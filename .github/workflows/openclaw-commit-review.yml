@@ -1,0 +1,52 @@
+name: OpenClaw Commit Review
+
+on:
+  push:
+    tags-ignore:
+      - "*"
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  dispatch:
+    if: ${{ github.event.deleted == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check OpenClaw review configuration
+        id: config
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.OPENCLAW_REVIEW_WEBHOOK_URL }}" ] || [ -z "${{ secrets.OPENCLAW_REVIEW_WEBHOOK_TOKEN }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "OpenClaw review skipped: OPENCLAW_REVIEW_WEBHOOK_URL and OPENCLAW_REVIEW_WEBHOOK_TOKEN must be configured."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repository
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dispatch commit reviews to OpenClaw
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_REVIEW_WEBHOOK_URL: ${{ secrets.OPENCLAW_REVIEW_WEBHOOK_URL }}
+          OPENCLAW_REVIEW_WEBHOOK_TOKEN: ${{ secrets.OPENCLAW_REVIEW_WEBHOOK_TOKEN }}
+          OPENCLAW_REVIEW_AGENT_ID: ${{ vars.OPENCLAW_REVIEW_AGENT_ID }}
+          OPENCLAW_REVIEW_MODEL: ${{ vars.OPENCLAW_REVIEW_MODEL }}
+          OPENCLAW_REVIEW_TIMEOUT_SECONDS: ${{ vars.OPENCLAW_REVIEW_TIMEOUT_SECONDS }}
+          OPENCLAW_REVIEW_MAX_PATCH_CHARS: ${{ vars.OPENCLAW_REVIEW_MAX_PATCH_CHARS }}
+          OPENCLAW_REVIEW_SESSION_PREFIX: ${{ vars.OPENCLAW_REVIEW_SESSION_PREFIX }}
+          OPENCLAW_REVIEW_COMMIT_STATUS_TARGET_URL: ${{ vars.OPENCLAW_REVIEW_COMMIT_STATUS_TARGET_URL }}
+        run: python3 scripts/dispatch_openclaw_commit_review.py

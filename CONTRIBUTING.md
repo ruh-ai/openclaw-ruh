@@ -36,6 +36,7 @@ python3 -m pip install pypdf PyYAML
 - Explain what changed, why it changed, and any follow-up work that remains.
 - Include validation notes. For this repo, that usually means the exact script or command you ran and what you verified manually.
 - Prefer smaller PRs over large mixed changes.
+- Every pushed commit can be dispatched to OpenClaw for automated review when the repository webhook secrets are configured. Keep commits scoped and messages descriptive so review output stays actionable.
 
 ## Review expectations
 

@@ -1,0 +1,20 @@
+{
+  // Example OpenClaw gateway configuration for commit review automation.
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_HOOKS_TOKEN}",
+    "path": "/hooks",
+    "allowedAgentIds": ["github-review"],
+    "defaultSessionKey": "hook:github-review",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:github-review:"]
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "github-review",
+        "workspace": "/srv/openclaw/github-review-workspace"
+      }
+    ]
+  }
+}
