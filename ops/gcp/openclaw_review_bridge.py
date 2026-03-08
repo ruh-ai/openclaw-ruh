@@ -366,34 +366,46 @@ def process_github_push_event(
             target_url=target_url,
             token=github_token,
         )
-        patch, truncated = fetch_commit_patch(repo, sha, github_token)
-        message = build_review_message(
-            event=event,
-            commit=commit,
-            repo=repo,
-            branch_ref=ref,
-            commit_html_url=commit_html_url,
-            patch=patch,
-            truncated=truncated,
-        )
-        agent_result = run_openclaw_agent(
-            message=message,
-            session_key=f"{DEFAULT_SESSION_PREFIX}{sha}",
-            timeout_seconds=int(os.environ.get("OPENCLAW_REVIEW_TIMEOUT_SECONDS") or "180"),
-            agent_id=agent_id,
-        )
-        review = parse_review_json(agent_result)
-        upsert_commit_comment(repo, sha, comment_body(sha, review), github_token)
-        set_commit_status(
-            repo=repo,
-            sha=sha,
-            state=status_state(review["conclusion"]),
-            description=review.get("description") or "OpenClaw review complete",
-            context=status_context,
-            target_url=target_url,
-            token=github_token,
-        )
-        results.append({"sha": sha, "conclusion": review["conclusion"]})
+        try:
+            patch, truncated = fetch_commit_patch(repo, sha, github_token)
+            message = build_review_message(
+                event=event,
+                commit=commit,
+                repo=repo,
+                branch_ref=ref,
+                commit_html_url=commit_html_url,
+                patch=patch,
+                truncated=truncated,
+            )
+            agent_result = run_openclaw_agent(
+                message=message,
+                session_key=f"{DEFAULT_SESSION_PREFIX}{sha}",
+                timeout_seconds=int(os.environ.get("OPENCLAW_REVIEW_TIMEOUT_SECONDS") or "180"),
+                agent_id=agent_id,
+            )
+            review = parse_review_json(agent_result)
+            upsert_commit_comment(repo, sha, comment_body(sha, review), github_token)
+            set_commit_status(
+                repo=repo,
+                sha=sha,
+                state=status_state(review["conclusion"]),
+                description=review.get("description") or "OpenClaw review complete",
+                context=status_context,
+                target_url=target_url,
+                token=github_token,
+            )
+            results.append({"sha": sha, "conclusion": review["conclusion"]})
+        except (BridgeError, urllib.error.URLError, subprocess.SubprocessError, ValueError) as exc:
+            set_commit_status(
+                repo=repo,
+                sha=sha,
+                state="error",
+                description=f"OpenClaw review failed: {exc}",
+                context=status_context,
+                target_url=target_url,
+                token=github_token,
+            )
+            results.append({"sha": sha, "conclusion": "review_failed"})
 
     return results
 

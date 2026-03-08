@@ -89,6 +89,57 @@ class OpenClawReviewBridgeTests(unittest.TestCase):
         self.assertEqual(comments[0]["sha"], "abc123")
         self.assertIn("OpenClaw commit review", comments[0]["body"])
 
+    @mock.patch.dict(
+        os.environ,
+        {
+            "OPENCLAW_REVIEW_GITHUB_TOKEN": "github-token",
+            "OPENCLAW_REVIEW_AGENT_ID": "github-review",
+        },
+        clear=False,
+    )
+    def test_process_github_push_event_marks_error_when_review_fails(self) -> None:
+        event = {
+            "deleted": False,
+            "ref": "refs/heads/main",
+            "before": "before-sha",
+            "after": "after-sha",
+            "compare": "https://github.com/ruh-ai/openclaw-ruh/compare/before...after",
+            "repository": {"full_name": "ruh-ai/openclaw-ruh"},
+            "commits": [
+                {
+                    "id": "deadbeef",
+                    "message": "Break review path",
+                    "timestamp": "2026-03-08T22:00:00Z",
+                    "author": {"name": "Prasanjit", "email": "engage@rapidinnovation.io"},
+                    "added": [],
+                    "modified": ["ops/gcp/openclaw_review_bridge.py"],
+                    "removed": [],
+                }
+            ],
+        }
+
+        statuses = []
+
+        def record_status(**kwargs):
+            statuses.append(kwargs)
+
+        with mock.patch.object(
+            BRIDGE,
+            "fetch_commit_patch",
+            side_effect=BRIDGE.BridgeError("patch fetch failed"),
+        ), mock.patch.object(BRIDGE, "set_commit_status", side_effect=record_status):
+            result = BRIDGE.process_github_push_event(
+                event=event,
+                target_url_override=None,
+                status_context="openclaw/review",
+            )
+
+        self.assertEqual(result, [{"sha": "deadbeef", "conclusion": "review_failed"}])
+        self.assertEqual(len(statuses), 2)
+        self.assertEqual(statuses[0]["state"], "pending")
+        self.assertEqual(statuses[1]["state"], "error")
+        self.assertIn("patch fetch failed", statuses[1]["description"])
+
 
 if __name__ == "__main__":
     unittest.main()
