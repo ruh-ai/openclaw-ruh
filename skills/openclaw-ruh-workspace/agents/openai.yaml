@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Ruh Workspace"
+  short_description: "Ruh.ai repo workflow and tooling"
+  default_prompt: "Use $openclaw-ruh-workspace to work in this repo with the correct docs, knowledge-base, and Linear workflow."

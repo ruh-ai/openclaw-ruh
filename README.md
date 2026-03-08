@@ -8,6 +8,7 @@
 - Operational planning assets, including Linear backlog data, under `docs/02 Operations/`
 - A generated knowledge base for faster onboarding and review under `docs/Knowledge Base/`
 - Helper scripts for regenerating knowledge artifacts and bootstrapping Linear from CSV
+- A shared project-local Codex skill under `skills/` for repo-specific agent workflows
 
 ## Repository layout
 
@@ -19,6 +20,7 @@
 |   |-- 98 Templates/
 |   |-- 99 Inbox/
 |   `-- Knowledge Base/
+|-- skills/
 |-- scripts/
 |-- package.json
 `-- .linear.toml
@@ -43,6 +45,10 @@ Regenerate the knowledge base after changing files under `docs/`:
 ```bash
 python3 scripts/sync_obsidian_kb.py
 ```
+
+## Shared Codex skill
+
+This repo includes a reusable project-local skill at `skills/openclaw-ruh-workspace/`. It captures the repo's reading order, source-of-truth rules, knowledge-base regeneration flow, and repo-local Linear workflow so other contributors can reuse the same project instructions.
 
 ## Linear tooling
 
