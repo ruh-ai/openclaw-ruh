@@ -1,7 +1,7 @@
 {$OPENCLAW_REVIEW_HOST} {
   encode gzip
 
-  @review path /hooks/agent
+  @review path /hooks/agent /hooks/github
   handle @review {
     reverse_proxy 127.0.0.1:8787
   }

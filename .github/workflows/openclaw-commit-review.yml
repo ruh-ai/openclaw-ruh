@@ -1,9 +1,6 @@
 name: OpenClaw Commit Review
 
 on:
-  push:
-    tags-ignore:
-      - "*"
   workflow_dispatch:
 
 permissions:
@@ -12,7 +9,6 @@ permissions:
 
 jobs:
   dispatch:
-    if: ${{ github.event_name != 'push' || github.event.deleted == false }}
     runs-on: ubuntu-latest
     steps:
       - name: Check OpenClaw review configuration

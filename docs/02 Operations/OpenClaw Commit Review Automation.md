@@ -8,25 +8,24 @@ Every pushed commit should be dispatched to an OpenClaw agent running on a GCP-h
 
 ## Architecture
 
-1. A GitHub Actions workflow triggers on every `push` or manual dispatch.
-2. The workflow checks out the repo with full history.
-3. `scripts/dispatch_openclaw_commit_review.py` iterates through each commit in the push payload or falls back to the current `HEAD` commit for manual runs.
-4. For each commit, the script:
+1. GitHub repository webhooks send every `push` event directly to the review bridge on the GCP VM.
+2. The review bridge verifies the GitHub webhook signature.
+3. For each commit in the push event, the bridge:
    - sets `openclaw/review` to `pending`
-   - gathers the commit patch from local git history
-   - posts the review request plus explicit commit metadata to the configured review bridge on the GCP VM
-5. The review bridge on the VM:
-   - verifies the bearer token
+   - fetches the commit patch from the GitHub API
    - invokes `openclaw agent` locally against the existing gateway
+4. The review bridge on the VM:
+   - verifies the bearer token
    - parses the structured JSON review returned by OpenClaw
    - upserts a commit comment on the reviewed SHA
    - sets the final GitHub status to `success`, `failure`, or `error`
+5. A separate GitHub Actions workflow remains available as a manual `workflow_dispatch` replay path. It checks out the repo, reconstructs the selected commit patch from git history, and posts a signed request to the same review bridge.
 
 ## Repository configuration
 
-The workflow lives at `.github/workflows/openclaw-commit-review.yml`.
+The manual replay workflow lives at `.github/workflows/openclaw-commit-review.yml`.
 
-Required GitHub repository secrets:
+Required GitHub repository secrets for the manual replay workflow:
 
 - `OPENCLAW_REVIEW_WEBHOOK_URL`: full HTTPS URL for the review bridge endpoint, usually `https://<host>/hooks/agent`
 - `OPENCLAW_REVIEW_WEBHOOK_TOKEN`: shared bearer token that protects the review bridge
@@ -57,7 +56,12 @@ Recommended host preparation:
 2. Put the environment variables from `ops/gcp/openclaw-review.env.example` into a real env file on the server.
 3. Install the bridge from `ops/gcp/openclaw_review_bridge.py`.
 4. Install the systemd unit from `ops/gcp/openclaw-review-bridge.service`.
-5. Put a reverse proxy with TLS in front of the server and forward only `/hooks/agent` to the bridge on `127.0.0.1:8787`.
+5. Put a reverse proxy with TLS in front of the server and forward `/hooks/agent` and `/hooks/github` to the bridge on `127.0.0.1:8787`.
+6. Configure a GitHub repository webhook:
+   - payload URL: `https://<host>/hooks/github`
+   - content type: `application/json`
+   - secret: same value as `OPENCLAW_REVIEW_GITHUB_WEBHOOK_SECRET`
+   - events: `Just the push event`
 
 ## OpenClaw gateway requirements
 
@@ -82,16 +86,17 @@ For a simple first version, a fine-grained token scoped to `ruh-ai/openclaw-ruh`
 
 ## Operational notes
 
-- The GitHub Actions workflow only dispatches when the webhook secrets are configured.
+- The repository webhook is the automatic path for every pushed commit.
+- The GitHub Actions workflow is the manual replay path and only dispatches when the bearer-token secrets are configured.
 - If dispatch to OpenClaw fails, the workflow sets the commit status to `error`.
 - If the patch is very large, the dispatch script truncates it and tells OpenClaw to treat the review as partial.
 - The branch protection rule should not require `openclaw/review` until the server-side path is deployed and stable.
 
 ## Validation checklist
 
-1. Confirm the review bridge answers `401` without a token and `200` with a valid token on a manual test request.
+1. Confirm the review bridge answers `401` without a valid signature on `/hooks/github`.
 2. Push a test commit to a non-critical branch.
-3. Confirm the workflow runs.
+3. Confirm the repository webhook delivery succeeds.
 4. Confirm the commit status changes from `pending` to a final state.
 5. Confirm a commit comment appears on the pushed SHA.
-6. Re-run the workflow and confirm the comment is updated rather than duplicated.
+6. Run the manual replay workflow and confirm the comment is updated rather than duplicated.

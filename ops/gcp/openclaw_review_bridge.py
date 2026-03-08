@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import textwrap
 from typing import Any
 import urllib.error
 import urllib.request
@@ -15,6 +18,8 @@ import urllib.request
 STATUS_CONTEXT_DEFAULT = "openclaw/review"
 COMMENT_MARKER_PREFIX = "<!-- openclaw-review:"
 GITHUB_API_BASE = "https://api.github.com"
+DEFAULT_MAX_PATCH_CHARS = 120000
+DEFAULT_SESSION_PREFIX = "hook:github-review:"
 
 
 class BridgeError(RuntimeError):
@@ -46,6 +51,20 @@ def github_request(method: str, path: str, token: str, body: dict[str, Any] | No
         if not raw:
             return None
         return json.loads(raw)
+
+
+def github_text_request(method: str, path: str, token: str, accept: str) -> str:
+    request = urllib.request.Request(
+        f"{GITHUB_API_BASE}{path}",
+        method=method,
+        headers={
+            "Accept": accept,
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "openclaw-review-bridge",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read().decode("utf-8")
 
 
 def upsert_commit_comment(repo: str, sha: str, body: str, token: str) -> None:
@@ -151,6 +170,113 @@ def parse_review_json(agent_result: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+def commit_files(commit: dict[str, Any]) -> list[str]:
+    if commit.get("files"):
+        return sorted(set(commit["files"]))
+    files = set()
+    for key in ("added", "modified", "removed"):
+        files.update(commit.get(key, []))
+    return sorted(files)
+
+
+def build_review_message(
+    *,
+    event: dict[str, Any],
+    commit: dict[str, Any],
+    repo: str,
+    branch_ref: str,
+    commit_html_url: str,
+    patch: str,
+    truncated: bool,
+) -> str:
+    sha = commit["id"]
+    metadata = {
+        "repository": repo,
+        "branch": branch_ref,
+        "before": event.get("before"),
+        "after": event.get("after"),
+        "compare_url": event.get("compare"),
+        "commit": {
+            "sha": sha,
+            "message": commit.get("message"),
+            "timestamp": commit.get("timestamp"),
+            "url": commit_html_url,
+            "author": commit.get("author", {}),
+            "files": commit_files(commit),
+        },
+    }
+    metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
+    truncation_note = (
+        "The patch was truncated. Mention clearly that the review is partial and only covers the visible diff."
+        if truncated
+        else "The patch was not truncated."
+    )
+    return textwrap.dedent(
+        f"""
+        You are the automated OpenClaw reviewer for a single GitHub commit.
+
+        Review rubric:
+        - Look only for material problems introduced by this commit.
+        - Prioritize correctness bugs, security issues, secret exposure, broken auth, data loss risk, unsafe automation, and operational regressions.
+        - Ignore style nits, cosmetic refactors, and speculative design commentary.
+
+        Return only valid JSON. Do not wrap it in markdown fences. Do not include any extra prose.
+
+        Required JSON shape:
+        {{
+          "conclusion": "no_material_findings" | "material_findings" | "review_failed",
+          "description": "short status line, 140 characters or fewer",
+          "findings": [
+            {{
+              "title": "short title",
+              "body": "concise explanation of the issue and why it matters",
+              "path": "optional/file/path.ext",
+              "severity": "high" | "medium" | "low"
+            }}
+          ],
+          "notes": [
+            "optional note"
+          ]
+        }}
+
+        Output rules:
+        - If there are no material findings, set "conclusion" to "no_material_findings" and return an empty "findings" array.
+        - If you cannot review reliably, set "conclusion" to "review_failed".
+        - Keep findings concise and actionable.
+        - Include file paths whenever possible.
+        - Add this note verbatim to "notes" if helpful: "{truncation_note}"
+
+        Repository metadata:
+        ```json
+        {metadata_json}
+        ```
+
+        Patch to review:
+        ```diff
+        {patch}
+        ```
+        """
+    ).strip()
+
+
+def fetch_commit_patch(repo: str, sha: str, token: str) -> tuple[str, bool]:
+    max_chars = int(os.environ.get("OPENCLAW_REVIEW_MAX_PATCH_CHARS") or DEFAULT_MAX_PATCH_CHARS)
+    patch = github_text_request(
+        "GET",
+        f"/repos/{repo}/commits/{sha}",
+        token,
+        "application/vnd.github.v3.patch",
+    )
+    truncated = False
+    if len(patch) > max_chars:
+        truncated = True
+        patch = (
+            patch[:max_chars]
+            + "\n\n[TRUNCATED] The patch exceeded the configured size limit. Review only what is shown.\n"
+        )
+    return patch, truncated
+
+
 def comment_body(sha: str, review: dict[str, Any]) -> str:
     marker = f"{COMMENT_MARKER_PREFIX}{sha} -->"
     conclusion_text = {
@@ -197,23 +323,132 @@ def status_state(conclusion: str) -> str:
     }[conclusion]
 
 
+def verify_github_webhook_signature(secret: str, body: bytes, signature_header: str) -> bool:
+    if not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    provided = signature_header.removeprefix("sha256=")
+    return hmac.compare_digest(expected, provided)
+
+
+def process_github_push_event(
+    *,
+    event: dict[str, Any],
+    target_url_override: str | None,
+    status_context: str,
+) -> list[dict[str, str]]:
+    if event.get("deleted"):
+        return []
+
+    ref = event.get("ref", "")
+    if not ref.startswith("refs/heads/"):
+        return []
+
+    repo = event.get("repository", {}).get("full_name")
+    if not repo:
+        raise BridgeError("GitHub push payload is missing repository.full_name")
+
+    github_token = env_required("OPENCLAW_REVIEW_GITHUB_TOKEN")
+    agent_id = os.environ.get("OPENCLAW_REVIEW_AGENT_ID", "github-review")
+    commits = [commit for commit in event.get("commits", []) if commit.get("id")]
+    results: list[dict[str, str]] = []
+
+    for commit in commits:
+        sha = commit["id"]
+        commit_html_url = f"https://github.com/{repo}/commit/{sha}"
+        target_url = target_url_override or commit_html_url
+        set_commit_status(
+            repo=repo,
+            sha=sha,
+            state="pending",
+            description="OpenClaw review queued",
+            context=status_context,
+            target_url=target_url,
+            token=github_token,
+        )
+        patch, truncated = fetch_commit_patch(repo, sha, github_token)
+        message = build_review_message(
+            event=event,
+            commit=commit,
+            repo=repo,
+            branch_ref=ref,
+            commit_html_url=commit_html_url,
+            patch=patch,
+            truncated=truncated,
+        )
+        agent_result = run_openclaw_agent(
+            message=message,
+            session_key=f"{DEFAULT_SESSION_PREFIX}{sha}",
+            timeout_seconds=int(os.environ.get("OPENCLAW_REVIEW_TIMEOUT_SECONDS") or "180"),
+            agent_id=agent_id,
+        )
+        review = parse_review_json(agent_result)
+        upsert_commit_comment(repo, sha, comment_body(sha, review), github_token)
+        set_commit_status(
+            repo=repo,
+            sha=sha,
+            state=status_state(review["conclusion"]),
+            description=review.get("description") or "OpenClaw review complete",
+            context=status_context,
+            target_url=target_url,
+            token=github_token,
+        )
+        results.append({"sha": sha, "conclusion": review["conclusion"]})
+
+    return results
+
+
 class ReviewHandler(BaseHTTPRequestHandler):
     server_version = "OpenClawReviewBridge/1.0"
 
     def do_POST(self) -> None:
-        if self.path != "/hooks/agent":
+        if self.path not in {"/hooks/agent", "/hooks/github"}:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-            return
-
-        expected = env_required("OPENCLAW_REVIEW_WEBHOOK_TOKEN")
-        auth = self.headers.get("Authorization", "")
-        if auth != f"Bearer {expected}":
-            self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
             return
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            raw_body = self.rfile.read(length)
+            if self.path == "/hooks/github":
+                secret = env_required("OPENCLAW_REVIEW_GITHUB_WEBHOOK_SECRET")
+                signature = self.headers.get("X-Hub-Signature-256", "")
+                if not verify_github_webhook_signature(secret, raw_body, signature):
+                    self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+                    return
+
+                event_name = self.headers.get("X-GitHub-Event", "")
+                payload = json.loads(raw_body.decode("utf-8"))
+                if event_name == "ping":
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": True, "event": "ping"}).encode("utf-8"))
+                    return
+                if event_name != "push":
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": True, "ignored": event_name}).encode("utf-8"))
+                    return
+
+                results = process_github_push_event(
+                    event=payload,
+                    target_url_override=None,
+                    status_context=STATUS_CONTEXT_DEFAULT,
+                )
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "results": results}).encode("utf-8"))
+                return
+
+            expected = env_required("OPENCLAW_REVIEW_WEBHOOK_TOKEN")
+            auth = self.headers.get("Authorization", "")
+            if auth != f"Bearer {expected}":
+                self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+                return
+
+            payload = json.loads(raw_body.decode("utf-8"))
             message = payload["message"]
             agent_id = payload.get("agentId") or os.environ.get("OPENCLAW_REVIEW_AGENT_ID", "github-review")
             session_key = payload.get("sessionKey") or "hook:github-review"
@@ -238,7 +473,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 target_url=target_url,
                 token=github_token,
             )
-
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
