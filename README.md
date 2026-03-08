@@ -82,6 +82,14 @@ The `docs/` directory is structured as an Obsidian vault. `docs/Home.md` is the 
 
 This repository is being opened in stages. The current public history includes planning material, source artifacts, and operational tooling that were used to shape the early Ruh.ai workstream.
 
+## Contributing
+
+See `CONTRIBUTING.md` for development workflow, contribution expectations, and pull request guidance.
+
+Community participation is governed by `CODE_OF_CONDUCT.md`.
+
+For security disclosures, follow `SECURITY.md` instead of opening a public issue.
+
 ## License
 
-No open-source license has been added yet. Add a `LICENSE` file before accepting outside contributions under explicit open-source terms.
+Licensed under the Apache License, Version 2.0. See `LICENSE`.
