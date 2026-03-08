@@ -1,0 +1,84 @@
+kind: tenantOverlay
+apiVersion: ruh.ai/v1alpha1
+metadata:
+  overlayId: construction.procore-sharepoint-teams
+  packRef: construction-project-operations@1.0.0
+  displayName: Procore + SharePoint + Teams overlay
+  owner: solutions-engineering
+  environmentClass: production
+  version: 0.1.0
+trustBoundary:
+  key: contractor-prod-east
+  runtimeProfile: prod
+  gateway:
+    mode: dedicated
+    workspaceStrategy: project-per-workspace
+    sandbox:
+      mode: non-main
+      scope: agent
+projects:
+  template:
+    workspaceIdPattern: constr-{project_code}
+    channelBindings:
+      internalTeam: teams:{project_code}-ops
+      approvals: teams:{project_code}-approvals
+connectors:
+  procore:
+    enabled: true
+    installationRef: secretref://connectors/procore/app-prod
+    companyId: ${PROCORE_COMPANY_ID}
+    projectFieldMap:
+      projectId: procore.project.id
+      rfiId: procore.rfi.id
+      submittalId: procore.submittal.id
+  sharepoint:
+    enabled: true
+    siteRef: ${SP_SITE_URL}
+    libraryMap:
+      controlledDocs: /Shared Documents/Controlled Project Files
+      generatedReports: /Shared Documents/Ruh Output
+  teams:
+    enabled: true
+    botRef: secretref://connectors/teams/bot-prod
+    quietHours: "20:00-06:00 America/Chicago"
+roleMappings:
+  approvals:
+    rfiOwner: group://project-engineers
+    documentController: group://document-control
+    pmApprover: group://project-managers
+    execEscalation: group://ops-leadership
+policies:
+  actions:
+    externalWriteback:
+      default: approval_required
+      allowAuto: []
+    sendOwnerDesignerMessage:
+      default: approval_required
+    internalSummary:
+      default: auto_allowed
+workflows:
+  rfiLifecycle:
+    enabled: true
+    officialRecord: procore
+    requiredCitationBundle: true
+    approvalRule: pmApprover
+  submittalLifecycle:
+    enabled: true
+    officialRecord: procore
+    approvalRule: documentController
+  meetingActionSync:
+    enabled: true
+    officialRecord: sharepoint
+    deliveryChannel: teams
+notifications:
+  slaWarnings:
+    destination: teams:ops-leads
+  dailyDigest:
+    destination: teams:project-controls
+    schedule: "0 6 * * 1-5"
+evals:
+  suites:
+    - citation-freshness
+    - revision-conflict-detection
+    - approval-policy-enforcement
+    - routing-to-correct-project

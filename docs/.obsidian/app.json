@@ -1,0 +1,10 @@
+{
+  "alwaysUpdateLinks": true,
+  "attachmentFolderPath": "Knowledge Base/Attachments",
+  "newFileLocation": "folder",
+  "newFileFolderPath": "99 Inbox",
+  "promptDelete": false,
+  "showLineNumber": false,
+  "showUnsupportedFiles": true,
+  "trashOption": "local"
+}

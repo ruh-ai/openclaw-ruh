@@ -1,0 +1,15 @@
+{
+  "name": "openclaw-ruh",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Operational tooling for the openclaw-ruh workspace.",
+  "scripts": {
+    "linear": "linear",
+    "linear:auth": "linear auth login",
+    "linear:whoami": "linear auth whoami",
+    "linear:projects": "linear project list"
+  },
+  "devDependencies": {
+    "@schpet/linear-cli": "1.11.1"
+  }
+}

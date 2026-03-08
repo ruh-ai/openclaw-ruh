@@ -1,0 +1,93 @@
+kind: tenantOverlay
+apiVersion: ruh.ai/v1alpha1
+metadata:
+  overlayId: ai-buildops.github-linear-slack-sentry
+  packRef: ai-buildops@1.0.0
+  displayName: GitHub + Linear + Slack + Sentry overlay
+  owner: platform-solutions
+  environmentClass: production
+  version: 0.1.0
+trustBoundary:
+  key: product-prod-core
+  runtimeProfile: prod
+  gateway:
+    mode: dedicated
+    workspaceStrategy: service-per-workspace
+    sandbox:
+      mode: non-main
+      scope: agent
+services:
+  catalog:
+    - key: api
+      repo: github:acme/api
+      linearTeam: CORE
+      slackChannel: '#api-buildops'
+      sentryProject: api-prod
+    - key: web
+      repo: github:acme/web
+      linearTeam: APP
+      slackChannel: '#web-buildops'
+      sentryProject: web-prod
+connectors:
+  github:
+    enabled: true
+    installationRef: secretref://connectors/github/app-prod
+    org: acme
+    protectedBranchPolicyRef: main-release-guardrails
+  linear:
+    enabled: true
+    installationRef: secretref://connectors/linear/app-prod
+    teamMap:
+      CORE: core-platform
+      APP: app-experience
+  slack:
+    enabled: true
+    installationRef: secretref://connectors/slack/app-prod
+    approvalChannel: '#eng-approvals'
+    alertChannel: '#eng-alerts'
+  sentry:
+    enabled: true
+    installationRef: secretref://connectors/sentry/app-prod
+    orgSlug: acme-observability
+roleMappings:
+  approvals:
+    releaseManager: group://release-managers
+    repoOwner: group://service-owners
+    oncallLead: group://oncall-leads
+policies:
+  actions:
+    createBranch:
+      default: auto_allowed
+    openPullRequest:
+      default: auto_allowed
+    mergeProtectedBranch:
+      default: human_only
+    deployProduction:
+      default: approval_required
+    postExternalIncidentMessage:
+      default: approval_required
+workflows:
+  intakeToSpec:
+    enabled: true
+    officialPlanningRecord: linear
+  specToBuild:
+    enabled: true
+    officialCodeRecord: github
+  evalAndRelease:
+    enabled: true
+    requiredEvalProfile: standard-ai-release
+  incidentLearning:
+    enabled: true
+    officialIncidentSource: sentry
+notifications:
+  triageDigest:
+    destination: '#eng-leads'
+    schedule: '0 9 * * 1-5'
+  incidentEscalation:
+    destination: '#eng-alerts'
+evals:
+  suites:
+    - work-item-quality
+    - test-and-eval-thresholds
+    - protected-branch-policy
+    - incident-to-regression-loop

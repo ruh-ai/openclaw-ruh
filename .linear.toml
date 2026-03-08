@@ -1,0 +1,7 @@
+# Repo-local defaults for the schpet/linear-cli workflow.
+# Do not put API keys in this file. Use LINEAR_API_KEY or stored credentials.
+
+workspace = "ruh-ai"
+team_id = "RUH"
+issue_sort = "priority"
+vcs = "git"
