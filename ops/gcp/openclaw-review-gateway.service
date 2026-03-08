@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Gateway for GitHub commit review
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/srv/openclaw
+EnvironmentFile=/etc/openclaw/openclaw-review.env
+ExecStart=/usr/bin/env openclaw gateway --bind 127.0.0.1 --port 18789
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
