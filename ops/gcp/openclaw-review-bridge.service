@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenClaw GitHub review bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pd
+WorkingDirectory=/home/pd/openclaw-review
+EnvironmentFile=/etc/openclaw-review.env
+Environment=HOME=/home/pd
+ExecStart=/usr/bin/python3 /home/pd/openclaw-review/openclaw_review_bridge.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

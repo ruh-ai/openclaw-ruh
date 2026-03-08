@@ -1,13 +1,12 @@
 {
-  // Example OpenClaw gateway configuration for commit review automation.
-  "hooks": {
-    "enabled": true,
-    "token": "${OPENCLAW_HOOKS_TOKEN}",
-    "path": "/hooks",
-    "allowedAgentIds": ["github-review"],
-    "defaultSessionKey": "hook:github-review",
-    "allowRequestSessionKey": true,
-    "allowedSessionKeyPrefixes": ["hook:github-review:"]
+  // Example OpenClaw gateway configuration for the local review bridge.
+  // The bridge is the only public entrypoint. It shells into the local
+  // gateway with `openclaw agent --agent github-review`.
+  "gateway": {
+    "server": {
+      "host": "127.0.0.1",
+      "port": 18789
+    }
   },
   "agents": {
     "list": [

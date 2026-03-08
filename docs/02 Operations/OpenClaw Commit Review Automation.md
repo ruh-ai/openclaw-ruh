@@ -8,15 +8,17 @@ Every pushed commit should be dispatched to an OpenClaw agent running on a GCP-h
 
 ## Architecture
 
-1. A GitHub Actions workflow triggers on every `push`.
+1. A GitHub Actions workflow triggers on every `push` or manual dispatch.
 2. The workflow checks out the repo with full history.
-3. `scripts/dispatch_openclaw_commit_review.py` iterates through each commit in the push payload.
+3. `scripts/dispatch_openclaw_commit_review.py` iterates through each commit in the push payload or falls back to the current `HEAD` commit for manual runs.
 4. For each commit, the script:
    - sets `openclaw/review` to `pending`
    - gathers the commit patch from local git history
-   - posts the review request to the configured OpenClaw webhook
-5. The OpenClaw agent running on the GCP server:
-   - reviews the diff
+   - posts the review request plus explicit commit metadata to the configured review bridge on the GCP VM
+5. The review bridge on the VM:
+   - verifies the bearer token
+   - invokes `openclaw agent` locally against the existing gateway
+   - parses the structured JSON review returned by OpenClaw
    - upserts a commit comment on the reviewed SHA
    - sets the final GitHub status to `success`, `failure`, or `error`
 
@@ -26,13 +28,12 @@ The workflow lives at `.github/workflows/openclaw-commit-review.yml`.
 
 Required GitHub repository secrets:
 
-- `OPENCLAW_REVIEW_WEBHOOK_URL`: full HTTPS URL for the OpenClaw webhook endpoint, usually `https://<host>/hooks/agent`
-- `OPENCLAW_REVIEW_WEBHOOK_TOKEN`: shared bearer token that protects the OpenClaw webhook
+- `OPENCLAW_REVIEW_WEBHOOK_URL`: full HTTPS URL for the review bridge endpoint, usually `https://<host>/hooks/agent`
+- `OPENCLAW_REVIEW_WEBHOOK_TOKEN`: shared bearer token that protects the review bridge
 
 Optional GitHub repository variables:
 
 - `OPENCLAW_REVIEW_AGENT_ID`: OpenClaw agent id to target. Default: `github-review`
-- `OPENCLAW_REVIEW_MODEL`: explicit OpenClaw model override for review runs
 - `OPENCLAW_REVIEW_TIMEOUT_SECONDS`: OpenClaw webhook timeout. Default: `180`
 - `OPENCLAW_REVIEW_MAX_PATCH_CHARS`: max patch size included in the webhook message. Default: `120000`
 - `OPENCLAW_REVIEW_SESSION_PREFIX`: session key prefix for isolated review sessions. Default: `hook:github-review:`
@@ -40,41 +41,38 @@ Optional GitHub repository variables:
 
 ## GCP server setup
 
-Recommended target: a small Ubuntu VM on Compute Engine with OpenClaw and `gh` installed.
+Recommended target: a small Linux VM on Compute Engine with OpenClaw already running locally.
 
 Minimum server responsibilities:
 
-- run OpenClaw continuously
-- expose only the webhook entry point over HTTPS
-- authenticate GitHub write-back with `GH_TOKEN`
+- run OpenClaw continuously on loopback
+- run the review bridge locally
+- expose only the review bridge entry point over HTTPS
+- authenticate GitHub write-back with `OPENCLAW_REVIEW_GITHUB_TOKEN`
 - hold the model provider credentials OpenClaw needs to reason over diffs
 
 Recommended host preparation:
 
-1. Install Node 22+.
-2. Install OpenClaw: `npm install -g openclaw@latest`
-3. Install GitHub CLI: `gh --version`
-4. Create a dedicated Linux user for the review service.
-5. Put the environment variables from `ops/gcp/openclaw-review.env.example` into a real env file on the server.
-6. Use `ops/gcp/openclaw-review.config.example.jsonc` as the starting point for the OpenClaw gateway config.
-7. Install the systemd unit from `ops/gcp/openclaw-review-gateway.service`.
-8. Put a reverse proxy with TLS in front of the server and forward only `/hooks/*` to the local gateway on `127.0.0.1:18789`.
+1. Ensure the existing OpenClaw gateway is healthy on loopback.
+2. Put the environment variables from `ops/gcp/openclaw-review.env.example` into a real env file on the server.
+3. Install the bridge from `ops/gcp/openclaw_review_bridge.py`.
+4. Install the systemd unit from `ops/gcp/openclaw-review-bridge.service`.
+5. Put a reverse proxy with TLS in front of the server and forward only `/hooks/agent` to the bridge on `127.0.0.1:8787`.
 
 ## OpenClaw gateway requirements
 
-The gateway must have webhook support enabled with a shared token and a dedicated review agent id. The review agent must have command execution permissions strong enough to run `gh api` for commit comments and statuses.
+The gateway must be locally reachable from the bridge process. The bridge shells into `openclaw agent` locally, so the agent itself does not need direct GitHub CLI access.
 
 Expected OpenClaw behavior on each request:
 
 - review only the supplied commit diff
 - focus on correctness, security, auth, data loss, and operational regressions
-- keep comments concise
-- update an existing comment if the workflow re-dispatches the same commit
-- mark the final commit status context `openclaw/review`
+- return structured JSON only
+- avoid style-only feedback
 
 ## GitHub token scope on the server
 
-The `GH_TOKEN` used on the server should be a fine-grained token or GitHub App installation token with access to:
+The `OPENCLAW_REVIEW_GITHUB_TOKEN` used on the server should be a fine-grained token or GitHub App installation token with access to:
 
 - commit statuses
 - commit comments
@@ -91,7 +89,7 @@ For a simple first version, a fine-grained token scoped to `ruh-ai/openclaw-ruh`
 
 ## Validation checklist
 
-1. Confirm the OpenClaw webhook answers `200` on a manual test request.
+1. Confirm the review bridge answers `401` without a token and `200` with a valid token on a manual test request.
 2. Push a test commit to a non-critical branch.
 3. Confirm the workflow runs.
 4. Confirm the commit status changes from `pending` to a final state.

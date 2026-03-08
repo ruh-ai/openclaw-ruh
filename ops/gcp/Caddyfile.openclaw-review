@@ -1,0 +1,12 @@
+{$OPENCLAW_REVIEW_HOST} {
+  encode gzip
+
+  @review path /hooks/agent
+  handle @review {
+    reverse_proxy 127.0.0.1:8787
+  }
+
+  handle {
+    respond 404
+  }
+}

@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   dispatch:
-    if: ${{ github.event.deleted == false }}
+    if: ${{ github.event_name != 'push' || github.event.deleted == false }}
     runs-on: ubuntu-latest
     steps:
       - name: Check OpenClaw review configuration
@@ -45,7 +45,6 @@ jobs:
           OPENCLAW_REVIEW_WEBHOOK_URL: ${{ secrets.OPENCLAW_REVIEW_WEBHOOK_URL }}
           OPENCLAW_REVIEW_WEBHOOK_TOKEN: ${{ secrets.OPENCLAW_REVIEW_WEBHOOK_TOKEN }}
           OPENCLAW_REVIEW_AGENT_ID: ${{ vars.OPENCLAW_REVIEW_AGENT_ID }}
-          OPENCLAW_REVIEW_MODEL: ${{ vars.OPENCLAW_REVIEW_MODEL }}
           OPENCLAW_REVIEW_TIMEOUT_SECONDS: ${{ vars.OPENCLAW_REVIEW_TIMEOUT_SECONDS }}
           OPENCLAW_REVIEW_MAX_PATCH_CHARS: ${{ vars.OPENCLAW_REVIEW_MAX_PATCH_CHARS }}
           OPENCLAW_REVIEW_SESSION_PREFIX: ${{ vars.OPENCLAW_REVIEW_SESSION_PREFIX }}

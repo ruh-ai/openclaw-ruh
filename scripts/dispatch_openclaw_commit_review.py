@@ -23,8 +23,62 @@ class DispatchError(RuntimeError):
     pass
 
 
+def git_try_output(*args: str) -> str | None:
+    result = subprocess.run(
+        ["git", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def build_manual_event() -> dict:
+    sha = os.environ.get("GITHUB_SHA")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    github_server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    if not sha or not repo:
+        raise DispatchError("GITHUB_SHA or GITHUB_REPOSITORY is not set for manual dispatch")
+
+    before = git_try_output("rev-parse", f"{sha}^")
+    before_sha = before.strip() if before else None
+    files = git_output("diff-tree", "--no-commit-id", "--name-only", "-r", sha).splitlines()
+
+    event = {
+        "deleted": False,
+        "before": before_sha,
+        "after": sha,
+        "compare": (
+            f"{github_server_url}/{repo}/compare/{before_sha}...{sha}"
+            if before_sha
+            else f"{github_server_url}/{repo}/commit/{sha}"
+        ),
+        "commits": [
+            {
+                "id": sha,
+                "message": git_output("log", "-1", "--pretty=%s", sha).strip(),
+                "timestamp": git_output("log", "-1", "--date=iso-strict", "--pretty=%cI", sha).strip(),
+                "author": {
+                    "name": git_output("log", "-1", "--pretty=%an", sha).strip(),
+                    "email": git_output("log", "-1", "--pretty=%ae", sha).strip(),
+                },
+                "added": [],
+                "modified": [],
+                "removed": [],
+                "files": files,
+            }
+        ],
+    }
+    return event
+
+
 def load_push_event() -> dict:
     event_name = os.environ.get("GITHUB_EVENT_NAME")
+    if event_name == "workflow_dispatch":
+        return build_manual_event()
+
     if event_name != "push":
         raise DispatchError(f"Unsupported event: {event_name or 'unknown'}")
 
@@ -132,6 +186,8 @@ def build_patch(sha: str, max_chars: int) -> tuple[str, bool]:
 
 
 def commit_files(commit: dict) -> list[str]:
+    if commit.get("files"):
+        return sorted(set(commit["files"]))
     files = set()
     for key in ("added", "modified", "removed"):
         files.update(commit.get(key, []))
@@ -181,37 +237,31 @@ def build_message(
         - Prioritize correctness bugs, security issues, secret exposure, broken auth, data loss risk, unsafe automation, and operational regressions.
         - Ignore style nits, cosmetic refactors, and speculative design commentary.
 
-        After reviewing, write the result back to GitHub for commit `{sha}` in `{repo}`.
+        Return only valid JSON. Do not wrap it in markdown fences. Do not include any extra prose.
 
-        Required GitHub write-back steps:
-        1. Upsert a commit comment with marker `<!-- openclaw-review:{sha} -->`.
-        2. Set the commit status context `{STATUS_CONTEXT}`.
-        3. Use `success` when there are no material findings, `failure` when there are one or more material findings, and `error` if you cannot complete the review.
+        Required JSON shape:
+        {{
+          "conclusion": "no_material_findings" | "material_findings" | "review_failed",
+          "description": "short status line, 140 characters or fewer",
+          "findings": [
+            {{
+              "title": "short title",
+              "body": "concise explanation of the issue and why it matters",
+              "path": "optional/file/path.ext",
+              "severity": "high" | "medium" | "low"
+            }}
+          ],
+          "notes": [
+            "optional note"
+          ]
+        }}
 
-        Use these GitHub CLI patterns:
-        - List commit comments:
-          `gh api repos/{repo}/commits/{sha}/comments`
-        - Update an existing comment:
-          `gh api --method PATCH repos/{repo}/comments/<comment_id> -f body='<body>'`
-        - Create a new comment:
-          `gh api --method POST repos/{repo}/commits/{sha}/comments -f body='<body>'`
-        - Set the status:
-          `gh api --method POST repos/{repo}/statuses/{sha} -f state='<success|failure|error>' -f context='{STATUS_CONTEXT}' -f description='<short description>' -f target_url='{commit_html_url}'`
-
-        Required comment format:
-        <!-- openclaw-review:{sha} -->
-        ## OpenClaw commit review
-        Conclusion: <no material findings | material findings | review failed>
-
-        ### Findings
-        1. ...
-        2. ...
-
-        ### Notes
-        - {truncation_note}
-
-        If there are no material findings, say that plainly and keep the comment short.
-        If there are findings, keep them concise and actionable and include file paths whenever possible.
+        Output rules:
+        - If there are no material findings, set "conclusion" to "no_material_findings" and return an empty "findings" array.
+        - If you cannot review reliably, set "conclusion" to "review_failed".
+        - Keep findings concise and actionable.
+        - Include file paths whenever possible.
+        - Add this note verbatim to "notes" if helpful: "{truncation_note}"
 
         Repository metadata:
         ```json
@@ -231,20 +281,20 @@ def post_to_openclaw(
     hook_token: str,
     message: str,
     sha: str,
+    metadata: dict[str, object],
 ) -> None:
+    timeout_seconds = int(
+        os.environ.get("OPENCLAW_REVIEW_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS
+    )
     payload: dict[str, object] = {
         "message": message,
         "name": "GitHub Commit Review",
         "agentId": os.environ.get("OPENCLAW_REVIEW_AGENT_ID") or DEFAULT_AGENT_ID,
         "sessionKey": f"{os.environ.get('OPENCLAW_REVIEW_SESSION_PREFIX') or DEFAULT_SESSION_PREFIX}{sha}",
         "wakeMode": "now",
-        "timeoutSeconds": int(
-            os.environ.get("OPENCLAW_REVIEW_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS
-        ),
+        "timeoutSeconds": timeout_seconds,
+        "metadata": metadata,
     }
-    model = os.environ.get("OPENCLAW_REVIEW_MODEL")
-    if model:
-        payload["model"] = model
 
     request = urllib.request.Request(
         hook_url,
@@ -256,7 +306,7 @@ def post_to_openclaw(
             "User-Agent": "openclaw-commit-review-dispatch",
         },
     )
-    with urllib.request.urlopen(request, timeout=30):
+    with urllib.request.urlopen(request, timeout=max(timeout_seconds + 60, 120)):
         return
 
 
@@ -294,6 +344,15 @@ def dispatch() -> int:
     for commit in commits:
         sha = commit["id"]
         commit_html_url = f"{github_server_url}/{repo}/commit/{sha}"
+        compare_url = event.get("compare")
+        metadata = {
+            "repository": repo,
+            "sha": sha,
+            "commit_url": commit_html_url,
+            "compare_url": compare_url,
+            "status_context": STATUS_CONTEXT,
+            "target_url": status_target_url or commit_html_url,
+        }
         try:
             set_pending_status(
                 repo=repo,
@@ -312,7 +371,7 @@ def dispatch() -> int:
                 patch,
                 truncated,
             )
-            post_to_openclaw(hook_url, hook_token, message, sha)
+            post_to_openclaw(hook_url, hook_token, message, sha, metadata)
             print(f"Queued OpenClaw review for {sha}")
         except (DispatchError, subprocess.CalledProcessError, urllib.error.URLError) as exc:
             set_error_status(
