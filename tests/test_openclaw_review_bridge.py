@@ -14,6 +14,13 @@ SPEC.loader.exec_module(BRIDGE)
 
 
 class OpenClawReviewBridgeTests(unittest.TestCase):
+    def test_write_response_body_ignores_broken_pipe(self) -> None:
+        class BrokenWriter:
+            def write(self, _data):
+                raise BrokenPipeError("client disconnected")
+
+        self.assertFalse(BRIDGE.write_response_body(BrokenWriter(), b"{}"))
+
     def test_verify_github_webhook_signature_accepts_valid_signature(self) -> None:
         payload = b'{"zen":"ship it"}'
         secret = "topsecret"

@@ -67,6 +67,14 @@ def github_text_request(method: str, path: str, token: str, accept: str) -> str:
         return response.read().decode("utf-8")
 
 
+def write_response_body(stream: Any, body: bytes) -> bool:
+    try:
+        stream.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        return False
+    return True
+
+
 def upsert_commit_comment(repo: str, sha: str, body: str, token: str) -> None:
     marker = f"{COMMENT_MARKER_PREFIX}{sha} -->"
     comments = github_request(
@@ -434,13 +442,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    self.wfile.write(json.dumps({"ok": True, "event": "ping"}).encode("utf-8"))
+                    write_response_body(self.wfile, json.dumps({"ok": True, "event": "ping"}).encode("utf-8"))
                     return
                 if event_name != "push":
                     self.send_response(HTTPStatus.OK)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    self.wfile.write(json.dumps({"ok": True, "ignored": event_name}).encode("utf-8"))
+                    write_response_body(self.wfile, json.dumps({"ok": True, "ignored": event_name}).encode("utf-8"))
                     return
 
                 results = process_github_push_event(
@@ -451,7 +459,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"ok": True, "results": results}).encode("utf-8"))
+                write_response_body(self.wfile, json.dumps({"ok": True, "results": results}).encode("utf-8"))
                 return
 
             expected = env_required("OPENCLAW_REVIEW_WEBHOOK_TOKEN")
@@ -488,20 +496,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(
+            write_response_body(
+                self.wfile,
                 json.dumps(
                     {
                         "ok": True,
                         "conclusion": review["conclusion"],
                         "sha": sha,
                     }
-                ).encode("utf-8")
+                ).encode("utf-8"),
             )
         except (BridgeError, KeyError, ValueError, urllib.error.URLError, subprocess.SubprocessError) as exc:
             self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
+            write_response_body(self.wfile, json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(self.address_string(), "-", fmt % args, flush=True)
