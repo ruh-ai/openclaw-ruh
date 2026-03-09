@@ -172,7 +172,10 @@ def normalize_assistant_text(text: str) -> str:
 def latest_assistant_text(transcript_path: Path) -> str | None:
     if not transcript_path.exists():
         return None
-    lines = transcript_path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = transcript_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
     for raw_line in reversed(lines):
         if not raw_line.strip():
             continue
@@ -201,7 +204,11 @@ def wait_for_openclaw_reply(session_key: str, agent_id: str, timeout_seconds: in
 
     while time.monotonic() < deadline:
         if sessions_path.exists():
-            sessions = json.loads(sessions_path.read_text(encoding="utf-8"))
+            try:
+                sessions = json.loads(sessions_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                time.sleep(1)
+                continue
             entry = sessions.get(qualified_session_key)
             if entry:
                 transcript_path = sessions_dir(agent_id) / f"{entry['sessionId']}.jsonl"

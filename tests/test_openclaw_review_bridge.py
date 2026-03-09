@@ -124,6 +124,64 @@ class OpenClawReviewBridgeTests(unittest.TestCase):
         )
         sleep_mock.assert_not_called()
 
+    def test_wait_for_openclaw_reply_retries_transient_sessions_store_decode_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ,
+            {"OPENCLAW_STATE_DIR": tempdir},
+            clear=False,
+        ), mock.patch.object(BRIDGE.time, "sleep") as sleep_mock:
+            sessions_dir = os.path.join(tempdir, "agents", "github-review", "sessions")
+            os.makedirs(sessions_dir, exist_ok=True)
+
+            session_key = "hook:github-review:abc123:fixedsuffix"
+            qualified_key = f"agent:github-review:{session_key}"
+            sessions_path = os.path.join(sessions_dir, "sessions.json")
+            transcript_path = os.path.join(sessions_dir, "session-123.jsonl")
+
+            with open(sessions_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        qualified_key: {
+                            "sessionId": "session-123",
+                            "updatedAt": 1773038232658,
+                        }
+                    },
+                    handle,
+                )
+            with open(transcript_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"[[reply_to_current]] {\\"conclusion\\":\\"no_material_findings\\",\\"description\\":\\"ok\\",\\"findings\\":[],\\"notes\\":[]}"}]}}\n'
+                )
+
+            original_read_text = BRIDGE.Path.read_text
+            seen_invalid_sessions_read = {"value": False}
+
+            def flaky_read_text(path_obj, *args, **kwargs):
+                if (
+                    os.fspath(path_obj) == sessions_path
+                    and not seen_invalid_sessions_read["value"]
+                ):
+                    seen_invalid_sessions_read["value"] = True
+                    return "{"
+                return original_read_text(path_obj, *args, **kwargs)
+
+            with mock.patch.object(BRIDGE.Path, "read_text", autospec=True, side_effect=flaky_read_text):
+                result = BRIDGE.wait_for_openclaw_reply(session_key, "github-review", 2)
+
+        self.assertEqual(
+            result,
+            {
+                "result": {
+                    "payloads": [
+                        {
+                            "text": '{"conclusion":"no_material_findings","description":"ok","findings":[],"notes":[]}'
+                        }
+                    ]
+                }
+            },
+        )
+        sleep_mock.assert_called_once_with(1)
+
     @mock.patch.dict(
         os.environ,
         {
