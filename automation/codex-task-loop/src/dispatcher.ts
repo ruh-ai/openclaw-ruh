@@ -54,6 +54,11 @@ export async function dispatchTick(input: DispatchTickInput): Promise<DispatchTi
       return { status: "done", issueId: leasedIssue.id };
     }
 
+    if (isInReviewState(leasedIssue.state)) {
+      await input.leaseStore.renew(input.now);
+      return { status: "in_review", issueId: leasedIssue.id };
+    }
+
     const outcome = await input.codexExecutor(leasedIssue);
     if (outcome.status === "completed") {
       const prUrl = await input.gitPrAdapter.openOrUpdatePullRequest(leasedIssue, outcome);
@@ -120,4 +125,8 @@ export async function dispatchTick(input: DispatchTickInput): Promise<DispatchTi
   await input.leaseStore.write(newLease);
 
   return { status: "started", issueId: selectedIssue.id };
+}
+
+function isInReviewState(state: string): boolean {
+  return state === "In Review" || state === "CODE REVIEW";
 }

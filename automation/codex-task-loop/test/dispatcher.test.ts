@@ -162,6 +162,50 @@ test("marks the issue done and releases the lease when the pr is already merged"
   assert.equal(released, true);
 });
 
+test("keeps an in-review issue leased without rerunning codex until the pr merges", async () => {
+  let codexRuns = 0;
+  let renewedAt = "";
+
+  const result = await dispatchTick({
+    now: "2026-03-10T00:10:00.000Z",
+    leaseStore: {
+      read: async () => lease(),
+      write: async () => {},
+      renew: async (heartbeatAt: string) => {
+        renewedAt = heartbeatAt;
+      },
+      release: async () => {},
+    },
+    linearAdapter: {
+      listEligibleIssues: async () => [issue({ state: "CODE REVIEW" })],
+      transitionIssue: async () => {
+        throw new Error("should not transition");
+      },
+      commentOnIssue: async () => {
+        throw new Error("should not comment");
+      },
+    },
+    codexExecutor: async () => {
+      codexRuns += 1;
+      return { status: "completed", summary: "unexpected", verification: [] };
+    },
+    gitPrAdapter: {
+      findMergedPullRequest: async () => false,
+      openOrUpdatePullRequest: async () => {
+        throw new Error("should not update pr");
+      },
+    },
+    branchFactory: () => "codex/ruh-208",
+    runIdFactory: () => "run-1",
+    hostname: "vm-1",
+  });
+
+  assert.equal(result.status, "in_review");
+  assert.equal(result.issueId, "RUH-208");
+  assert.equal(codexRuns, 0);
+  assert.equal(renewedAt, "2026-03-10T00:10:00.000Z");
+});
+
 test("blocks the issue when retry budget is exhausted", async () => {
   const transitions: string[] = [];
   let released = false;
