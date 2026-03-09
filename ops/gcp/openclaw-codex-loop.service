@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw gateway for the codex task loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prasanjitdey
+WorkingDirectory=/srv/openclaw-ruh
+EnvironmentFile=/etc/openclaw/openclaw-codex-loop.env
+ExecStart=/usr/bin/env openclaw gateway --config /etc/openclaw/openclaw-codex-loop.config.jsonc
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

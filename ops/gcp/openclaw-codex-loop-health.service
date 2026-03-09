@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenClaw codex loop health check
+After=openclaw-codex-loop.service
+Wants=openclaw-codex-loop.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash -lc 'curl -fsS http://127.0.0.1:18789/health >/dev/null'

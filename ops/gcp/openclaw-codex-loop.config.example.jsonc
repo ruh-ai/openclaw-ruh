@@ -1,0 +1,30 @@
+{
+  // Example OpenClaw gateway config for the codex task loop host.
+  "bind": "127.0.0.1",
+  "port": 18789,
+  "auth": {
+    "mode": "local"
+  },
+  "agents": [
+    {
+      "id": "codex-task-loop",
+      "model": "${CODEX_TASK_LOOP_MODEL:-gpt-5.4}",
+      "instructions": [
+        "Run the codex task loop dispatcher on the local host.",
+        "Use Linear as the system of record.",
+        "Work only codex-labeled issues.",
+        "Process at most one issue at a time."
+      ],
+      "tools": [
+        "shell"
+      ]
+    }
+  ],
+  "cron": [
+    {
+      "schedule": "*/5 * * * *",
+      "agentId": "codex-task-loop",
+      "prompt": "Run one dispatcher tick for the codex task loop against the local openclaw-ruh checkout."
+    }
+  ]
+}
