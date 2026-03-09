@@ -60,12 +60,12 @@ test("builds the graphql issue query command", () => {
 });
 
 test("maps loop states to linear cli states", () => {
-  assert.equal(mapIssueState("Todo"), "unstarted");
-  assert.equal(mapIssueState("Backlog"), "backlog");
-  assert.equal(mapIssueState("Started"), "started");
-  assert.equal(mapIssueState("In Review"), "started");
-  assert.equal(mapIssueState("Done"), "completed");
-  assert.equal(mapIssueState("Blocked"), "triage");
+  assert.equal(mapIssueState("Todo"), "Todo");
+  assert.equal(mapIssueState("Backlog"), "Backlog");
+  assert.equal(mapIssueState("Started"), "In Development");
+  assert.equal(mapIssueState("In Review"), "CODE REVIEW");
+  assert.equal(mapIssueState("Done"), "Done");
+  assert.equal(mapIssueState("Blocked"), "ON HOLD");
 });
 
 test("formats a structured lease comment", () => {
@@ -116,7 +116,7 @@ test("builds an issue transition command", () => {
     "update",
     "RUH-208",
     "--state",
-    "started",
+    "CODE REVIEW",
   ]);
 });
 

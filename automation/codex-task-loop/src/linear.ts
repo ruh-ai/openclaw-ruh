@@ -120,6 +120,23 @@ export class LinearClient {
 export function mapIssueState(state: LoopIssueState): string {
   switch (state) {
     case "Todo":
+      return "Todo";
+    case "Backlog":
+      return "Backlog";
+    case "Started":
+      return "In Development";
+    case "In Review":
+      return "CODE REVIEW";
+    case "Done":
+      return "Done";
+    case "Blocked":
+      return "ON HOLD";
+  }
+}
+
+function mapIssueStateFilter(state: LoopIssueState): string {
+  switch (state) {
+    case "Todo":
       return "unstarted";
     case "Backlog":
       return "backlog";
@@ -154,7 +171,7 @@ export function listIssuesCommand(options: LinearListOptions): string[] {
   ];
 
   for (const state of options.states) {
-    command.push("--state", mapIssueState(state));
+    command.push("--state", mapIssueStateFilter(state));
   }
 
   return command;
