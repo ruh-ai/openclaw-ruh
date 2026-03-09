@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 
 import {
   buildCodexCommand,
@@ -88,4 +89,34 @@ test("returns a timeout outcome when the executor exceeds the deadline", async (
 
   assert.equal(outcome.status, "retryable_failure");
   assert.match(outcome.summary, /timed out/i);
+});
+
+test("reads the final codex message from the output file instead of stdout logs", async () => {
+  const outcome = await executeCodex(
+    {
+      model: "gpt-5.4",
+      cwd: "/srv/openclaw-ruh",
+      prompt: "Solve RUH-208",
+      timeoutMs: 1000,
+    },
+    async (command) => {
+      const outputPathIndex = command.indexOf("--output-last-message");
+      assert.notEqual(outputPathIndex, -1);
+      const outputPath = command[outputPathIndex + 1];
+      assert.ok(outputPath);
+      await writeFile(
+        outputPath,
+        '{"status":"completed","summary":"Created ADR","verification":["npm test"],"commitSha":"abc123","prUrl":"https://github.com/ruh-ai/openclaw-ruh/pull/2"}',
+      );
+
+      return {
+        stdout: '[2026-03-09T23:08:51] noisy codex logs\n{"status":"success"}',
+        stderr: "",
+      };
+    },
+  );
+
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.commitSha, "abc123");
+  assert.equal(outcome.prUrl, "https://github.com/ruh-ai/openclaw-ruh/pull/2");
 });

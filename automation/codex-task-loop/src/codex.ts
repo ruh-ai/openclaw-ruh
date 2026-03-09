@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -20,6 +23,13 @@ export interface CodexExecOptions {
   timeoutMs: number;
 }
 
+interface BuildCodexCommandOptions {
+  model: string;
+  cwd: string;
+  prompt: string;
+  outputLastMessagePath?: string;
+}
+
 export interface CommandOutput {
   stdout: string;
   stderr: string;
@@ -27,8 +37,8 @@ export interface CommandOutput {
 
 export type CommandRunner = (command: string[]) => Promise<CommandOutput>;
 
-export function buildCodexCommand(options: Omit<CodexExecOptions, "timeoutMs">): string[] {
-  return [
+export function buildCodexCommand(options: BuildCodexCommandOptions): string[] {
+  const command = [
     "codex",
     "exec",
     "-c",
@@ -40,22 +50,30 @@ export function buildCodexCommand(options: Omit<CodexExecOptions, "timeoutMs">):
     "--cd",
     options.cwd,
     "--dangerously-bypass-approvals-and-sandbox",
-    options.prompt,
   ];
+
+  if (options.outputLastMessagePath) {
+    command.push("--output-last-message", options.outputLastMessagePath);
+  }
+
+  command.push(options.prompt);
+  return command;
 }
 
 export async function executeCodex(
   options: CodexExecOptions,
   runner: CommandRunner = defaultRunner,
 ): Promise<CodexOutcome> {
+  const outputDir = await mkdtemp(join(tmpdir(), "codex-task-loop-"));
+  const outputLastMessagePath = join(outputDir, "last-message.txt");
   try {
     const output = await withTimeout(
-      runner(buildCodexCommand(options)),
+      runner(buildCodexCommand({ ...options, outputLastMessagePath })),
       options.timeoutMs,
       `Codex execution timed out after ${options.timeoutMs}ms`,
     );
 
-    return parseCodexOutcome(output.stdout);
+    return parseCodexOutcome(await readCodexFinalMessage(outputLastMessagePath, output.stdout));
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -63,6 +81,8 @@ export async function executeCodex(
       summary: message,
       verification: [],
     };
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
   }
 }
 
@@ -108,6 +128,15 @@ export function parseCodexOutcome(raw: string): CodexOutcome {
 async function defaultRunner(command: string[]): Promise<CommandOutput> {
   const [file, ...args] = command;
   return execFileAsync(file, args);
+}
+
+async function readCodexFinalMessage(outputPath: string, fallback: string): Promise<string> {
+  try {
+    const value = await readFile(outputPath, "utf8");
+    return value.trim() || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
