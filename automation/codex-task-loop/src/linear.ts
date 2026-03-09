@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { readActiveCycleIssueOrder, selectNextPlannedIssue } from "./build-plan.js";
+
 const execFileAsync = promisify(execFile);
 
 export type LoopIssueState = "Todo" | "Backlog" | "Started" | "In Review" | "Done" | "Blocked";
@@ -14,7 +16,6 @@ export interface LinearListOptions {
 export interface LinearTransitionOptions {
   issueId: string;
   state: LoopIssueState;
-  comment?: string;
 }
 
 export interface LeaseCommentInput {
@@ -27,11 +28,17 @@ export interface LeaseCommentInput {
 
 export interface LinearClientOptions {
   repoPath: string;
+  projectName: string;
+  labelName: string;
+  buildPlanPath: string;
+  dryRun?: boolean;
   apiKey?: string;
 }
 
 export interface LinearIssueSummary {
   id: string;
+  title: string;
+  description: string;
   priority: number;
   state: string;
   labels: readonly string[];
@@ -46,6 +53,52 @@ export interface CommandResult {
 export class LinearClient {
   constructor(private readonly options: LinearClientOptions) {}
 
+  async listEligibleIssues(): Promise<LinearIssueSummary[]> {
+    const codexIssues = await this.query(buildIssuesQueryCommand(this.options.projectName, this.options.labelName));
+    if (codexIssues.length > 0) {
+      return codexIssues;
+    }
+
+    const allIssues = await this.query(projectIssuesQueryCommand(this.options.projectName));
+    const issueOrder = await readActiveCycleIssueOrder(this.options.buildPlanPath);
+    const nextIssue = selectNextPlannedIssue(issueOrder, allIssues);
+    if (!nextIssue) {
+      return [];
+    }
+
+    await this.labelIssue(nextIssue.id, this.options.labelName);
+    return [
+      {
+        ...nextIssue,
+        labels: [...new Set([...nextIssue.labels, this.options.labelName])],
+      },
+    ];
+  }
+
+  async transitionIssue(issueId: string, state: LoopIssueState): Promise<void> {
+    if (this.options.dryRun) {
+      return;
+    }
+
+    await this.run(transitionIssueCommand({ issueId, state }));
+  }
+
+  async commentOnIssue(issueId: string, body: string): Promise<void> {
+    if (this.options.dryRun) {
+      return;
+    }
+
+    await this.run(commentOnIssueCommand(issueId, body));
+  }
+
+  async labelIssue(issueId: string, label: string): Promise<void> {
+    if (this.options.dryRun) {
+      return;
+    }
+
+    await this.run(labelIssueCommand(issueId, label));
+  }
+
   async run(command: string[]): Promise<CommandResult> {
     const [file, ...args] = command;
     const env = this.options.apiKey
@@ -56,6 +109,11 @@ export class LinearClient {
       cwd: this.options.repoPath,
       env,
     });
+  }
+
+  private async query(command: string[]): Promise<LinearIssueSummary[]> {
+    const result = await this.run(command);
+    return parseIssuesResponse(result.stdout);
   }
 }
 
@@ -101,6 +159,61 @@ export function listIssuesCommand(options: LinearListOptions): string[] {
   return command;
 }
 
+export function buildIssuesQueryCommand(project: string, label: string): string[] {
+  return [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "api",
+    "query EligibleIssues($project:String!,$label:String!){ issues(filter:{ project:{ name:{ eq:$project } }, labels:{ some:{ name:{ eq:$label } } } }, first:100){ nodes { identifier title description priority state { name } labels { nodes { name } } } } }",
+    "--variables-json",
+    JSON.stringify({ project, label }),
+  ];
+}
+
+export function projectIssuesQueryCommand(project: string): string[] {
+  return [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "api",
+    "query ProjectIssues($project:String!){ issues(filter:{ project:{ name:{ eq:$project } } }, first:100){ nodes { identifier title description priority state { name } labels { nodes { name } } } } }",
+    "--variables-json",
+    JSON.stringify({ project }),
+  ];
+}
+
+export function parseIssuesResponse(raw: string): LinearIssueSummary[] {
+  const parsed = JSON.parse(raw) as {
+    data?: {
+      issues?: {
+        nodes?: Array<{
+          identifier: string;
+          title?: string;
+          description?: string | null;
+          priority?: number | null;
+          state?: { name?: string | null } | null;
+          labels?: { nodes?: Array<{ name?: string | null }> } | null;
+        }>;
+      };
+    };
+  };
+
+  return (parsed.data?.issues?.nodes ?? []).map((issue) => ({
+    id: issue.identifier,
+    title: issue.title ?? issue.identifier,
+    description: issue.description ?? "",
+    priority: issue.priority ?? 4,
+    state: issue.state?.name ?? "Todo",
+    labels: (issue.labels?.nodes ?? [])
+      .map((label) => label.name)
+      .filter((label): label is string => Boolean(label)),
+    blockedBy: [],
+  }));
+}
+
 export function formatLeaseComment(input: LeaseCommentInput): string {
   return [
     "## OpenClaw Codex lease",
@@ -113,33 +226,44 @@ export function formatLeaseComment(input: LeaseCommentInput): string {
 }
 
 export function transitionIssueCommand(options: LinearTransitionOptions): string[] {
-  const command = `npm run linear -- issue update ${shellEscape(options.issueId)} --state ${shellEscape(mapIssueState(options.state))}`;
-
-  if (!options.comment) {
-    return ["sh", "-lc", command];
-  }
-
-  const graphql = "mutation($issueId:String!,$body:String!){ commentCreate(input:{ issueId:$issueId, body:$body }){ success } }";
-  const commentCommand = [
-    "npm run linear -- api",
-    shellSingleQuote(graphql),
-    "--var",
-    `issueId=${options.issueId}`,
-    "--var",
-    `body=${shellDoubleQuote(options.comment)}`,
-  ].join(" ");
-
-  return ["sh", "-lc", `${command} && ${commentCommand}`];
+  return [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "update",
+    options.issueId,
+    "--state",
+    mapIssueState(options.state),
+  ];
 }
 
-function shellEscape(value: string): string {
-  return value.replace(/(["\s'$`\\])/g, "\\$1");
+export function commentOnIssueCommand(issueId: string, body: string): string[] {
+  return [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "comment",
+    "add",
+    issueId,
+    "--body",
+    body,
+  ];
 }
 
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function shellDoubleQuote(value: string): string {
-  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+export function labelIssueCommand(issueId: string, label: string): string[] {
+  return [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "update",
+    issueId,
+    "--label",
+    label,
+  ];
 }

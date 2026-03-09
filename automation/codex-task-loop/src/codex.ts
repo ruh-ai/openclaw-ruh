@@ -31,6 +31,10 @@ export function buildCodexCommand(options: Omit<CodexExecOptions, "timeoutMs">):
   return [
     "codex",
     "exec",
+    "-c",
+    "mcp_servers={}",
+    "-c",
+    'model_reasoning_effort="high"',
     "--model",
     options.model,
     "--cd",

@@ -64,11 +64,27 @@ export async function dispatchTick(input: DispatchTickInput): Promise<DispatchTi
       }
     }
 
+    if (outcome.status === "blocked") {
+      await input.linearAdapter.transitionIssue(leasedIssue.id, "Blocked");
+      await input.linearAdapter.commentOnIssue(leasedIssue.id, outcome.summary);
+      await input.leaseStore.release();
+      return { status: "blocked", issueId: leasedIssue.id };
+    }
+
     if (outcome.status === "retryable_failure" && activeLease.retryCount >= (input.maxRetries ?? 2)) {
       await input.linearAdapter.transitionIssue(leasedIssue.id, "Blocked");
       await input.linearAdapter.commentOnIssue(leasedIssue.id, outcome.summary);
       await input.leaseStore.release();
       return { status: "blocked", issueId: leasedIssue.id };
+    }
+
+    if (outcome.status === "retryable_failure") {
+      await input.leaseStore.write({
+        ...activeLease,
+        heartbeatAt: input.now,
+        retryCount: activeLease.retryCount + 1,
+      });
+      return { status: "started", issueId: leasedIssue.id };
     }
 
     await input.leaseStore.renew(input.now);

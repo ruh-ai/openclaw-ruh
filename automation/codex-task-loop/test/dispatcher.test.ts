@@ -8,6 +8,8 @@ import type { LinearIssueSummary } from "../src/linear.js";
 function issue(overrides: Partial<LinearIssueSummary> = {}): LinearIssueSummary {
   return {
     id: "RUH-208",
+    title: "Publish V1 boundary ADR and non-goals",
+    description: "Create one decision note.",
     priority: 1,
     state: "Todo",
     labels: ["codex"],
@@ -190,6 +192,78 @@ test("blocks the issue when retry budget is exhausted", async () => {
     runIdFactory: () => "run-1",
     hostname: "vm-1",
     maxRetries: 2,
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(transitions[0], "RUH-208:Blocked");
+  assert.equal(released, true);
+});
+
+test("increments retry count when a retryable failure stays within budget", async () => {
+  let writtenRetryCount = -1;
+  let writtenHeartbeatAt = "";
+
+  const result = await dispatchTick({
+    now: "2026-03-10T00:10:00.000Z",
+    leaseStore: {
+      read: async () => lease({ retryCount: 0 }),
+      write: async (value: TaskLease) => {
+        writtenRetryCount = value.retryCount;
+        writtenHeartbeatAt = value.heartbeatAt;
+      },
+      renew: async () => {},
+      release: async () => {},
+    },
+    linearAdapter: {
+      listEligibleIssues: async () => [issue({ state: "Started" })],
+      transitionIssue: async () => {},
+      commentOnIssue: async () => {},
+    },
+    codexExecutor: async () => ({ status: "retryable_failure", summary: "temporary failure", verification: [] }),
+    gitPrAdapter: {
+      findMergedPullRequest: async () => false,
+      openOrUpdatePullRequest: async () => null,
+    },
+    branchFactory: () => "codex/ruh-208",
+    runIdFactory: () => "run-1",
+    hostname: "vm-1",
+    maxRetries: 2,
+  });
+
+  assert.equal(result.status, "started");
+  assert.equal(writtenRetryCount, 1);
+  assert.equal(writtenHeartbeatAt, "2026-03-10T00:10:00.000Z");
+});
+
+test("moves the issue to blocked when codex reports a terminal blocker", async () => {
+  const transitions: string[] = [];
+  let released = false;
+
+  const result = await dispatchTick({
+    now: "2026-03-10T00:10:00.000Z",
+    leaseStore: {
+      read: async () => lease(),
+      write: async () => {},
+      renew: async () => {},
+      release: async () => {
+        released = true;
+      },
+    },
+    linearAdapter: {
+      listEligibleIssues: async () => [issue({ state: "Started" })],
+      transitionIssue: async (issueId: string, state: string) => {
+        transitions.push(`${issueId}:${state}`);
+      },
+      commentOnIssue: async () => {},
+    },
+    codexExecutor: async () => ({ status: "blocked", summary: "Needs missing spec", verification: [] }),
+    gitPrAdapter: {
+      findMergedPullRequest: async () => false,
+      openOrUpdatePullRequest: async () => null,
+    },
+    branchFactory: () => "codex/ruh-208",
+    runIdFactory: () => "run-1",
+    hostname: "vm-1",
   });
 
   assert.equal(result.status, "blocked");

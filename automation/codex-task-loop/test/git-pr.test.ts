@@ -2,10 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  addPullRequestLabelsCommand,
   buildBranchName,
   buildCommitMessage,
   createPullRequestCommand,
   detectMergeState,
+  findMergedPullRequestCommand,
+  findPullRequestByHeadCommand,
+  parsePullRequestList,
+  parsePullRequestUrl,
   pushBranchCommand,
   updatePullRequestCommand,
 } from "../src/git-pr.js";
@@ -75,6 +80,69 @@ test("builds the pull request update command", () => {
       "--body",
       "Updated automation output",
     ],
+  );
+});
+
+test("builds the pull request lookup command by head branch", () => {
+  assert.deepEqual(findPullRequestByHeadCommand("codex/ruh-208-boundary"), [
+    "gh",
+    "pr",
+    "list",
+    "--head",
+    "codex/ruh-208-boundary",
+    "--state",
+    "all",
+    "--limit",
+    "1",
+    "--json",
+    "number,url,state",
+  ]);
+});
+
+test("builds the merged pull request lookup command by issue id", () => {
+  assert.deepEqual(findMergedPullRequestCommand("RUH-208"), [
+    "gh",
+    "pr",
+    "list",
+    "--search",
+    "RUH-208 in:title",
+    "--state",
+    "merged",
+    "--limit",
+    "1",
+    "--json",
+    "number,url,state",
+  ]);
+});
+
+test("builds the automation label command for pull requests", () => {
+  assert.deepEqual(addPullRequestLabelsCommand(12), [
+    "gh",
+    "pr",
+    "edit",
+    "12",
+    "--add-label",
+    "codex",
+    "--add-label",
+    "codex-automation",
+  ]);
+});
+
+test("parses the first pull request from gh json output", () => {
+  assert.deepEqual(
+    parsePullRequestList('[{"number":12,"url":"https://github.com/ruh-ai/openclaw-ruh/pull/12","state":"OPEN"}]'),
+    {
+      number: 12,
+      url: "https://github.com/ruh-ai/openclaw-ruh/pull/12",
+      state: "OPEN",
+    },
+  );
+});
+
+test("parses a pull request number from a pr url", () => {
+  assert.equal(
+    parsePullRequestUrl("https://github.com/ruh-ai/openclaw-ruh/pull/12")?.number,
+    12,
   );
 });
 

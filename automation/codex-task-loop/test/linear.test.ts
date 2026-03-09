@@ -2,9 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildIssuesQueryCommand,
+  commentOnIssueCommand,
   formatLeaseComment,
+  labelIssueCommand,
   listIssuesCommand,
   mapIssueState,
+  parseIssuesResponse,
+  projectIssuesQueryCommand,
   transitionIssueCommand,
 } from "../src/linear.js";
 
@@ -37,6 +42,21 @@ test("builds the list issues command with codex label and state filters", () => 
   ]);
 });
 
+test("builds the graphql issue query command", () => {
+  const command = buildIssuesQueryCommand("openclaw-ruh", "codex");
+
+  assert.deepEqual(command, [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "api",
+    "query EligibleIssues($project:String!,$label:String!){ issues(filter:{ project:{ name:{ eq:$project } }, labels:{ some:{ name:{ eq:$label } } } }, first:100){ nodes { identifier title description priority state { name } labels { nodes { name } } } } }",
+    "--variables-json",
+    "{\"project\":\"openclaw-ruh\",\"label\":\"codex\"}",
+  ]);
+});
+
 test("maps loop states to linear cli states", () => {
   assert.equal(mapIssueState("Todo"), "unstarted");
   assert.equal(mapIssueState("Backlog"), "backlog");
@@ -62,16 +82,87 @@ test("formats a structured lease comment", () => {
   assert.match(comment, /vm-1/);
 });
 
-test("builds an issue transition command with a comment payload", () => {
+test("builds a project issue query without a codex label filter", () => {
+  const command = projectIssuesQueryCommand("openclaw-ruh");
+
+  assert.deepEqual(command, [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "api",
+    "query ProjectIssues($project:String!){ issues(filter:{ project:{ name:{ eq:$project } } }, first:100){ nodes { identifier title description priority state { name } labels { nodes { name } } } } }",
+    "--variables-json",
+    "{\"project\":\"openclaw-ruh\"}",
+  ]);
+});
+
+test("builds an issue transition command", () => {
   const command = transitionIssueCommand({
     issueId: "RUH-208",
     state: "In Review",
-    comment: "PR created: https://github.com/example/pull/1",
   });
 
   assert.deepEqual(command, [
-    "sh",
-    "-lc",
-    "npm run linear -- issue update RUH-208 --state started && npm run linear -- api 'mutation($issueId:String!,$body:String!){ commentCreate(input:{ issueId:$issueId, body:$body }){ success } }' --var issueId=RUH-208 --var body=\"PR created: https://github.com/example/pull/1\"",
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "update",
+    "RUH-208",
+    "--state",
+    "started",
+  ]);
+});
+
+test("builds an issue comment command", () => {
+  const command = commentOnIssueCommand("RUH-208", "PR created: https://github.com/example/pull/1");
+
+  assert.deepEqual(command, [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "comment",
+    "add",
+    "RUH-208",
+    "--body",
+    "PR created: https://github.com/example/pull/1",
+  ]);
+});
+
+test("builds an issue label command", () => {
+  const command = labelIssueCommand("RUH-208", "codex");
+
+  assert.deepEqual(command, [
+    "npm",
+    "run",
+    "linear",
+    "--",
+    "issue",
+    "update",
+    "RUH-208",
+    "--label",
+    "codex",
+  ]);
+});
+
+test("parses graphql issues into loop summaries", () => {
+  const issues = parseIssuesResponse(
+    '{"data":{"issues":{"nodes":[{"identifier":"RUH-208","title":"Publish V1 boundary ADR and non-goals","description":"Create one decision note.","priority":1,"state":{"name":"Todo"},"labels":{"nodes":[{"name":"codex"},{"name":"platform"}]}}]}}}',
+  );
+
+  assert.deepEqual(issues, [
+    {
+      id: "RUH-208",
+      title: "Publish V1 boundary ADR and non-goals",
+      description: "Create one decision note.",
+      priority: 1,
+      state: "Todo",
+      labels: ["codex", "platform"],
+      blockedBy: [],
+    },
   ]);
 });

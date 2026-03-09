@@ -34,6 +34,10 @@ test("builds a codex exec command with model and cwd wiring", () => {
   assert.deepEqual(command, [
     "codex",
     "exec",
+    "-c",
+    'mcp_servers={}',
+    "-c",
+    'model_reasoning_effort=\"high\"',
     "--model",
     "gpt-5.4",
     "--cd",
