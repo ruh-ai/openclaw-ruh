@@ -1,12 +1,37 @@
 {
   // Example OpenClaw gateway configuration for the local review bridge.
-  // The bridge is the only public entrypoint. It shells into the local
-  // gateway with `openclaw agent --agent github-review`.
+  // The bridge talks to the loopback-only mapped hook below, which creates
+  // isolated review sessions and bypasses the untrusted-content wrapper only
+  // for this trusted internal path.
   "gateway": {
     "server": {
       "host": "127.0.0.1",
       "port": 18789
     }
+  },
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_GATEWAY_HOOK_TOKEN}",
+    "path": "/hooks",
+    "defaultSessionKey": "hook:github-review",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "allowedAgentIds": ["github-review"],
+    "mappings": [
+      {
+        "match": {
+          "path": "review"
+        },
+        "action": "agent",
+        "agentId": "github-review",
+        "name": "ReviewBridge",
+        "wakeMode": "now",
+        "sessionKey": "{{sessionKey}}",
+        "messageTemplate": "{{message}}",
+        "deliver": false,
+        "allowUnsafeExternalContent": true
+      }
+    ]
   },
   "agents": {
     "list": [

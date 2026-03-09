@@ -6,13 +6,16 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
 import textwrap
 from typing import Any
 import urllib.error
 import urllib.request
+import uuid
 
 
 STATUS_CONTEXT_DEFAULT = "openclaw/review"
@@ -127,34 +130,87 @@ def run_openclaw_agent(
     timeout_seconds: int,
     agent_id: str,
 ) -> dict[str, Any]:
-    openclaw_bin = os.environ.get("OPENCLAW_BIN", "/home/pd/.npm-global/bin/openclaw")
-    cmd = [
-        openclaw_bin,
-        "agent",
-        "--agent",
-        agent_id,
-        "--session-id",
-        session_key,
-        "--message",
-        message,
-        "--timeout",
-        str(timeout_seconds),
-        "--json",
-    ]
-    result = subprocess.run(
-        cmd,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds + 60,
-        env=os.environ.copy(),
+    hook_url = os.environ.get("OPENCLAW_GATEWAY_HOOK_URL", "http://127.0.0.1:18789/hooks/review")
+    hook_token = os.environ.get("OPENCLAW_GATEWAY_HOOK_TOKEN") or env_required("OPENCLAW_REVIEW_WEBHOOK_TOKEN")
+    isolated_session_key = f"{session_key}:{uuid.uuid4().hex}"
+    request = urllib.request.Request(
+        hook_url,
+        data=json.dumps(
+            {
+                "message": message,
+                "sessionKey": isolated_session_key,
+            }
+        ).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {hook_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "openclaw-review-bridge",
+        },
     )
-    if result.returncode != 0:
-        raise BridgeError(f"OpenClaw agent failed: {result.stderr.strip() or result.stdout.strip()}")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read().decode("utf-8")
     try:
-        return json.loads(result.stdout)
+        payload = json.loads(raw) if raw else {}
     except json.JSONDecodeError as exc:
-        raise BridgeError(f"OpenClaw agent output was not valid JSON: {exc}") from exc
+        raise BridgeError(f"Gateway hook output was not valid JSON: {exc}") from exc
+    if not payload.get("ok"):
+        raise BridgeError(f"Gateway hook rejected review run: {payload}")
+    return wait_for_openclaw_reply(isolated_session_key, agent_id, timeout_seconds)
+
+
+def sessions_dir(agent_id: str) -> Path:
+    state_root = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw")))
+    return state_root / "agents" / agent_id / "sessions"
+
+
+def normalize_assistant_text(text: str) -> str:
+    prefix = "[[reply_to_current]] "
+    return text.removeprefix(prefix).strip()
+
+
+def latest_assistant_text(transcript_path: Path) -> str | None:
+    if not transcript_path.exists():
+        return None
+    lines = transcript_path.read_text(encoding="utf-8").splitlines()
+    for raw_line in reversed(lines):
+        if not raw_line.strip():
+            continue
+        try:
+            entry = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        message = entry.get("message") or {}
+        if message.get("role") != "assistant":
+            continue
+        contents = message.get("content") or []
+        text_blocks = [
+            content.get("text", "")
+            for content in contents
+            if isinstance(content, dict) and content.get("type") == "text" and content.get("text")
+        ]
+        if text_blocks:
+            return normalize_assistant_text("\n".join(text_blocks))
+    return None
+
+
+def wait_for_openclaw_reply(session_key: str, agent_id: str, timeout_seconds: int) -> dict[str, Any]:
+    sessions_path = sessions_dir(agent_id) / "sessions.json"
+    qualified_session_key = f"agent:{agent_id}:{session_key}"
+    deadline = time.monotonic() + timeout_seconds + 30
+
+    while time.monotonic() < deadline:
+        if sessions_path.exists():
+            sessions = json.loads(sessions_path.read_text(encoding="utf-8"))
+            entry = sessions.get(qualified_session_key)
+            if entry:
+                transcript_path = sessions_dir(agent_id) / f"{entry['sessionId']}.jsonl"
+                text = latest_assistant_text(transcript_path)
+                if text:
+                    return {"result": {"payloads": [{"text": text}]}}
+        time.sleep(1)
+
+    raise BridgeError(f"Timed out waiting for OpenClaw reply in session {qualified_session_key}")
 
 
 def parse_review_json(agent_result: dict[str, Any]) -> dict[str, Any]:

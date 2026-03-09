@@ -1,7 +1,9 @@
 import hashlib
 import hmac
 import importlib.util
+import json
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -37,6 +39,90 @@ class OpenClawReviewBridgeTests(unittest.TestCase):
                 signature_header=signature,
             )
         )
+
+    @mock.patch.dict(
+        os.environ,
+        {
+            "OPENCLAW_GATEWAY_HOOK_URL": "http://127.0.0.1:18789/hooks/review",
+            "OPENCLAW_GATEWAY_HOOK_TOKEN": "gateway-hook-token",
+        },
+        clear=False,
+    )
+    def test_run_openclaw_agent_posts_to_internal_gateway_hook(self) -> None:
+        response = {"result": {"payloads": [{"text": '{"conclusion":"no_material_findings","description":"ok","findings":[],"notes":[]}'}]}}
+
+        with mock.patch.object(BRIDGE, "wait_for_openclaw_reply", return_value=response) as wait_mock, mock.patch.object(
+            BRIDGE.uuid,
+            "uuid4",
+            return_value=mock.Mock(hex="fixedsuffix"),
+        ), mock.patch.object(BRIDGE.urllib.request, "urlopen") as urlopen_mock:
+            urlopen_mock.return_value.__enter__.return_value.read.return_value = b'{"ok":true,"runId":"run-123"}'
+
+            result = BRIDGE.run_openclaw_agent(
+                message="Review this patch",
+                session_key="hook:github-review:abc123",
+                timeout_seconds=180,
+                agent_id="github-review",
+            )
+
+        self.assertEqual(result, response)
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:18789/hooks/review")
+        self.assertEqual(request.get_header("Authorization"), "Bearer gateway-hook-token")
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {
+                "message": "Review this patch",
+                "sessionKey": "hook:github-review:abc123:fixedsuffix",
+            },
+        )
+        wait_mock.assert_called_once_with(
+            "hook:github-review:abc123:fixedsuffix",
+            "github-review",
+            180,
+        )
+
+    def test_wait_for_openclaw_reply_reads_isolated_hook_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
+            os.environ,
+            {"OPENCLAW_STATE_DIR": tempdir},
+            clear=False,
+        ), mock.patch.object(BRIDGE.time, "sleep") as sleep_mock:
+            sessions_dir = os.path.join(tempdir, "agents", "github-review", "sessions")
+            os.makedirs(sessions_dir, exist_ok=True)
+
+            session_key = "hook:github-review:abc123:fixedsuffix"
+            qualified_key = f"agent:github-review:{session_key}"
+            with open(os.path.join(sessions_dir, "sessions.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        qualified_key: {
+                            "sessionId": "session-123",
+                            "updatedAt": 1773038232658,
+                        }
+                    },
+                    handle,
+                )
+            with open(os.path.join(sessions_dir, "session-123.jsonl"), "w", encoding="utf-8") as handle:
+                handle.write(
+                    '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"[[reply_to_current]] {\\"conclusion\\":\\"no_material_findings\\",\\"description\\":\\"ok\\",\\"findings\\":[],\\"notes\\":[]}"}]}}\n'
+                )
+
+            result = BRIDGE.wait_for_openclaw_reply(session_key, "github-review", 2)
+
+        self.assertEqual(
+            result,
+            {
+                "result": {
+                    "payloads": [
+                        {
+                            "text": '{"conclusion":"no_material_findings","description":"ok","findings":[],"notes":[]}'
+                        }
+                    ]
+                }
+            },
+        )
+        sleep_mock.assert_not_called()
 
     @mock.patch.dict(
         os.environ,
