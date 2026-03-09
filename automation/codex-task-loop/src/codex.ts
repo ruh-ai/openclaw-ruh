@@ -68,22 +68,32 @@ export async function executeCodex(
 
 export function parseCodexOutcome(raw: string): CodexOutcome {
   try {
-    const parsed = JSON.parse(raw) as Partial<CodexOutcome>;
+    const parsed = JSON.parse(raw) as {
+      status?: unknown;
+      summary?: unknown;
+      verification?: unknown;
+      commitSha?: unknown;
+      prUrl?: unknown;
+    };
+    const rawStatus = typeof parsed.status === "string" ? parsed.status : undefined;
+    const normalizedStatus = rawStatus === "success" ? "completed" : rawStatus;
     if (
-      parsed.status !== "completed" &&
-      parsed.status !== "blocked" &&
-      parsed.status !== "retryable_failure" &&
-      parsed.status !== "noop"
+      normalizedStatus !== "completed" &&
+      normalizedStatus !== "blocked" &&
+      normalizedStatus !== "retryable_failure" &&
+      normalizedStatus !== "noop"
     ) {
       throw new Error("Missing valid status");
     }
 
     return {
-      status: parsed.status,
-      summary: parsed.summary ?? "",
-      verification: parsed.verification ?? [],
-      commitSha: parsed.commitSha,
-      prUrl: parsed.prUrl,
+      status: normalizedStatus,
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      verification: Array.isArray(parsed.verification)
+        ? parsed.verification.filter((value): value is string => typeof value === "string")
+        : [],
+      commitSha: typeof parsed.commitSha === "string" ? parsed.commitSha : undefined,
+      prUrl: typeof parsed.prUrl === "string" ? parsed.prUrl : undefined,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

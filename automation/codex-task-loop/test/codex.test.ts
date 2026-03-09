@@ -56,6 +56,15 @@ test("parses a structured completed outcome", () => {
   assert.equal(outcome.commitSha, "abc123");
 });
 
+test("normalizes a success outcome to completed", () => {
+  const outcome = parseCodexOutcome(
+    '{"status":"success","summary":"Created ADR","verification":["npm test"],"commitSha":"abc123","prUrl":"https://github.com/ruh-ai/openclaw-ruh/pull/1"}',
+  );
+
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.prUrl, "https://github.com/ruh-ai/openclaw-ruh/pull/1");
+});
+
 test("downgrades invalid output to retryable failure", () => {
   const outcome = parseCodexOutcome("not json");
 
