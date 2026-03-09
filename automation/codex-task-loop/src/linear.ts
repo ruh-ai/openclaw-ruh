@@ -138,6 +138,7 @@ export function listIssuesCommand(options: LinearListOptions): string[] {
   const command = [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -163,6 +164,7 @@ export function buildIssuesQueryCommand(project: string, label: string): string[
   return [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "api",
@@ -176,6 +178,7 @@ export function projectIssuesQueryCommand(project: string): string[] {
   return [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "api",
@@ -229,6 +232,7 @@ export function transitionIssueCommand(options: LinearTransitionOptions): string
   return [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -243,6 +247,7 @@ export function commentOnIssueCommand(issueId: string, body: string): string[] {
   return [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -258,6 +263,7 @@ export function labelIssueCommand(issueId: string, label: string): string[] {
   return [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",

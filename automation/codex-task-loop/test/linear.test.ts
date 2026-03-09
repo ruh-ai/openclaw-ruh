@@ -23,6 +23,7 @@ test("builds the list issues command with codex label and state filters", () => 
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -48,6 +49,7 @@ test("builds the graphql issue query command", () => {
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "api",
@@ -88,6 +90,7 @@ test("builds a project issue query without a codex label filter", () => {
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "api",
@@ -106,6 +109,7 @@ test("builds an issue transition command", () => {
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -122,6 +126,7 @@ test("builds an issue comment command", () => {
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
@@ -139,6 +144,7 @@ test("builds an issue label command", () => {
   assert.deepEqual(command, [
     "npm",
     "run",
+    "--silent",
     "linear",
     "--",
     "issue",
