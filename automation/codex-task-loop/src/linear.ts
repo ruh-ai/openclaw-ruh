@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { readActiveCycleIssueOrder, selectNextPlannedIssue } from "./build-plan.js";
 
 const execFileAsync = promisify(execFile);
+const NON_BLOCKING_CODEX_STATES = new Set(["Done", "Completed", "Canceled", "Cancelled", "ON HOLD"]);
 
 export type LoopIssueState = "Todo" | "Backlog" | "Started" | "In Review" | "Done" | "Blocked";
 
@@ -55,8 +56,9 @@ export class LinearClient {
 
   async listEligibleIssues(): Promise<LinearIssueSummary[]> {
     const codexIssues = await this.query(buildIssuesQueryCommand(this.options.projectName, this.options.labelName));
-    if (codexIssues.length > 0) {
-      return codexIssues;
+    const activeCodexIssues = codexIssues.filter((issue) => !NON_BLOCKING_CODEX_STATES.has(issue.state));
+    if (activeCodexIssues.length > 0) {
+      return activeCodexIssues;
     }
 
     const allIssues = await this.query(projectIssuesQueryCommand(this.options.projectName));

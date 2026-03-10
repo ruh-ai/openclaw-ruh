@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   buildIssuesQueryCommand,
   commentOnIssueCommand,
   formatLeaseComment,
+  LinearClient,
   labelIssueCommand,
   listIssuesCommand,
   mapIssueState,
@@ -171,4 +175,77 @@ test("parses graphql issues into loop summaries", () => {
       blockedBy: [],
     },
   ]);
+});
+
+test("relabels the next planned issue when the only codex issue is already done", async () => {
+  const root = await mkdtemp(join(tmpdir(), "codex-task-loop-linear-"));
+  const buildPlanPath = join(root, "build-plan.md");
+  await writeFile(
+    buildPlanPath,
+    [
+      "## Current Execution Snapshot",
+      "",
+      "Active cycle",
+      "",
+      "- `RUH-208` Publish V1 boundary ADR and non-goals",
+      "- `RUH-209` Draft API and event contract v0.1 from current docs",
+      "",
+      "Next cycle runway",
+      "",
+      "- `RUH-212` Decide monorepo topology and package boundaries",
+      "",
+    ].join("\n"),
+  );
+
+  const recordedCommands: string[][] = [];
+
+  class FakeLinearClient extends LinearClient {
+    override async run(command: string[]) {
+      recordedCommands.push(command);
+
+      if (JSON.stringify(command) === JSON.stringify(buildIssuesQueryCommand("openclaw-ruh", "codex"))) {
+        return {
+          stdout:
+            '{"data":{"issues":{"nodes":[{"identifier":"RUH-208","title":"Publish V1 boundary ADR and non-goals","description":"Create one decision note.","priority":1,"state":{"name":"Done"},"labels":{"nodes":[{"name":"codex"}]}}]}}}',
+          stderr: "",
+        };
+      }
+
+      if (JSON.stringify(command) === JSON.stringify(projectIssuesQueryCommand("openclaw-ruh"))) {
+        return {
+          stdout:
+            '{"data":{"issues":{"nodes":[{"identifier":"RUH-208","title":"Publish V1 boundary ADR and non-goals","description":"Create one decision note.","priority":1,"state":{"name":"Done"},"labels":{"nodes":[{"name":"codex"}]}},{"identifier":"RUH-209","title":"Draft API and event contract v0.1 from current docs","description":"Draft the first contract set.","priority":1,"state":{"name":"Todo"},"labels":{"nodes":[{"name":"platform"}]}}]}}}',
+          stderr: "",
+        };
+      }
+
+      if (JSON.stringify(command) === JSON.stringify(labelIssueCommand("RUH-209", "codex"))) {
+        return { stdout: "", stderr: "" };
+      }
+
+      throw new Error(`Unexpected command: ${JSON.stringify(command)}`);
+    }
+  }
+
+  const client = new FakeLinearClient({
+    repoPath: root,
+    projectName: "openclaw-ruh",
+    labelName: "codex",
+    buildPlanPath,
+  });
+
+  const issues = await client.listEligibleIssues();
+
+  assert.deepEqual(issues, [
+    {
+      id: "RUH-209",
+      title: "Draft API and event contract v0.1 from current docs",
+      description: "Draft the first contract set.",
+      priority: 1,
+      state: "Todo",
+      labels: ["platform", "codex"],
+      blockedBy: [],
+    },
+  ]);
+  assert(recordedCommands.some((command) => JSON.stringify(command) === JSON.stringify(labelIssueCommand("RUH-209", "codex"))));
 });
