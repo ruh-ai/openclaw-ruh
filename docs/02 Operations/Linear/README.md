@@ -60,6 +60,11 @@ Suggested views
 - `Pack Quality`: labels `pack-system` or `evals`
 - `Pilot Gates`: project `Design Partner Pilot`
 
+Engineering handoff conventions
+
+- Use [Engineering Ready and Done Conventions.md](/Users/prasanjitdey/projects/openclaw-ruh/docs/02%20Operations/Linear/Engineering%20Ready%20and%20Done%20Conventions.md) as the minimum definition of ready and definition of done for architecture, schema, service, connector, and workflow issues.
+- Keep issue-specific acceptance criteria in Linear, but use that note as the minimum bar before work starts or an issue closes.
+
 How to use `initial-backlog.csv`
 
 1. Create the four projects above in Linear first.
