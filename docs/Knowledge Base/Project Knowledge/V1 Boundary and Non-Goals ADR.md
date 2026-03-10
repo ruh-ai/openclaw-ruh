@@ -51,7 +51,7 @@ This ADR fixes those choices as V1 implementation rules so product, platform, an
 ## Follow-up
 - Use this ADR as the scope gate for V1 data model, deployment compiler, runtime manager, secrets broker, and workflow orchestration work.
 - Keep future roadmap items explicit when they cross this boundary, especially shared-runtime ideas, new autonomy levels, or system-of-record replacement proposals.
-- Revisit the ADR when the missing API and Event Contract Specification is available, but do not expand V1 scope without a new decision note.
+- Revisit the ADR when the internal [[Knowledge Base/Project Knowledge/Internal API and Event Contract v0.1|API and Event Contract v0.1]] draft changes materially or the original source specification is recovered, but do not expand V1 scope without a new decision note.
 
 ## Source Notes
 - [[Knowledge Base/Documents/Platform Core/Digital Employee Platform PRD|Digital Employee Platform PRD]]

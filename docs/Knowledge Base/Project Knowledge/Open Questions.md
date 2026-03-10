@@ -7,7 +7,7 @@ tags:
 # Open Questions
 
 ## Missing Or Incomplete Inputs
-- The source docs repeatedly reference an API and Event Contract Specification, but that document is not in the current `docs` folder.
+- The original API and Event Contract Specification source is still missing, but the repo now carries an internal replacement draft at [[Knowledge Base/Project Knowledge/Internal API and Event Contract v0.1|Internal API and Event Contract v0.1]].
 - Most of the core documents are working drafts from March 2026, so the final platform scope is not yet locked.
 - The current workspace contains documentation and manifests, but it does not yet expose an application codebase or deployed runtime implementation.
 
@@ -24,6 +24,6 @@ tags:
 - Re-run the sync after any changes in `docs`, then update the manual synthesis notes if the thesis or architecture shifts.
 
 ## High-Value Next Additions
-- Add the missing API and Event Contract source if it exists.
+- Recover the original API and Event Contract source if it exists, then reconcile it against the internal v0.1 replacement draft.
 - Add implementation notes once there is an actual codebase in the workspace.
 - Add customer timeline notes if new proposals, pilots, or production rollouts appear.
