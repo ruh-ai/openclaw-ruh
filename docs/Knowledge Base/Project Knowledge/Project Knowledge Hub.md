@@ -11,12 +11,13 @@ This folder is the fastest path for understanding the project later. Read these 
 ## Recommended Read Order
 1. [[Knowledge Base/Project Knowledge/Project Brief|Project Brief]]
 2. [[Knowledge Base/Project Knowledge/Architecture Model|Architecture Model]]
-3. [[Knowledge Base/Project Knowledge/Internal API and Event Contract v0.1|Internal API and Event Contract v0.1]]
-4. [[Knowledge Base/Project Knowledge/Packs and Overlays|Packs and Overlays]]
-5. [[Knowledge Base/Project Knowledge/Delivery Model|Delivery Model]]
-6. [[Knowledge Base/Project Knowledge/Commercial Context|Commercial Context]]
-7. [[Knowledge Base/Project Knowledge/Glossary|Glossary]]
-8. [[Knowledge Base/Project Knowledge/Open Questions|Open Questions]]
+3. [[Knowledge Base/Project Knowledge/Monorepo Topology and Package Boundaries ADR|Monorepo Topology and Package Boundaries ADR]]
+4. [[Knowledge Base/Project Knowledge/Internal API and Event Contract v0.1|Internal API and Event Contract v0.1]]
+5. [[Knowledge Base/Project Knowledge/Packs and Overlays|Packs and Overlays]]
+6. [[Knowledge Base/Project Knowledge/Delivery Model|Delivery Model]]
+7. [[Knowledge Base/Project Knowledge/Commercial Context|Commercial Context]]
+8. [[Knowledge Base/Project Knowledge/Glossary|Glossary]]
+9. [[Knowledge Base/Project Knowledge/Open Questions|Open Questions]]
 
 ## What This Project Appears To Be
 Ruh.ai is being framed as a digital employee operating system built on top of OpenClaw gateway runtimes. The core strategy is a horizontal control plane plus reusable vertical packs, with customer-specific overlays used to bind those packs into real operating environments.
