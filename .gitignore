@@ -1,0 +1,58 @@
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+backend/.env
+frontend/.env.local
+frontend/.env*.local
+*.env
+
+# ── Python ────────────────────────────────────────────────────────────────────
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Backend runtime data (auto-generated, not for version control) ────────────
+backend/data/sandboxes.json
+backend/data/sessions/*
+!backend/data/sessions/.gitkeep
+backend/data/conversations.json
+backend/data/messages/
+
+# ── Node.js ───────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+frontend/.yarn/*
+!frontend/.yarn/patches
+!frontend/.yarn/plugins
+!frontend/.yarn/releases
+!frontend/.yarn/sdks
+!frontend/.yarn/versions
+
+# ── Next.js ───────────────────────────────────────────────────────────────────
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/settings.local.json
