@@ -1,0 +1,38 @@
+{
+  "name": "ruh-backend",
+  "version": "1.0.0",
+  "description": "OpenClaw Daytona Backend API — TypeScript/Bun port",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests/",
+    "test:unit": "bun test tests/unit/",
+    "test:integration": "bun test tests/integration/",
+    "test:e2e": "bun test tests/e2e/",
+    "test:smoke": "bun test tests/smoke/",
+    "test:security": "bun test tests/security/",
+    "test:contract": "bun test tests/contract/",
+    "test:watch": "bun test --watch tests/unit/"
+  },
+  "dependencies": {
+    "@daytonaio/sdk": "^0.13.0",
+    "axios": "^1.7.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.0",
+    "pg": "^8.12.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/pg": "^8.11.6",
+    "@types/supertest": "^6.0.2",
+    "@types/uuid": "^10.0.0",
+    "bun-types": "latest",
+    "supertest": "^7.0.0",
+    "typescript": "^5.5.0"
+  }
+}
