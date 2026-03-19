@@ -5,54 +5,36 @@
 Thumbs.db
 
 # ── Environment & secrets ─────────────────────────────────────────────────────
-backend/.env
+.env
+*.env
 frontend/.env.local
 frontend/.env*.local
-*.env
 
-# ── Python ────────────────────────────────────────────────────────────────────
-backend/.venv/
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
-*.egg-info/
+# ── Node / Bun ────────────────────────────────────────────────────────────────
+node_modules/
 dist/
 build/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# ── Backend runtime data (auto-generated, not for version control) ────────────
-backend/data/sandboxes.json
-backend/data/sessions/*
-!backend/data/sessions/.gitkeep
-backend/data/conversations.json
-backend/data/messages/
-
-# ── Node.js ───────────────────────────────────────────────────────────────────
-frontend/node_modules/
-frontend/.pnp
-frontend/.pnp.js
-frontend/.yarn/*
-!frontend/.yarn/patches
-!frontend/.yarn/plugins
-!frontend/.yarn/releases
-!frontend/.yarn/sdks
-!frontend/.yarn/versions
-
-# ── Next.js ───────────────────────────────────────────────────────────────────
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/next-env.d.ts
-frontend/tsconfig.tsbuildinfo
-
-# ── Logs ──────────────────────────────────────────────────────────────────────
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 *.log
+
+# ── Backend-ts ────────────────────────────────────────────────────────────────
+ruh-backend/node_modules/
+ruh-backend/dist/
+
+# ── Frontend (Next.js) ────────────────────────────────────────────────────────
+ruh-frontend/node_modules/
+ruh-frontend/.pnp
+ruh-frontend/.pnp.js
+ruh-frontend/.yarn/*
+!ruh-frontend/.yarn/patches
+!ruh-frontend/.yarn/plugins
+!ruh-frontend/.yarn/releases
+!ruh-frontend/.yarn/sdks
+!ruh-frontend/.yarn/versions
+ruh-frontend/.next/
+ruh-frontend/out/
+ruh-frontend/build/
+ruh-frontend/next-env.d.ts
+ruh-frontend/tsconfig.tsbuildinfo
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json

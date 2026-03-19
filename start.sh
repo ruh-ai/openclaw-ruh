@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
-# Start backend and frontend concurrently
+# Start backend and frontend concurrently (development)
 
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# --- Backend ---
-echo "==> Setting up Python backend..."
-cd "$ROOT/backend"
-if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+# ── Check Bun is installed ────────────────────────────────────────────────────
+if ! command -v bun &>/dev/null; then
+  echo "ERROR: bun is not installed. Install it from https://bun.sh"
+  exit 1
 fi
-source .venv/bin/activate
-pip install -q -r requirements.txt
+
+# ── Backend ───────────────────────────────────────────────────────────────────
+echo "==> Installing backend dependencies..."
+cd "$ROOT/ruh-backend"
+bun install --silent
 
 if [ ! -f ".env" ]; then
   cp .env.example .env
-  echo "    Created backend/.env — add your DAYTONA_API_KEY before using the app."
+  echo "    Created ruh-backend/.env — add your DAYTONA_API_KEY and DATABASE_URL before using the app."
 fi
 
 echo "==> Starting backend on http://localhost:8000 ..."
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+bun run --watch src/index.ts &
 BACKEND_PID=$!
 
-# --- Frontend ---
+# ── Frontend ──────────────────────────────────────────────────────────────────
 echo "==> Installing frontend dependencies..."
-cd "$ROOT/frontend"
+cd "$ROOT/ruh-frontend"
 npm install --silent
 
 echo "==> Starting frontend on http://localhost:3000 ..."
@@ -35,7 +37,6 @@ echo ""
 echo "================================================================"
 echo "  Backend  : http://localhost:8000"
 echo "  Frontend : http://localhost:3000"
-echo "  API docs : http://localhost:8000/docs"
 echo "================================================================"
 echo "Press Ctrl+C to stop both servers."
 

@@ -1,0 +1,64 @@
+# Requires nginx-ingress-controller installed in the cluster.
+# Install with: helm install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --create-namespace
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw-ingress
+  namespace: openclaw
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # Disable buffering for SSE / streaming (sandbox creation + chat)
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # Uncomment to enable TLS via cert-manager:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  # Uncomment for TLS:
+  # tls:
+  #   - hosts:
+  #       - yourdomain.com
+  #     secretName: openclaw-tls
+  rules:
+    - host: yourdomain.com    # ← replace with your domain (or remove for IP-based access)
+      http:
+        paths:
+          # Backend: API, docs, health
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /openapi.json
+            pathType: Exact
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          # Frontend: everything else
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000

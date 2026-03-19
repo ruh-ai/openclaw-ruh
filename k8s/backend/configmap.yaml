@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: openclaw
+data:
+  PORT: "8000"
+  # Set to your public domain(s); the ingress will be on the same origin.
+  ALLOWED_ORIGINS: "https://yourdomain.com"
