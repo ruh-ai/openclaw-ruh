@@ -61,7 +61,7 @@ jobs:
       helm_dir: helm/ruh-backend
       base_values_file: values.yaml
       values_file: values.dev.yaml
-      deploy_name: ruh-backend
+      deploy_name: openclaw-backend
       artifact_name: openclaw-backend
     secrets: inherit
 
@@ -75,7 +75,7 @@ jobs:
       helm_dir: helm/ruh-frontend
       base_values_file: values.yaml
       values_file: values.dev.yaml
-      deploy_name: ruh-frontend
+      deploy_name: openclaw-frontend
       artifact_name: openclaw-frontend
     secrets: inherit
 
@@ -89,6 +89,6 @@ jobs:
       helm_dir: helm/agent-builder-ui
       base_values_file: values.yaml
       values_file: values.dev.yaml
-      deploy_name: ruh-agent-builder-ui
+      deploy_name: openclaw-agent-builder-ui
       artifact_name: openclaw-agent-builder-ui
     secrets: inherit
