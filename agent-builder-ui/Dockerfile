@@ -5,8 +5,8 @@ WORKDIR /app
 
 RUN corepack enable
 
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn .yarn
+COPY agent-builder-ui/package.json agent-builder-ui/yarn.lock agent-builder-ui/.yarnrc.yml ./
+COPY agent-builder-ui/.yarn .yarn
 RUN yarn install --immutable
 
 # ── Stage 2: Build ────────────────────────────────────────────────────────────
@@ -16,11 +16,11 @@ WORKDIR /app
 
 RUN corepack enable
 
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn .yarn
+COPY agent-builder-ui/package.json agent-builder-ui/yarn.lock agent-builder-ui/.yarnrc.yml ./
+COPY agent-builder-ui/.yarn .yarn
 RUN yarn install --immutable
 
-COPY . .
+COPY agent-builder-ui/ .
 
 ARG NEXT_PUBLIC_API_URL=""
 ARG NEXT_PUBLIC_AUTH_URL=""

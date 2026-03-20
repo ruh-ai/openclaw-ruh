@@ -3,7 +3,7 @@ FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+COPY ruh-frontend/package.json ruh-frontend/package-lock.json* ./
 RUN npm ci --omit=dev
 
 # ── Stage 2: Build ─────────────────────────────────────────────────────────────
@@ -12,10 +12,10 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy all deps (including devDeps needed for build)
-COPY package.json package-lock.json* ./
+COPY ruh-frontend/package.json ruh-frontend/package-lock.json* ./
 RUN npm ci
 
-COPY . .
+COPY ruh-frontend/ .
 
 # NEXT_PUBLIC_API_URL is baked in at build time.
 # In production (behind nginx), leave it empty so the browser
