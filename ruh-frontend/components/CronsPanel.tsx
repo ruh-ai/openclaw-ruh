@@ -31,7 +31,7 @@ interface CronRun {
   jobId: string;
   startedAtMs: number;
   finishedAtMs?: number;
-  status: "ok" | "error" | "skipped";
+  status: "ok" | "error" | "skipped" | "running";
   error?: string;
 }
 
@@ -111,7 +111,7 @@ function RunHistoryModal({
                       ? `${((r.finishedAtMs - r.startedAtMs) / 1000).toFixed(1)}s`
                       : "—";
                   return (
-                    <tr key={r.runId} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                    <tr key={r.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="px-5 py-2.5 text-gray-300">{formatTs(r.startedAtMs)}</td>
                       <td className="px-5 py-2.5 text-gray-400">{dur}</td>
                       <td className="px-5 py-2.5">
