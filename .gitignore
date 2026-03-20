@@ -56,3 +56,4 @@ yarn-error.log*
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
+openclaw-agent-builder/output/
