@@ -1,0 +1,98 @@
+name: ruh-backend
+
+replicaCount: null
+
+image:
+  name: nginx:latest
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  gcpServiceAccount: ""
+
+revisionHistoryLimit: 2
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 25%
+    maxSurge: 25%
+
+resources:
+  requests:
+    memory: "200Mi"
+    cpu: "100m"
+  limits:
+    memory: "600Mi"
+    cpu: "250m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 70
+
+initContainer:
+  enabled: true
+  name: migration
+  command:
+    - /app/run_migrations.sh
+  resources:
+    requests:
+      memory: "200Mi"
+      cpu: "150m"
+    limits:
+      memory: "300Mi"
+      cpu: "200m"
+
+livenessProbe:
+  enabled: false
+  type: http
+  http:
+    path: /health
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: false
+  type: http
+  http:
+    path: /health
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  sessionAffinity:
+    enabled: false
+    timeoutSeconds: 10800
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: ruh-be.rapidinnovation.dev
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+externalSecret:
+  enabled: true
+  refreshInterval: "1m"
+  gcpStore: gcp-store
+  gcpSecretName: ""
+
+nodeSelector:
+  enabled: false
+
+tolerations:
+  enabled: false

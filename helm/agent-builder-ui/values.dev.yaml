@@ -1,0 +1,2 @@
+externalSecret:
+  gcpSecretName: "ruh-agent-builder-ui-dev"

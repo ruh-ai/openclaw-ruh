@@ -1,0 +1,79 @@
+name: Build and Deploy Application
+
+on:
+  push:
+    branches:
+      - dev
+      - qa
+      - main
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────
+  # BUILD JOBS — run in parallel, each gets its own image pushed to Artifact Registry
+  # ─────────────────────────────────────────────
+
+  build-backend:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    with:
+      image_name: ruh-backend
+      dockerfile_path: ruh-backend/Dockerfile
+    secrets: inherit
+
+  build-frontend:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    with:
+      image_name: ruh-frontend
+      dockerfile_path: ruh-frontend/Dockerfile
+    secrets: inherit
+
+  build-agent-builder-ui:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    with:
+      image_name: ruh-agent-builder-ui
+      dockerfile_path: agent-builder-ui/Dockerfile
+    secrets: inherit
+
+  # ─────────────────────────────────────────────
+  # DEPLOY JOBS — each waits only for its own build
+  # values_file points to per-service helm folder
+  # ─────────────────────────────────────────────
+
+  deploy-backend:
+    permissions:
+      contents: read
+      id-token: write
+    needs: build-backend
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.1
+    with:
+      values_file: helm/ruh-backend/values.yaml
+    secrets: inherit
+
+  deploy-frontend:
+    permissions:
+      contents: read
+      id-token: write
+    needs: build-frontend
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.1
+    with:
+      values_file: helm/ruh-frontend/values.yaml
+    secrets: inherit
+
+  deploy-agent-builder-ui:
+    permissions:
+      contents: read
+      id-token: write
+    needs: build-agent-builder-ui
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.1
+    with:
+      values_file: helm/agent-builder-ui/values.yaml
+    secrets: inherit

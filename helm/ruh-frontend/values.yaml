@@ -1,0 +1,88 @@
+name: ruh-frontend
+
+replicaCount: null
+
+image:
+  name: nginx:latest
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  gcpServiceAccount: ""
+
+revisionHistoryLimit: 2
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 25%
+    maxSurge: 25%
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "250m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 70
+
+initContainer:
+  enabled: false
+
+livenessProbe:
+  enabled: false
+  type: http
+  http:
+    path: /
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: false
+  type: http
+  http:
+    path: /
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+  sessionAffinity:
+    enabled: false
+    timeoutSeconds: 10800
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: ruh-fe.rapidinnovation.dev
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+externalSecret:
+  enabled: true
+  refreshInterval: "1m"
+  gcpStore: gcp-store
+  gcpSecretName: ""
+
+nodeSelector:
+  enabled: false
+
+tolerations:
+  enabled: false

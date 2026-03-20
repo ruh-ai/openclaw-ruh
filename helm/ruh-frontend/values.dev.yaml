@@ -1,0 +1,5 @@
+# serviceAccount:
+#   gcpServiceAccount: "ruh-workload-sa-dev@ruh-ai-dev.iam.gserviceaccount.com"
+
+externalSecret:
+  gcpSecretName: "ruh-frontend-dev"
