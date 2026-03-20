@@ -1,2 +1,14 @@
-externalSecret:
-  gcpSecretName: "ruh-agent-builder-ui-dev"
+# externalSecret:
+#   gcpSecretName: "ruh-agent-builder-ui-dev"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: ruh-agent-builder.rapidinnovation.dev
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

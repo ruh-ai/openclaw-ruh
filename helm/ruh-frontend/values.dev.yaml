@@ -1,5 +1,16 @@
 # serviceAccount:
 #   gcpServiceAccount: "ruh-workload-sa-dev@ruh-ai-dev.iam.gserviceaccount.com"
 
-externalSecret:
-  gcpSecretName: "ruh-frontend-dev"
+# externalSecret:
+#   gcpSecretName: "ruh-frontend-dev"
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: ruh-fe.rapidinnovation.dev
+      paths:
+        - path: /
+          pathType: Prefix

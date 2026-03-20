@@ -63,17 +63,17 @@ service:
     enabled: false
     timeoutSeconds: 10800
 
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-  hosts:
-    - host: ruh-fe.rapidinnovation.dev
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
+# ingress:
+#   enabled: true
+#   className: nginx
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+#   hosts:
+#     - host: ruh-fe.rapidinnovation.dev
+#       paths:
+#         - path: /
+#           pathType: Prefix
+#   tls: []
 
 externalSecret:
   enabled: true
