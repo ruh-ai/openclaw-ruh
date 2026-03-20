@@ -9,7 +9,8 @@ Full-stack deployment of the OpenClaw gateway manager — TypeScript/Bun backend
 | Layer | Technology |
 |---|---|
 | Backend | TypeScript, Bun, Express |
-| Frontend | Next.js (TypeScript) |
+| Frontend (Developer) | Next.js 16, TypeScript, Tailwind CSS |
+| Agent Builder UI | Next.js 15, TypeScript, Tailwind CSS, shadcn/ui |
 | Database | PostgreSQL 16 |
 | Proxy | Nginx |
 | Sandbox runtime | Daytona (`@daytonaio/sdk`) |
@@ -20,7 +21,7 @@ Full-stack deployment of the OpenClaw gateway manager — TypeScript/Bun backend
 
 ```
 .
-├── backend-ts/          # TypeScript/Bun REST API
+├── ruh-backend/         # TypeScript/Bun REST API
 │   ├── src/
 │   │   ├── index.ts           # Express app + all routes
 │   │   ├── db.ts              # PostgreSQL connection pool
@@ -31,8 +32,10 @@ Full-stack deployment of the OpenClaw gateway manager — TypeScript/Bun backend
 │   ├── .env.example
 │   ├── Dockerfile
 │   └── package.json
-├── frontend/            # Next.js UI
+├── ruh-frontend/        # Next.js developer UI (port 3001)
+├── agent-builder-ui/    # Next.js agent builder UI (port 3000)
 ├── nginx/               # Reverse proxy config
+├── k8s/                 # Kubernetes deployment manifests
 ├── docker-compose.yml   # Production stack
 ├── start.sh             # Local development helper
 └── .env.example         # Root env template for docker-compose
@@ -60,8 +63,8 @@ docker run -d --name pg \
 ### 1. Configure environment
 
 ```bash
-cp backend-ts/.env.example backend-ts/.env
-# Edit backend-ts/.env and set DAYTONA_API_KEY and at least one LLM key
+cp .env.example .env
+# Edit .env and set DAYTONA_API_KEY and at least one LLM key
 ```
 
 ### 2. Run both servers
@@ -73,7 +76,8 @@ cp backend-ts/.env.example backend-ts/.env
 | Service | URL |
 |---|---|
 | Backend API | http://localhost:8000 |
-| Frontend | http://localhost:3000 |
+| Agent Builder UI | http://localhost:3000 |
+| Frontend (Developer) | http://localhost:3001 |
 
 ### Run backend only
 

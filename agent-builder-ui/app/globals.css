@@ -292,38 +292,39 @@ h1 {
   --sidebar-ring: oklch(0.556 0 0);
   --toast-text: oklch(0.205 0 0);
 
-  --text-primary: #121212;
-  --text-secondary: #4b5563;
-  --text-tertiary: #827f82;
+  /* Figma Design System Colors - Dark Mode */
+  --text-primary: #ededed;
+  --text-secondary: #9ca3af;
+  --text-tertiary: #6b7280;
 
   --primary: #ae00d0;
-  --primary-hover: #9400b4;
+  --primary-hover: #c026d3;
   --secondary: #7b5aff;
-  --secondary-hover: #6b4bef;
-  --tertiary-color: #12195e;
-  --background: #f9f7f9;
-  --background-light: #fafafa;
-  --background-muted: #f9fafb;
-  --border-muted: #eff0f3;
-  --border-light: #e0e0e0;
-  --border-stroke: #e2e2e2;
-  --border-default: #e5e7eb;
-  --color-light: #fdf4ff;
-  --agent-bubble: #f9fafb;
-  --user-bubble: #f1f1f1;
-  --color-light-secondary: #fbfaff;
-  --color-light-tertiary: #f8f8fa;
-  --card-color: #ffffff;
-  --text-placeholder: #c2c2c2;
-  --background-accent: #f7e6fa;
-  --tab-color: #f4f4f4;
+  --secondary-hover: #8b6fff;
+  --tertiary-color: #a5b4fc;
+  --background: #030712;
+  --background-light: #0a0a0a;
+  --background-muted: #111827;
+  --border-muted: #1f2937;
+  --border-light: #374151;
+  --border-stroke: #374151;
+  --border-default: #374151;
+  --color-light: #1a0a1e;
+  --agent-bubble: #111827;
+  --user-bubble: #1f2937;
+  --color-light-secondary: #0f0d1a;
+  --color-light-tertiary: #111117;
+  --card-color: #111827;
+  --text-placeholder: #4b5563;
+  --background-accent: #2d1033;
+  --tab-color: #1f2937;
   --success: #22c55e;
   --warning: #f59e0b;
   --warning-2: #f59e0b;
   --error: #ef4444;
   --info: #3b82f6;
-  --disabled: #9ca3af;
-  --sidebar-background: #fdfbff;
+  --disabled: #4b5563;
+  --sidebar-background: #0f172a;
 }
 
 @layer base {

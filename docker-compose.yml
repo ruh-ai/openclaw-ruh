@@ -53,6 +53,20 @@ services:
       backend:
         condition: service_healthy
 
+  # ── Agent Builder UI ───────────────────────────────────────────────────────
+  agent-builder-ui:
+    build:
+      context: ./agent-builder-ui
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
   # ── Nginx reverse proxy ────────────────────────────────────────────────────
   nginx:
     build:
@@ -66,6 +80,7 @@ services:
     depends_on:
       - backend
       - frontend
+      - agent-builder-ui
 
 volumes:
   postgres_data:
