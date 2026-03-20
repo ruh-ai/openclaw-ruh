@@ -16,7 +16,7 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
   const components = useMemo(
     () => ({
       pre: ({ children, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: React.ReactNode }) => (
-        <pre {...props} className="max-w-[90vw] overflow-x-auto bg-[#f8f8f8] rounded-lg p-3 my-3 text-sm">
+        <pre {...props} className="max-w-full overflow-x-auto bg-[#f5f3f7] rounded-lg p-3 my-3 text-xs text-[#3c3a3d]">
           {children}
         </pre>
       ),
@@ -27,14 +27,14 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
           return (
             <code
               {...props}
-              className="bg-[#f0f0f0] text-[var(--primary,#7c3aed)] px-1.5 py-0.5 rounded text-[13px] font-mono"
+              className="bg-[#f3f0f5] text-[#222022] px-1.5 py-0.5 rounded text-[13px] font-mono border border-[#e2e2e2]"
             >
               {children}
             </code>
           );
         }
         return (
-          <code {...props} className={cn(codeClassName, "text-sm font-mono")}>
+          <code {...props} className={cn(codeClassName, "text-xs font-mono text-[#3c3a3d]")}>
             {children}
           </code>
         );
@@ -43,7 +43,7 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
       blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<"blockquote"> & { children?: React.ReactNode }) => (
         <blockquote
           {...props}
-          className="border-l-4 border-[var(--primary,#7c3aed)]/30 pl-4 py-2 my-4 bg-[#f9f7ff] rounded-r-lg italic text-text-secondary"
+          className="border-l-4 border-[#ae00d0]/30 pl-4 py-2 my-3 bg-[#f9f3ff] rounded-r-lg italic text-[#3c3a3d]"
         >
           {children}
         </blockquote>
@@ -81,17 +81,41 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
         </td>
       ),
 
-      a: ({ children, href, ...props }: React.ComponentPropsWithoutRef<"a"> & { children?: React.ReactNode }) => (
-        <a
+      img: ({ src, alt, ...props }: React.ComponentPropsWithoutRef<"img">) => (
+        <img
           {...props}
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[var(--primary,#7c3aed)] hover:text-[var(--primary,#7c3aed)]/80 underline underline-offset-2"
-        >
-          {children}
-        </a>
+          src={src}
+          alt={alt || ""}
+          className="rounded-md w-10 h-10 inline-block align-middle object-cover my-1"
+        />
       ),
+
+      a: ({ children, href, ...props }: React.ComponentPropsWithoutRef<"a"> & { children?: React.ReactNode }) => {
+        // Detect image URLs and render as images
+        const isImageUrl = href && /\.(png|jpg|jpeg|gif|svg|webp)(\?.*)?$/i.test(href);
+        // Also detect storage/CDN image URLs that may not have extensions
+        const isStorageImage = href && /storage\.googleapis\.com.*\/(chat-uploads|images|avatars)\//i.test(href);
+        if (isImageUrl || isStorageImage) {
+          return (
+            <img
+              src={href}
+              alt={typeof children === "string" ? children : "image"}
+              className="rounded-md w-10 h-10 inline-block align-middle object-cover"
+            />
+          );
+        }
+        return (
+          <a
+            {...props}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#ae00d0] hover:text-[#ae00d0]/80 underline underline-offset-2"
+          >
+            {children}
+          </a>
+        );
+      },
 
       h1: ({ children, ...props }: React.ComponentPropsWithoutRef<"h1"> & { children?: React.ReactNode }) => (
         <h1 {...props} className="text-xl font-satoshi-bold mt-5 mb-3 first:mt-0 text-text-primary">
@@ -100,13 +124,13 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
       ),
 
       h2: ({ children, ...props }: React.ComponentPropsWithoutRef<"h2"> & { children?: React.ReactNode }) => (
-        <h2 {...props} className="text-lg font-satoshi-semibold mt-4 mb-2.5 first:mt-0 text-text-primary">
+        <h2 {...props} className="text-lg font-satoshi-bold mt-4 mb-2 first:mt-0 text-[#222022]">
           {children}
         </h2>
       ),
 
       h3: ({ children, ...props }: React.ComponentPropsWithoutRef<"h3"> & { children?: React.ReactNode }) => (
-        <h3 {...props} className="text-base font-satoshi-semibold mt-3.5 mb-2 first:mt-0 text-text-primary">
+        <h3 {...props} className="text-[15px] font-satoshi-bold mt-3 mb-1.5 first:mt-0 text-[#222022]">
           {children}
         </h3>
       ),
@@ -118,35 +142,35 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
       ),
 
       p: ({ children, ...props }: React.ComponentPropsWithoutRef<"p"> & { children?: React.ReactNode }) => (
-        <p {...props} className="leading-relaxed my-2.5 first:mt-0 last:mb-0 text-text-primary">
+        <p {...props} className="leading-[1.6] my-1.5 first:mt-0 last:mb-0 text-[#3c3a3d]">
           {children}
         </p>
       ),
 
       ul: ({ children, ...props }: React.ComponentPropsWithoutRef<"ul"> & { children?: React.ReactNode }) => (
-        <ul {...props} className="list-disc pl-5 my-2.5 space-y-1.5">
+        <ul {...props} className="list-disc pl-5 my-1.5 space-y-1">
           {children}
         </ul>
       ),
 
       ol: ({ children, ...props }: React.ComponentPropsWithoutRef<"ol"> & { children?: React.ReactNode }) => (
-        <ol {...props} className="list-decimal pl-5 my-2.5 space-y-1.5">
+        <ol {...props} className="list-decimal pl-5 my-1.5 space-y-1">
           {children}
         </ol>
       ),
 
       li: ({ children, ...props }: React.ComponentPropsWithoutRef<"li"> & { children?: React.ReactNode }) => (
-        <li {...props} className="leading-relaxed text-text-primary">
+        <li {...props} className="leading-[1.6] text-[#3c3a3d]">
           {children}
         </li>
       ),
 
       hr: (props: React.ComponentPropsWithoutRef<"hr">) => (
-        <hr {...props} className="my-5 border-border-default" />
+        <hr {...props} className="my-4 border-[#e2e2e2]" />
       ),
 
       strong: ({ children, ...props }: React.ComponentPropsWithoutRef<"strong"> & { children?: React.ReactNode }) => (
-        <strong {...props} className="font-satoshi-semibold text-text-primary">
+        <strong {...props} className="font-satoshi-bold text-[#222022]">
           {children}
         </strong>
       ),

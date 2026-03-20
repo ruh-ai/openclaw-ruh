@@ -2,13 +2,32 @@ import { NextRequest, NextResponse } from "next/server";
 import WebSocket from "ws";
 import { randomUUID } from "crypto";
 import yaml from "js-yaml";
+import { appendFileSync, mkdirSync } from "fs";
+import { join } from "path";
+
+// ---------------------------------------------------------------------------
+// Chat logger — saves all request/response data to logs/openclaw-chat.log
+// ---------------------------------------------------------------------------
+const LOG_DIR = join(process.cwd(), "logs");
+const LOG_FILE = join(LOG_DIR, "openclaw-chat.log");
+
+function chatLog(direction: "SEND" | "RECV" | "INFO" | "USER" | "AGENT", data: unknown) {
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const line = `[${timestamp}] [${direction}] ${typeof data === "string" ? data : JSON.stringify(data, null, 2)}\n`;
+    appendFileSync(LOG_FILE, line);
+  } catch {
+    // Logging should never break the app
+  }
+}
 
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
 const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 const GATEWAY_ORIGIN =
   process.env.OPENCLAW_GATEWAY_ORIGIN || "https://clawagentbuilder.ruh.ai";
 const PER_ATTEMPT_TIMEOUT_MS = parseInt(
-  process.env.OPENCLAW_TIMEOUT_MS || "180000",
+  process.env.OPENCLAW_TIMEOUT_MS || "600000",
   10
 );
 const MAX_RETRIES = 3;
@@ -45,13 +64,13 @@ function sseEncode(event: string, data: object): Uint8Array {
 // ---------------------------------------------------------------------------
 
 const PHASE_MESSAGES: Record<string, string> = {
-  start: "Agent started...",
-  thinking: "Agent thinking...",
-  planning: "Planning approach...",
+  start: "Processing your inputs...",
+  thinking: "Analyzing requirements...",
+  planning: "Planning agent architecture...",
   searching: "Searching for existing skills...",
   generating: "Generating skill graph...",
-  reviewing: "Reviewing results...",
-  writing: "Writing response...",
+  reviewing: "Reviewing agent design...",
+  writing: "Preparing response...",
   end: "Complete",
 };
 
@@ -70,6 +89,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { session_id, message, agent } = body;
+
+    chatLog("USER", { session_id, message, agent });
 
     if (!session_id || !message) {
       return NextResponse.json(
@@ -100,6 +121,7 @@ export async function POST(req: NextRequest) {
             onLifecycleEvent
           );
 
+          chatLog("AGENT", response);
           send("result", response as Record<string, unknown>);
         } catch (gatewayError) {
           const errMsg =
@@ -394,27 +416,33 @@ async function forwardToGateway(
       } catch {
         return;
       }
+      chatLog("RECV", frame);
 
       // Step 1: Server sends connect.challenge
       if (frame.type === "event" && frame.event === "connect.challenge") {
+        const connectMsg = {
+          type: "req",
+          id: "1",
+          method: "connect",
+          params: {
+            minProtocol: 3,
+            maxProtocol: 3,
+            client: {
+              id: "openclaw-control-ui",
+              version: "2026.3.13",
+              platform: "web",
+              mode: "webchat",
+            },
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            auth: { token: "***" },
+          },
+        };
+        chatLog("SEND", connectMsg);
         ws.send(
           JSON.stringify({
-            type: "req",
-            id: "1",
-            method: "connect",
-            params: {
-              minProtocol: 3,
-              maxProtocol: 3,
-              client: {
-                id: "openclaw-control-ui",
-                version: "2026.3.13",
-                platform: "web",
-                mode: "webchat",
-              },
-              role: "operator",
-              scopes: ["operator.read", "operator.write"],
-              auth: { token: GATEWAY_TOKEN },
-            },
+            ...connectMsg,
+            params: { ...connectMsg.params, auth: { token: GATEWAY_TOKEN } },
           })
         );
         return;
@@ -434,23 +462,23 @@ async function forwardToGateway(
         connected = true;
         onLifecycleEvent({
           phase: "authenticated",
-          message: "Agent started...",
+          message: "Processing your inputs...",
         });
 
         // Step 3: Send chat.send
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id: "2",
-            method: "chat.send",
-            params: {
-              sessionKey: `agent:${agentId}:main`,
-              message,
-              idempotencyKey: randomUUID(),
-              deliver: false,
-            },
-          })
-        );
+        const chatSendMsg = {
+          type: "req",
+          id: "2",
+          method: "chat.send",
+          params: {
+            sessionKey: `agent:${agentId}:main`,
+            message,
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          },
+        };
+        chatLog("SEND", chatSendMsg);
+        ws.send(JSON.stringify(chatSendMsg));
         return;
       }
 
@@ -468,7 +496,7 @@ async function forwardToGateway(
         runId = (payload?.runId as string) || "";
         onLifecycleEvent({
           phase: "thinking",
-          message: "Agent thinking...",
+          message: "Analyzing requirements...",
         });
         return;
       }
