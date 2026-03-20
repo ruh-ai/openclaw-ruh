@@ -38,3 +38,4 @@ ruh-frontend/tsconfig.tsbuildinfo
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
+openclaw-agent-builder/output/
