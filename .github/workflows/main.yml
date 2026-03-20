@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.2
     with:
       image_name: ruh-backend
       dockerfile_path: ruh-backend/Dockerfile
@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.2
     with:
       image_name: ruh-frontend
       dockerfile_path: ruh-frontend/Dockerfile
@@ -37,7 +37,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.1
+    uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-build.yaml@workflow/v1.3.2
     with:
       image_name: ruh-agent-builder-ui
       dockerfile_path: agent-builder-ui/Dockerfile
