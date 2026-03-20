@@ -58,7 +58,9 @@ jobs:
     needs: build-backend
     uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.2
     with:
-      values_file: ruh-backend/values.yaml
+      helm_dir: helm/ruh-backend
+      base_values_file: values.yaml
+      values_file: values.dev.yaml
       deploy_name: ruh-backend
       artifact_name: openclaw-backend
     secrets: inherit
@@ -70,7 +72,9 @@ jobs:
     needs: build-frontend
     uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.2
     with:
-      values_file: ruh-frontend/values.yaml
+      helm_dir: helm/ruh-frontend
+      base_values_file: values.yaml
+      values_file: values.dev.yaml
       deploy_name: ruh-frontend
       artifact_name: openclaw-frontend
     secrets: inherit
@@ -82,7 +86,9 @@ jobs:
     needs: build-agent-builder-ui
     uses: ruh-ai/reusable-workflows-and-charts/.github/workflows/reusable-deploy-gke.yaml@workflow/v1.3.2
     with:
-      values_file: agent-builder-ui/values.yaml
+      helm_dir: helm/agent-builder-ui
+      base_values_file: values.yaml
+      values_file: values.dev.yaml
       deploy_name: ruh-agent-builder-ui
       artifact_name: openclaw-agent-builder-ui
     secrets: inherit
