@@ -8,16 +8,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { useUserStore } from "@/hooks/use-user";
-import { authApi } from "@/app/api/auth";
-import { loginRoute, settingsRoute } from "@/shared/routes";
+import { loginRoute } from "@/shared/routes";
+// TODO: Re-enable when external auth is restored
+// import { useUserStore } from "@/hooks/use-user";
+// import { authApi } from "@/app/api/auth";
 import {
   ChevronDown,
-  ExternalLink,
-  LifeBuoy,
   Loader2,
   LogOut,
-  Settings2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React, { useState } from "react";
@@ -35,45 +33,46 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
   isCollapsed = false,
 }) => {
   const router = useRouter();
-  const { user } = useUserStore();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  // Derive display values from user store
-  const userName = user?.fullName || "User";
-  const userEmail = user?.email || "";
-  const userInitials = userName
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  // Simple static user for now — no user store needed
+  const userName = "Developer";
+  const userEmail = "dev@ruh.ai";
+  const userInitials = "DE";
 
-  const handleManageAccount = () => {
-    onClose?.();
-    router.push(settingsRoute);
-  };
-
-  const handleHelp = () => {
-    onClose?.();
-    window.open("https://ruh.ai/support", "_blank");
-  };
-
+  // Simple logout — just clear the auth cookie
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      await authApi.logout();
+      await fetch("/api/auth/simple-logout", { method: "POST" });
       router.push(loginRoute);
     } catch (error) {
       console.error("Logout error:", error);
       toast.error("Logout failed. Redirecting to login...");
-      // Even on error, redirect to login
       router.push(loginRoute);
     } finally {
       setIsLoggingOut(false);
       onClose?.();
     }
   };
+
+  /* Original logout using external auth:
+   * const handleLogout = async () => {
+   *   setIsLoggingOut(true);
+   *   try {
+   *     await authApi.logout();
+   *     router.push(loginRoute);
+   *   } catch (error) {
+   *     console.error("Logout error:", error);
+   *     toast.error("Logout failed. Redirecting to login...");
+   *     router.push(loginRoute);
+   *   } finally {
+   *     setIsLoggingOut(false);
+   *     onClose?.();
+   *   }
+   * };
+   */
 
   return (
     <div
@@ -151,25 +150,6 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
           </div>
 
           <DropdownMenuSeparator className="my-0" />
-
-          <DropdownMenuItem
-            onClick={handleManageAccount}
-            className="flex items-center gap-2.5 px-1.5 h-8 py-0! cursor-pointer rounded-lg hover:bg-background-muted"
-          >
-            <Settings2 className="h-5 w-5 text-text-primary" />
-            <span className="text-sm text-text-secondary">Manage account</span>
-          </DropdownMenuItem>
-
-          <DropdownMenuSeparator className="my-0" />
-
-          <DropdownMenuItem
-            onClick={handleHelp}
-            className="flex items-center gap-2.5 px-1.5 h-8 py-0! cursor-pointer rounded-lg hover:bg-background-muted"
-          >
-            <LifeBuoy className="h-5 w-5 text-text-primary" />
-            <span className="text-sm text-text-secondary">Help</span>
-            <ExternalLink className="h-3.5 w-3.5 text-text-tertiary ml-auto" />
-          </DropdownMenuItem>
 
           <DropdownMenuItem
             onClick={handleLogout}

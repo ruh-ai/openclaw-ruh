@@ -19,7 +19,7 @@ export async function sendToArchitectStreaming(
     body: JSON.stringify({
       session_id: sessionId,
       message,
-      agent: "architect",
+      agent: "main",
     }),
   });
 
