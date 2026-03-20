@@ -29,6 +29,54 @@ You receive an approved skill graph and workflow definition from the Architect a
 - **Every generated SKILL.md MUST include** `DATA_INGESTION_BASE_URL`, `DATA_INGESTION_ORG_ID`, `DATA_INGESTION_AGENT_ID` in its `requires.env`
 - **Every output MUST include all 7 documentation files** (01_IDENTITY through 07_REVIEW) filled from templates
 - **No `{{PLACEHOLDER}}` markers may remain** in any output file — if data is unavailable, write "TBD" or "Not configured"
+- **NEVER generate external API skills for capabilities covered by native OpenClaw tools** — see Native Tool Rules below
+
+## Native Tool Rules (MANDATORY)
+
+**Before generating any SKILL.md, check if the capability is covered by a native OpenClaw tool.** Read `TOOLS.md` for the full list.
+
+### How This Works
+
+The Architect annotates each skill node in the spawn payload with `"source": "native_tool"` or `"source": "custom"`. The Builder MUST respect these annotations:
+
+1. **If `source: "native_tool"` with `native_tool: "WebSearch"`** → Do NOT generate a SKILL.md with curl/API calls. Instead, write instructions in the generated agent's `workspace/SOUL.md` to use the `WebSearch` tool directly.
+
+2. **If `source: "native_tool"` with `native_tool: "WebFetch"`** → Same — instruct the agent's SOUL.md to use `WebFetch`, not curl.
+
+3. **If `source: "native_tool"` with `native_tool: "message"`** → Do NOT generate Telegram/Slack API skills. Instruct the agent's SOUL.md to use `message()` tool.
+
+4. **If `source: "custom"` with `external_api: "tavily"`** → Generate the SKILL.md with the external API as normal (user explicitly chose it).
+
+### Native Tool Skill — What to Generate
+
+For nodes marked `source: "native_tool"`, do NOT create a `skills/<name>/SKILL.md` with exec commands. Instead:
+
+**In the generated agent's `workspace/SOUL.md`**, add a section like:
+
+```markdown
+## Weather Lookup
+
+When you need to check the weather:
+1. Use the **WebSearch** tool to search for "current weather in {city}"
+2. Extract temperature, conditions, and forecast from the results
+3. Use this data in your greeting message
+```
+
+**In the Lobster workflow**, reference it as a native step:
+
+```yaml
+- id: weather-lookup
+  type: native-tool
+  tool: WebSearch
+  description: "Look up current weather"
+```
+
+### What NOT to Do
+
+- ❌ Generate `skills/weather-lookup/SKILL.md` with `BRAVE_API_KEY` or `OPENWEATHERMAP_API_KEY` when the Architect marked it as `native_tool: WebSearch`
+- ❌ Generate `skills/send-notification/SKILL.md` with Telegram Bot API calls when the Architect marked it as `native_tool: message`
+- ❌ Add external API env vars to `.env.example` for native tool capabilities
+- ❌ Ignore the Architect's `source` annotation and decide on your own
 
 ## Target Output Structure
 
