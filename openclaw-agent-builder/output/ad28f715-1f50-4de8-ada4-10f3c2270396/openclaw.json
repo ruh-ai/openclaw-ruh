@@ -1,0 +1,90 @@
+{
+  "name": "dev-productivity-scoreboard",
+  "version": "1.0.0",
+  "agents": {
+    "defaults": {
+      "model": "gpt-5.2"
+    },
+    "list": [
+      {
+        "id": "agent",
+        "name": "Dev Productivity Scoreboard Agent",
+        "skills": [
+          "data-ingestion-openclaw",
+          "developer_identity_mapping",
+          "jira_scoring_agent",
+          "github_scoring_agent",
+          "daily_orchestrator_report",
+          "telegram_report_sender"
+        ]
+      }
+    ]
+  },
+  "tools": {
+    "agentToAgent": {
+      "enabled": false,
+      "allow": []
+    }
+  },
+  "skills": {
+    "entries": {
+      "data-ingestion-openclaw": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "developer_identity_mapping": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}",
+          "DEV_MAPPING_JSON": "${DEV_MAPPING_JSON}"
+        }
+      },
+      "jira_scoring_agent": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "github_scoring_agent": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "daily_orchestrator_report": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "telegram_report_sender": {
+        "enabled": true,
+        "env": {
+          "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}",
+          "TELEGRAM_CHAT_ID": "${TELEGRAM_CHAT_ID}"
+        }
+      }
+    }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "intervalMinutes": 30
+  }
+}

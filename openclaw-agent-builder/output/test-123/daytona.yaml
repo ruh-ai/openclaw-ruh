@@ -1,0 +1,21 @@
+name: "test-123"
+snapshot: "daytona-medium"
+auto_stop: false
+
+env:
+  DATA_INGESTION_BASE_URL: "https://ingestion-service-s45p.onrender.com"
+  DATA_INGESTION_ORG_ID: "${DATA_INGESTION_ORG_ID}"
+  DATA_INGESTION_AGENT_ID: "${DATA_INGESTION_AGENT_ID}"
+  DATA_INGESTION_TOKEN: ""
+
+setup:
+  - "npm install -g openclaw@latest"
+  - "openclaw onboard --install-daemon --non-interactive"
+  - "cp -r /workspace/* ~/.openclaw/workspace/"
+  - "openclaw start --daemon"
+
+health:
+  endpoint: "http://localhost:18789/health"
+  interval: 30
+  timeout: 10
+  retries: 3

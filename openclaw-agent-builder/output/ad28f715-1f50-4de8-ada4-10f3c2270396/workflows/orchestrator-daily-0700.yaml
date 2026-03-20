@@ -1,0 +1,34 @@
+name: "orchestrator-daily-0700-utc"
+description: "Daily 07:00 UTC: produce narrative report and send to Telegram."
+version: "1.0.0"
+
+schedule:
+  cron: "0 7 * * *"
+  timezone: "UTC"
+
+steps:
+  - id: provision
+    action: provision_schema
+    skill: data-ingestion-openclaw
+    input:
+      organisation_id: "${env.DATA_INGESTION_ORG_ID}"
+      agent_id: "${env.DATA_INGESTION_AGENT_ID}"
+    run_once: true
+    timeout_ms: 30000
+
+  - id: orchestrator
+    action: run
+    skill: daily_orchestrator_report
+    input:
+      run_id: "${run_id}"
+    wait_for: [provision]
+    timeout_ms: 300000
+
+  - id: telegram
+    action: run
+    skill: telegram_report_sender
+    input:
+      run_id: "${run_id}"
+      text: "${orchestrator.telegram_message}"
+    wait_for: [orchestrator]
+    timeout_ms: 60000

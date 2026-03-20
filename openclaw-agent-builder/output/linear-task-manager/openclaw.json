@@ -1,0 +1,23 @@
+{
+  "agentId": "linear-task-manager",
+  "version": "1.0.0",
+  "description": "Fetches Linear tasks daily, analyzes criticality, and sends prioritized digest to Telegram",
+  "agents": [
+    {
+      "id": "main",
+      "skills": [
+        "data-ingestion-openclaw",
+        "linear-to-ingestion-wrapper",
+        "task-criticality-analyzer",
+        "task-digest-builder",
+        "telegram-sender"
+      ]
+    }
+  ],
+  "skills": {
+    "dirs": ["skills", "workspace/skills"]
+  },
+  "workflows": {
+    "dirs": ["workflows"]
+  }
+}

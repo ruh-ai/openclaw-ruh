@@ -1,0 +1,71 @@
+{
+  "name": "jira-sprint-metrics",
+  "version": "1.0.0",
+  "agents": {
+    "defaults": {
+      "model": "gpt-5.2"
+    },
+    "list": [
+      {
+        "id": "agent",
+        "name": "Jira Sprint Metrics Agent",
+        "skills": [
+          "data-ingestion-openclaw",
+          "jira_entity_sync_daily",
+          "compute_sprint_metrics",
+          "write_results_metrics_narratives"
+        ]
+      }
+    ]
+  },
+  "tools": {
+    "agentToAgent": {
+      "enabled": false,
+      "allow": []
+    }
+  },
+  "skills": {
+    "entries": {
+      "data-ingestion-openclaw": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "jira_entity_sync_daily": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "compute_sprint_metrics": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      },
+      "write_results_metrics_narratives": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      }
+    }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "intervalMinutes": 30
+  }
+}
