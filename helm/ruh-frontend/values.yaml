@@ -58,7 +58,7 @@ readinessProbe:
 service:
   type: ClusterIP
   port: 80
-  targetPort: 3000
+  targetPort: 3001
   sessionAffinity:
     enabled: false
     timeoutSeconds: 10800
