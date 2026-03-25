@@ -1,3 +1,4 @@
 [test]
 timeout = 30000
 preload = ["./tests/helpers/env.ts"]
+coverageDir = "./coverage"

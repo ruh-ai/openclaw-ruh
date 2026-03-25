@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { MOCK_SKILLS } from "./mockData";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 import type { SkillItem } from "./types";
+import type { SkillGraphNode } from "@/lib/openclaw/types";
 
 interface StepChooseSkillsProps {
   onContinue: () => void;
   onCancel: () => void;
   onSkip: () => void;
   stepLabel: string;
+  skillGraph?: SkillGraphNode[] | null;
 }
 
 export function StepChooseSkills({
@@ -20,8 +22,19 @@ export function StepChooseSkills({
   onCancel,
   onSkip,
   stepLabel,
+  skillGraph,
 }: StepChooseSkillsProps) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Derive skill items from the real graph if available, otherwise fall back to mock
+  const skills: SkillItem[] = skillGraph && skillGraph.length > 0
+    ? skillGraph.map((node) => ({
+        id: node.skill_id,
+        name: node.name || node.skill_id,
+        description: node.description || node.source,
+        isNew: node.status === "generating" || node.status === "generated",
+      }))
+    : MOCK_SKILLS;
+
+  const [selected, setSelected] = useState<Set<string>>(new Set(skills.map((s) => s.id)));
   const [viewingSkill, setViewingSkill] = useState<SkillItem | null>(null);
 
   const toggleSelect = (id: string) => {
@@ -64,7 +77,7 @@ export function StepChooseSkills({
 
           {/* Skill cards */}
           <div className="space-y-3">
-            {MOCK_SKILLS.map((skill) => {
+            {skills.map((skill) => {
               const isSelected = selected.has(skill.id);
               return (
                 <div

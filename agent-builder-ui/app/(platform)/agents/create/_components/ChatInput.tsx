@@ -8,15 +8,28 @@ interface ChatInputProps {
   onSend: (message: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  prefillValue?: string;
+  onPrefillConsumed?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSend,
   placeholder = "Describe your agent idea",
   disabled = false,
+  prefillValue,
+  onPrefillConsumed,
 }) => {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // When a clarification option is selected, pre-fill the input
+  useEffect(() => {
+    if (prefillValue) {
+      setValue(prefillValue);
+      textareaRef.current?.focus();
+      onPrefillConsumed?.();
+    }
+  }, [prefillValue, onPrefillConsumed]);
 
   useEffect(() => {
     if (textareaRef.current) {

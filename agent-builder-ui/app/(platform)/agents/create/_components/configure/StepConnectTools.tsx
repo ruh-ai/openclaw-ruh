@@ -7,12 +7,58 @@ import { Button } from "@/components/ui/button";
 import { MOCK_TOOLS } from "./mockData";
 import { ConnectToolsSidebar, ToolIcon } from "./ConnectToolsSidebar";
 import type { ToolItem } from "./types";
+import type { SkillGraphNode } from "@/lib/openclaw/types";
+
+// Detect which tools are required based on skill graph content
+const TOOL_PATTERNS: { keywords: string[]; tool: ToolItem }[] = [
+  {
+    keywords: ["slack"],
+    tool: { id: "slack", name: "Slack", description: "Send messages, read channels, and manage your Slack workspace.", icon: "slack", connected: false },
+  },
+  {
+    keywords: ["github", "pull_request", "gh_api", "github_api"],
+    tool: { id: "github", name: "Github", description: "Code hosting with Git version control, pull requests, and CI/CD integrations.", icon: "github", connected: false },
+  },
+  {
+    keywords: ["jira", "ticket", "sprint", "atlassian"],
+    tool: { id: "jira", name: "Jira", description: "Atlassian's project tracker with customizable workflows and agile boards.", icon: "jira", connected: false },
+  },
+  {
+    keywords: ["notion"],
+    tool: { id: "notion", name: "Notion", description: "All-in-one workspace for notes, documents, and project management.", icon: "notion", connected: false },
+  },
+  {
+    keywords: ["linear"],
+    tool: { id: "linear", name: "Linear", description: "Issue tracking and project management built for modern software teams.", icon: "linear", connected: false },
+  },
+  {
+    keywords: ["google", "gmail", "sheets", "drive", "calendar"],
+    tool: { id: "google", name: "Google Workspace", description: "Gmail, Sheets, Drive, Calendar and other Google services.", icon: "google", connected: false },
+  },
+  {
+    keywords: ["zoho"],
+    tool: { id: "zoho-crm", name: "Zoho CRM", description: "Zoho OAuth integration for accessing CRM user data.", icon: "zoho", connected: false },
+  },
+];
+
+function deriveTools(nodes?: SkillGraphNode[] | null): ToolItem[] {
+  if (!nodes || nodes.length === 0) return MOCK_TOOLS;
+  const allText = nodes
+    .map((n) => `${n.skill_id} ${n.name} ${n.description || ""}`)
+    .join(" ")
+    .toLowerCase();
+  const detected = TOOL_PATTERNS.filter(({ keywords }) =>
+    keywords.some((kw) => allText.includes(kw))
+  ).map(({ tool }) => ({ ...tool }));
+  return detected.length > 0 ? detected : MOCK_TOOLS;
+}
 
 interface StepConnectToolsProps {
   onContinue: () => void;
   onCancel: () => void;
   onSkip: () => void;
   stepLabel: string;
+  skillGraph?: SkillGraphNode[] | null;
 }
 
 export function StepConnectTools({
@@ -20,8 +66,9 @@ export function StepConnectTools({
   onCancel,
   onSkip,
   stepLabel,
+  skillGraph,
 }: StepConnectToolsProps) {
-  const [tools, setTools] = useState<ToolItem[]>(MOCK_TOOLS);
+  const [tools, setTools] = useState<ToolItem[]>(() => deriveTools(skillGraph));
   const [sidebarTool, setSidebarTool] = useState<string | null>(null);
 
   const hasConnected = tools.some((t) => t.connected);

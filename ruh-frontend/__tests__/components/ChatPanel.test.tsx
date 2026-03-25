@@ -46,7 +46,7 @@ describe('ChatPanel', () => {
       let deleteCalled = false;
       server.use(
         http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-          HttpResponse.json([makeConversation()]),
+          HttpResponse.json({ items: [makeConversation()], next_cursor: null, has_more: false }),
         ),
         http.delete(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}`, () => {
           deleteCalled = true;
@@ -67,7 +67,7 @@ describe('ChatPanel', () => {
     test('shows loading state while fetching conversations', async () => {
       server.use(http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, async () => {
         await new Promise((r) => setTimeout(r, 100));
-        return HttpResponse.json([]);
+        return HttpResponse.json({ items: [], next_cursor: null, has_more: false });
       }));
       renderChat();
       // Loading should be visible briefly
@@ -98,13 +98,17 @@ describe('ChatPanel', () => {
     test('loads messages when conversation is selected', async () => {
       server.use(
         http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-          HttpResponse.json([makeConversation()]),
+          HttpResponse.json({ items: [makeConversation()], next_cursor: null, has_more: false }),
         ),
         http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`, () =>
-          HttpResponse.json([
-            { role: 'user', content: 'Hello there' },
-            { role: 'assistant', content: 'Hi from AI!' },
-          ]),
+          HttpResponse.json({
+            messages: [
+              { id: 1, role: 'user', content: 'Hello there', created_at: new Date('2025-01-15T10:05:01Z').toISOString() },
+              { id: 2, role: 'assistant', content: 'Hi from AI!', created_at: new Date('2025-01-15T10:05:02Z').toISOString() },
+            ],
+            next_cursor: null,
+            has_more: false,
+          }),
         ),
       );
 
@@ -184,7 +188,7 @@ describe('ChatPanel', () => {
   describe('empty state', () => {
     test('shows start message when no conversations exist', async () => {
       server.use(http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-        HttpResponse.json([]),
+        HttpResponse.json({ items: [], next_cursor: null, has_more: false }),
       ));
       renderChat();
       await waitFor(() =>

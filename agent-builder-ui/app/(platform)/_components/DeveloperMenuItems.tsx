@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import React from "react";
+import { useOpenClawChat } from "@/hooks/use-openclaw-chat";
 
 interface DeveloperMenuItemsProps {
   onMobileClose?: () => void;
@@ -35,9 +36,11 @@ export const DeveloperMenuItems: React.FC<DeveloperMenuItemsProps> = ({
 }) => {
   const router = useRouter();
   const pathname = usePathname();
+  const reset = useOpenClawChat((s) => s.reset);
 
   const handleNewAgent = () => {
     if (onMobileClose) onMobileClose();
+    reset();
     router.push("/agents/create");
   };
 

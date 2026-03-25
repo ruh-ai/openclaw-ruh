@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import WebSocket from "ws";
 import { randomUUID } from "crypto";
 import yaml from "js-yaml";
+import { classifyGatewayRunError } from "@/lib/openclaw/error-classification";
+import { normalizeArchitectResponse } from "@/lib/openclaw/response-normalization";
+import {
+  buildGatewaySessionKey,
+  buildGatewayUserMessage,
+  type OpenClawRequestMode,
+} from "@/lib/openclaw/test-mode";
 
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
 const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
@@ -69,7 +76,7 @@ function mapLifecyclePhase(phase: string): LifecycleEvent {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { session_id, message, agent } = body;
+    const { session_id, message, agent, mode, soul_override } = body;
 
     if (!session_id || !message) {
       return NextResponse.json(
@@ -97,6 +104,8 @@ export async function POST(req: NextRequest) {
             session_id,
             message,
             agent || "architect",
+            mode === "test" ? "test" : "build",
+            typeof soul_override === "string" ? soul_override : undefined,
             onLifecycleEvent
           );
 
@@ -149,6 +158,8 @@ async function connectWithRetry(
   sessionId: string,
   message: string,
   agentId: string,
+  mode: OpenClawRequestMode,
+  soulOverride: string | undefined,
   onLifecycleEvent: (evt: LifecycleEvent) => void
 ): Promise<object> {
   let lastError: Error | null = null;
@@ -173,6 +184,8 @@ async function connectWithRetry(
         sessionId,
         message,
         agentId,
+        mode,
+        soulOverride,
         onLifecycleEvent
       );
     } catch (err) {
@@ -230,6 +243,8 @@ async function forwardToGateway(
   sessionId: string,
   message: string,
   agentId: string,
+  mode: OpenClawRequestMode,
+  soulOverride: string | undefined,
   onLifecycleEvent: (evt: LifecycleEvent) => void
 ): Promise<object> {
   return new Promise((resolve, reject) => {
@@ -265,13 +280,78 @@ async function forwardToGateway(
       reject(err);
     };
 
+    // Ensure ready_for_review always carries a system_name
+    const ensureSystemName = (parsed: Record<string, unknown>) => {
+      if (parsed.type !== "ready_for_review") return;
+      const sg = parsed.skill_graph as Record<string, unknown> | undefined;
+      if (!sg) return;
+      if (!sg.system_name) {
+        const nodes = sg.nodes as Array<Record<string, unknown>> | undefined;
+        const firstId = nodes?.[0]?.skill_id as string | undefined;
+        sg.system_name = firstId
+          ? firstId.replace(/_/g, "-").replace(/-skill$/, "")
+          : `agent-${Date.now().toString(36)}`;
+      }
+    };
+
+    const KNOWN_TYPES = new Set([
+      "clarification", "ready_for_review", "agent_response",
+      "deploy_complete", "build_complete", "error",
+    ]);
+
     const finalizeResponse = (text: string) => {
-      // Try JSON parse first
+      // Try JSON parse first (agent output may be pure JSON)
       try {
-        resolveOnce(JSON.parse(text));
+        const parsed = normalizeArchitectResponse(
+          JSON.parse(text) as Record<string, unknown>
+        ) as Record<string, unknown>;
+
+        // Normalize unknown types (e.g. "greeting", "status", etc.) so the
+        // frontend always receives a known ArchitectResponse type.
+        if (typeof parsed.type === "string" && !KNOWN_TYPES.has(parsed.type)) {
+          resolveOnce({
+            type: "agent_response",
+            content:
+              (parsed.message as string) ||
+              (parsed.content as string) ||
+              text,
+          });
+          return;
+        }
+
+        ensureSystemName(parsed);
+        resolveOnce(parsed);
         return;
       } catch {
-        // Not JSON, try other formats
+        // Not pure JSON — try other formats
+      }
+
+      // Try extracting an embedded JSON object (agent may wrap JSON in prose)
+      const jsonMatch = text.match(/\{[\s\S]*"type"\s*:\s*"(clarification|ready_for_review|agent_response|deploy_complete|error)"[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+          const normalized = normalizeArchitectResponse(parsed) as Record<string, unknown>;
+          ensureSystemName(normalized);
+          resolveOnce(normalized);
+          return;
+        } catch {
+          // Not valid JSON fragment
+        }
+      }
+
+      // Try JSON in a ```json code block
+      const jsonBlockMatch = text.match(/```json\s*\n([\s\S]*?)```/);
+      if (jsonBlockMatch) {
+        try {
+          const parsed = JSON.parse(jsonBlockMatch[1]) as Record<string, unknown>;
+          const normalized = normalizeArchitectResponse(parsed) as Record<string, unknown>;
+          ensureSystemName(normalized);
+          resolveOnce(normalized);
+          return;
+        } catch {
+          // Not valid JSON in code block
+        }
       }
 
       // Try YAML code blocks tagged with response type
@@ -283,13 +363,14 @@ async function forwardToGateway(
         const blockContent = codeBlockMatch[2];
         try {
           const parsed = yaml.load(blockContent) as Record<string, unknown>;
+          const normalized = normalizeArchitectResponse(parsed) as Record<string, unknown>;
 
           if (
             blockType === "ready_for_review" &&
-            parsed?.skill_graph &&
-            typeof parsed.skill_graph === "object"
+            normalized?.skill_graph &&
+            typeof normalized.skill_graph === "object"
           ) {
-            const sg = parsed.skill_graph as Record<string, unknown>;
+            const sg = normalized.skill_graph as Record<string, unknown>;
             const nodes = (
               (sg.nodes as Array<Record<string, unknown>>) || []
             ).map((node) => ({
@@ -333,7 +414,7 @@ async function forwardToGateway(
               type: "ready_for_review",
               skill_graph: {
                 system_name:
-                  (parsed.automation_type as string) ||
+                  (normalized.automation_type as string) ||
                   `system-${Date.now().toString(36)}`,
                 nodes,
                 workflow,
@@ -341,31 +422,16 @@ async function forwardToGateway(
               adapter_availability: buildAdapterAvailability(
                 (sg.nodes as Array<Record<string, unknown>>) || []
               ),
-              raw_spec: parsed,
+              raw_spec: normalized,
             });
             return;
           }
 
-          resolveOnce({ type: blockType, ...parsed });
+          resolveOnce({ type: blockType, ...normalized });
           return;
         } catch (yamlErr) {
           console.warn("[Gateway] YAML parse failed:", yamlErr);
         }
-      }
-
-      // Check for clarification keywords
-      if (
-        text.includes("What I need from you") ||
-        text.includes("questions") ||
-        text.includes("?")
-      ) {
-        resolveOnce({
-          type: "agent_response",
-          runId,
-          agent: agentId,
-          content: text,
-        });
-        return;
       }
 
       // Default: wrap as agent_response
@@ -438,14 +504,22 @@ async function forwardToGateway(
         });
 
         // Step 3: Send chat.send
+        // Use sessionId in the session key so every create-agent session gets its
+        // own isolated conversation context on the gateway. Previously the hardcoded
+        // "agent:architect:main" key meant all sessions shared one context — a
+        // crash or malformed response in any session would poison every future one
+        // until the gateway was restarted.
         ws.send(
           JSON.stringify({
             type: "req",
             id: "2",
             method: "chat.send",
             params: {
-              sessionKey: `agent:${agentId}:main`,
-              message,
+              sessionKey: buildGatewaySessionKey(agentId, sessionId, mode),
+              message: buildGatewayUserMessage(message, {
+                mode,
+                soulOverride,
+              }),
               idempotencyKey: randomUUID(),
               deliver: false,
             },
@@ -484,18 +558,9 @@ async function forwardToGateway(
           const errorMsg =
             (chat.errorMessage as string) ||
             "Agent execution error";
-          // Model-level errors should not be retried
-          if (
-            errorMsg.includes("failed_generation") ||
-            errorMsg.includes("Failed to call a function") ||
-            errorMsg.includes("rate_limit") ||
-            errorMsg.includes("context_length")
-          ) {
-            resolveOnce({
-              type: "error",
-              error: errorMsg,
-              content: `The agent encountered an error: ${errorMsg}. This may be a model limitation — try simplifying your message or the agent model may need upgrading.`,
-            });
+          const classification = classifyGatewayRunError(errorMsg);
+          if (!classification.retryable && classification.response) {
+            resolveOnce(classification.response);
           } else {
             rejectOnce(new Error(errorMsg));
           }

@@ -21,8 +21,22 @@ export interface ConversationRecord {
 }
 
 export interface MessageRecord {
+  id?: number;
   role: string;
   content: string;
+  created_at?: string;
+}
+
+export interface ConversationPage {
+  items: ConversationRecord[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface MessagePage {
+  messages: MessageRecord[];
+  next_cursor: number | null;
+  has_more: boolean;
 }
 
 export async function initDb(): Promise<void> {
@@ -88,6 +102,48 @@ export async function listConversations(sandboxId: string): Promise<Conversation
   });
 }
 
+export async function listConversationsPage(
+  sandboxId: string,
+  options: { limit: number; cursor?: string | null },
+): Promise<ConversationPage> {
+  const queryLimit = options.limit + 1;
+  const cursor = options.cursor ? decodeConversationCursor(options.cursor) : null;
+
+  return withConn(async (client) => {
+    const res = cursor
+      ? await client.query(
+        `SELECT *
+           FROM conversations
+          WHERE sandbox_id = $1
+            AND (
+              updated_at < $2::timestamptz
+              OR (updated_at = $2::timestamptz AND id < $3)
+            )
+          ORDER BY updated_at DESC, id DESC
+          LIMIT $4`,
+        [sandboxId, cursor.updatedAt, cursor.id, queryLimit],
+      )
+      : await client.query(
+        `SELECT *
+           FROM conversations
+          WHERE sandbox_id = $1
+          ORDER BY updated_at DESC, id DESC
+          LIMIT $2`,
+        [sandboxId, queryLimit],
+      );
+
+    const hasMore = res.rows.length > options.limit;
+    const rows = (hasMore ? res.rows.slice(0, options.limit) : res.rows).map(serializeConv);
+    const last = rows[rows.length - 1];
+
+    return {
+      items: rows,
+      next_cursor: hasMore && last ? encodeConversationCursor(last.updated_at, last.id) : null,
+      has_more: hasMore,
+    };
+  });
+}
+
 export async function getConversation(convId: string): Promise<ConversationRecord | null> {
   return withConn(async (client) => {
     const res = await client.query(
@@ -98,6 +154,17 @@ export async function getConversation(convId: string): Promise<ConversationRecor
   });
 }
 
+export async function getConversationForSandbox(
+  convId: string,
+  sandboxId: string,
+): Promise<ConversationRecord | null> {
+  const conversation = await getConversation(convId);
+  if (!conversation || conversation.sandbox_id !== sandboxId) {
+    return null;
+  }
+  return conversation;
+}
+
 export async function getMessages(convId: string): Promise<MessageRecord[]> {
   return withConn(async (client) => {
     const res = await client.query(
@@ -105,6 +172,45 @@ export async function getMessages(convId: string): Promise<MessageRecord[]> {
       [convId],
     );
     return res.rows as MessageRecord[];
+  });
+}
+
+export async function getMessagesPage(
+  convId: string,
+  options: { limit: number; before?: number | null },
+): Promise<MessagePage> {
+  const queryLimit = options.limit + 1;
+
+  return withConn(async (client) => {
+    const res = options.before != null
+      ? await client.query(
+        `SELECT id, role, content, created_at
+           FROM messages
+          WHERE conversation_id = $1 AND id < $2
+          ORDER BY id DESC
+          LIMIT $3`,
+        [convId, options.before, queryLimit],
+      )
+      : await client.query(
+        `SELECT id, role, content, created_at
+           FROM messages
+          WHERE conversation_id = $1
+          ORDER BY id DESC
+          LIMIT $2`,
+        [convId, queryLimit],
+      );
+
+    const hasMore = res.rows.length > options.limit;
+    const rows = (hasMore ? res.rows.slice(0, options.limit) : res.rows)
+      .map(serializeMessage)
+      .reverse();
+    const first = rows[0];
+
+    return {
+      messages: rows,
+      next_cursor: hasMore && first?.id != null ? first.id : null,
+      has_more: hasMore,
+    };
   });
 }
 
@@ -155,4 +261,29 @@ function serializeConv(row: Record<string, unknown>): ConversationRecord {
     }
   }
   return row as unknown as ConversationRecord;
+}
+
+function serializeMessage(row: Record<string, unknown>): MessageRecord {
+  if (row.created_at instanceof Date) {
+    row.created_at = row.created_at.toISOString();
+  }
+  return row as unknown as MessageRecord;
+}
+
+function encodeConversationCursor(updatedAt: string, id: string): string {
+  return `${updatedAt}|${id}`;
+}
+
+function decodeConversationCursor(cursor: string): { updatedAt: string; id: string } {
+  const [updatedAt, id] = cursor.split('|');
+  if (!updatedAt || !id) {
+    throw new Error('Invalid conversation cursor');
+  }
+
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error('Invalid conversation cursor');
+  }
+
+  return { updatedAt: date.toISOString(), id };
 }

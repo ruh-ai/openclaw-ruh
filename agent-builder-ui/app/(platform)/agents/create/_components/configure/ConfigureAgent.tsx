@@ -6,6 +6,7 @@ import { ConfigureStepper } from "./ConfigureStepper";
 import { StepConnectTools } from "./StepConnectTools";
 import { StepChooseSkills } from "./StepChooseSkills";
 import { StepSetTriggers } from "./StepSetTriggers";
+import type { SkillGraphNode } from "@/lib/openclaw/types";
 
 const STEPS = [
   { label: "Connect Tools" },
@@ -18,6 +19,8 @@ interface ConfigureAgentProps {
   onBack: () => void;
   onComplete: () => void;
   onCancel: () => void;
+  skillGraph?: SkillGraphNode[] | null;
+  agentRules?: string[];
 }
 
 export function ConfigureAgent({
@@ -25,6 +28,8 @@ export function ConfigureAgent({
   onBack,
   onComplete,
   onCancel,
+  skillGraph,
+  agentRules,
 }: ConfigureAgentProps) {
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -69,6 +74,7 @@ export function ConfigureAgent({
           onCancel={onCancel}
           onSkip={handleSkip}
           stepLabel={stepLabel}
+          skillGraph={skillGraph}
         />
       )}
       {currentStep === 1 && (
@@ -77,6 +83,7 @@ export function ConfigureAgent({
           onCancel={onCancel}
           onSkip={handleSkip}
           stepLabel={stepLabel}
+          skillGraph={skillGraph}
         />
       )}
       {currentStep === 2 && (
@@ -84,6 +91,7 @@ export function ConfigureAgent({
           onContinue={handleContinue}
           onCancel={onCancel}
           stepLabel={stepLabel}
+          agentRules={agentRules}
         />
       )}
     </div>

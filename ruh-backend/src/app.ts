@@ -6,22 +6,55 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'node:crypto';
 import axios from 'axios';
 
+import {
+  buildConfigureAgentCronAddCommand,
+  buildCronDeleteCommand,
+  buildCronRunCommand,
+  buildHomeFileWriteCommand,
+  dockerContainerRunning,
+  joinShellArgs,
+  normalizePathSegment,
+} from './docker';
 import * as store from './store';
 import * as conversationStore from './conversationStore';
+import * as agentStore from './agentStore';
 import * as channelManager from './channelManager';
-import { createOpenclawSandbox } from './sandboxManager';
-import { Daytona } from '@daytonaio/sdk';
+import * as auditStore from './auditStore';
+import { getBackendReadiness } from './backendReadiness';
+import { getSandboxConversationRecord } from './conversationAccess';
+import {
+  createOpenclawSandbox,
+  dockerExec,
+  getContainerName,
+  reconfigureSandboxLlm,
+  retrofitSandboxToSharedCodex,
+  stopAndRemoveContainer,
+} from './sandboxManager';
 import {
   httpError,
   gatewayUrlAndHeaders,
   parseJsonOutput,
   syntheticModels,
 } from './utils';
+import {
+  createWorkspaceDownloadCommand,
+  createWorkspaceListCommand,
+  createWorkspaceReadCommand,
+  normalizeWorkspaceRelativePath,
+} from "./workspaceFiles";
+import {
+  JSON_BODY_LIMIT,
+  validateAgentConfigPatchBody,
+  validateAgentCreateBody,
+  validateAgentMetadataPatchBody,
+  validateAgentSandboxAttachBody,
+} from './validation';
 
 export const app = express();
-app.use(express.json());
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
   .split(',')
@@ -45,13 +78,14 @@ export interface StreamEntry {
 }
 export const _streams = new Map<string, StreamEntry>();
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-function daytonaApiKey(): string {
-  const key = process.env.DAYTONA_API_KEY ?? '';
-  if (!key) throw httpError(500, 'DAYTONA_API_KEY not set in server environment');
-  return key;
+interface ConfigureAgentStepResult {
+  kind: 'soul' | 'skill' | 'cron';
+  target: string;
+  ok: boolean;
+  message: string;
 }
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function getRecord(sandboxId: string): Promise<store.SandboxRecord> {
   const record = await store.getSandbox(sandboxId);
@@ -65,11 +99,80 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
   };
 }
 
-async function sandboxExec(sandboxId: string, cmd: string, timeout = 30): Promise<[number, string]> {
-  const d = new Daytona({ apiKey: daytonaApiKey() });
-  const sb = await d.get(sandboxId);
-  const res = await sb.process.executeCommand(cmd, undefined, undefined, timeout);
-  return [res.exitCode, res.result ?? ''];
+function parsePositiveIntParam(
+  value: unknown,
+  fallback: number,
+  fieldName: string,
+): number {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw httpError(400, `Invalid ${fieldName}`);
+  }
+  return parsed;
+}
+
+function requireAdmin(req: Request): void {
+  const configuredToken = String(process.env.OPENCLAW_ADMIN_TOKEN ?? '').trim();
+  if (!configuredToken) {
+    throw httpError(503, 'OPENCLAW_ADMIN_TOKEN is not configured');
+  }
+
+  const authHeader = String(req.headers.authorization ?? '');
+  const expectedHeader = `Bearer ${configuredToken}`;
+  if (authHeader !== expectedHeader) {
+    throw httpError(401, 'Invalid admin token');
+  }
+}
+
+interface AuditActor {
+  actor_type: string;
+  actor_id: string;
+}
+
+async function recordAuditEvent(
+  req: Request,
+  event: Omit<auditStore.WriteAuditEventInput, 'request_id' | 'actor_type' | 'actor_id' | 'origin'>,
+  actor: AuditActor = { actor_type: 'anonymous', actor_id: 'anonymous' },
+): Promise<void> {
+  const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0]?.trim();
+  const rawOrigin = forwarded || req.ip || req.socket.remoteAddress || 'unknown';
+  const origin = `iphash:${createHash('sha256').update(rawOrigin).digest('hex').slice(0, 12)}`;
+  const requestId = String(req.headers['x-request-id'] ?? '').trim() || uuidv4();
+
+  try {
+    await auditStore.writeAuditEvent({
+      ...event,
+      request_id: requestId,
+      actor_type: actor.actor_type,
+      actor_id: actor.actor_id,
+      origin,
+    });
+  } catch (error) {
+    console.error('Failed to persist control-plane audit event', error);
+  }
+}
+
+async function sandboxExec(sandboxId: string, cmd: string, timeoutSec = 30): Promise<[number, string]> {
+  const containerName = getContainerName(sandboxId);
+  const [ok, output] = await dockerExec(containerName, cmd, timeoutSec * 1000);
+  return [ok ? 0 : 1, output];
+}
+
+function parseWorkspaceRelativePath(value: unknown, required = false): string {
+  if (value == null || String(value).trim() === '') {
+    if (required) throw httpError(400, 'Workspace file path is required');
+    return '';
+  }
+
+  try {
+    return normalizeWorkspaceRelativePath(String(value));
+  } catch (error) {
+    throw httpError(400, error instanceof Error ? error.message : 'Invalid workspace path');
+  }
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
@@ -78,12 +181,16 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/ready', (_req, res) => {
+  const readiness = getBackendReadiness();
+  res.status(readiness.ready ? 200 : 503).json(readiness);
+});
+
 // ── Sandbox creation ──────────────────────────────────────────────────────────
 
 app.post(
   '/api/sandboxes/create',
   asyncHandler(async (req, res) => {
-    daytonaApiKey();
     const sandboxName: string = req.body.sandbox_name ?? 'openclaw-gateway';
     const streamId = uuidv4();
     _streams.set(streamId, { status: 'pending', request: { sandbox_name: sandboxName } });
@@ -113,11 +220,12 @@ app.get(
 
     try {
       const gen = createOpenclawSandbox({
-        daytonaApiKey: daytonaApiKey(),
         anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
         openaiApiKey: process.env.OPENAI_API_KEY ?? '',
         openrouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
         geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+        ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? 'http://host.docker.internal:11434/v1',
+        ollamaModel: process.env.OLLAMA_MODEL ?? 'qwen3-coder:30b',
         telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
         discordBotToken: process.env.DISCORD_BOT_TOKEN ?? '',
         sandboxName: String(entry.request.sandbox_name ?? 'openclaw-gateway'),
@@ -173,9 +281,222 @@ app.get('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
 }));
 
 app.delete('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
-  const deleted = await store.deleteSandbox(req.params.sandbox_id);
+  const { sandbox_id } = req.params;
+  const deleted = await store.deleteSandbox(sandbox_id);
   if (!deleted) throw httpError(404, 'Sandbox not found');
-  res.json({ deleted: req.params.sandbox_id });
+  // Stop and remove the Docker container (best-effort)
+  stopAndRemoveContainer(sandbox_id).catch(() => {});
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.delete',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { deleted: true },
+  });
+  res.json({ deleted: sandbox_id });
+}));
+
+// ── Agents CRUD ──────────────────────────────────────────────────────────────
+
+async function getAgentRecord(agentId: string): Promise<agentStore.AgentRecord> {
+  const record = await agentStore.getAgent(agentId);
+  if (!record) throw httpError(404, 'Agent not found');
+  return record;
+}
+
+app.get('/api/agents', asyncHandler(async (_req, res) => {
+  res.json(await agentStore.listAgents());
+}));
+
+app.post('/api/agents', asyncHandler(async (req, res) => {
+  const body = validateAgentCreateBody(req.body);
+  res.json(await agentStore.saveAgent(body));
+}));
+
+app.get('/api/agents/:id', asyncHandler(async (req, res) => {
+  res.json(await getAgentRecord(req.params.id));
+}));
+
+app.patch('/api/agents/:id', asyncHandler(async (req, res) => {
+  await getAgentRecord(req.params.id);
+  const body = validateAgentMetadataPatchBody(req.body);
+  const updated = await agentStore.updateAgent(req.params.id, body);
+  res.json(updated);
+}));
+
+app.delete('/api/agents/:id', asyncHandler(async (req, res) => {
+  const deleted = await agentStore.deleteAgent(req.params.id);
+  if (!deleted) throw httpError(404, 'Agent not found');
+  await recordAuditEvent(req, {
+    action_type: 'agent.delete',
+    target_type: 'agent',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: { deleted: true },
+  });
+  res.json({ deleted: req.params.id });
+}));
+
+app.post('/api/agents/:id/sandbox', asyncHandler(async (req, res) => {
+  await getAgentRecord(req.params.id);
+  const { sandbox_id } = validateAgentSandboxAttachBody(req.body);
+  const updated = await agentStore.addSandboxToAgent(req.params.id, sandbox_id);
+  res.json(updated);
+}));
+
+app.patch('/api/agents/:id/config', asyncHandler(async (req, res) => {
+  await getAgentRecord(req.params.id);
+  const body = validateAgentConfigPatchBody(req.body);
+  const updated = await agentStore.updateAgentConfig(req.params.id, body);
+  res.json(updated);
+}));
+
+// ── Agent configuration push ──────────────────────────────────────────────────
+
+app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, res) => {
+  const { sandbox_id } = req.params;
+  const record = await getRecord(sandbox_id);
+  const containerName = getContainerName(record.sandbox_id);
+
+  const {
+    system_name,
+    soul_content,
+    skills,
+    cron_jobs,
+  } = req.body as {
+    system_name: string;
+    soul_content: string;
+    skills: Array<{ skill_id: string; name: string; description: string }>;
+    cron_jobs: Array<{ name: string; schedule: string; message: string }>;
+  };
+
+  const steps: ConfigureAgentStepResult[] = [];
+
+  const pushStep = (step: ConfigureAgentStepResult) => {
+    steps.push(step);
+    return step.ok;
+  };
+
+  // Write SOUL.md
+  if (soul_content) {
+    const [ok, out] = await dockerExec(containerName,
+      buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', soul_content),
+      30_000);
+    if (!pushStep({
+      kind: 'soul',
+      target: 'SOUL.md',
+      ok,
+      message: ok ? 'SOUL.md written' : `SOUL.md failed: ${out}`,
+    })) {
+      await recordAuditEvent(req, {
+        action_type: 'sandbox.configure_agent',
+        target_type: 'sandbox',
+        target_id: sandbox_id,
+        outcome: 'failure',
+        details: {
+          system_name: typeof system_name === 'string' ? system_name : '',
+          skill_count: Array.isArray(skills) ? skills.length : 0,
+          cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+          step_count: steps.length,
+          failed_step: steps[steps.length - 1],
+        },
+      });
+      res.status(500).json({ ok: false, applied: false, detail: 'Agent config apply failed', steps });
+      return;
+    }
+  }
+
+  // Write each skill SKILL.md
+  for (const skill of (skills ?? [])) {
+    const normalizedSkillId = normalizePathSegment(String(skill.skill_id ?? ''));
+    const skillContent = [
+      '---',
+      `name: ${normalizedSkillId}`,
+      'version: 1.0.0',
+      `description: "${skill.description || skill.name}"`,
+      'user-invocable: false',
+      '---',
+      '',
+      `# ${skill.name}`,
+      '',
+      skill.description || 'Auto-generated skill.',
+    ].join('\n');
+    const [ok, out] = await dockerExec(containerName,
+      buildHomeFileWriteCommand(
+        `.openclaw/workspace/skills/${normalizedSkillId}/SKILL.md`,
+        skillContent,
+      ),
+      20_000);
+    if (!pushStep({
+      kind: 'skill',
+      target: normalizedSkillId,
+      ok,
+      message: ok ? `Skill ${normalizedSkillId} written` : `Skill ${normalizedSkillId} failed: ${out}`,
+    })) {
+      await recordAuditEvent(req, {
+        action_type: 'sandbox.configure_agent',
+        target_type: 'sandbox',
+        target_id: sandbox_id,
+        outcome: 'failure',
+        details: {
+          system_name: typeof system_name === 'string' ? system_name : '',
+          skill_count: Array.isArray(skills) ? skills.length : 0,
+          cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+          step_count: steps.length,
+          failed_step: steps[steps.length - 1],
+        },
+      });
+      res.status(500).json({ ok: false, applied: false, detail: 'Agent config apply failed', steps });
+      return;
+    }
+  }
+
+  // Register cron jobs
+  for (const job of (cron_jobs ?? [])) {
+    const [ok, out] = await dockerExec(containerName,
+      buildConfigureAgentCronAddCommand({
+        name: String(job.name ?? ''),
+        schedule: String(job.schedule ?? ''),
+        message: String(job.message ?? ''),
+      }),
+      20_000);
+    if (!pushStep({
+      kind: 'cron',
+      target: String(job.name ?? ''),
+      ok,
+      message: ok ? `Cron ${job.name} registered` : `Cron ${job.name} failed: ${out}`,
+    })) {
+      await recordAuditEvent(req, {
+        action_type: 'sandbox.configure_agent',
+        target_type: 'sandbox',
+        target_id: sandbox_id,
+        outcome: 'failure',
+        details: {
+          system_name: typeof system_name === 'string' ? system_name : '',
+          skill_count: Array.isArray(skills) ? skills.length : 0,
+          cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+          step_count: steps.length,
+          failed_step: steps[steps.length - 1],
+        },
+      });
+      res.status(500).json({ ok: false, applied: false, detail: 'Agent config apply failed', steps });
+      return;
+    }
+  }
+
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.configure_agent',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: {
+      system_name: typeof system_name === 'string' ? system_name : '',
+      skill_count: Array.isArray(skills) ? skills.length : 0,
+      cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+      step_count: steps.length,
+    },
+  });
+  res.json({ ok: true, applied: true, steps });
 }));
 
 // ── Gateway proxy ─────────────────────────────────────────────────────────────
@@ -195,17 +516,99 @@ app.get('/api/sandboxes/:sandbox_id/models', asyncHandler(async (req, res) => {
 app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
   const record = await getRecord(req.params.sandbox_id);
   const [url, headers] = gatewayUrlAndHeaders(record, '/api/status');
-  try {
-    const resp = await axios.get(url, { headers, timeout: 10000, validateStatus: () => true });
-    if (resp.status === 200 && resp.data) { res.json(resp.data); return; }
-  } catch { /* fall through */ }
-  res.json({
+  const container_running = await dockerContainerRunning(getContainerName(record.sandbox_id))
+    .catch(() => false);
+  const fallback = {
     sandbox_id: record.sandbox_id,
     sandbox_name: record.sandbox_name,
     gateway_port: record.gateway_port ?? 18789,
     approved: record.approved ?? false,
     created_at: record.created_at,
+    container_running,
+  };
+  try {
+    const resp = await axios.get(url, { headers, timeout: 10000, validateStatus: () => true });
+    if (resp.status === 200 && resp.data && typeof resp.data === 'object' && !Array.isArray(resp.data)) {
+      res.json({
+        ...fallback,
+        ...resp.data,
+        container_running,
+      });
+      return;
+    }
+  } catch { /* fall through */ }
+  res.json(fallback);
+}));
+
+app.post('/api/sandboxes/:sandbox_id/reconfigure-llm', asyncHandler(async (req, res) => {
+  const { sandbox_id } = req.params;
+  const record = await getRecord(sandbox_id);
+  if (record.shared_codex_enabled) {
+    throw httpError(409, 'This sandbox is locked to shared Codex auth');
+  }
+
+  const provider = String(req.body.provider ?? '').trim();
+  if (!provider) throw httpError(400, 'provider is required');
+
+  const result = await reconfigureSandboxLlm(sandbox_id, {
+    provider: provider as 'anthropic' | 'openai' | 'gemini' | 'openrouter' | 'ollama',
+    apiKey: typeof req.body.apiKey === 'string' ? req.body.apiKey : undefined,
+    model: typeof req.body.model === 'string' ? req.body.model : undefined,
+    ollamaBaseUrl: typeof req.body.ollamaBaseUrl === 'string' ? req.body.ollamaBaseUrl : undefined,
+    ollamaModel: typeof req.body.ollamaModel === 'string' ? req.body.ollamaModel : undefined,
   });
+
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.reconfigure_llm',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: {
+      provider: result.provider,
+      model: result.model,
+      shared_codex_enabled: false,
+    },
+  });
+  res.json(result);
+}));
+
+app.post('/api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', asyncHandler(async (req, res) => {
+  requireAdmin(req);
+
+  const { sandbox_id } = req.params;
+  await getRecord(sandbox_id);
+
+  const result = await retrofitSandboxToSharedCodex(sandbox_id, {
+    sharedCodexModel: typeof req.body.model === 'string' ? req.body.model : undefined,
+  });
+
+  await store.updateSandboxSharedCodex(sandbox_id, true, result.model);
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.retrofit_shared_codex',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: {
+      model: result.model,
+      authSource: result.authSource,
+    },
+  }, { actor_type: 'admin_token', actor_id: 'openclaw_admin_token' });
+  res.json(result);
+}));
+
+app.get('/api/admin/audit-events', asyncHandler(async (req, res) => {
+  requireAdmin(req);
+  const limit = Math.min(parsePositiveIntParam(req.query.limit, 50, 'audit-event limit'), 100);
+  const result = await auditStore.listAuditEvents({
+    action_type: req.query.action_type == null ? undefined : String(req.query.action_type),
+    target_type: req.query.target_type == null ? undefined : String(req.query.target_type),
+    target_id: req.query.target_id == null ? undefined : String(req.query.target_id),
+    actor_type: req.query.actor_type == null ? undefined : String(req.query.actor_type),
+    actor_id: req.query.actor_id == null ? undefined : String(req.query.actor_id),
+    outcome: req.query.outcome == null ? undefined : String(req.query.outcome),
+    limit,
+  });
+  res.json(result);
 }));
 
 app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
@@ -218,6 +621,9 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
   let sessionKey: string | null = null;
   if (conversationId) {
     const conv = await conversationStore.getConversation(conversationId);
+    if (conv && conv.sandbox_id !== req.params.sandbox_id) {
+      throw httpError(404, 'Conversation not found');
+    }
     sessionKey = conv ? conv.openclaw_session_key : `agent:main:${conversationId}`;
     body['user'] = conversationId;
   }
@@ -248,11 +654,83 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
   }
 }));
 
+app.get('/api/sandboxes/:sandbox_id/workspace/files', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const relativePath = parseWorkspaceRelativePath(req.query.path);
+  const depth = Math.min(parsePositiveIntParam(req.query.depth, 2, 'workspace depth'), 5);
+  const limit = Math.min(parsePositiveIntParam(req.query.limit, 200, 'workspace limit'), 500);
+  const [code, output] = await sandboxExec(
+    req.params.sandbox_id,
+    createWorkspaceListCommand(relativePath, depth, limit),
+    30,
+  );
+  if (code !== 0) throw httpError(502, `Workspace list failed: ${output.slice(0, 300)}`);
+  try {
+    res.json(parseJsonOutput(output));
+  } catch {
+    throw httpError(502, 'Failed to parse workspace list output');
+  }
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace/file', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const relativePath = parseWorkspaceRelativePath(req.query.path, true);
+  const [code, output] = await sandboxExec(
+    req.params.sandbox_id,
+    createWorkspaceReadCommand(relativePath),
+    30,
+  );
+  if (code !== 0) throw httpError(502, `Workspace read failed: ${output.slice(0, 300)}`);
+  try {
+    res.json(parseJsonOutput(output));
+  } catch {
+    throw httpError(502, 'Failed to parse workspace file output');
+  }
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace/file/download', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const relativePath = parseWorkspaceRelativePath(req.query.path, true);
+  const [code, output] = await sandboxExec(
+    req.params.sandbox_id,
+    createWorkspaceDownloadCommand(relativePath),
+    30,
+  );
+  if (code !== 0) throw httpError(502, `Workspace download failed: ${output.slice(0, 300)}`);
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = parseJsonOutput(output) as Record<string, unknown>;
+  } catch {
+    throw httpError(502, 'Failed to parse workspace download output');
+  }
+
+  const base64 = typeof payload.base64 === 'string' ? payload.base64 : null;
+  if (!base64) throw httpError(502, 'Workspace download payload missing file bytes');
+
+  const buffer = Buffer.from(base64, 'base64');
+  const downloadName = typeof payload.download_name === 'string' ? payload.download_name : 'download';
+  const mimeType = typeof payload.mime_type === 'string' ? payload.mime_type : 'application/octet-stream';
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${downloadName.replace(/"/g, '')}"`);
+  res.send(buffer);
+}));
+
 // ── Conversation management ───────────────────────────────────────────────────
 
 app.get('/api/sandboxes/:sandbox_id/conversations', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  res.json(await conversationStore.listConversations(req.params.sandbox_id));
+  const limit = Math.min(parsePositiveIntParam(req.query.limit, 20, 'conversation limit'), 100);
+  const cursor = req.query.cursor == null ? null : String(req.query.cursor);
+
+  try {
+    res.json(await conversationStore.listConversationsPage(req.params.sandbox_id, { limit, cursor }));
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Invalid conversation cursor') {
+      throw httpError(400, 'Invalid conversation cursor');
+    }
+    throw error;
+  }
 }));
 
 app.post('/api/sandboxes/:sandbox_id/conversations', asyncHandler(async (req, res) => {
@@ -266,31 +744,34 @@ app.post('/api/sandboxes/:sandbox_id/conversations', asyncHandler(async (req, re
 
 app.get('/api/sandboxes/:sandbox_id/conversations/:conv_id/messages', asyncHandler(async (req, res) => {
   const { sandbox_id, conv_id } = req.params;
-  const conv = await conversationStore.getConversation(conv_id);
-  if (!conv || conv.sandbox_id !== sandbox_id) throw httpError(404, 'Conversation not found');
-  res.json(await conversationStore.getMessages(conv_id));
+  await getSandboxConversationRecord(sandbox_id, conv_id);
+  const limit = Math.min(parsePositiveIntParam(req.query.limit, 50, 'message limit'), 200);
+  const beforeValue = req.query.before;
+  let before: number | null = null;
+  if (beforeValue != null && beforeValue !== '') {
+    before = parsePositiveIntParam(beforeValue, 0, 'message cursor');
+  }
+
+  res.json(await conversationStore.getMessagesPage(conv_id, { limit, before }));
 }));
 
 app.post('/api/sandboxes/:sandbox_id/conversations/:conv_id/messages', asyncHandler(async (req, res) => {
   const { sandbox_id, conv_id } = req.params;
-  const conv = await conversationStore.getConversation(conv_id);
-  if (!conv || conv.sandbox_id !== sandbox_id) throw httpError(404, 'Conversation not found');
+  await getSandboxConversationRecord(sandbox_id, conv_id);
   await conversationStore.appendMessages(conv_id, req.body.messages ?? []);
   res.json({ ok: true });
 }));
 
 app.patch('/api/sandboxes/:sandbox_id/conversations/:conv_id', asyncHandler(async (req, res) => {
   const { sandbox_id, conv_id } = req.params;
-  const conv = await conversationStore.getConversation(conv_id);
-  if (!conv || conv.sandbox_id !== sandbox_id) throw httpError(404, 'Conversation not found');
+  await getSandboxConversationRecord(sandbox_id, conv_id);
   await conversationStore.renameConversation(conv_id, req.body.name);
   res.json({ ok: true });
 }));
 
 app.delete('/api/sandboxes/:sandbox_id/conversations/:conv_id', asyncHandler(async (req, res) => {
   const { sandbox_id, conv_id } = req.params;
-  const conv = await conversationStore.getConversation(conv_id);
-  if (!conv || conv.sandbox_id !== sandbox_id) throw httpError(404, 'Conversation not found');
+  await getSandboxConversationRecord(sandbox_id, conv_id);
   await conversationStore.deleteConversation(conv_id);
   res.json({ deleted: conv_id });
 }));
@@ -309,38 +790,68 @@ app.post('/api/sandboxes/:sandbox_id/crons', asyncHandler(async (req, res) => {
   const { name, schedule, payload, session_target = 'isolated', wake_mode = 'now', delete_after_run = false, enabled = true, description = '' } = req.body;
 
   const kind = String(schedule.kind ?? 'cron');
-  let schedFlag: string;
   if (kind === 'cron') {
-    schedFlag = `--cron ${JSON.stringify(String(schedule.expr ?? '0 9 * * *'))}`;
-    const tz = String(schedule.tz ?? '');
-    if (tz) schedFlag += ` --tz ${JSON.stringify(tz)}`;
   } else if (kind === 'every') {
-    schedFlag = `--every ${Math.floor(Number(schedule.everyMs ?? 1_800_000) / 60_000)}m`;
   } else if (kind === 'at') {
-    schedFlag = `--at ${JSON.stringify(String(schedule.at ?? ''))}`;
   } else {
     throw httpError(400, `Unknown schedule kind: ${kind}`);
   }
 
   const pk = String(payload.kind ?? 'agentTurn');
-  const payloadFlag = pk === 'systemEvent'
-    ? `--system-event ${JSON.stringify(String(payload.text ?? ''))}`
-    : `--message ${JSON.stringify(String(payload.message ?? payload.text ?? ''))}`;
-
-  const parts = ['openclaw cron add --json', `--name ${JSON.stringify(name)}`, schedFlag, payloadFlag, `--session ${session_target}`, `--wake ${wake_mode}`];
+  const parts: Array<string | number> = ['openclaw', 'cron', 'add', '--json', '--name', String(name)];
+  if (kind === 'cron') {
+    parts.push('--cron', String(schedule.expr ?? '0 9 * * *'));
+    const tz = String(schedule.tz ?? '');
+    if (tz) parts.push('--tz', tz);
+  } else if (kind === 'every') {
+    parts.push('--every', `${Math.floor(Number(schedule.everyMs ?? 1_800_000) / 60_000)}m`);
+  } else if (kind === 'at') {
+    parts.push('--at', String(schedule.at ?? ''));
+  }
+  if (pk === 'systemEvent') {
+    parts.push('--system-event', String(payload.text ?? ''));
+  } else {
+    parts.push('--message', String(payload.message ?? payload.text ?? ''));
+  }
+  parts.push('--session', String(session_target), '--wake', String(wake_mode));
   if (delete_after_run) parts.push('--delete-after-run');
   if (!enabled) parts.push('--disabled');
-  if (description) parts.push(`--description ${JSON.stringify(description)}`);
+  if (description) parts.push('--description', String(description));
 
-  const [code, output] = await sandboxExec(req.params.sandbox_id, parts.join(' ') + ' 2>&1', 30);
+  const [code, output] = await sandboxExec(req.params.sandbox_id, `${joinShellArgs(parts)} 2>&1`, 30);
   if (code !== 0) throw httpError(502, `openclaw cron add failed: ${output.slice(0, 400)}`);
-  try { res.json(parseJsonOutput(output)); } catch { res.json({ ok: true, output }); }
+  let response: Record<string, unknown>;
+  try { response = parseJsonOutput(output) as Record<string, unknown>; } catch { response = { ok: true, output }; }
+  await recordAuditEvent(req, {
+    action_type: 'cron.create',
+    target_type: 'sandbox',
+    target_id: req.params.sandbox_id,
+    outcome: 'success',
+    details: {
+      schedule_kind: kind,
+      payload_kind: pk,
+      session_target: String(session_target),
+      wake_mode: String(wake_mode),
+      delete_after_run: Boolean(delete_after_run),
+      enabled: Boolean(enabled),
+      description_present: Boolean(description),
+      job_id: typeof response['id'] === 'string' ? response['id'] : undefined,
+    },
+  });
+  res.json(response);
 }));
 
 app.delete('/api/sandboxes/:sandbox_id/crons/:job_id', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  const [code, output] = await sandboxExec(req.params.sandbox_id, `openclaw cron rm ${req.params.job_id} 2>&1`, 20);
+  const [code, output] = await sandboxExec(req.params.sandbox_id, buildCronDeleteCommand(req.params.job_id), 20);
   if (code !== 0) throw httpError(502, `openclaw cron rm failed: ${output.slice(0, 300)}`);
+  await recordAuditEvent(req, {
+    action_type: 'cron.delete',
+    target_type: 'sandbox',
+    target_id: req.params.sandbox_id,
+    outcome: 'success',
+    details: { job_id: req.params.job_id },
+  });
   res.json({ deleted: req.params.job_id });
 }));
 
@@ -355,8 +866,19 @@ app.post('/api/sandboxes/:sandbox_id/crons/:job_id/toggle', asyncHandler(async (
   const job = jobs.find((j) => j['id'] === job_id);
   if (!job) throw httpError(404, 'Cron job not found');
   const subcmd = Boolean(job['enabled'] ?? true) ? 'disable' : 'enable';
-  const [code2, output2] = await sandboxExec(sandbox_id, `openclaw cron ${subcmd} ${job_id} 2>&1`, 20);
+  const [code2, output2] = await sandboxExec(
+    sandbox_id,
+    `${joinShellArgs(['openclaw', 'cron', subcmd, job_id])} 2>&1`,
+    20,
+  );
   if (code2 !== 0) throw httpError(502, `cron ${subcmd} failed: ${output2.slice(0, 300)}`);
+  await recordAuditEvent(req, {
+    action_type: 'cron.toggle',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { job_id, enabled: subcmd === 'enable' },
+  });
   res.json({ jobId: job_id, enabled: subcmd === 'enable' });
 }));
 
@@ -364,31 +886,59 @@ app.patch('/api/sandboxes/:sandbox_id/crons/:job_id', asyncHandler(async (req, r
   const { sandbox_id, job_id } = req.params;
   await getRecord(sandbox_id);
   const { name, schedule, payload, session_target, wake_mode, description } = req.body;
-  const parts = [`openclaw cron edit ${job_id}`];
-  if (name != null) parts.push(`--name ${JSON.stringify(name)}`);
+  const parts: Array<string | number> = ['openclaw', 'cron', 'edit', job_id];
+  if (name != null) parts.push('--name', String(name));
   if (schedule != null) {
     const kind = String(schedule.kind ?? 'cron');
-    if (kind === 'cron') { parts.push(`--cron ${JSON.stringify(String(schedule.expr ?? '0 9 * * *'))}`); if (schedule.tz) parts.push(`--tz ${JSON.stringify(String(schedule.tz))}`); }
-    else if (kind === 'every') parts.push(`--every ${Math.floor(Number(schedule.everyMs ?? 1_800_000) / 60_000)}m`);
-    else if (kind === 'at') parts.push(`--at ${JSON.stringify(String(schedule.at ?? ''))}`);
+    if (kind === 'cron') {
+      parts.push('--cron', String(schedule.expr ?? '0 9 * * *'));
+      if (schedule.tz) parts.push('--tz', String(schedule.tz));
+    } else if (kind === 'every') parts.push('--every', `${Math.floor(Number(schedule.everyMs ?? 1_800_000) / 60_000)}m`);
+    else if (kind === 'at') parts.push('--at', String(schedule.at ?? ''));
   }
   if (payload != null) {
     const pk = String(payload.kind ?? 'agentTurn');
-    parts.push(pk === 'systemEvent' ? `--system-event ${JSON.stringify(String(payload.text ?? ''))}` : `--message ${JSON.stringify(String(payload.message ?? payload.text ?? ''))}`);
+    if (pk === 'systemEvent') {
+      parts.push('--system-event', String(payload.text ?? ''));
+    } else {
+      parts.push('--message', String(payload.message ?? payload.text ?? ''));
+    }
   }
-  if (session_target != null) parts.push(`--session ${session_target}`);
-  if (wake_mode != null) parts.push(`--wake ${wake_mode}`);
-  if (description != null) parts.push(`--description ${JSON.stringify(description)}`);
-  const [code, output] = await sandboxExec(sandbox_id, parts.join(' ') + ' 2>&1', 30);
+  if (session_target != null) parts.push('--session', String(session_target));
+  if (wake_mode != null) parts.push('--wake', String(wake_mode));
+  if (description != null) parts.push('--description', String(description));
+  const [code, output] = await sandboxExec(sandbox_id, `${joinShellArgs(parts)} 2>&1`, 30);
   if (code !== 0) throw httpError(502, `openclaw cron edit failed: ${output.slice(0, 400)}`);
+  await recordAuditEvent(req, {
+    action_type: 'cron.edit',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: {
+      job_id,
+      name_present: name != null,
+      schedule_present: schedule != null,
+      payload_present: payload != null,
+      session_target_present: session_target != null,
+      wake_mode_present: wake_mode != null,
+      description_present: description != null,
+    },
+  });
   res.json({ ok: true, jobId: job_id });
 }));
 
 app.post('/api/sandboxes/:sandbox_id/crons/:job_id/run', asyncHandler(async (req, res) => {
   const { sandbox_id, job_id } = req.params;
   await getRecord(sandbox_id);
-  const [code, output] = await sandboxExec(sandbox_id, `openclaw cron run ${job_id} 2>&1`, 60);
+  const [code, output] = await sandboxExec(sandbox_id, buildCronRunCommand(job_id), 60);
   if (code !== 0) throw httpError(502, `openclaw cron run failed: ${output.slice(0, 300)}`);
+  await recordAuditEvent(req, {
+    action_type: 'cron.run',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { job_id },
+  });
   res.json({ ok: true, jobId: job_id });
 }));
 
@@ -396,7 +946,11 @@ app.get('/api/sandboxes/:sandbox_id/crons/:job_id/runs', asyncHandler(async (req
   const { sandbox_id, job_id } = req.params;
   const limit = Number(req.query.limit ?? 50);
   await getRecord(sandbox_id);
-  const [code, output] = await sandboxExec(sandbox_id, `openclaw cron runs --id ${job_id} --limit ${limit} 2>&1`, 20);
+  const [code, output] = await sandboxExec(
+    sandbox_id,
+    `${joinShellArgs(['openclaw', 'cron', 'runs', '--id', job_id, '--limit', String(limit)])} 2>&1`,
+    20,
+  );
   if (code !== 0) throw httpError(502, `openclaw cron runs failed: ${output.slice(0, 300)}`);
   try { res.json(parseJsonOutput(output)); } catch { throw httpError(502, 'Failed to parse runs output'); }
 }));
@@ -405,24 +959,51 @@ app.get('/api/sandboxes/:sandbox_id/crons/:job_id/runs', asyncHandler(async (req
 
 app.get('/api/sandboxes/:sandbox_id/channels', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  res.json(await channelManager.getChannelsConfig(daytonaApiKey(), req.params.sandbox_id));
+  res.json(await channelManager.getChannelsConfig(req.params.sandbox_id));
 }));
 
 app.put('/api/sandboxes/:sandbox_id/channels/telegram', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  res.json(await channelManager.setTelegramConfig(daytonaApiKey(), req.params.sandbox_id, req.body));
+  const result = await channelManager.setTelegramConfig(req.params.sandbox_id, req.body);
+  await recordAuditEvent(req, {
+    action_type: 'channel.telegram.update',
+    target_type: 'sandbox',
+    target_id: req.params.sandbox_id,
+    outcome: 'success',
+    details: {
+      enabled: req.body?.enabled,
+      dmPolicy: req.body?.dmPolicy,
+      botTokenConfigured: Boolean(req.body?.botToken),
+    },
+  });
+  res.json(result);
 }));
 
 app.put('/api/sandboxes/:sandbox_id/channels/slack', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  res.json(await channelManager.setSlackConfig(daytonaApiKey(), req.params.sandbox_id, req.body));
+  const result = await channelManager.setSlackConfig(req.params.sandbox_id, req.body);
+  await recordAuditEvent(req, {
+    action_type: 'channel.slack.update',
+    target_type: 'sandbox',
+    target_id: req.params.sandbox_id,
+    outcome: 'success',
+    details: {
+      enabled: req.body?.enabled,
+      mode: req.body?.mode,
+      dmPolicy: req.body?.dmPolicy,
+      appTokenConfigured: Boolean(req.body?.appToken),
+      botTokenConfigured: Boolean(req.body?.botToken),
+      signingSecretConfigured: Boolean(req.body?.signingSecret),
+    },
+  });
+  res.json(result);
 }));
 
 app.get('/api/sandboxes/:sandbox_id/channels/:channel/status', asyncHandler(async (req, res) => {
   const { sandbox_id, channel } = req.params;
   if (channel !== 'telegram' && channel !== 'slack') throw httpError(400, "channel must be 'telegram' or 'slack'");
   await getRecord(sandbox_id);
-  res.json(await channelManager.probeChannelStatus(daytonaApiKey(), sandbox_id, channel));
+  res.json(await channelManager.probeChannelStatus(sandbox_id, channel));
 }));
 
 // ── Pairing ───────────────────────────────────────────────────────────────────
@@ -431,15 +1012,22 @@ app.get('/api/sandboxes/:sandbox_id/channels/:channel/pairing', asyncHandler(asy
   const { sandbox_id, channel } = req.params;
   if (channel !== 'telegram' && channel !== 'slack') throw httpError(400, "channel must be 'telegram' or 'slack'");
   await getRecord(sandbox_id);
-  res.json(await channelManager.listPairingRequests(daytonaApiKey(), sandbox_id, channel));
+  res.json(await channelManager.listPairingRequests(sandbox_id, channel));
 }));
 
 app.post('/api/sandboxes/:sandbox_id/channels/:channel/pairing/approve', asyncHandler(async (req, res) => {
   const { sandbox_id, channel } = req.params;
   if (channel !== 'telegram' && channel !== 'slack') throw httpError(400, "channel must be 'telegram' or 'slack'");
   await getRecord(sandbox_id);
-  const result = await channelManager.approvePairing(daytonaApiKey(), sandbox_id, channel, String(req.body.code ?? ''));
+  const result = await channelManager.approvePairing(sandbox_id, channel, String(req.body.code ?? ''));
   if (!result['ok']) throw httpError(400, String(result['output'] ?? 'Approval failed'));
+  await recordAuditEvent(req, {
+    action_type: `channel.${channel}.pairing_approve`,
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { channel, code_present: Boolean(req.body.code) },
+  });
   res.json(result);
 }));
 

@@ -1,7 +1,17 @@
 import { ArchitectResponse } from "./types";
+import type { OpenClawRequestMode } from "./test-mode";
 
 export interface StreamCallbacks {
   onStatus?: (phase: string, message: string) => void;
+}
+
+export interface SendToArchitectOptions {
+  mode?: OpenClawRequestMode;
+  soulOverride?: string;
+}
+
+function normalizeSseChunk(chunk: string): string {
+  return chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
 /**
@@ -11,7 +21,8 @@ export interface StreamCallbacks {
 export async function sendToArchitectStreaming(
   sessionId: string,
   message: string,
-  callbacks?: StreamCallbacks
+  callbacks?: StreamCallbacks,
+  options?: SendToArchitectOptions
 ): Promise<ArchitectResponse> {
   const res = await fetch("/api/openclaw", {
     method: "POST",
@@ -20,6 +31,8 @@ export async function sendToArchitectStreaming(
       session_id: sessionId,
       message,
       agent: "architect",
+      mode: options?.mode,
+      soul_override: options?.soulOverride,
     }),
   });
 
@@ -42,48 +55,56 @@ export async function sendToArchitectStreaming(
   let buffer = "";
   let finalResult: ArchitectResponse | null = null;
 
+  const handleEventBlock = (eventBlock: string) => {
+    if (!eventBlock.trim()) return;
+
+    let eventName = "";
+    const eventDataLines: string[] = [];
+
+    for (const line of eventBlock.split("\n")) {
+      if (line.startsWith("event: ")) {
+        eventName = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        eventDataLines.push(line.slice(6));
+      }
+    }
+
+    const eventData = eventDataLines.join("\n");
+
+    if (!eventName || !eventData) return;
+
+    try {
+      const parsed = JSON.parse(eventData);
+
+      if (eventName === "status") {
+        callbacks?.onStatus?.(parsed.phase, parsed.message);
+      } else if (eventName === "result") {
+        finalResult = parsed as ArchitectResponse;
+      }
+    } catch {
+      console.warn(
+        "[SSE] Failed to parse event data:",
+        eventData.slice(0, 200)
+      );
+    }
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
+      buffer += normalizeSseChunk(decoder.decode(value, { stream: true }));
 
       const events = buffer.split("\n\n");
       buffer = events.pop() || "";
 
       for (const eventBlock of events) {
-        if (!eventBlock.trim()) continue;
-
-        let eventName = "";
-        let eventData = "";
-
-        for (const line of eventBlock.split("\n")) {
-          if (line.startsWith("event: ")) {
-            eventName = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            eventData = line.slice(6);
-          }
-        }
-
-        if (!eventName || !eventData) continue;
-
-        try {
-          const parsed = JSON.parse(eventData);
-
-          if (eventName === "status") {
-            callbacks?.onStatus?.(parsed.phase, parsed.message);
-          } else if (eventName === "result") {
-            finalResult = parsed as ArchitectResponse;
-          }
-        } catch {
-          console.warn(
-            "[SSE] Failed to parse event data:",
-            eventData.slice(0, 200)
-          );
-        }
+        handleEventBlock(eventBlock);
       }
     }
+
+    handleEventBlock(normalizeSseChunk(buffer));
   } finally {
     reader.releaseLock();
   }

@@ -14,21 +14,50 @@ import {
   X,
   Plus,
   Check,
+  Bot,
+  Loader2,
+  Play,
 } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/components/ui/button";
 import { SectionCard } from "./SectionCard";
 import { InlineInput } from "./InlineInput";
 import { DataFlowDiagram } from "./DataFlowDiagram";
-import { INITIAL_AGENT_DATA } from "./mockData";
 import type { AgentData, TriggerItem } from "./types";
+import type { SkillGraphNode, WorkflowDefinition } from "@/lib/openclaw/types";
+import type { SavedAgent } from "@/hooks/use-agents-store";
+import { buildSoulContent } from "@/lib/openclaw/agent-config";
+import { sendToArchitectStreaming } from "@/lib/openclaw/api";
+
+interface TestChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+}
 
 interface ReviewAgentProps {
   onBack: () => void;
   onConfirm: () => void;
+  skillGraph?: SkillGraphNode[] | null;
+  workflow?: WorkflowDefinition | null;
+  systemName?: string | null;
+  agentRules?: string[];
 }
 
-export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
-  const [data, setData] = useState<AgentData>(INITIAL_AGENT_DATA);
+export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemName, agentRules }: ReviewAgentProps) {
+  const initialData: AgentData = {
+    name: systemName || "New Agent",
+    rules: agentRules && agentRules.length > 0 ? agentRules : [],
+    skills: skillGraph ? skillGraph.map((n) => n.name || n.skill_id) : [],
+    triggers: workflow
+      ? workflow.steps.slice(0, 3).map((s) => ({
+          icon: "calendar" as const,
+          text: typeof s === "string" ? s : s.skill,
+        }))
+      : [],
+    accessTeams: [],
+  };
+  const [data, setData] = useState<AgentData>(initialData);
   const [editing, setEditing] = useState<Partial<Record<string, boolean>>>({});
   const [draftName, setDraftName] = useState(data.name);
   const [draftRules, setDraftRules] = useState<string[]>(data.rules);
@@ -36,6 +65,13 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
   const [draftTriggers, setDraftTriggers] = useState<TriggerItem[]>(data.triggers);
   const [draftTeams, setDraftTeams] = useState<string[]>(data.accessTeams);
   const [newTeam, setNewTeam] = useState("");
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
+  const [testMessages, setTestMessages] = useState<TestChatMessage[]>([]);
+  const [testInput, setTestInput] = useState("");
+  const [testStatus, setTestStatus] = useState("");
+  const [testError, setTestError] = useState<string | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testSessionId, setTestSessionId] = useState(() => uuidv4());
 
   const startEdit = (s: string) => {
     if (s === "name") setDraftName(data.name);
@@ -65,6 +101,94 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
     if (newTeam.trim()) {
       setDraftTeams((p) => [...p, newTeam.trim()]);
       setNewTeam("");
+    }
+  };
+
+  const reviewAgentSnapshot: SavedAgent = {
+    id: "review-preview",
+    name: data.name,
+    avatar: "",
+    description: data.rules[0] || `run the following skills: ${data.skills.join(", ")}`,
+    skills: data.skills,
+    triggerLabel:
+      data.triggers.map((trigger) => trigger.text).filter(Boolean).join(", ") ||
+      "Manual review",
+    status: "draft",
+    createdAt: new Date().toISOString(),
+    sandboxIds: [],
+    agentRules: data.rules,
+    skillGraph: skillGraph ?? undefined,
+    workflow: workflow ?? null,
+  };
+  const testAgentLabel = reviewAgentSnapshot.name || "New Agent";
+
+  const closeTestPanel = () => {
+    setTestPanelOpen(false);
+    setTestMessages([]);
+    setTestInput("");
+    setTestStatus("");
+    setTestError(null);
+    setIsTesting(false);
+    setTestSessionId(uuidv4());
+  };
+
+  const handleTestMessage = async () => {
+    const message = testInput.trim();
+    if (!message || isTesting) return;
+
+    setTestMessages((current) => [
+      ...current,
+      { id: uuidv4(), role: "user", content: message },
+    ]);
+    setTestInput("");
+    setIsTesting(true);
+    setTestError(null);
+    setTestStatus("Connecting to test agent...");
+
+    try {
+      const response = await sendToArchitectStreaming(
+        testSessionId,
+        message,
+        {
+          onStatus: (_phase, statusMessage) => {
+            setTestStatus(statusMessage);
+          },
+        },
+        {
+          mode: "test",
+          soulOverride: buildSoulContent(reviewAgentSnapshot),
+        }
+      );
+
+      setTestMessages((current) => [
+        ...current,
+        {
+          id: uuidv4(),
+          role: "agent",
+          content:
+            response.content ||
+            ("error" in response && typeof response.error === "string"
+              ? response.error
+              : "No response received."),
+        },
+      ]);
+      setTestStatus("");
+    } catch (error) {
+      const messageText =
+        error instanceof Error ? error.message : "Unable to run test chat.";
+      setTestError(messageText);
+      setTestMessages((current) => [
+        ...current,
+        {
+          id: uuidv4(),
+          role: "agent",
+          content: `Test chat failed: ${messageText}`,
+        },
+      ]);
+      setTestStatus("");
+      setTestSessionId(uuidv4());
+    } finally {
+      setIsTesting(false);
     }
   };
 
@@ -183,7 +307,11 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
               </div>
             ) : (
               <ul className="space-y-3">
-                {data.rules.map((rule, i) => (
+                {data.rules.length === 0 ? (
+                  <li className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                    No rules defined yet — click edit to add.
+                  </li>
+                ) : data.rules.map((rule, i) => (
                   <li
                     key={i}
                     className="flex items-start gap-2 text-sm font-satoshi-medium text-[var(--text-secondary)]"
@@ -212,7 +340,7 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
               </div>
             </div>
             <div className="border-t border-[var(--border-default)] mb-4" />
-            <DataFlowDiagram />
+            <DataFlowDiagram nodes={skillGraph ?? undefined} />
           </div>
 
           {/* Skills */}
@@ -277,6 +405,11 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
             onSave={() => saveEdit("triggers")}
             onCancel={() => cancelEdit("triggers")}
           >
+            {data.triggers.length === 0 && !editing.triggers && (
+              <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic mb-1">
+                No triggers set — click edit to add.
+              </p>
+            )}
             {editing.triggers ? (
               <div className="space-y-3">
                 {draftTriggers.map((trigger, i) => (
@@ -403,7 +536,7 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
               <div className="flex items-start gap-2 flex-wrap">
                 <PersonStanding className="h-[18px] w-[18px] text-[var(--text-tertiary)] shrink-0 mt-0.5" />
                 <span className="text-sm font-satoshi-medium text-[var(--text-secondary)] mr-1">
-                  Specific teams
+                  {data.accessTeams.length === 0 ? "All members" : "Specific teams"}
                 </span>
                 {data.accessTeams.map((team) => (
                   <span
@@ -418,6 +551,112 @@ export function ReviewAgent({ onBack, onConfirm }: ReviewAgentProps) {
           </SectionCard>
 
           <div className="h-2" />
+
+          <div className="bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-2xl px-6 py-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-[var(--text-primary)]">
+                  <Bot className="h-4 w-4" />
+                  <span className="text-base font-satoshi-bold">Test Agent</span>
+                </div>
+                <p className="text-sm font-satoshi-regular text-[var(--text-secondary)]">
+                  Run a quick review chat as {testAgentLabel} before deployment. Test messages use an isolated builder session and do not change the main architect history.
+                </p>
+              </div>
+              <Button
+                variant={testPanelOpen ? "tertiary" : "secondary"}
+                className="h-10 px-4"
+                onClick={() => {
+                  if (testPanelOpen) {
+                    closeTestPanel();
+                    return;
+                  }
+
+                  setTestPanelOpen(true);
+                }}
+              >
+                <Play className="h-4 w-4" />
+                {testPanelOpen ? "Close Test Panel" : "Test Agent"}
+              </Button>
+            </div>
+
+            {testPanelOpen && (
+              <div className="mt-5 border-t border-[var(--border-default)] pt-5 space-y-4">
+                <div className="rounded-2xl border border-[var(--border-default)] bg-[var(--background-muted)] p-4">
+                  <p className="text-xs font-satoshi-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
+                    Testing as {testAgentLabel}
+                  </p>
+                  <div className="mt-3 space-y-3 max-h-72 overflow-y-auto">
+                    {testMessages.length === 0 ? (
+                      <p className="text-sm font-satoshi-regular text-[var(--text-secondary)]">
+                        Ask a sample question to verify the current agent draft before you deploy it.
+                      </p>
+                    ) : (
+                      testMessages.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className={`rounded-2xl px-4 py-3 text-sm ${
+                            entry.role === "user"
+                              ? "bg-[var(--primary)] text-white"
+                              : "bg-[var(--card-color)] text-[var(--text-primary)] border border-[var(--border-default)]"
+                          }`}
+                        >
+                          {entry.content}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label
+                    htmlFor="review-test-input"
+                    className="text-sm font-satoshi-medium text-[var(--text-primary)]"
+                  >
+                    Test prompt
+                  </label>
+                  <textarea
+                    id="review-test-input"
+                    value={testInput}
+                    onChange={(event) => setTestInput(event.target.value)}
+                    placeholder="Ask what this agent can do, or give it a sample task."
+                    className="min-h-24 w-full rounded-2xl border border-[var(--border-default)] bg-[var(--background)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--primary)]"
+                  />
+                </div>
+
+                {(testStatus || testError) && (
+                  <div className="rounded-xl border border-[var(--border-default)] bg-[var(--background)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                    {testStatus && (
+                      <div className="flex items-center gap-2">
+                        {isTesting && <Loader2 className="h-4 w-4 animate-spin" />}
+                        <span>{testStatus}</span>
+                      </div>
+                    )}
+                    {!testStatus && testError && <span>{testError}</span>}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-3">
+                  <Button
+                    variant="tertiary"
+                    className="h-10 px-4"
+                    onClick={closeTestPanel}
+                  >
+                    Reset
+                  </Button>
+                  <Button
+                    variant="primary"
+                    className="h-10 px-4"
+                    onClick={handleTestMessage}
+                    disabled={isTesting || !testInput.trim()}
+                  >
+                    {isTesting && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Send Test Message
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

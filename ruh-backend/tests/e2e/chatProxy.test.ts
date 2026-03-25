@@ -5,7 +5,12 @@
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import { request } from '../helpers/app';
-import { makeSandboxRecord, SANDBOX_ID, MOCK_CHAT_RESPONSE } from '../helpers/fixtures';
+import {
+  makeConversationRecord,
+  makeSandboxRecord,
+  SANDBOX_ID,
+  MOCK_CHAT_RESPONSE,
+} from '../helpers/fixtures';
 
 // ── Mock store ────────────────────────────────────────────────────────────────
 
@@ -14,6 +19,25 @@ const mockListSandboxes = mock(async () => [makeSandboxRecord()]);
 const mockDeleteSandbox = mock(async () => true);
 const mockSaveSandbox = mock(async () => {});
 const mockMarkApproved = mock(async () => {});
+const mockUpdateSandboxSharedCodex = mock(async () => {});
+const mockWriteAuditEvent = mock(async () => {});
+const mockListAuditEvents = mock(async () => ({
+  items: [{
+    event_id: 'evt-1',
+    occurred_at: new Date('2026-03-25T12:00:00Z').toISOString(),
+    request_id: 'req-1',
+    action_type: 'sandbox.delete',
+    target_type: 'sandbox',
+    target_id: SANDBOX_ID,
+    outcome: 'success',
+    actor_type: 'anonymous',
+    actor_id: 'anonymous',
+    origin: 'iphash:test',
+    details: { deleted: true },
+  }],
+  has_more: false,
+}));
+const mockDockerContainerRunning = mock(async () => true);
 
 mock.module('../../src/store', () => ({
   getSandbox: mockGetSandbox,
@@ -21,7 +45,26 @@ mock.module('../../src/store', () => ({
   deleteSandbox: mockDeleteSandbox,
   saveSandbox: mockSaveSandbox,
   markApproved: mockMarkApproved,
+  updateSandboxSharedCodex: mockUpdateSandboxSharedCodex,
   initDb: mock(async () => {}),
+}));
+
+mock.module('../../src/auditStore', () => ({
+  initDb: mock(async () => {}),
+  writeAuditEvent: mockWriteAuditEvent,
+  listAuditEvents: mockListAuditEvents,
+}));
+
+mock.module('../../src/docker', () => ({
+  buildConfigureAgentCronAddCommand: (job: { name: string; schedule: string; message: string }) =>
+    `openclaw cron add --name ${job.name} --cron ${job.schedule} --message ${job.message}`,
+  buildCronDeleteCommand: (jobId: string) => `openclaw cron rm ${jobId}`,
+  buildCronRunCommand: (jobId: string) => `openclaw cron run ${jobId}`,
+  buildHomeFileWriteCommand: (relativePath: string, content: string) =>
+    `mkdir -p $HOME && printf %s '${content}' > $HOME/${relativePath}`,
+  dockerContainerRunning: mockDockerContainerRunning,
+  joinShellArgs: (args: Array<string | number>) => args.map(String).join(' '),
+  normalizePathSegment: (value: string) => value,
 }));
 
 // ── Mock conversationStore ────────────────────────────────────────────────────
@@ -51,8 +94,30 @@ mock.module('../../src/conversationStore', () => ({
 
 // ── Mock sandboxManager ───────────────────────────────────────────────────────
 
+const mockReconfigureSandboxLlm = mock(async () => ({
+  ok: true,
+  provider: 'openai',
+  model: 'gpt-4o',
+  logs: ['Config updated', 'Gateway restarted'],
+  configured: { apiKey: 'sk-12***cdef' },
+}));
+const mockRetrofitSandboxToSharedCodex = mock(async () => ({
+  ok: true,
+  sandboxId: SANDBOX_ID,
+  model: 'openai-codex/gpt-5.4',
+  homeDir: '/root',
+  authSource: 'Codex CLI auth',
+  logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
+}));
+const mockDockerExec = mock(async () => [true, '']);
+
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  reconfigureSandboxLlm: mockReconfigureSandboxLlm,
+  retrofitSandboxToSharedCodex: mockRetrofitSandboxToSharedCodex,
+  dockerExec: mockDockerExec,
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
 }));
 
 // ── Mock axios ────────────────────────────────────────────────────────────────
@@ -73,6 +138,45 @@ beforeEach(() => {
   mockAxiosGet.mockImplementation(async () => ({ status: 200, data: { models: [] } }));
   mockAxiosPost.mockImplementation(async () => ({ status: 200, data: MOCK_CHAT_RESPONSE }));
   mockGetConversation.mockImplementation(async () => null);
+  mockUpdateSandboxSharedCodex.mockImplementation(async () => {});
+  mockWriteAuditEvent.mockReset();
+  mockWriteAuditEvent.mockImplementation(async () => {});
+  mockListAuditEvents.mockReset();
+  mockListAuditEvents.mockImplementation(async () => ({
+    items: [{
+      event_id: 'evt-1',
+      occurred_at: new Date('2026-03-25T12:00:00Z').toISOString(),
+      request_id: 'req-1',
+      action_type: 'sandbox.delete',
+      target_type: 'sandbox',
+      target_id: SANDBOX_ID,
+      outcome: 'success',
+      actor_type: 'anonymous',
+      actor_id: 'anonymous',
+      origin: 'iphash:test',
+      details: { deleted: true },
+    }],
+    has_more: false,
+  }));
+  mockReconfigureSandboxLlm.mockImplementation(async () => ({
+    ok: true,
+    provider: 'openai',
+    model: 'gpt-4o',
+    logs: ['Config updated', 'Gateway restarted'],
+    configured: { apiKey: 'sk-12***cdef' },
+  }));
+  mockDockerExec.mockReset();
+  mockDockerExec.mockImplementation(async () => [true, '']);
+  mockRetrofitSandboxToSharedCodex.mockImplementation(async () => ({
+    ok: true,
+    sandboxId: SANDBOX_ID,
+    model: 'openai-codex/gpt-5.4',
+    homeDir: '/root',
+    authSource: 'Codex CLI auth',
+    logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
+  }));
+  mockDockerContainerRunning.mockImplementation(async () => true);
+  process.env.OPENCLAW_ADMIN_TOKEN = 'admin-test-token';
 });
 
 // ── Health ────────────────────────────────────────────────────────────────────
@@ -99,6 +203,12 @@ describe('DELETE /api/sandboxes/:sandbox_id', () => {
       .delete(`/api/sandboxes/${SANDBOX_ID}`)
       .expect(200);
     expect(res.body.deleted).toBe(SANDBOX_ID);
+    expect(mockWriteAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action_type: 'sandbox.delete',
+      target_type: 'sandbox',
+      target_id: SANDBOX_ID,
+      outcome: 'success',
+    }));
   });
 
   test('returns 404 when sandbox not found', async () => {
@@ -164,10 +274,13 @@ describe('GET /api/sandboxes/:sandbox_id/status', () => {
       .expect(200);
 
     expect(res.body.status).toBe('running');
+    expect(res.body.container_running).toBe(true);
+    expect(res.body.approved).toBe(false);
   });
 
   test('returns fallback status when gateway unavailable', async () => {
     mockAxiosGet.mockImplementation(async () => { throw new Error('timeout'); });
+    mockDockerContainerRunning.mockImplementation(async () => false);
 
     const res = await request()
       .get(`/api/sandboxes/${SANDBOX_ID}/status`)
@@ -175,6 +288,184 @@ describe('GET /api/sandboxes/:sandbox_id/status', () => {
 
     expect(res.body.sandbox_id).toBe(SANDBOX_ID);
     expect(res.body.gateway_port).toBe(18789);
+    expect(res.body.container_running).toBe(false);
+  });
+});
+
+describe('workspace file routes', () => {
+  test('lists bounded workspace files for a sandbox', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      root: '',
+      items: [
+        {
+          path: 'reports/daily.md',
+          name: 'daily.md',
+          type: 'file',
+          size: 128,
+          modified_at: '2026-03-25T15:30:00.000Z',
+          preview_kind: 'text',
+          mime_type: 'text/markdown',
+        },
+      ],
+    })]);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/workspace/files`)
+      .expect(200);
+
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].path).toBe('reports/daily.md');
+  });
+
+  test('rejects traversal outside the workspace root', async () => {
+    await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/workspace/file?path=../secret.txt`)
+      .expect(400);
+  });
+
+  test('returns inline-safe text file content plus metadata', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      path: 'reports/daily.md',
+      name: 'daily.md',
+      size: 21,
+      mime_type: 'text/markdown',
+      preview_kind: 'text',
+      content: '# Daily report\nReady',
+      truncated: false,
+      download_name: 'daily.md',
+    })]);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/workspace/file?path=reports/daily.md`)
+      .expect(200);
+
+    expect(res.body.preview_kind).toBe('text');
+    expect(res.body.content).toContain('Daily report');
+  });
+});
+
+// ── LLM reconfiguration ───────────────────────────────────────────────────────
+
+describe('POST /api/sandboxes/:sandbox_id/reconfigure-llm', () => {
+  test('reconfigures sandbox provider and returns masked summary', async () => {
+    let capturedArgs: unknown[] = [];
+    mockReconfigureSandboxLlm.mockImplementation(async (...args: unknown[]) => {
+      capturedArgs = args;
+      return {
+        ok: true,
+        provider: 'openai',
+        model: 'gpt-4o',
+        logs: ['Config updated', 'Gateway restarted'],
+        configured: { apiKey: 'sk-12***cdef' },
+      };
+    });
+
+    const res = await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/reconfigure-llm`)
+      .send({
+        provider: 'openai',
+        apiKey: 'sk-openai-secret-1234',
+        model: 'gpt-4o',
+      })
+      .expect(200);
+
+    expect(capturedArgs[0]).toBe(SANDBOX_ID);
+    expect(capturedArgs[1]).toEqual({
+      provider: 'openai',
+      apiKey: 'sk-openai-secret-1234',
+      model: 'gpt-4o',
+    });
+    expect(res.body.provider).toBe('openai');
+    expect(res.body.model).toBe('gpt-4o');
+    expect(res.body.configured.apiKey).toContain('***');
+    expect(mockWriteAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action_type: 'sandbox.reconfigure_llm',
+      target_type: 'sandbox',
+      target_id: SANDBOX_ID,
+      outcome: 'success',
+    }));
+  });
+
+  test('returns 400 when provider is missing', async () => {
+    await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/reconfigure-llm`)
+      .send({ apiKey: 'sk-openai-secret-1234' })
+      .expect(400);
+  });
+
+  test('returns 409 when sandbox is locked to shared Codex', async () => {
+    mockGetSandbox.mockImplementation(async () =>
+      makeSandboxRecord({
+        shared_codex_enabled: true,
+        shared_codex_model: 'openai-codex/gpt-5.4',
+      } as never),
+    );
+
+    await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/reconfigure-llm`)
+      .send({
+        provider: 'openai',
+        apiKey: 'sk-openai-secret-1234',
+        model: 'gpt-4o',
+      })
+      .expect(409);
+  });
+});
+
+describe('POST /api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', () => {
+  test('requires a valid admin bearer token', async () => {
+    await request()
+      .post(`/api/admin/sandboxes/${SANDBOX_ID}/retrofit-shared-codex`)
+      .send({})
+      .expect(401);
+  });
+
+  test('retrofits a running sandbox and returns the retrofit summary', async () => {
+    let capturedArgs: unknown[] = [];
+    mockRetrofitSandboxToSharedCodex.mockImplementation(async (...args: unknown[]) => {
+      capturedArgs = args;
+      return {
+        ok: true,
+        sandboxId: SANDBOX_ID,
+        model: 'openai-codex/gpt-5.4',
+        homeDir: '/root',
+        authSource: 'Codex CLI auth',
+        logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
+      };
+    });
+
+    const res = await request()
+      .post(`/api/admin/sandboxes/${SANDBOX_ID}/retrofit-shared-codex`)
+      .set('Authorization', 'Bearer admin-test-token')
+      .send({})
+      .expect(200);
+
+    expect(capturedArgs[0]).toBe(SANDBOX_ID);
+    expect(capturedArgs[1]).toEqual({ model: undefined });
+    expect(res.body.model).toBe('openai-codex/gpt-5.4');
+    expect(res.body.authSource).toBe('Codex CLI auth');
+  });
+});
+
+describe('GET /api/admin/audit-events', () => {
+  test('requires a valid admin bearer token', async () => {
+    await request()
+      .get('/api/admin/audit-events')
+      .expect(401);
+  });
+
+  test('returns filtered audit events for admins', async () => {
+    const res = await request()
+      .get('/api/admin/audit-events?action_type=sandbox.delete&limit=10')
+      .set('Authorization', 'Bearer admin-test-token')
+      .expect(200);
+
+    expect(mockListAuditEvents).toHaveBeenCalledWith(expect.objectContaining({
+      action_type: 'sandbox.delete',
+      limit: 10,
+    }));
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].action_type).toBe('sandbox.delete');
   });
 });
 
@@ -212,6 +503,22 @@ describe('POST /api/sandboxes/:sandbox_id/chat', () => {
       });
 
     expect(capturedHeaders['x-openclaw-session-key']).toContain(convId);
+  });
+
+  test('rejects conversation_id from a different sandbox before contacting the gateway', async () => {
+    mockGetConversation.mockImplementation(async () => (
+      makeConversationRecord({ sandbox_id: 'different-sandbox-id' })
+    ));
+
+    await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
+      .send({
+        messages: [{ role: 'user', content: 'Hello' }],
+        conversation_id: 'conv-cross-sandbox',
+      })
+      .expect(404);
+
+    expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
   test('returns 404 when sandbox not found', async () => {

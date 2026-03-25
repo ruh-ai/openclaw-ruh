@@ -1,11 +1,12 @@
-export type SkillSource = "clawhub" | "skills_sh" | "custom" | "data_ingestion";
+export type SkillSource = "clawhub" | "skills_sh" | "custom" | "data_ingestion" | "native_tool" | "existing";
 export type SkillNodeStatus =
   | "found"
   | "generating"
   | "generated"
   | "approved"
   | "rejected"
-  | "always_included";
+  | "always_included"
+  | "pending_approval";
 
 export interface SkillGraphNode {
   skill_id: string;
@@ -14,6 +15,10 @@ export interface SkillGraphNode {
   status: SkillNodeStatus;
   depends_on: string[];
   description?: string;
+  native_tool?: string | null;
+  requires_env?: string[];
+  external_api?: string;
+  note?: string;
 }
 
 export interface WorkflowStep {
@@ -29,6 +34,27 @@ export interface WorkflowDefinition {
   steps: WorkflowStep[];
 }
 
+export interface AgentMetadata {
+  agent_name?: string;
+  agent_id?: string;
+  avatar?: string;
+  tone?: string;
+  domain?: string;
+  primary_users?: string;
+  automation_type?: string;
+  schedule_description?: string;
+  cron_expression?: string;
+}
+
+export interface AgentRequirements {
+  description?: string;
+  automation_type?: string;
+  data_sources?: Array<{ source_type: string; access_method: string; skill_id?: string }>;
+  outputs?: Array<{ type: string; format?: string }>;
+  schedule?: string;
+  required_env_vars?: string[];
+}
+
 export interface ArchitectResponse {
   type:
     | "clarification"
@@ -39,10 +65,16 @@ export interface ArchitectResponse {
     | "error";
   content?: string;
   questions?: string[];
+  // Top-level fields (real architect JSON response)
+  system_name?: string;
+  description?: string;
+  agent_metadata?: AgentMetadata;
+  requirements?: AgentRequirements;
   skill_graph?: {
-    system_name: string;
+    system_name?: string; // present only in YAML-normalized path
     nodes: SkillGraphNode[];
-    workflow: WorkflowDefinition;
+    workflow: WorkflowDefinition | { steps: string[] };
+    agents?: Array<{ id: string; skills: string[] }>;
   };
   deployment?: { repo_url: string };
   error?: string;
@@ -52,11 +84,23 @@ export interface ArchitectResponse {
   >;
 }
 
+export interface ClarificationQuestion {
+  id: string;
+  question: string;
+  type: "text" | "select" | "multiselect" | "boolean";
+  placeholder?: string;
+  options?: string[];
+  required?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "architect";
   content: string;
   timestamp: string;
+  responseType?: ArchitectResponse["type"];
+  questions?: ClarificationQuestion[];
+  clarificationContext?: string;
 }
 
 export interface LifecycleEvent {

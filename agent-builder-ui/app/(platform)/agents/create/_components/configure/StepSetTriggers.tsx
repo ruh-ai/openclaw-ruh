@@ -19,6 +19,7 @@ interface StepSetTriggersProps {
   onCancel: () => void;
   onSkip?: () => void;
   stepLabel: string;
+  agentRules?: string[];
 }
 
 const FILTER_PILLS: { id: "all" | TriggerCategoryId; label: string }[] = [
@@ -33,20 +34,36 @@ const FILTER_PILLS: { id: "all" | TriggerCategoryId; label: string }[] = [
   { id: "system-infra", label: "System/Infra" },
 ];
 
+// Detect which trigger to pre-select from agent rules (schedule/cron info)
+function detectPreselectedTrigger(agentRules?: string[]): string | null {
+  if (!agentRules || agentRules.length === 0) return null;
+  const combined = agentRules.join(" ").toLowerCase();
+  if (combined.includes("cron") || combined.includes("schedule") || combined.includes("daily") || combined.includes("weekly") || combined.includes("hourly")) {
+    return "cron-schedule";
+  }
+  if (combined.includes("webhook")) return "webhook-post";
+  if (combined.includes("message") || combined.includes("slack")) return "message-received";
+  return null;
+}
+
 export function StepSetTriggers({
   onContinue,
   onCancel,
   onSkip,
   stepLabel,
+  agentRules,
 }: StepSetTriggersProps) {
+  const preselected = detectPreselectedTrigger(agentRules);
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | TriggerCategoryId>("all");
   const [expanded, setExpanded] = useState<Set<TriggerCategoryId>>(
     new Set(["user-initiated", "time-based", "data-change", "event-webhook"])
   );
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(preselected ? [preselected] : [])
+  );
 
-  const totalCount = MOCK_TRIGGER_CATEGORIES.reduce((sum, c) => sum + c.count, 0);
+  const totalCount = MOCK_TRIGGER_CATEGORIES.reduce((sum, c) => sum + c.triggers.length, 0);
 
   const toggleExpand = (id: TriggerCategoryId) => {
     setExpanded((prev) => {
@@ -113,6 +130,7 @@ export function StepSetTriggers({
                 </div>
                 <p className="text-sm font-satoshi-regular text-[var(--text-secondary)] mt-0.5">
                   {totalCount} triggers across {MOCK_TRIGGER_CATEGORIES.length} categories
+                  {selected.size > 0 && ` · ${selected.size} selected`}
                 </p>
               </div>
             </div>
@@ -141,7 +159,7 @@ export function StepSetTriggers({
               const count =
                 pill.id === "all"
                   ? totalCount
-                  : MOCK_TRIGGER_CATEGORIES.find((c) => c.id === pill.id)?.count ?? 0;
+                  : (MOCK_TRIGGER_CATEGORIES.find((c) => c.id === pill.id)?.triggers.length ?? 0);
               return (
                 <button
                   key={pill.id}
@@ -184,7 +202,7 @@ export function StepSetTriggers({
                       className="w-7 h-7 rounded-full text-xs font-satoshi-bold flex items-center justify-center text-white"
                       style={{ backgroundColor: category.color }}
                     >
-                      {category.count}
+                      {category.triggers.length}
                     </span>
                     <span className="text-base font-satoshi-bold text-[var(--text-primary)] flex-1">
                       {category.label}

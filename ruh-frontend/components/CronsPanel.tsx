@@ -9,14 +9,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface CronSchedule {
   kind: "cron" | "every" | "at";
-  expr?: string;       // cron expression (kind=cron)
-  everyMs?: number;    // milliseconds (kind=every)
-  at?: string;         // ISO-8601 (kind=at)
-  tz?: string;         // IANA timezone
+  expr?: string;
+  everyMs?: number;
+  at?: string;
+  tz?: string;
 }
 
 interface CronJob {
-  id: string;           // openclaw uses "id", not "jobId"
+  id: string;
   name: string;
   enabled: boolean;
   schedule: CronSchedule;
@@ -49,6 +49,10 @@ function scheduleLabel(s: CronSchedule): string {
   return "—";
 }
 
+// Shared input/select classes for modal forms
+const inputCls = "w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500";
+const selectCls = inputCls;
+
 // ── RunHistory modal ──────────────────────────────────────────────────────────
 
 function RunHistoryModal({
@@ -76,29 +80,27 @@ function RunHistoryModal({
   }, [sandboxId, job.id]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg mx-4 overflow-hidden shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-lg mx-4 overflow-hidden shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
-            <h2 className="text-sm font-semibold text-white">Run History</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Run History</h2>
             <p className="text-xs text-gray-500 mt-0.5">{job.name}</p>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
         </div>
 
-        {/* Body */}
         <div className="max-h-96 overflow-y-auto">
           {loading ? (
-            <p className="text-xs text-gray-600 px-5 py-6 text-center">Loading…</p>
+            <p className="text-xs text-gray-400 px-5 py-6 text-center">Loading…</p>
           ) : error ? (
-            <p className="text-xs text-red-400 px-5 py-6 text-center">{error}</p>
+            <p className="text-xs text-red-500 px-5 py-6 text-center">{error}</p>
           ) : runs.length === 0 ? (
-            <p className="text-xs text-gray-600 px-5 py-6 text-center">No runs recorded yet.</p>
+            <p className="text-xs text-gray-400 px-5 py-6 text-center">No runs recorded yet.</p>
           ) : (
             <table className="w-full text-xs">
               <thead>
-                <tr className="text-gray-500 border-b border-gray-800">
+                <tr className="text-gray-500 border-b border-gray-200">
                   <th className="text-left px-5 py-2">Started</th>
                   <th className="text-left px-5 py-2">Duration</th>
                   <th className="text-left px-5 py-2">Status</th>
@@ -111,22 +113,20 @@ function RunHistoryModal({
                       ? `${((r.finishedAtMs - r.startedAtMs) / 1000).toFixed(1)}s`
                       : "—";
                   return (
-                    <tr key={r.runId} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                      <td className="px-5 py-2.5 text-gray-300">{formatTs(r.startedAtMs)}</td>
-                      <td className="px-5 py-2.5 text-gray-400">{dur}</td>
+                    <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-5 py-2.5 text-gray-700">{formatTs(r.startedAtMs)}</td>
+                      <td className="px-5 py-2.5 text-gray-500">{dur}</td>
                       <td className="px-5 py-2.5">
                         <span
                           className={`inline-flex items-center gap-1 font-medium ${
                             r.status === "ok"
-                              ? "text-green-400"
-                              : r.status === "running"
-                              ? "text-blue-400"
-                              : "text-red-400"
+                              ? "text-green-600"
+                              : "text-red-500"
                           }`}
                         >
-                          {r.status === "ok" ? "✓" : r.status === "running" ? "⟳" : "✗"} {r.status}
+                          {r.status === "ok" ? "✓" : "✗"} {r.status}
                           {r.error && (
-                            <span className="text-gray-500 font-normal ml-1 truncate max-w-32" title={r.error}>
+                            <span className="text-gray-400 font-normal ml-1 truncate max-w-32" title={r.error}>
                               ({r.error})
                             </span>
                           )}
@@ -143,8 +143,6 @@ function RunHistoryModal({
     </div>
   );
 }
-
-// ── CreateCronModal ───────────────────────────────────────────────────────────
 
 // ── EditCronModal ─────────────────────────────────────────────────────────────
 
@@ -171,9 +169,7 @@ function EditCronModal({
     job.schedule.at ? new Date(job.schedule.at).toISOString().slice(0, 16) : ""
   );
   const [tz, setTz] = useState(job.schedule.tz ?? "");
-  const [message, setMessage] = useState(
-    job.payload?.message ?? job.payload?.text ?? ""
-  );
+  const [message, setMessage] = useState(job.payload?.message ?? job.payload?.text ?? "");
   const [sessionTarget, setSessionTarget] = useState(job.sessionTarget ?? "main");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -221,36 +217,25 @@ function EditCronModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-2xl">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
-            <h2 className="text-sm font-semibold text-white">Edit Cron Job</h2>
-            <p className="text-xs text-gray-500 font-mono mt-0.5">{job.id.slice(0, 16)}…</p>
+            <h2 className="text-sm font-semibold text-gray-900">Edit Cron Job</h2>
+            <p className="text-xs text-gray-400 font-mono mt-0.5">{job.id.slice(0, 16)}…</p>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
         </div>
 
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
-          {/* Name */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Job name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <label className="block text-xs text-gray-500 mb-1">Job name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
           </div>
 
-          {/* Schedule kind */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Schedule type</label>
-            <select
-              value={scheduleKind}
-              onChange={(e) => setScheduleKind(e.target.value as "cron" | "every" | "at")}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
+            <label className="block text-xs text-gray-500 mb-1">Schedule type</label>
+            <select value={scheduleKind} onChange={(e) => setScheduleKind(e.target.value as "cron" | "every" | "at")} className={selectCls}>
               <option value="cron">Cron expression (recurring)</option>
               <option value="every">Every N minutes (interval)</option>
               <option value="at">One-time (specific date/time)</option>
@@ -260,80 +245,52 @@ function EditCronModal({
           {scheduleKind === "cron" && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Cron expression</label>
-                <input
-                  value={cronExpr}
-                  onChange={(e) => setCronExpr(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-xs text-gray-500 mb-1">Cron expression</label>
+                <input value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} className={`${inputCls} font-mono`} />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Timezone</label>
-                <input
-                  value={tz}
-                  onChange={(e) => setTz(e.target.value)}
-                  placeholder="UTC"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-xs text-gray-500 mb-1">Timezone</label>
+                <input value={tz} onChange={(e) => setTz(e.target.value)} placeholder="UTC" className={inputCls} />
               </div>
             </div>
           )}
 
           {scheduleKind === "every" && (
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Interval (minutes)</label>
-              <input
-                type="number" min="1" value={everyMin}
-                onChange={(e) => setEveryMin(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-xs text-gray-500 mb-1">Interval (minutes)</label>
+              <input type="number" min="1" value={everyMin} onChange={(e) => setEveryMin(e.target.value)} className={inputCls} />
             </div>
           )}
 
           {scheduleKind === "at" && (
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Date & time</label>
-              <input
-                type="datetime-local" value={atDate}
-                onChange={(e) => setAtDate(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-xs text-gray-500 mb-1">Date & time</label>
+              <input type="datetime-local" value={atDate} onChange={(e) => setAtDate(e.target.value)} className={inputCls} />
             </div>
           )}
 
-          {/* Message */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Message / prompt</label>
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              required rows={3}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-            />
+            <label className="block text-xs text-gray-500 mb-1">Message / prompt</label>
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} required rows={3} className={`${inputCls} resize-none`} />
           </div>
 
-          {/* Session target */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Session target</label>
-            <select
-              value={sessionTarget}
-              onChange={(e) => setSessionTarget(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
+            <label className="block text-xs text-gray-500 mb-1">Session target</label>
+            <select value={sessionTarget} onChange={(e) => setSessionTarget(e.target.value)} className={selectCls}>
               <option value="main">main (shared agent session)</option>
               <option value="isolated">isolated (dedicated session per run)</option>
             </select>
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-red-500">{error}</p>}
 
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose}
-              className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition-colors">
+              className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm py-2 rounded-lg transition-colors">
               Cancel
             </button>
             <button type="submit" disabled={submitting}
-              className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm py-2 rounded-lg transition-colors font-medium">
+              className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm py-2 rounded-lg transition-colors font-medium">
               {submitting ? "Saving…" : "Save Changes"}
             </button>
           </div>
@@ -404,146 +361,84 @@ function CreateCronModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-          <h2 className="text-sm font-semibold text-white">New Cron Job</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-lg leading-none">✕</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 overflow-hidden shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <h2 className="text-sm font-semibold text-gray-900">New Cron Job</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
-          {/* Name */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Job name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Daily summary"
-              required
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <label className="block text-xs text-gray-500 mb-1">Job name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Daily summary" required className={inputCls} />
           </div>
 
-          {/* Schedule kind */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Schedule type</label>
-            <select
-              value={scheduleKind}
-              onChange={(e) => setScheduleKind(e.target.value as "cron" | "every" | "at")}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
+            <label className="block text-xs text-gray-500 mb-1">Schedule type</label>
+            <select value={scheduleKind} onChange={(e) => setScheduleKind(e.target.value as "cron" | "every" | "at")} className={selectCls}>
               <option value="cron">Cron expression (recurring)</option>
               <option value="every">Every N minutes (interval)</option>
               <option value="at">One-time (specific date/time)</option>
             </select>
           </div>
 
-          {/* Schedule value */}
           {scheduleKind === "cron" && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Cron expression</label>
-                <input
-                  value={cronExpr}
-                  onChange={(e) => setCronExpr(e.target.value)}
-                  placeholder="0 9 * * *"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-xs text-gray-500 mb-1">Cron expression</label>
+                <input value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} placeholder="0 9 * * *" className={`${inputCls} font-mono`} />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Timezone</label>
-                <input
-                  value={tz}
-                  onChange={(e) => setTz(e.target.value)}
-                  placeholder="UTC"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <label className="block text-xs text-gray-500 mb-1">Timezone</label>
+                <input value={tz} onChange={(e) => setTz(e.target.value)} placeholder="UTC" className={inputCls} />
               </div>
             </div>
           )}
 
           {scheduleKind === "every" && (
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Interval (minutes)</label>
-              <input
-                type="number"
-                min="1"
-                value={everyMin}
-                onChange={(e) => setEveryMin(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-xs text-gray-500 mb-1">Interval (minutes)</label>
+              <input type="number" min="1" value={everyMin} onChange={(e) => setEveryMin(e.target.value)} className={inputCls} />
             </div>
           )}
 
           {scheduleKind === "at" && (
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Date & time</label>
-              <input
-                type="datetime-local"
-                value={atDate}
-                onChange={(e) => setAtDate(e.target.value)}
-                required
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-xs text-gray-500 mb-1">Date & time</label>
+              <input type="datetime-local" value={atDate} onChange={(e) => setAtDate(e.target.value)} required className={inputCls} />
             </div>
           )}
 
-          {/* Message */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Message / prompt</label>
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Summarize today's activity"
-              required
-              rows={3}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-            />
+            <label className="block text-xs text-gray-500 mb-1">Message / prompt</label>
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Summarize today's activity" required rows={3} className={`${inputCls} resize-none`} />
           </div>
 
-          {/* Session target */}
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Session target</label>
-            <select
-              value={sessionTarget}
-              onChange={(e) => setSessionTarget(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
+            <label className="block text-xs text-gray-500 mb-1">Session target</label>
+            <select value={sessionTarget} onChange={(e) => setSessionTarget(e.target.value)} className={selectCls}>
               <option value="main">main (shared agent session)</option>
               <option value="isolated">isolated (dedicated session per run)</option>
             </select>
           </div>
 
-          {/* Delete after run */}
           {scheduleKind === "at" && (
             <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={deleteAfterRun}
-                onChange={(e) => setDeleteAfterRun(e.target.checked)}
-                className="rounded"
-              />
-              <span className="text-xs text-gray-400">Delete job after it runs</span>
+              <input type="checkbox" checked={deleteAfterRun} onChange={(e) => setDeleteAfterRun(e.target.checked)} className="rounded" />
+              <span className="text-xs text-gray-500">Delete job after it runs</span>
             </label>
           )}
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-red-500">{error}</p>}
 
           <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm py-2 rounded-lg transition-colors"
-            >
+            <button type="button" onClick={onClose}
+              className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm py-2 rounded-lg transition-colors">
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm py-2 rounded-lg transition-colors font-medium"
-            >
+            <button type="submit" disabled={submitting}
+              className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm py-2 rounded-lg transition-colors font-medium">
               {submitting ? "Creating…" : "Create Job"}
             </button>
           </div>
@@ -585,9 +480,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   async function handleToggle(job: CronJob) {
     setActionLoading(job.id + "-toggle");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/toggle`, {
-        method: "POST",
-      });
+      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/toggle`, { method: "POST" });
       setJobs((prev) => prev.map((j) => j.id === job.id ? { ...j, enabled: !j.enabled } : j));
     } finally {
       setActionLoading(null);
@@ -597,10 +490,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   async function handleRun(job: CronJob) {
     setActionLoading(job.id + "-run");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/run`, {
-        method: "POST",
-      });
-      // Refresh to show updated lastRun
+      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/run`, { method: "POST" });
       await loadJobs();
     } finally {
       setActionLoading(null);
@@ -611,9 +501,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
     if (!confirm(`Delete cron job "${job.name}"?`)) return;
     setActionLoading(job.id + "-delete");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}`, {
-        method: "DELETE",
-      });
+      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}`, { method: "DELETE" });
       setJobs((prev) => prev.filter((j) => j.id !== job.id));
     } finally {
       setActionLoading(null);
@@ -623,22 +511,15 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Cron Jobs</h2>
-          <p className="text-xs text-gray-500 mt-0.5">{sandbox.sandbox_name}</p>
-        </div>
+      <div className="shrink-0 px-6 py-3.5 border-b border-gray-200 bg-white flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-900">Cron Jobs</h2>
         <div className="flex items-center gap-3">
-          <button
-            onClick={loadJobs}
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-            title="Refresh"
-          >
+          <button onClick={loadJobs} className="text-xs text-gray-400 hover:text-gray-600 transition-colors" title="Refresh">
             ↻
           </button>
           <button
             onClick={() => setShowCreate(true)}
-            className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors font-medium"
+            className="text-xs bg-[#ae00d0] hover:bg-[#9400b4] text-white px-3 py-1.5 rounded-lg transition-colors font-medium"
           >
             + New Job
           </button>
@@ -649,43 +530,33 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
           <div className="flex items-center justify-center h-40">
-            <span className="text-xs text-gray-600">Loading cron jobs…</span>
+            <span className="text-xs text-gray-400">Loading cron jobs…</span>
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center h-40 gap-3">
-            <p className="text-xs text-red-400">{error}</p>
-            <button onClick={loadJobs} className="text-xs text-blue-400 hover:text-blue-300">Retry</button>
+            <p className="text-xs text-red-500">{error}</p>
+            <button onClick={loadJobs} className="text-xs text-violet-600 hover:text-violet-500">Retry</button>
           </div>
         ) : jobs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 gap-3 text-center">
             <p className="text-sm text-gray-500">No cron jobs yet.</p>
-            <p className="text-xs text-gray-600">Schedule recurring tasks for your OpenClaw agent.</p>
-            <button
-              onClick={() => setShowCreate(true)}
-              className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-            >
+            <p className="text-xs text-gray-400">Schedule recurring tasks for your OpenClaw agent.</p>
+            <button onClick={() => setShowCreate(true)} className="text-xs text-violet-600 hover:text-violet-500 transition-colors">
               + Create your first job →
             </button>
           </div>
         ) : (
           <div className="space-y-3">
             {jobs.map((job) => (
-              <div
-                key={job.id}
-                className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3"
-              >
+              <div key={job.id} className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
                 {/* Top row */}
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`w-2 h-2 rounded-full shrink-0 ${
-                          job.enabled ? "bg-green-400" : "bg-gray-600"
-                        }`}
-                      />
-                      <p className="text-sm font-medium text-white truncate">{job.name}</p>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${job.enabled ? "bg-green-500" : "bg-gray-300"}`} />
+                      <p className="text-sm font-medium text-gray-900 truncate">{job.name}</p>
                       {job.state?.status === "error" && (
-                        <span className="text-[10px] bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded font-medium shrink-0">
+                        <span className="text-[10px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-medium shrink-0">
                           failed
                         </span>
                       )}
@@ -698,7 +569,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
                     <button
                       onClick={() => handleRun(job)}
                       disabled={actionLoading === job.id + "-run"}
-                      className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
                       title="Run now"
                     >
                       {actionLoading === job.id + "-run" ? "…" : "▶ Run"}
@@ -708,8 +579,8 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
                       disabled={actionLoading === job.id + "-toggle"}
                       className={`text-xs px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50 ${
                         job.enabled
-                          ? "bg-yellow-900/30 hover:bg-yellow-900/50 text-yellow-400"
-                          : "bg-green-900/30 hover:bg-green-900/50 text-green-400"
+                          ? "bg-yellow-50 hover:bg-yellow-100 text-yellow-700"
+                          : "bg-green-50 hover:bg-green-100 text-green-700"
                       }`}
                       title={job.enabled ? "Disable" : "Enable"}
                     >
@@ -717,23 +588,20 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
                     </button>
                     <button
                       onClick={() => setEditJob(job)}
-                      className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-2.5 py-1 rounded-lg transition-colors"
-                      title="Edit job"
+                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-500 px-2.5 py-1 rounded-lg transition-colors"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => setHistoryJob(job)}
-                      className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 px-2.5 py-1 rounded-lg transition-colors"
-                      title="View run history"
+                      className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-500 px-2.5 py-1 rounded-lg transition-colors"
                     >
                       History
                     </button>
                     <button
                       onClick={() => handleDelete(job)}
                       disabled={actionLoading === job.id + "-delete"}
-                      className="text-xs text-gray-600 hover:text-red-400 transition-colors disabled:opacity-50 px-1"
-                      title="Delete job"
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50 px-1"
                     >
                       ✕
                     </button>
@@ -743,29 +611,25 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
                 {/* Meta row */}
                 <div className="grid grid-cols-3 gap-4 text-xs">
                   <div>
-                    <span className="text-gray-600 block">Session</span>
-                    <span className="text-gray-400 font-mono">{job.sessionTarget}</span>
+                    <span className="text-gray-400 block">Session</span>
+                    <span className="text-gray-600 font-mono">{job.sessionTarget}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600 block">Last run</span>
-                    <span className="text-gray-400">{formatTs(job.state?.lastRunAtMs)}</span>
+                    <span className="text-gray-400 block">Last run</span>
+                    <span className="text-gray-600">{formatTs(job.state?.lastRunAtMs)}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600 block">Next run</span>
-                    <span className="text-gray-400">{formatTs(job.state?.nextRunAtMs)}</span>
+                    <span className="text-gray-400 block">Next run</span>
+                    <span className="text-gray-600">{formatTs(job.state?.nextRunAtMs)}</span>
                   </div>
                 </div>
 
-                {/* Payload preview */}
                 {job.payload?.text && (
-                  <p className="text-xs text-gray-600 italic truncate">
-                    "{job.payload.text}"
-                  </p>
+                  <p className="text-xs text-gray-400 italic truncate">"{job.payload.text}"</p>
                 )}
 
-                {/* Error */}
                 {job.state?.error && (
-                  <p className="text-xs text-red-400 truncate" title={job.state.error}>
+                  <p className="text-xs text-red-500 truncate" title={job.state.error}>
                     Error: {job.state.error}
                   </p>
                 )}
@@ -777,26 +641,13 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
 
       {/* Modals */}
       {editJob && (
-        <EditCronModal
-          sandboxId={sandbox.sandbox_id}
-          job={editJob}
-          onSaved={loadJobs}
-          onClose={() => setEditJob(null)}
-        />
+        <EditCronModal sandboxId={sandbox.sandbox_id} job={editJob} onSaved={loadJobs} onClose={() => setEditJob(null)} />
       )}
       {showCreate && (
-        <CreateCronModal
-          sandboxId={sandbox.sandbox_id}
-          onCreated={loadJobs}
-          onClose={() => setShowCreate(false)}
-        />
+        <CreateCronModal sandboxId={sandbox.sandbox_id} onCreated={loadJobs} onClose={() => setShowCreate(false)} />
       )}
       {historyJob && (
-        <RunHistoryModal
-          sandboxId={sandbox.sandbox_id}
-          job={historyJob}
-          onClose={() => setHistoryJob(null)}
-        />
+        <RunHistoryModal sandboxId={sandbox.sandbox_id} job={historyJob} onClose={() => setHistoryJob(null)} />
       )}
     </div>
   );

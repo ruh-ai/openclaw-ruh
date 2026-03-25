@@ -43,43 +43,41 @@ mock.module('axios', () => ({
 // ─────────────────────────────────────────────────────────────────────────────
 
 const originalDaytonaKey = process.env.DAYTONA_API_KEY;
-
 beforeEach(() => {
   mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
   process.env.DAYTONA_API_KEY = 'test-key-present';
 });
 
-describe('DAYTONA_API_KEY requirement', () => {
-  test('POST /api/sandboxes/create returns 500 when DAYTONA_API_KEY is missing', async () => {
-    delete process.env.DAYTONA_API_KEY;
-
+describe('sandbox create endpoint security', () => {
+  test('POST /api/sandboxes/create returns 200 with stream_id', async () => {
+    // The Docker-based implementation no longer requires an external API key.
+    // It returns a stream_id immediately and creates the container asynchronously.
     const res = await request()
       .post('/api/sandboxes/create')
       .send({ sandbox_name: 'test' });
 
-    expect(res.status).toBe(500);
-    expect(res.body.detail).toContain('DAYTONA_API_KEY');
-
-    // Restore
-    process.env.DAYTONA_API_KEY = 'test-key-present';
+    expect(res.status).toBe(200);
+    expect(res.body.stream_id).toBeTruthy();
   });
 
-  test('GET /api/sandboxes/stream/:id with no DAYTONA_API_KEY does not expose stack trace', async () => {
-    delete process.env.DAYTONA_API_KEY;
-
+  test('POST /api/sandboxes/create response does not expose stack traces', async () => {
     const res = await request()
       .post('/api/sandboxes/create')
       .send({ sandbox_name: 'test' });
 
-    if (res.status !== 200) {
-      // Error body should not contain a stack trace
-      const body = JSON.stringify(res.body);
-      expect(body).not.toContain('at Object');
-      expect(body).not.toContain('at async');
-      expect(body).not.toContain('node_modules');
-    }
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain('at Object');
+    expect(body).not.toContain('at async');
+    expect(body).not.toContain('node_modules');
+  });
 
-    process.env.DAYTONA_API_KEY = 'test-key-present';
+  test('POST /api/sandboxes/create with no body still returns a stream_id', async () => {
+    const res = await request()
+      .post('/api/sandboxes/create')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.stream_id).toBeTruthy();
   });
 });
 

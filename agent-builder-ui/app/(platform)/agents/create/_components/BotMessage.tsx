@@ -1,17 +1,39 @@
 "use client";
 
+import React from "react";
 import Image from "next/image";
 import MessageContent from "./MessageContent";
+import { ClarificationMessage } from "./ClarificationMessage";
+import { ChatMessage } from "@/lib/openclaw/types";
 
 interface BotMessageProps {
-  message: string;
+  message: ChatMessage;
   animate?: boolean;
+  onSelectOption?: (text: string) => void;
 }
 
 export const BotMessage: React.FC<BotMessageProps> = ({
   message,
   animate = false,
+  onSelectOption,
 }) => {
+  const renderContent = () => {
+    if (
+      message.responseType === "clarification" &&
+      message.questions &&
+      message.questions.length > 0
+    ) {
+      return (
+        <ClarificationMessage
+          context={message.clarificationContext}
+          questions={message.questions}
+          onSelectOption={onSelectOption}
+        />
+      );
+    }
+    return <MessageContent content={message.content} />;
+  };
+
   return (
     <div
       className={`flex items-start gap-3 ${animate ? "animate-fadeIn" : ""}`}
@@ -26,7 +48,7 @@ export const BotMessage: React.FC<BotMessageProps> = ({
         />
       </div>
       <div className="flex-1 min-w-0 pt-0.5">
-        <MessageContent content={message} />
+        {renderContent()}
       </div>
     </div>
   );
