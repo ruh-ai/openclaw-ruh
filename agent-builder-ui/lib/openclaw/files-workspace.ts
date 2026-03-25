@@ -29,15 +29,24 @@ export function createWorkspaceApiUrl(
   sandboxId: string,
   route: "files" | "file" | "download",
   relativePath?: string,
+  sessionId?: string,
 ): string {
   const url = new URL(
     `/api/sandboxes/${sandboxId}/workspace/${route === "files" ? "files" : route === "file" ? "file" : "file/download"}`,
     apiBase,
   );
-  if (relativePath) {
-    url.searchParams.set("path", relativePath);
+  // For file listings, scope to the session folder when a sessionId is provided
+  const effectivePath = route === "files" && sessionId
+    ? `sessions/${sessionId}`
+    : relativePath;
+  if (effectivePath) {
+    url.searchParams.set("path", effectivePath);
   }
   return url.toString();
+}
+
+export function sessionWorkspaceFolder(sessionId: string): string {
+  return `sessions/${sessionId}`;
 }
 
 export function formatWorkspaceFileSize(bytes: number): string {

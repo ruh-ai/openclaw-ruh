@@ -21,7 +21,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface FilesPanelProps {
   sandboxId: string | null;
-  scopeKey: string;
+  conversationId: string | null;
 }
 
 function kindLabel(file: WorkspaceFileItem | WorkspaceFilePayload): string {
@@ -49,7 +49,7 @@ function kindIcon(previewKind: WorkspaceFileItem["preview_kind"]) {
   }
 }
 
-export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
+export default function FilesPanel({ sandboxId, conversationId }: FilesPanelProps) {
   const [files, setFiles] = useState<WorkspaceFileItem[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFilePayload | null>(null);
@@ -60,10 +60,10 @@ export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
   useEffect(() => {
     setSelectedPath(null);
     setSelectedFile(null);
-  }, [scopeKey]);
+  }, [conversationId]);
 
   useEffect(() => {
-    if (!sandboxId) {
+    if (!sandboxId || !conversationId) {
       setFiles([]);
       setListError(null);
       return;
@@ -73,7 +73,7 @@ export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
     setLoadingList(true);
     setListError(null);
 
-    fetch(createWorkspaceApiUrl(API_BASE, sandboxId, "files"))
+    fetch(createWorkspaceApiUrl(API_BASE, sandboxId, "files", undefined, conversationId ?? undefined))
       .then(async (response) => {
         if (!response.ok) throw new Error("Unable to load workspace files");
         return response.json() as Promise<{ items?: WorkspaceFileItem[] }>;
@@ -96,7 +96,7 @@ export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [sandboxId, scopeKey]);
+  }, [sandboxId, conversationId]);
 
   useEffect(() => {
     if (!sandboxId || !selectedPath) {
@@ -136,10 +136,12 @@ export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-4 py-2.5 border-b border-white/5">
         <p className="text-[10px] font-satoshi-bold text-white/40 uppercase tracking-widest">
-          Workspace Files
+          Session Files
         </p>
         <p className="text-[10px] font-mono text-white/25">
-          {files.length} recent output{files.length === 1 ? "" : "s"}
+          {conversationId
+            ? `${files.length} file${files.length === 1 ? "" : "s"} · sessions/${conversationId.slice(0, 8)}…`
+            : "No active session"}
         </p>
       </div>
 
@@ -156,7 +158,7 @@ export default function FilesPanel({ sandboxId, scopeKey }: FilesPanelProps) {
           ) : files.length === 0 ? (
             <div className="p-4">
               <p className="text-[11px] font-mono text-white/25">
-                No workspace files yet. Generated files and artifacts will appear here after the sandbox writes them.
+                No files yet in this session. Files the agent writes to the session folder will appear here.
               </p>
             </div>
           ) : (

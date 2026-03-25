@@ -51,6 +51,7 @@ import {
   validateAgentCreateBody,
   validateAgentMetadataPatchBody,
   validateAgentSandboxAttachBody,
+  validateAgentWorkspaceMemoryPatchBody,
 } from './validation';
 
 export const app = express();
@@ -348,6 +349,19 @@ app.patch('/api/agents/:id/config', asyncHandler(async (req, res) => {
   await getAgentRecord(req.params.id);
   const body = validateAgentConfigPatchBody(req.body);
   const updated = await agentStore.updateAgentConfig(req.params.id, body);
+  res.json(updated);
+}));
+
+app.get('/api/agents/:id/workspace-memory', asyncHandler(async (req, res) => {
+  await getAgentRecord(req.params.id);
+  const memory = await agentStore.getAgentWorkspaceMemory(req.params.id);
+  res.json(memory);
+}));
+
+app.patch('/api/agents/:id/workspace-memory', asyncHandler(async (req, res) => {
+  await getAgentRecord(req.params.id);
+  const body = validateAgentWorkspaceMemoryPatchBody(req.body);
+  const updated = await agentStore.updateAgentWorkspaceMemory(req.params.id, body);
   res.json(updated);
 }));
 
@@ -654,6 +668,24 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
   }
 }));
 
+// ── Browser / VNC status ──────────────────────────────────────────────────────
+
+app.get('/api/sandboxes/:sandbox_id/browser/status', asyncHandler(async (req, res) => {
+  const record = await getRecord(req.params.sandbox_id);
+  if (!record.vnc_port) {
+    res.json({ active: false, reason: 'VNC not provisioned for this sandbox' });
+    return;
+  }
+  // Check if x11vnc is running inside the container
+  const [ok, output] = await sandboxExec(req.params.sandbox_id, 'pgrep -f x11vnc', 5);
+  res.json({
+    active: ok && output.trim().length > 0,
+    vnc_port: record.vnc_port,
+  });
+}));
+
+// ── Workspace file access ─────────────────────────────────────────────────────
+
 app.get('/api/sandboxes/:sandbox_id/workspace/files', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
   const relativePath = parseWorkspaceRelativePath(req.query.path);
@@ -735,11 +767,18 @@ app.get('/api/sandboxes/:sandbox_id/conversations', asyncHandler(async (req, res
 
 app.post('/api/sandboxes/:sandbox_id/conversations', asyncHandler(async (req, res) => {
   await getRecord(req.params.sandbox_id);
-  res.json(await conversationStore.createConversation(
+  const conv = await conversationStore.createConversation(
     req.params.sandbox_id,
     req.body.model ?? 'openclaw-default',
     req.body.name ?? 'New Conversation',
-  ));
+  );
+  // Create session folder in the sandbox workspace (fire-and-forget — non-fatal if sandbox is down)
+  sandboxExec(
+    req.params.sandbox_id,
+    `mkdir -p "$HOME/.openclaw/workspace/sessions/${conv.id}" 2>/dev/null`,
+    10,
+  ).catch(() => { /* sandbox may be stopped — folder will be created on first file write */ });
+  res.json(conv);
 }));
 
 app.get('/api/sandboxes/:sandbox_id/conversations/:conv_id/messages', asyncHandler(async (req, res) => {

@@ -9,6 +9,7 @@ import Image from "next/image";
 import MessageContent from "@/app/(platform)/agents/create/_components/MessageContent";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import { getEffectiveChatModel } from "@/lib/openclaw/shared-codex";
+import { buildWorkspaceMemorySystemMessage, hasWorkspaceMemory } from "@/lib/openclaw/workspace-memory";
 import {
   applyBrowserWorkspaceEvent,
   createEmptyBrowserWorkspaceState,
@@ -42,6 +43,7 @@ interface SandboxRecord {
   sandbox_name:  string;
   sandbox_state?: string;
   gateway_port?:  number;
+  vnc_port?:      number | null;
   approved?:      boolean;
   created_at?:    string;
   shared_codex_enabled?: boolean;
@@ -254,7 +256,8 @@ function ComputerView({
   liveBrowserState,
   onResumeTakeover,
   activeSandboxId,
-  workspaceScopeKey,
+  conversationId,
+  vncAvailable,
 }: {
   liveSteps:        AgentStep[];
   messages:         ChatMessage[];
@@ -263,7 +266,8 @@ function ComputerView({
   liveBrowserState: BrowserWorkspaceState;
   onResumeTakeover: () => void;
   activeSandboxId: string | null;
-  workspaceScopeKey: string;
+  conversationId: string | null;
+  vncAvailable:   boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"terminal" | "thinking" | "browser" | "files">("terminal");
   const terminalScrollRef = useRef<HTMLDivElement>(null);
@@ -425,9 +429,9 @@ function ComputerView({
         </div>
       )}
 
-      {/* Browser tab */}
+      {/* Files tab */}
       {activeTab === "files" && (
-        <FilesPanel sandboxId={activeSandboxId} scopeKey={workspaceScopeKey} />
+        <FilesPanel sandboxId={activeSandboxId} conversationId={conversationId} />
       )}
 
       {/* Browser tab */}
@@ -438,6 +442,8 @@ function ComputerView({
           previewUrl={previewUrl}
           takeover={takeover}
           onResumeTakeover={onResumeTakeover}
+          sandboxId={activeSandboxId ?? undefined}
+          vncAvailable={vncAvailable}
         />
       )}
     </div>
@@ -459,6 +465,7 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [showComputer,   setShowComputer]   = useState(true);
   const [liveBrowserState, setLiveBrowserState] = useState<BrowserWorkspaceState>(createEmptyBrowserWorkspaceState);
+  const [memoryAppliedConversationId, setMemoryAppliedConversationId] = useState<string | null>(null);
 
   // Tick for live elapsed re-renders
   const [tick, setTick] = useState(0);
@@ -502,6 +509,9 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
   const liveBrowserStateRef = useRef<BrowserWorkspaceState>(createEmptyBrowserWorkspaceState());
   // Tracks the last browser tool name so the result handler can synthesize screenshot events
   const lastBrowserToolRef = useRef<string | null>(null);
+  // Stable ref to the active sandbox ID — used inside processForBrowser without stale closures
+  const sandboxIdRef = useRef<string | null>(activeSandbox?.sandbox_id ?? null);
+  sandboxIdRef.current = activeSandbox?.sandbox_id ?? null;
 
   const effectiveModel = getEffectiveChatModel(agent.model, activeSandbox);
 
@@ -527,6 +537,7 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
     setMessageCursor(null);
     setHasMoreHistory(false);
     setLiveBrowserState(createEmptyBrowserWorkspaceState());
+    setMemoryAppliedConversationId(null);
     lastLoadedConvId.current = null;
   }, [activeSandbox?.sandbox_id]);
 
@@ -536,6 +547,7 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
     if (selectedConvId === lastLoadedConvId.current) return;
     lastLoadedConvId.current = selectedConvId;
     setConversationId(selectedConvId);
+    setMemoryAppliedConversationId(null);
     setMessages([]);
     setMessageCursor(null);
     setHasMoreHistory(false);
@@ -785,11 +797,21 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
       addItem({ type: "screenshot", url: match[2], label: match[1] || "Screenshot" }, match[2]);
     }
 
-    // 2. Detect URLs after navigation verbs
+    // 2. Detect URLs after navigation verbs (with https://)
     const navRegex = /(?:navigat(?:ing|ed)\s+to|open(?:ing|ed)\s+|brows(?:ing|ed)\s+|visit(?:ing|ed)\s+|going\s+to|fetch(?:ing|ed)|loading)\s+`?(https?:\/\/[^\s`),>"]+)`?/gi;
     while ((match = navRegex.exec(completedText)) !== null) {
       const url = match[1].replace(/[.),"']+$/, "");
       addItem({ type: "navigation", url, label: url }, url);
+    }
+
+    // 2b. Detect bare domains after navigation verbs (no protocol — e.g. "fetched google.com")
+    const bareNavRegex = /(?:navigat(?:ing|ed)\s+to|open(?:ing|ed)\s+|brows(?:ing|ed)\s+|visit(?:ing|ed)\s+|going\s+to|fetch(?:ing|ed)|loading)\s+`?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z]{2,})+(?:\/[^\s`),>"]*)?)`?/gi;
+    while ((match = bareNavRegex.exec(completedText)) !== null) {
+      const raw = match[1].replace(/[.),"']+$/, "");
+      // Skip if it was already captured as an https:// URL
+      if (/^https?:\/\//.test(raw)) continue;
+      const url = `https://${raw}`;
+      addItem({ type: "navigation", url, label: raw }, url);
     }
 
     // 3. Detect standalone URLs after "URL:" or "Visited URL:" patterns
@@ -799,13 +821,35 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
       addItem({ type: "navigation", url, label: url }, url);
     }
 
-    // 4. Detect port announcements (for Phase 2 preview)
+    // 4. Detect standalone https:// URLs on their own line or after a list marker
+    //    e.g. "https://www.wordstream.com/blog/..." in search result listings
+    const standaloneUrlRegex = /(?:^|\n)\s*(?:\d+\.\s+)?(?:[^\n]*\n\s*)?`?(https?:\/\/[^\s`),>"]+)`?/gm;
+    while ((match = standaloneUrlRegex.exec(completedText)) !== null) {
+      const url = match[1].replace(/[.),"']+$/, "");
+      addItem({ type: "navigation", url, label: url }, url);
+    }
+
+    // 5. Detect port announcements (for Phase 2 preview)
     const portRegex = /(?:running|started|listening|available|serving)\s+(?:on|at)\s+(?:port\s+|:|\s*)(\d{4,5})/gi;
     while ((match = portRegex.exec(completedText)) !== null) {
       addItem(
         { type: "preview", url: `http://localhost:${match[1]}`, label: `localhost:${match[1]}` },
         `preview:${match[1]}`,
       );
+    }
+
+    // 6. Detect container workspace file paths for images/screenshots
+    //    e.g. /root/.openclaw/workspace/screenshot.png → backend download URL
+    const WORKSPACE_PREFIX = "/root/.openclaw/workspace/";
+    const wsPathRegex = /`?(\/root\/\.openclaw\/workspace\/[^\s`),>"]+\.(?:png|jpg|jpeg|gif|webp|svg))`?/gi;
+    while ((match = wsPathRegex.exec(completedText)) !== null) {
+      const containerPath = match[1].replace(/[.),"']+$/, "");
+      const relativePath = containerPath.slice(WORKSPACE_PREFIX.length);
+      const sid = sandboxIdRef.current;
+      if (sid && relativePath) {
+        const downloadUrl = `${API_BASE}/api/sandboxes/${sid}/workspace/file/download?path=${encodeURIComponent(relativePath)}`;
+        addItem({ type: "screenshot", url: downloadUrl, label: relativePath }, containerPath);
+      }
     }
   }, []);
 
@@ -854,18 +898,35 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
     let customToolStepId = -1;
 
     try {
+      const isNewConversation = !conversationId;
+      const willApplyWorkspaceMemory = isNewConversation && hasWorkspaceMemory(agent.workspaceMemory);
       const convId = await ensureConversation(activeSandbox.sandbox_id);
+      const sessionFolderMsg = isNewConversation
+        ? `Save any output files to /root/.openclaw/workspace/sessions/${convId}/ so they are scoped to this conversation. Create that directory first if needed.`
+        : null;
       const res = await fetch(`${API_BASE}/api/sandboxes/${activeSandbox.sandbox_id}/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           conversation_id: convId,
-          messages:        [{ role: "user", content: text }],
+          messages:        [
+            ...(willApplyWorkspaceMemory && agent.workspaceMemory
+              ? [{ role: "system", content: buildWorkspaceMemorySystemMessage(agent.workspaceMemory) }]
+              : []),
+            ...(sessionFolderMsg
+              ? [{ role: "system", content: sessionFolderMsg }]
+              : []),
+            { role: "user", content: text },
+          ],
           model:           effectiveModel,
           stream:          true,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
+
+      if (willApplyWorkspaceMemory) {
+        setMemoryAppliedConversationId(convId);
+      }
 
       const reader  = res.body!.getReader();
       const decoder = new TextDecoder();
@@ -1296,10 +1357,19 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
 
   const startNewChat = () => {
     setConversationId(null);
+    setMemoryAppliedConversationId(null);
     setMessages([]);
   };
 
   const agentLogo = "/assets/logos/favicon.svg";
+  const hasSavedWorkspaceMemory = hasWorkspaceMemory(agent.workspaceMemory);
+  const memoryBanner = !hasSavedWorkspaceMemory
+    ? null
+    : conversationId && memoryAppliedConversationId === conversationId
+    ? "Workspace memory was applied when this conversation started."
+    : !conversationId
+    ? "Workspace memory will be applied to the next new chat."
+    : "Workspace memory is saved for the next new chat.";
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
@@ -1331,6 +1401,14 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
             <span className="hidden sm:inline">Workspace</span>
           </button>
         </div>
+
+        {memoryBanner && (
+          <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--primary)]/5 px-5 py-2">
+            <p className="text-xs font-satoshi-medium text-[var(--primary)]">
+              {memoryBanner}
+            </p>
+          </div>
+        )}
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-0">
@@ -1475,7 +1553,8 @@ export function TabChat({ agent, activeSandbox, selectedConvId, onConversationCr
             liveBrowserState={liveBrowserState}
             onResumeTakeover={resumeBrowserTakeover}
             activeSandboxId={activeSandbox?.sandbox_id ?? null}
-            workspaceScopeKey={`${activeSandbox?.sandbox_id ?? "none"}:${selectedConvId ?? conversationId ?? "new"}`}
+            conversationId={selectedConvId ?? conversationId}
+            vncAvailable={Boolean(activeSandbox?.vnc_port)}
           />
         </div>
       )}
