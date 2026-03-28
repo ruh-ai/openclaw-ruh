@@ -44,34 +44,6 @@ export interface AuditEventListResult {
 
 const SENSITIVE_KEY_PATTERN = /(token|secret|api[_-]?key|authorization|cookie|credential|password)/i;
 
-export async function initDb(): Promise<void> {
-  await withConn(async (client) => {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS control_plane_audit_events (
-        event_id     TEXT        PRIMARY KEY,
-        occurred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        request_id   TEXT,
-        action_type  TEXT        NOT NULL,
-        target_type  TEXT        NOT NULL,
-        target_id    TEXT        NOT NULL,
-        outcome      TEXT        NOT NULL,
-        actor_type   TEXT        NOT NULL,
-        actor_id     TEXT        NOT NULL,
-        origin       TEXT,
-        details      JSONB       NOT NULL DEFAULT '{}'::jsonb
-      )
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS control_plane_audit_events_occurred_at_idx
-      ON control_plane_audit_events (occurred_at DESC)
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS control_plane_audit_events_action_idx
-      ON control_plane_audit_events (action_type, occurred_at DESC)
-    `);
-  });
-}
-
 export async function writeAuditEvent(input: WriteAuditEventInput): Promise<void> {
   const eventId = randomUUID();
   const details = sanitizeAuditDetails(input.details ?? {});

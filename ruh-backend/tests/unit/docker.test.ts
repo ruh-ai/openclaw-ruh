@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 
-import { dockerContainerRunning, joinShellArgs, normalizePathSegment, shellQuote } from '../../src/docker';
+import {
+  dockerContainerRunning,
+  joinShellArgs,
+  normalizePathSegment,
+  parseManagedSandboxContainerList,
+  shellQuote,
+} from '../../src/docker';
 
 const originalSpawn = Bun.spawn;
 
@@ -60,5 +66,32 @@ describe('dockerContainerRunning', () => {
     })) as typeof Bun.spawn;
 
     await expect(dockerContainerRunning('openclaw-sb-1')).resolves.toBe(false);
+  });
+});
+
+describe('parseManagedSandboxContainerList', () => {
+  test('keeps only managed openclaw containers and normalizes sandbox ids', () => {
+    const parsed = parseManagedSandboxContainerList([
+      'openclaw-sb-1\trunning\tUp 5 minutes',
+      'postgres\trunning\tUp 1 hour',
+      'openclaw-sb-2\texited\tExited (0) 2 minutes ago',
+    ].join('\n'));
+
+    expect(parsed).toEqual([
+      {
+        sandbox_id: 'sb-1',
+        container_name: 'openclaw-sb-1',
+        state: 'running',
+        running: true,
+        status: 'Up 5 minutes',
+      },
+      {
+        sandbox_id: 'sb-2',
+        container_name: 'openclaw-sb-2',
+        state: 'exited',
+        running: false,
+        status: 'Exited (0) 2 minutes ago',
+      },
+    ]);
   });
 });

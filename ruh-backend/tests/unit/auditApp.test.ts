@@ -133,6 +133,7 @@ function makeRes() {
   return {
     statusCode: 200,
     body: undefined as unknown,
+    headers: {} as Record<string, string>,
     done,
     status(code: number) {
       this.statusCode = code;
@@ -143,7 +144,14 @@ function makeRes() {
       resolveJson?.(payload);
       return this;
     },
-    setHeader() {},
+    send(payload: unknown) {
+      this.body = payload;
+      resolveJson?.(payload);
+      return this;
+    },
+    setHeader(name: string, value: string) {
+      this.headers[name] = value;
+    },
   };
 }
 
@@ -337,9 +345,13 @@ describe('audit route wiring', () => {
     mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
       path: 'reports/daily.md',
       name: 'daily.md',
+      type: 'file',
       size: 24,
+      modified_at: '2026-03-25T15:30:00.000Z',
       mime_type: 'text/markdown',
       preview_kind: 'text',
+      artifact_type: 'document',
+      source_conversation_id: 'conv-1',
       content: '# Daily report\nReady now',
       truncated: false,
       download_name: 'daily.md',
@@ -356,5 +368,71 @@ describe('audit route wiring', () => {
       preview_kind: 'text',
       content: '# Daily report\nReady now',
     }));
+  });
+
+  test('workspace download route returns binary bytes with safe inline headers', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      path: 'artifacts/report "final".pdf',
+      name: 'report "final".pdf',
+      mime_type: 'application/pdf',
+      download_name: 'report "final".pdf',
+      base64: Buffer.from('pdf-bytes').toString('base64'),
+    })]);
+
+    const res = await invokeRoute('GET', '/api/sandboxes/:sandbox_id/workspace/file/download', makeReq({
+      params: { sandbox_id: SANDBOX_ID },
+      query: { path: 'artifacts/report-final.pdf' },
+    }));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['Content-Type']).toBe('application/pdf');
+    expect(res.headers['Content-Disposition']).toBe('inline; filename="report final.pdf"');
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect((res.body as Buffer).toString('utf8')).toBe('pdf-bytes');
+  });
+
+  test('workspace handoff route returns summary payload', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      summary: 'Workspace has exportable code',
+      file_count: 6,
+      code_file_count: 3,
+      top_level_paths: ['app', 'public'],
+      suggested_paths: ['app/page.tsx', 'app/layout.tsx'],
+      archive: {
+        eligible: true,
+        reason: null,
+        file_count: 6,
+        total_bytes: 8192,
+        download_name: 'workspace-bundle.tar.gz',
+      },
+    })]);
+
+    const res = await invokeRoute('GET', '/api/sandboxes/:sandbox_id/workspace/handoff', makeReq({
+      params: { sandbox_id: SANDBOX_ID },
+    }));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(expect.objectContaining({
+      summary: 'Workspace has exportable code',
+      code_file_count: 3,
+      top_level_paths: ['app', 'public'],
+    }));
+  });
+
+  test('workspace archive route returns attachment headers', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      mime_type: 'application/gzip',
+      download_name: 'workspace "bundle".tar.gz',
+      base64: Buffer.from('zip-archive').toString('base64'),
+    })]);
+
+    const res = await invokeRoute('GET', '/api/sandboxes/:sandbox_id/workspace/archive', makeReq({
+      params: { sandbox_id: SANDBOX_ID },
+    }));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['Content-Type']).toBe('application/gzip');
+    expect(res.headers['Content-Disposition']).toBe('attachment; filename="workspace bundle.tar.gz"');
+    expect((res.body as Buffer).toString('utf8')).toBe('zip-archive');
   });
 });

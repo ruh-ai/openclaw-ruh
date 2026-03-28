@@ -200,10 +200,12 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingTools, setStreamingTools] = useState<ToolCall[]>([]);
   const [statusMessage, setStatusMessage] = useState("Thinking...");
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedSeconds(sending && !streamingContent);
 
   // Reset on sandbox change
@@ -296,36 +298,49 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
     return conv;
   }
 
+  // Abort in-flight request on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
+
   async function sendMessage() {
     const text = input.trim();
-    if (!text || sending || !selectedModel) return;
+    if (!text || sending) return;
+
+    // Abort any previous in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMsg: ChatMessage = { role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setSending(true);
     setStreamingContent("");
-    setStatusMessage("Thinking...");
+    setStreamingTools([]);
+    setStatusMessage("Connecting...");
     let assistantContent = "";
+    let currentSseEvent = "";
+    let persistenceError: string | null = null;
+    const toolCalls: ToolCall[] = [];
 
     try {
       const conv = await ensureConversation();
 
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat`, {
+      // Use the WebSocket-bridged endpoint for full agent capabilities
+      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat/ws`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: selectedModel,
           messages: [...messages, userMsg],
-          stream: true,
           conversation_id: conv.id,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
         const errText = await res.text();
         setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${errText}` }]);
-        await saveMessages(conv.id, [userMsg]);
         return;
       }
 
@@ -338,6 +353,8 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
         for (const line of decoder.decode(value, { stream: true }).split("\n")) {
           if (line.startsWith("event: ")) {
             const evt = line.slice(7).trim();
+            currentSseEvent = evt;
+            // Handle named SSE events (status, error, persistence_error)
             if (PHASE_LABELS[evt]) setStatusMessage(PHASE_LABELS[evt]);
             continue;
           }
@@ -346,18 +363,82 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
           if (raw === "[DONE]") break outer;
           try {
             const parsed = JSON.parse(raw);
-            if (parsed.phase) { if (PHASE_LABELS[parsed.phase]) setStatusMessage(PHASE_LABELS[parsed.phase]); continue; }
-            if (parsed.tool || parsed.name) { setStatusMessage(`Using tool: ${parsed.tool || parsed.name}...`); continue; }
+
+            // Persistence error event from backend
+            if (currentSseEvent === "persistence_error") {
+              persistenceError = typeof parsed?.message === "string"
+                ? parsed.message
+                : "Assistant reply could not be saved to conversation history.";
+              currentSseEvent = "";
+              continue;
+            }
+
+            // Status/lifecycle event (from event: status)
+            if (currentSseEvent === "status" && parsed.phase) {
+              if (PHASE_LABELS[parsed.phase]) setStatusMessage(PHASE_LABELS[parsed.phase]);
+              currentSseEvent = "";
+              continue;
+            }
+
+            // Error event
+            if (currentSseEvent === "error") {
+              setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${parsed.message || "Unknown error"}` }]);
+              currentSseEvent = "";
+              break outer;
+            }
+
+            // Tool execution start: {tool: "name", input: "summary"}
+            if (parsed.tool && !parsed.result) {
+              const toolName = parsed.tool as string;
+              const toolInput = (parsed.input as string) || "";
+              const tc: ToolCall = { id: `tool-${toolCalls.length}`, name: toolName, args: toolInput };
+              toolCalls.push(tc);
+              setStreamingTools([...toolCalls]);
+              setStatusMessage(`Using tool: ${toolName}...`);
+              continue;
+            }
+
+            // Tool completion: {result: "Completed: toolname"}
+            if (parsed.result && typeof parsed.result === "string" && parsed.result.startsWith("Completed:")) {
+              setStatusMessage("Thinking...");
+              continue;
+            }
+
+            // Inline phase update (legacy format)
+            if (parsed.phase) {
+              if (PHASE_LABELS[parsed.phase]) setStatusMessage(PHASE_LABELS[parsed.phase]);
+              continue;
+            }
+
+            // OpenAI-compatible text delta: {choices: [{delta: {content: "..."}}]}
             const delta = parsed?.choices?.[0]?.delta?.content ?? "";
-            if (delta) { assistantContent += delta; setStreamingContent(assistantContent); setStatusMessage(""); }
-          } catch { /* partial */ }
+            if (delta) {
+              assistantContent += delta;
+              setStreamingContent(assistantContent);
+              setStatusMessage("");
+            }
+            currentSseEvent = "";
+          } catch { /* partial JSON chunk — ignore */ }
         }
       }
 
-      const assistantMsg: ChatMessage = { role: "assistant", content: assistantContent };
-      setMessages((prev) => [...prev, assistantMsg]);
       setStreamingContent("");
-      await saveMessages(conv.id, [userMsg, assistantMsg]);
+      setStreamingTools([]);
+
+      if (persistenceError) {
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          content: `Error: ${persistenceError}`,
+        }]);
+        return;
+      }
+
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: assistantContent,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
 
       if (messages.length === 0 && conv.name === "New Conversation") {
         const autoName = text.slice(0, 45) + (text.length > 45 ? "…" : "");
@@ -369,24 +450,19 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
         window.dispatchEvent(new CustomEvent("conv:renamed", { detail: { id: conv.id, name: autoName } }));
       }
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${err instanceof Error ? err.message : String(err)}` }]);
       setStreamingContent("");
+      setStreamingTools([]);
     } finally {
       setSending(false);
       setStatusMessage("Thinking...");
+      abortRef.current = null;
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }
 
-  async function saveMessages(convId: string, msgs: ChatMessage[]) {
-    await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${convId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: msgs }),
-    }).catch(() => null);
-  }
-
-  const canSend = !sending && !!selectedModel && !!input.trim();
+  const canSend = !sending && !!input.trim();
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -401,16 +477,10 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
               <button onClick={loadModels} className="text-[#ae00d0] hover:text-[#9400b4]">Retry</button>
             </span>
           ) : (
-            <>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="bg-white border border-gray-200 text-gray-700 text-[11px] rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[#ae00d0]"
-              >
-                {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
-              </select>
-              {modelsSynthetic && <span className="text-[10px] text-yellow-600">default</span>}
-            </>
+            <span className="bg-gray-50 border border-gray-200 text-gray-600 text-[11px] rounded-lg px-2 py-1 font-mono">
+              {selectedModel || models[0]?.id}
+              {modelsSynthetic && <span className="text-yellow-600 ml-1">default</span>}
+            </span>
           )}
         </div>
         <button
@@ -457,6 +527,10 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
 
               <ContextMessages messages={messages} sandboxName={sandbox.sandbox_name} />
 
+              {sending && streamingTools.length > 0 && streamingTools.map((tc, i) => (
+                <ToolCallBubble key={tc.id} tc={tc} streaming={i === streamingTools.length - 1} />
+              ))}
+
               {streamingContent && (
                 <div className="flex items-start gap-3">
                   <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5">
@@ -494,7 +568,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
               placeholder={`Message ${sandbox.sandbox_name}…`}
-              disabled={sending || !selectedModel}
+              disabled={sending}
               rows={1}
               className="flex-1 resize-none bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none min-h-[24px] leading-relaxed disabled:opacity-50"
               style={{ maxHeight: "120px" }}

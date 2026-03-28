@@ -32,6 +32,9 @@ mock.module('../../src/docker', () => ({
     if (spawnQueue.length)                   return spawnQueue.shift()!;
     // Command-aware defaults for common docker commands
     const cmd = args.join(' ');
+    if (cmd.startsWith('image inspect node:22-bookworm')) {
+      return [0, '[]'];
+    }
     if (cmd.startsWith('port '))             return [0, '0.0.0.0:32769'];
     return [...defaultSpawn] as SpawnResult;
   },
@@ -60,6 +63,9 @@ mock.module('../../src/docker', () => ({
           },
         },
       })];
+    }
+    if (cmd.includes('bootstrap-config-verify')) {
+      return [true, JSON.stringify({ ok: true, failures: [] })];
     }
     if (cmd.includes('openclaw models status --json')) {
       return [true, JSON.stringify({
@@ -171,11 +177,31 @@ describe('createOpenclawSandbox', () => {
     expect(logs.some((m) => m.includes('Creating container'))).toBe(true);
   });
 
+  test('skips docker pull when the base image is already cached locally', async () => {
+    await collectEvents(BASE_OPTS);
+
+    expect(
+      spawnCalls.some((args) => args[0] === 'pull' && args[1] === 'node:22-bookworm'),
+    ).toBe(false);
+    expect(
+      spawnCalls.some((args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === 'node:22-bookworm'),
+    ).toBe(true);
+  });
+
+  test('pulls the base image when it is not present locally', async () => {
+    spawnQueue.push([1, 'No such image: node:22-bookworm']); // image inspect
+
+    await collectEvents(BASE_OPTS);
+
+    expect(
+      spawnCalls.some((args) => args[0] === 'pull' && args[1] === 'node:22-bookworm'),
+    ).toBe(true);
+  });
+
   // ── Error paths ─────────────────────────────────────────────────────────────
 
   test('yields error when docker run fails', async () => {
-    // docker pull → ok; docker run → fail
-    spawnQueue.push([0, '']); // pull
+    spawnQueue.push([0, '[]']); // image inspect
     spawnQueue.push([1, 'name already in use']); // run
 
     const events = await collectEvents(BASE_OPTS);
@@ -185,7 +211,7 @@ describe('createOpenclawSandbox', () => {
   });
 
   test('yields error when docker port mapping fails', async () => {
-    spawnQueue.push([0, '']);               // docker pull
+    spawnQueue.push([0, '[]']);               // image inspect
     spawnQueue.push([0, '']);               // docker run
     spawnQueue.push([1, 'no port mapping']); // docker port → fails
 
@@ -196,7 +222,7 @@ describe('createOpenclawSandbox', () => {
   });
 
   test('yields error when docker port output cannot be parsed', async () => {
-    spawnQueue.push([0, '']);          // docker pull
+    spawnQueue.push([0, '[]']);          // image inspect
     spawnQueue.push([0, '']);          // docker run
     spawnQueue.push([0, 'not-a-port']); // docker port → unparseable
 
@@ -231,12 +257,57 @@ describe('createOpenclawSandbox', () => {
   test('yields error when onboarding fails', async () => {
     execQueue.push([true, '']);   // npm install
     execQueue.push([true, '']);   // --version
+    execQueue.push([false, 'apt-get failed']); // browser install degrades
     execQueue.push([false, 'onboard failed']); // openclaw onboard
 
     const events = await collectEvents(BASE_OPTS);
     const errors = events.filter(([t]) => t === 'error');
     expect(errors.length).toBe(1);
     expect(String(errors[0][1])).toContain('Onboarding failed');
+  });
+
+  test('fails closed when a required bootstrap config step fails', async () => {
+    execQueue.push([true, '']); // npm install
+    execQueue.push([true, '']); // --version
+    execQueue.push([true, 'browser installed']); // browser install
+    execQueue.push([true, '']); // Xvfb
+    execQueue.push([true, '']); // bashrc export
+    execQueue.push([true, '']); // x11vnc
+    execQueue.push([true, '']); // websockify
+    execQueue.push([true, 'onboarded']); // onboarding
+    execQueue.push([true, 'auth profiles']); // auth-profiles.json
+    execQueue.push([false, 'permission denied']); // gateway.bind
+
+    const events = await collectEvents(BASE_OPTS);
+
+    expect(events.some(([type]) => type === 'result')).toBe(false);
+    const errors = events.filter(([type]) => type === 'error');
+    expect(errors.length).toBe(1);
+    expect(String(errors[0][1])).toContain('gateway.bind');
+    expect(spawnCalls.some((args) => args[0] === 'rm' && args[1] === '-f')).toBe(true);
+  });
+
+  test('verifies required bootstrap config before yielding result', async () => {
+    const events = await collectEvents(BASE_OPTS);
+
+    expect(events.some(([type]) => type === 'result')).toBe(true);
+    const verificationIndex = execCalls.findIndex(([, cmd]) =>
+      cmd.includes('bootstrap-config-verify'),
+    );
+    expect(verificationIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  test('passes a shell-safe bootstrap verification script to node -e', async () => {
+    await collectEvents(BASE_OPTS);
+
+    const verificationCall = execCalls.find(([, cmd]) =>
+      cmd.includes('bootstrap-config-verify'),
+    );
+
+    expect(verificationCall).toBeDefined();
+    const verificationCommand = verificationCall?.[1] ?? '';
+    expect(verificationCommand).not.toContain('\\nconst fs');
+    expect(verificationCommand).not.toContain('\\nconst os');
   });
 
   // ── LLM provider selection ───────────────────────────────────────────────────
@@ -341,6 +412,18 @@ describe('createOpenclawSandbox', () => {
       openclawOauth.cleanup();
       codexAuth.cleanup();
     }
+  });
+
+  test('keeps browser stack failure non-fatal when required bootstrap config still verifies', async () => {
+    execQueue.push([true, '']); // npm install
+    execQueue.push([true, '']); // --version
+    execQueue.push([false, 'apt failure']); // browser install
+
+    const events = await collectEvents(BASE_OPTS);
+    const logs = events.filter(([type]) => type === 'log').map(([, message]) => String(message));
+
+    expect(events.some(([type]) => type === 'result')).toBe(true);
+    expect(logs.some((message) => message.includes('live browser view unavailable'))).toBe(true);
   });
 });
 

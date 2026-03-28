@@ -23,14 +23,6 @@ beforeEach(() => {
   mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
 });
 
-describe('store.initDb', () => {
-  test('runs CREATE TABLE IF NOT EXISTS for sandboxes', async () => {
-    await store.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => (c[0] as string).trim());
-    expect(sqls.some((s) => s.includes('CREATE TABLE IF NOT EXISTS sandboxes'))).toBe(true);
-  });
-});
-
 describe('store.saveSandbox', () => {
   test('calls INSERT ... ON CONFLICT with sandbox_id', async () => {
     const result = {
@@ -82,6 +74,7 @@ describe('store.saveSandbox', () => {
       null,
       'gw-tok',
       18789,
+      null,
       'daytona ssh sb-shared',
       true,
       'openai-codex/gpt-5.4',

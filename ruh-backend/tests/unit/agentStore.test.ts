@@ -32,6 +32,17 @@ function makeAgentRow(overrides: Record<string, unknown> = {}) {
     skill_graph: null,
     workflow: null,
     agent_rules: [],
+    tool_connections: [],
+    runtime_inputs: [],
+    triggers: [],
+    channels: [],
+    discovery_documents: null,
+    workspace_memory: {
+      instructions: '',
+      continuity_summary: '',
+      pinned_paths: [],
+      updated_at: null,
+    },
     created_at: new Date(),
     updated_at: new Date(),
     ...overrides,
@@ -41,22 +52,6 @@ function makeAgentRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockQuery.mockReset();
   mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
-});
-
-// ── initDb ────────────────────────────────────────────────────────────────────
-
-describe('agentStore.initDb', () => {
-  test('creates agents table', async () => {
-    await agentStore.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
-    expect(sqls.some((s) => s.includes('CREATE TABLE IF NOT EXISTS agents'))).toBe(true);
-  });
-
-  test('creates status index', async () => {
-    await agentStore.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
-    expect(sqls.some((s) => s.includes('CREATE INDEX IF NOT EXISTS idx_agents_status'))).toBe(true);
-  });
 });
 
 // ── saveAgent ─────────────────────────────────────────────────────────────────
@@ -107,6 +102,243 @@ describe('agentStore.saveAgent', () => {
     // skills param should be '[]'
     expect(params.some((p) => p === '[]')).toBe(true);
   });
+
+  test('persists tool connection and trigger metadata alongside config fields', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [
+            makeAgentRow({
+              tool_connections: [
+                {
+                  toolId: 'google-ads',
+                  name: 'Google Ads',
+                  description: 'Manage campaigns',
+                  status: 'configured',
+                  authKind: 'oauth',
+                  connectorType: 'mcp',
+                  configSummary: ['Connected account: Acme Ads'],
+                },
+              ],
+              triggers: [
+                {
+                  id: 'cron-schedule',
+                  title: 'Cron Schedule',
+                  kind: 'schedule',
+                  status: 'supported',
+                  description: 'Runs every weekday at 9 AM.',
+                  schedule: '0 9 * * 1-5',
+                },
+              ],
+            }),
+          ],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.saveAgent({
+      name: 'Google Ads Agent',
+      toolConnections: [
+        {
+          toolId: 'google-ads',
+          name: 'Google Ads',
+          description: 'Manage campaigns',
+          status: 'configured',
+          authKind: 'oauth',
+          connectorType: 'mcp',
+          configSummary: ['Connected account: Acme Ads'],
+        },
+      ],
+      triggers: [
+        {
+          id: 'cron-schedule',
+          title: 'Cron Schedule',
+          kind: 'schedule',
+          status: 'supported',
+          description: 'Runs every weekday at 9 AM.',
+          schedule: '0 9 * * 1-5',
+        },
+      ],
+    });
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('INSERT INTO agents'),
+    );
+    const params = insertCall?.[1] as unknown[];
+    expect(params.some((p) => p === JSON.stringify([
+      {
+        toolId: 'google-ads',
+        name: 'Google Ads',
+        description: 'Manage campaigns',
+        status: 'configured',
+        authKind: 'oauth',
+        connectorType: 'mcp',
+        configSummary: ['Connected account: Acme Ads'],
+      },
+    ]))).toBe(true);
+    expect(params.some((p) => p === JSON.stringify([
+      {
+        id: 'cron-schedule',
+        title: 'Cron Schedule',
+        kind: 'schedule',
+        status: 'supported',
+        description: 'Runs every weekday at 9 AM.',
+        schedule: '0 9 * * 1-5',
+      },
+    ]))).toBe(true);
+  });
+
+  test('persists runtime input metadata alongside config fields', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [
+            makeAgentRow({
+              runtime_inputs: [
+                {
+                  key: 'GOOGLE_ADS_CUSTOMER_ID',
+                  label: 'Customer ID',
+                  description: 'Google Ads customer ID for the target account.',
+                  required: true,
+                  source: 'architect_requirement',
+                  value: '123-456-7890',
+                },
+              ],
+            }),
+          ],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.saveAgent({
+      name: 'Google Ads Agent',
+      runtimeInputs: [
+        {
+          key: 'GOOGLE_ADS_CUSTOMER_ID',
+          label: 'Customer ID',
+          description: 'Google Ads customer ID for the target account.',
+          required: true,
+          source: 'architect_requirement',
+          value: '123-456-7890',
+        },
+      ],
+    });
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('INSERT INTO agents'),
+    );
+    const params = insertCall?.[1] as unknown[];
+    expect(params.some((p) => p === JSON.stringify([
+      {
+        key: 'GOOGLE_ADS_CUSTOMER_ID',
+        label: 'Customer ID',
+        description: 'Google Ads customer ID for the target account.',
+        required: true,
+        source: 'architect_requirement',
+        value: '123-456-7890',
+      },
+    ]))).toBe(true);
+  });
+
+  test('persists channel metadata alongside config fields', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [
+            makeAgentRow({
+              channels: [
+                {
+                  kind: 'slack',
+                  status: 'planned',
+                  label: 'Slack',
+                  description: 'Configure the workspace bot after deploy.',
+                },
+              ],
+            }),
+          ],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.saveAgent({
+      name: 'Channel Agent',
+      channels: [
+        {
+          kind: 'slack',
+          status: 'planned',
+          label: 'Slack',
+          description: 'Configure the workspace bot after deploy.',
+        },
+      ],
+    });
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('INSERT INTO agents'),
+    );
+    const params = insertCall?.[1] as unknown[];
+    expect(params.some((p) => p === JSON.stringify([
+      {
+        kind: 'slack',
+        status: 'planned',
+        label: 'Slack',
+        description: 'Configure the workspace bot after deploy.',
+      },
+    ]))).toBe(true);
+  });
+
+  test('persists approved discovery documents alongside config fields', async () => {
+    const discoveryDocuments = {
+      prd: {
+        title: 'Product Requirements Document',
+        sections: [
+          {
+            heading: 'Goal',
+            content: 'Build a Google Ads copilot for media buyers.',
+          },
+        ],
+      },
+      trd: {
+        title: 'Technical Requirements Document',
+        sections: [
+          {
+            heading: 'Integrations',
+            content: 'Use the Google Ads MCP connector and persisted runtime inputs.',
+          },
+        ],
+      },
+    };
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [
+            makeAgentRow({
+              discovery_documents: discoveryDocuments,
+            }),
+          ],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.saveAgent({
+      name: 'Google Ads Agent',
+      discoveryDocuments,
+    });
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('INSERT INTO agents'),
+    );
+    const params = insertCall?.[1] as unknown[];
+    expect(params.some((p) => p === JSON.stringify(discoveryDocuments))).toBe(true);
+  });
 });
 
 // ── listAgents ────────────────────────────────────────────────────────────────
@@ -133,6 +365,50 @@ describe('agentStore.listAgents', () => {
     const sql = mockQuery.mock.calls[0][0] as string;
     expect(sql).toContain('ORDER BY created_at DESC');
   });
+
+  test('preserves api and cli connector types when reading tool metadata', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [
+        makeAgentRow({
+          tool_connections: [
+            {
+              toolId: 'figma',
+              name: 'Figma',
+              description: 'Design comments and file inspection',
+              status: 'unsupported',
+              authKind: 'none',
+              connectorType: 'api',
+              configSummary: ['Manual API wrapper recommended'],
+            },
+            {
+              toolId: 'docker',
+              name: 'Docker',
+              description: 'Local image and container management',
+              status: 'unsupported',
+              authKind: 'none',
+              connectorType: 'cli',
+              configSummary: ['CLI integration recommended'],
+            },
+          ],
+        }),
+      ],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.listAgents();
+
+    expect(result[0]?.tool_connections).toEqual([
+      expect.objectContaining({
+        toolId: 'figma',
+        connectorType: 'api',
+      }),
+      expect.objectContaining({
+        toolId: 'docker',
+        connectorType: 'cli',
+      }),
+    ]);
+  });
+
 });
 
 // ── getAgent ──────────────────────────────────────────────────────────────────
@@ -239,6 +515,102 @@ describe('agentStore.updateAgentConfig', () => {
     );
     expect(updateCall![0]).toContain('skill_graph');
   });
+
+  test('includes tool_connections and triggers in config updates when provided', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) return { rows: [makeAgentRow()], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.updateAgentConfig(AGENT_ID, {
+      toolConnections: [
+        {
+          toolId: 'google-ads',
+          name: 'Google Ads',
+          description: 'Manage campaigns',
+          status: 'missing_secret',
+          authKind: 'oauth',
+          connectorType: 'mcp',
+          configSummary: ['Account selected; credentials still required'],
+        },
+      ],
+      triggers: [
+        {
+          id: 'cron-schedule',
+          title: 'Cron Schedule',
+          kind: 'schedule',
+          status: 'supported',
+          description: 'Runs every weekday at 9 AM.',
+          schedule: '0 9 * * 1-5',
+        },
+      ],
+    });
+
+    const updateCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('UPDATE agents SET'),
+    );
+    expect(updateCall?.[0]).toContain('tool_connections');
+    expect(updateCall?.[0]).toContain('triggers');
+  });
+});
+
+// ── workspace memory ─────────────────────────────────────────────────────────
+
+describe('agentStore.getAgentWorkspaceMemory', () => {
+  test('returns normalized empty memory when agent exists with no stored payload', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow({ workspace_memory: null })],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgentWorkspaceMemory(AGENT_ID);
+    expect(result).toEqual({
+      instructions: '',
+      continuity_summary: '',
+      pinned_paths: [],
+      updated_at: null,
+    });
+  });
+});
+
+describe('agentStore.updateAgentWorkspaceMemory', () => {
+  test('writes workspace_memory JSON and returns normalized memory', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [makeAgentRow({
+            workspace_memory: {
+              instructions: 'Keep summaries short',
+              continuity_summary: 'Need to finish launch review',
+              pinned_paths: ['plans/launch.md'],
+              updated_at: '2026-03-25T17:30:00.000Z',
+            },
+          })],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    const result = await agentStore.updateAgentWorkspaceMemory(AGENT_ID, {
+      instructions: 'Keep summaries short',
+      continuitySummary: 'Need to finish launch review',
+      pinnedPaths: ['plans/launch.md'],
+    });
+
+    const updateCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('UPDATE agents SET workspace_memory'),
+    );
+
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]?.[0]).toBeTypeOf('string');
+    expect(result).toEqual({
+      instructions: 'Keep summaries short',
+      continuity_summary: 'Need to finish launch review',
+      pinned_paths: ['plans/launch.md'],
+      updated_at: '2026-03-25T17:30:00.000Z',
+    });
+  });
 });
 
 // ── addSandboxToAgent ─────────────────────────────────────────────────────────
@@ -302,5 +674,70 @@ describe('agentStore.deleteAgent', () => {
   test('passes id as parameter', async () => {
     await agentStore.deleteAgent('del-me');
     expect(mockQuery.mock.calls[0][1]).toContain('del-me');
+  });
+});
+
+describe('agentStore improvement metadata', () => {
+  test('saveAgent persists improvements JSON', async () => {
+    const improvements = [
+      {
+        id: 'connect-google-ads',
+        kind: 'tool_connection',
+        status: 'accepted',
+        scope: 'builder',
+        title: 'Connect Google Ads before deploy',
+        summary: 'Attach a Google Ads connection so the optimizer can read live account data.',
+        rationale: 'The generated Google Ads skills depend on account data that is not available yet.',
+        targetId: 'google-ads',
+      },
+    ];
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) {
+        return {
+          rows: [makeAgentRow({ improvements })],
+          rowCount: 1,
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.saveAgent({
+      name: 'Google Ads Agent',
+      improvements,
+    });
+
+    const insertCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('INSERT INTO agents'),
+    );
+    const params = insertCall?.[1] as unknown[];
+    expect(params).toContain(JSON.stringify(improvements));
+  });
+
+  test('updateAgentConfig writes improvements when provided', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT')) return { rows: [makeAgentRow()], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+
+    await agentStore.updateAgentConfig(AGENT_ID, {
+      improvements: [
+        {
+          id: 'connect-google-ads',
+          kind: 'tool_connection',
+          status: 'dismissed',
+          scope: 'builder',
+          title: 'Connect Google Ads before deploy',
+          summary: 'Attach a Google Ads connection so the optimizer can read live account data.',
+          rationale: 'The generated Google Ads skills depend on account data that is not available yet.',
+          targetId: 'google-ads',
+        },
+      ],
+    });
+
+    const updateCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('UPDATE agents SET'),
+    );
+    expect(updateCall?.[0]).toContain('improvements');
   });
 });

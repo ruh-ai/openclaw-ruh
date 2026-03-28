@@ -24,6 +24,7 @@ export interface MessageRecord {
   id?: number;
   role: string;
   content: string;
+  workspace_state?: unknown;
   created_at?: string;
 }
 
@@ -37,40 +38,6 @@ export interface MessagePage {
   messages: MessageRecord[];
   next_cursor: number | null;
   has_more: boolean;
-}
-
-export async function initDb(): Promise<void> {
-  await withConn(async (client) => {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS conversations (
-        id                   TEXT        PRIMARY KEY,
-        sandbox_id           TEXT        NOT NULL,
-        name                 TEXT        NOT NULL DEFAULT 'New Conversation',
-        model                TEXT        NOT NULL DEFAULT 'openclaw-default',
-        openclaw_session_key TEXT        NOT NULL,
-        created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        message_count        INTEGER     NOT NULL DEFAULT 0
-      )
-    `);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS messages (
-        id              SERIAL      PRIMARY KEY,
-        conversation_id TEXT        NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-        role            TEXT        NOT NULL,
-        content         TEXT        NOT NULL,
-        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_messages_conv_id
-      ON messages (conversation_id)
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_id
-      ON conversations (sandbox_id)
-    `);
-  });
 }
 
 export async function createConversation(
@@ -168,10 +135,10 @@ export async function getConversationForSandbox(
 export async function getMessages(convId: string): Promise<MessageRecord[]> {
   return withConn(async (client) => {
     const res = await client.query(
-      `SELECT role, content FROM messages WHERE conversation_id = $1 ORDER BY id`,
+      `SELECT role, content, workspace_state FROM messages WHERE conversation_id = $1 ORDER BY id`,
       [convId],
     );
-    return res.rows as MessageRecord[];
+    return res.rows.map(serializeMessage);
   });
 }
 
@@ -185,6 +152,7 @@ export async function getMessagesPage(
     const res = options.before != null
       ? await client.query(
         `SELECT id, role, content, created_at
+                , workspace_state
            FROM messages
           WHERE conversation_id = $1 AND id < $2
           ORDER BY id DESC
@@ -193,6 +161,7 @@ export async function getMessagesPage(
       )
       : await client.query(
         `SELECT id, role, content, created_at
+                , workspace_state
            FROM messages
           WHERE conversation_id = $1
           ORDER BY id DESC
@@ -216,14 +185,21 @@ export async function getMessagesPage(
 
 export async function appendMessages(
   convId: string,
-  messages: Array<{ role: string; content?: string }>,
+  messages: Array<{ role: string; content?: string; workspace_state?: unknown }>,
 ): Promise<boolean> {
   await withConn(async (client) => {
     for (const msg of messages) {
-      await client.query(
-        `INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
-        [convId, msg.role, msg.content ?? ''],
-      );
+      if (msg.workspace_state !== undefined) {
+        await client.query(
+          `INSERT INTO messages (conversation_id, role, content, workspace_state) VALUES ($1, $2, $3, $4::jsonb)`,
+          [convId, msg.role, msg.content ?? '', msg.workspace_state],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
+          [convId, msg.role, msg.content ?? ''],
+        );
+      }
     }
     await client.query(
       `UPDATE conversations SET message_count = message_count + $1, updated_at = NOW() WHERE id = $2`,

@@ -37,7 +37,20 @@ const mockGetMessages = mock(async () => [
 const mockGetMessagesPage = mock(async () => ({
   messages: [
     { id: 1, role: 'user', content: 'Hello', created_at: '2026-03-25T10:00:00.000Z' },
-    { id: 2, role: 'assistant', content: 'Hi!', created_at: '2026-03-25T10:00:02.000Z' },
+    {
+      id: 2,
+      role: 'assistant',
+      content: 'Hi!',
+      created_at: '2026-03-25T10:00:02.000Z',
+      workspace_state: {
+        version: 1,
+        browser: {
+          items: [],
+          previewUrl: 'https://example.com',
+          takeover: null,
+        },
+      },
+    },
   ],
   next_cursor: null,
   has_more: false,
@@ -86,7 +99,20 @@ beforeEach(() => {
   mockGetMessagesPage.mockImplementation(async () => ({
     messages: [
       { id: 1, role: 'user', content: 'Hello', created_at: '2026-03-25T10:00:00.000Z' },
-      { id: 2, role: 'assistant', content: 'Hi!', created_at: '2026-03-25T10:00:02.000Z' },
+      {
+        id: 2,
+        role: 'assistant',
+        content: 'Hi!',
+        created_at: '2026-03-25T10:00:02.000Z',
+        workspace_state: {
+          version: 1,
+          browser: {
+            items: [],
+            previewUrl: 'https://example.com',
+            takeover: null,
+          },
+        },
+      },
     ],
     next_cursor: null,
     has_more: false,
@@ -154,6 +180,14 @@ describe('GET /api/sandboxes/:sandbox_id/conversations/:conv_id/messages', () =>
     expect(Array.isArray(res.body.messages)).toBe(true);
     expect(res.body.messages[0].role).toBe('user');
     expect(res.body.messages[1].role).toBe('assistant');
+    expect(res.body.messages[1].workspace_state).toEqual({
+      version: 1,
+      browser: {
+        items: [],
+        previewUrl: 'https://example.com',
+        takeover: null,
+      },
+    });
     expect(res.body.has_more).toBe(false);
   });
 
@@ -193,10 +227,59 @@ describe('POST /api/sandboxes/:sandbox_id/conversations/:conv_id/messages', () =
   test('appends messages and returns ok', async () => {
     const res = await request()
       .post(`/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`)
-      .send({ messages: [{ role: 'user', content: 'Hi' }] })
+      .send({
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Hi',
+            workspace_state: {
+              version: 1,
+              browser: {
+                items: [],
+                previewUrl: 'https://example.com',
+                takeover: null,
+              },
+            },
+          },
+        ],
+      })
       .expect(200);
 
     expect(res.body.ok).toBe(true);
+    expect(mockAppendMessages).toHaveBeenCalledWith(CONV_ID, [
+      {
+        role: 'assistant',
+        content: 'Hi',
+        workspace_state: {
+          version: 1,
+          browser: {
+            items: [],
+            previewUrl: 'https://example.com',
+            takeover: null,
+          },
+        },
+      },
+    ]);
+  });
+
+  test('rejects malformed workspace_state payloads', async () => {
+    await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`)
+      .send({
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Hi',
+            workspace_state: {
+              version: 1,
+              browser: {
+                items: 'not-an-array',
+              },
+            },
+          },
+        ],
+      })
+      .expect(422);
   });
 
   test('returns 404 when conversation not found', async () => {

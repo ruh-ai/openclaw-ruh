@@ -14,15 +14,6 @@ beforeEach(() => {
   mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
 });
 
-describe('auditStore.initDb', () => {
-  test('creates the control_plane_audit_events table', async () => {
-    await auditStore.initDb();
-
-    const sqls = mockQuery.mock.calls.map((call) => String(call[0]));
-    expect(sqls.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS control_plane_audit_events'))).toBe(true);
-  });
-});
-
 describe('auditStore.writeAuditEvent', () => {
   test('redacts secret-bearing detail fields before persisting', async () => {
     await auditStore.writeAuditEvent({

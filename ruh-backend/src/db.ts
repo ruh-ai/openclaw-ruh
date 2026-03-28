@@ -4,14 +4,12 @@
  */
 
 import { Pool, PoolClient } from 'pg';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { getConfig } from './config';
 
 let pool: Pool | null = null;
 
-export function initPool(): void {
-  const dsn = process.env.DATABASE_URL;
-  if (!dsn) {
-    throw new Error('DATABASE_URL environment variable is not set');
-  }
+export function initPool(dsn = getConfig(process.env, { requireDatabaseUrl: true }).databaseUrl): void {
   pool = new Pool({
     connectionString: dsn,
     min: 2,
@@ -27,16 +25,21 @@ export async function withConn<T>(fn: (client: PoolClient) => Promise<T>): Promi
   if (!pool) {
     throw new Error('DB pool not initialized — call initPool() first');
   }
+  const span = trace.getTracer('ruh-backend').startSpan('db.transaction');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const result = await fn(client);
     await client.query('COMMIT');
+    span.setStatus({ code: SpanStatusCode.OK });
     return result;
   } catch (err) {
     await client.query('ROLLBACK');
+    span.setStatus({ code: SpanStatusCode.ERROR, message: err instanceof Error ? err.message : String(err) });
+    span.recordException(err instanceof Error ? err : new Error(String(err)));
     throw err;
   } finally {
+    span.end();
     client.release();
   }
 }

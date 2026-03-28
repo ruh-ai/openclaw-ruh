@@ -1,3 +1,4 @@
+import { getSecurityHeaders } from "../../lib/security-headers";
 import nextConfig from "../../next.config";
 
 describe("ruh frontend security headers", () => {
@@ -26,5 +27,32 @@ describe("ruh frontend security headers", () => {
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).not.toContain("'unsafe-eval'");
+  });
+
+  test("falls back to the default API origin when NEXT_PUBLIC_API_URL is invalid", () => {
+    const headers = new Map(
+      getSecurityHeaders({
+        apiUrl: "not-a-valid-url",
+        nodeEnv: "production",
+      }).map((header) => [header.key, header.value]),
+    );
+
+    expect(headers.get("Content-Security-Policy")).toContain(
+      "connect-src 'self' http://localhost:8000",
+    );
+    expect(headers.get("Content-Security-Policy")).not.toContain("not-a-valid-url");
+  });
+
+  test("includes documented development-only websocket and eval allowances", () => {
+    const headers = new Map(
+      getSecurityHeaders({
+        apiUrl: "http://localhost:8000/api",
+        nodeEnv: "development",
+      }).map((header) => [header.key, header.value]),
+    );
+    const csp = headers.get("Content-Security-Policy");
+
+    expect(csp).toContain("connect-src 'self' http://localhost:8000 ws: wss:");
+    expect(csp).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
   });
 });

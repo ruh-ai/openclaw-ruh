@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../helpers/server';
@@ -7,104 +7,84 @@ import ChatPanel from '@/components/ChatPanel';
 
 const BASE = 'http://localhost:8000';
 
-function renderChat(sandbox = makeSandbox()) {
-  return render(<ChatPanel sandbox={sandbox} />);
+Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+  configurable: true,
+  value: () => {},
+});
+
+function renderChat(
+  sandbox = makeSandbox(),
+  conversation: Parameters<typeof ChatPanel>[0]['conversation'] = null,
+) {
+  const handlers = {
+    onNewChat: jest.fn(),
+    onConversationCreated: jest.fn(),
+  };
+  render(
+    <ChatPanel
+      sandbox={sandbox}
+      conversation={conversation}
+      onNewChat={handlers.onNewChat}
+      onConversationCreated={handlers.onConversationCreated}
+    />,
+  );
+  return handlers;
 }
 
 describe('ChatPanel', () => {
-  // ── ConversationList ─────────────────────────────────────────────────────────
+  // ── Model display ───────────────────────────────────────────────────────────
 
-  describe('conversation list', () => {
-    test('fetches and displays conversations on mount', async () => {
+  describe('model display', () => {
+    test('shows model info after loading', async () => {
       renderChat();
-      await waitFor(() => expect(screen.getByText('New Conversation')).toBeInTheDocument());
-    });
-
-    test('shows "New" button to create conversation', async () => {
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-      expect(screen.getByRole('button', { name: /new/i })).toBeInTheDocument();
-    });
-
-    test('creates new conversation on "New" button click', async () => {
-      let createCalled = false;
-      server.use(http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () => {
-        createCalled = true;
-        return HttpResponse.json(makeConversation({ id: 'conv-new', name: 'New Conversation' }));
-      }));
-
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-
-      const newBtn = screen.getByRole('button', { name: /new/i });
-      await userEvent.click(newBtn);
-
-      await waitFor(() => expect(createCalled).toBe(true));
-    });
-
-    test('deletes conversation on delete button click', async () => {
-      let deleteCalled = false;
-      server.use(
-        http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-          HttpResponse.json({ items: [makeConversation()], next_cursor: null, has_more: false }),
-        ),
-        http.delete(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}`, () => {
-          deleteCalled = true;
-          return HttpResponse.json({ deleted: CONV_ID });
-        }),
-      );
-
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-
-      // Delete button (✕) should be present
-      const deleteBtn = screen.getByTitle(/delete/i) || screen.getAllByText('✕')[0];
-      await userEvent.click(deleteBtn);
-
-      await waitFor(() => expect(deleteCalled).toBe(true));
-    });
-
-    test('shows loading state while fetching conversations', async () => {
-      server.use(http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, async () => {
-        await new Promise((r) => setTimeout(r, 100));
-        return HttpResponse.json({ items: [], next_cursor: null, has_more: false });
-      }));
-      renderChat();
-      // Loading should be visible briefly
-      expect(screen.queryByText('Loading…') ?? document.body).toBeTruthy();
-    });
-  });
-
-  // ── Model selector ────────────────────────────────────────────────────────────
-
-  describe('model selector', () => {
-    test('fetches and displays available models', async () => {
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-      // Click on a conversation to show the chat view with model selector
-      await userEvent.click(screen.getByText('New Conversation'));
-
-      // Model selector should appear
       await waitFor(() => {
-        const select = screen.queryByRole('combobox');
-        expect(select ?? document.body).toBeTruthy();
+        expect(screen.getByText('openclaw-default')).toBeInTheDocument();
       });
     });
+
+    test('shows loading state initially', () => {
+      renderChat();
+      expect(screen.getByText('Loading agents…')).toBeInTheDocument();
+    });
   });
 
-  // ── Chat view ─────────────────────────────────────────────────────────────────
+  // ── Empty state ─────────────────────────────────────────────────────────────
 
-  describe('chat view after selecting conversation', () => {
-    test('loads messages when conversation is selected', async () => {
+  describe('empty state (no conversation)', () => {
+    test('shows greeting with sandbox name', async () => {
+      renderChat();
+      await waitFor(() => {
+        expect(screen.getByText('openclaw-gateway')).toBeInTheDocument();
+      });
+    });
+
+    test('shows "Start typing" prompt', async () => {
+      renderChat();
+      expect(screen.getByText('Start typing to create a new conversation')).toBeInTheDocument();
+    });
+
+    test('renders input textarea', () => {
+      renderChat();
+      expect(screen.getByRole('textbox')).toBeInTheDocument();
+    });
+
+    test('New Chat button is present', () => {
+      renderChat();
+      expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
+    });
+  });
+
+  // ── Message history ─────────────────────────────────────────────────────────
+
+  describe('message history', () => {
+    test('loads messages when conversation is provided', async () => {
+      const conv = makeConversation();
       server.use(
-        http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-          HttpResponse.json({ items: [makeConversation()], next_cursor: null, has_more: false }),
-        ),
         http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`, () =>
           HttpResponse.json({
             messages: [
-              { id: 1, role: 'user', content: 'Hello there', created_at: new Date('2025-01-15T10:05:01Z').toISOString() },
-              { id: 2, role: 'assistant', content: 'Hi from AI!', created_at: new Date('2025-01-15T10:05:02Z').toISOString() },
+              { role: 'user', content: 'Hello there' },
+              { role: 'assistant', content: 'Hi from AI!' },
             ],
             next_cursor: null,
             has_more: false,
@@ -112,90 +92,190 @@ describe('ChatPanel', () => {
         ),
       );
 
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-      await userEvent.click(screen.getByText('New Conversation'));
+      renderChat(makeSandbox(), conv);
 
       await waitFor(() => expect(screen.getByText('Hello there')).toBeInTheDocument());
       expect(screen.getByText('Hi from AI!')).toBeInTheDocument();
     });
 
-    test('renders message input textarea', async () => {
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-      await userEvent.click(screen.getByText('New Conversation'));
+    test('shows conversation name when conversation is active', async () => {
+      const conv = makeConversation({ name: 'My Chat' });
+      server.use(
+        http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`, () =>
+          HttpResponse.json({ messages: [], next_cursor: null, has_more: false }),
+        ),
+      );
+
+      renderChat(makeSandbox(), conv);
 
       await waitFor(() => {
-        const textarea = screen.queryByRole('textbox');
-        expect(textarea).toBeTruthy();
+        expect(screen.getByText('My Chat')).toBeInTheDocument();
       });
     });
+  });
 
-    test('sends message on Send button click', async () => {
-      let chatCalled = false;
+  // ── Sending messages via /chat/ws ───────────────────────────────────────────
+
+  describe('sending messages via WebSocket bridge', () => {
+    test('sends message to /chat/ws endpoint', async () => {
+      let chatWsCalled = false;
       server.use(
-        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat`, () => {
-          chatCalled = true;
-          return HttpResponse.json({
-            id: 'chatcmpl-001',
-            object: 'chat.completion',
-            created: 1700000000,
-            model: 'openclaw-default',
-            choices: [{ index: 0, message: { role: 'assistant', content: 'Response!' }, finish_reason: 'stop' }],
-            usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
-          });
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+          HttpResponse.json(makeConversation()),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat/ws`, () => {
+          chatWsCalled = true;
+          return new HttpResponse(
+            [
+              'event: status\ndata: {"phase":"authenticated","message":"Agent started..."}\n\n',
+              'data: {"choices":[{"delta":{"content":"Hello!"}}]}\n\n',
+              'data: [DONE]\n\n',
+            ].join(''),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          );
         }),
       );
 
       renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-      await userEvent.click(screen.getByText('New Conversation'));
+      await waitFor(() => screen.getByRole('textbox'));
 
-      // Wait for chat view to load
-      await waitFor(() => screen.queryByRole('textbox'));
       const textarea = screen.getByRole('textbox');
-
       await userEvent.type(textarea, 'Test message');
-      const sendBtn = screen.getByRole('button', { name: /send/i });
-      await userEvent.click(sendBtn);
 
-      await waitFor(() => expect(chatCalled).toBe(true));
-    });
-  });
-
-  // ── Rename conversation ───────────────────────────────────────────────────────
-
-  describe('rename conversation', () => {
-    test('edit button triggers rename mode', async () => {
-      renderChat();
-      await waitFor(() => screen.getByText('New Conversation'));
-
-      // Find the edit button (✎)
-      const editBtns = screen.queryAllByTitle(/edit/i);
-      if (editBtns.length > 0) {
-        await userEvent.click(editBtns[0]);
-        // Input for rename should appear
-        await waitFor(() => {
-          const input = screen.queryByDisplayValue('New Conversation');
-          expect(input).toBeTruthy();
-        });
-      }
-    });
-  });
-
-  // ── Empty conversation list ───────────────────────────────────────────────────
-
-  describe('empty state', () => {
-    test('shows start message when no conversations exist', async () => {
-      server.use(http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
-        HttpResponse.json({ items: [], next_cursor: null, has_more: false }),
-      ));
-      renderChat();
-      await waitFor(() =>
-        expect(
-          screen.queryByText(/no conversations/i) ?? screen.queryByText(/new/i),
-        ).toBeTruthy(),
+      const sendButton = screen.getAllByRole('button').find(
+        (btn) => btn.textContent?.trim() !== 'New Chat',
       );
+      expect(sendButton).toBeTruthy();
+      await userEvent.click(sendButton!);
+
+      await waitFor(() => expect(chatWsCalled).toBe(true));
+    });
+
+    test('displays streamed response', async () => {
+      server.use(
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+          HttpResponse.json(makeConversation()),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat/ws`, () =>
+          new HttpResponse(
+            [
+              'event: status\ndata: {"phase":"authenticated","message":"Agent started..."}\n\n',
+              'data: {"choices":[{"delta":{"content":"Streamed reply"}}]}\n\n',
+              'data: [DONE]\n\n',
+            ].join(''),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+      );
+
+      renderChat();
+      await waitFor(() => screen.getByRole('textbox'));
+
+      const textarea = screen.getByRole('textbox');
+      fireEvent.change(textarea, { target: { value: 'Hello' } });
+
+      const sendButton = screen.getAllByRole('button').find(
+        (btn) => btn.textContent?.trim() !== 'New Chat',
+      );
+      await userEvent.click(sendButton!);
+
+      await waitFor(() => expect(screen.getByText('Streamed reply')).toBeInTheDocument());
+    });
+
+    test('backend persists messages via /chat/ws — no follow-up POST needed', async () => {
+      let messagesCalled = false;
+      server.use(
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+          HttpResponse.json(makeConversation()),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat/ws`, () =>
+          new HttpResponse(
+            [
+              'event: status\ndata: {"phase":"authenticated","message":"Agent started..."}\n\n',
+              'data: {"choices":[{"delta":{"content":"Persisted reply"}}]}\n\n',
+              'data: [DONE]\n\n',
+            ].join(''),
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/${CONV_ID}/messages`, () => {
+          messagesCalled = true;
+          return HttpResponse.json({ ok: true });
+        }),
+      );
+
+      renderChat();
+      await waitFor(() => screen.getByRole('textbox'));
+
+      const textarea = screen.getByRole('textbox');
+      fireEvent.change(textarea, { target: { value: 'Persist this' } });
+
+      const sendButton = screen.getAllByRole('button').find(
+        (btn) => btn.textContent?.trim() !== 'New Chat',
+      );
+      await userEvent.click(sendButton!);
+
+      await waitFor(() => expect(screen.getByText('Persisted reply')).toBeInTheDocument());
+      expect(messagesCalled).toBe(false);
+    });
+
+    test('does not send model param in request body', async () => {
+      let requestBody: Record<string, unknown> = {};
+      server.use(
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+          HttpResponse.json(makeConversation()),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat/ws`, async ({ request }) => {
+          requestBody = (await request.json()) as Record<string, unknown>;
+          return new HttpResponse(
+            'data: {"choices":[{"delta":{"content":"Ok"}}]}\n\ndata: [DONE]\n\n',
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          );
+        }),
+      );
+
+      renderChat();
+      await waitFor(() => screen.getByRole('textbox'));
+
+      const textarea = screen.getByRole('textbox');
+      fireEvent.change(textarea, { target: { value: 'Hi' } });
+
+      const sendButton = screen.getAllByRole('button').find(
+        (btn) => btn.textContent?.trim() !== 'New Chat',
+      );
+      await userEvent.click(sendButton!);
+
+      await waitFor(() => expect(screen.getByText('Ok')).toBeInTheDocument());
+      expect(requestBody).not.toHaveProperty('model');
+      expect(requestBody).toHaveProperty('conversation_id', CONV_ID);
+      expect(requestBody).toHaveProperty('messages');
+    });
+
+    test('handles error event from gateway', async () => {
+      server.use(
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+          HttpResponse.json(makeConversation()),
+        ),
+        http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/chat/ws`, () =>
+          new HttpResponse(
+            'event: error\ndata: {"message":"Gateway timeout"}\n\ndata: [DONE]\n\n',
+            { headers: { 'Content-Type': 'text/event-stream' } },
+          ),
+        ),
+      );
+
+      renderChat();
+      await waitFor(() => screen.getByRole('textbox'));
+
+      const textarea = screen.getByRole('textbox');
+      fireEvent.change(textarea, { target: { value: 'Test' } });
+
+      const sendButton = screen.getAllByRole('button').find(
+        (btn) => btn.textContent?.trim() !== 'New Chat',
+      );
+      await userEvent.click(sendButton!);
+
+      await waitFor(() => expect(screen.getByText(/Gateway timeout/)).toBeInTheDocument());
     });
   });
 });

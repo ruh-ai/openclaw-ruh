@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyWorkspaceArtifactType,
   classifyWorkspacePreview,
   normalizeWorkspaceRelativePath,
 } from "../../src/workspaceFiles";
@@ -24,5 +25,22 @@ describe("workspaceFiles", () => {
     expect(classifyWorkspacePreview("artifacts/chart.png", "image/png")).toBe("image");
     expect(classifyWorkspacePreview("artifacts/report.pdf", "application/pdf")).toBe("pdf");
     expect(classifyWorkspacePreview("artifacts/archive.bin", "application/octet-stream")).toBe("binary");
+  });
+
+  test("falls back to file extensions when mime metadata is missing or generic", () => {
+    expect(classifyWorkspacePreview("reports/DAILY.MD", "")).toBe("text");
+    expect(classifyWorkspacePreview("artifacts/preview.PNG", "application/octet-stream")).toBe("image");
+    expect(classifyWorkspacePreview("artifacts/report.PDF", undefined)).toBe("pdf");
+    expect(classifyWorkspacePreview("artifacts/blob.bin", null)).toBe("binary");
+  });
+
+  test("classifies artifact types independently of preview kind", () => {
+    expect(classifyWorkspaceArtifactType("site/index.html", "text/html")).toBe("webpage");
+    expect(classifyWorkspaceArtifactType("reports/daily.md", "text/markdown")).toBe("document");
+    expect(classifyWorkspaceArtifactType("data/summary.json", "application/json")).toBe("data");
+    expect(classifyWorkspaceArtifactType("src/app.tsx", "text/typescript")).toBe("code");
+    expect(classifyWorkspaceArtifactType("artifacts/chart.png", "image/png")).toBe("image");
+    expect(classifyWorkspaceArtifactType("downloads/bundle.zip", "application/zip")).toBe("archive");
+    expect(classifyWorkspaceArtifactType("artifacts/blob.bin", "application/octet-stream")).toBe("other");
   });
 });

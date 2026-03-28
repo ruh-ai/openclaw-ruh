@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
+import { Readable } from 'node:stream';
 import { request } from '../helpers/app';
 import {
   makeConversationRecord,
@@ -176,6 +177,8 @@ beforeEach(() => {
     logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
   }));
   mockDockerContainerRunning.mockImplementation(async () => true);
+  mockAppendMessages.mockReset();
+  mockAppendMessages.mockImplementation(async () => true);
   process.env.OPENCLAW_ADMIN_TOKEN = 'admin-test-token';
 });
 
@@ -305,6 +308,8 @@ describe('workspace file routes', () => {
           modified_at: '2026-03-25T15:30:00.000Z',
           preview_kind: 'text',
           mime_type: 'text/markdown',
+          artifact_type: 'document',
+          source_conversation_id: 'conv-1',
         },
       ],
     })]);
@@ -327,9 +332,13 @@ describe('workspace file routes', () => {
     mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
       path: 'reports/daily.md',
       name: 'daily.md',
+      type: 'file',
       size: 21,
+      modified_at: '2026-03-25T15:30:00.000Z',
       mime_type: 'text/markdown',
       preview_kind: 'text',
+      artifact_type: 'document',
+      source_conversation_id: 'conv-1',
       content: '# Daily report\nReady',
       truncated: false,
       download_name: 'daily.md',
@@ -341,6 +350,47 @@ describe('workspace file routes', () => {
 
     expect(res.body.preview_kind).toBe('text');
     expect(res.body.content).toContain('Daily report');
+  });
+
+  test('returns a bounded workspace handoff summary', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      summary: '2 code files ready for handoff',
+      file_count: 4,
+      code_file_count: 2,
+      top_level_paths: ['app', 'reports'],
+      suggested_paths: ['app/page.tsx', 'reports/daily.md'],
+      archive: {
+        eligible: true,
+        reason: null,
+        file_count: 4,
+        total_bytes: 4096,
+        download_name: 'workspace-bundle.tar.gz',
+      },
+    })]);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/workspace/handoff`)
+      .expect(200);
+
+    expect(res.body.summary).toContain('handoff');
+    expect(res.body.archive.eligible).toBe(true);
+    expect(res.body.suggested_paths).toContain('app/page.tsx');
+  });
+
+  test('returns a bounded workspace archive download', async () => {
+    mockDockerExec.mockImplementation(async () => [true, JSON.stringify({
+      mime_type: 'application/gzip',
+      download_name: 'workspace bundle.tar.gz',
+      base64: Buffer.from('zip-bytes').toString('base64'),
+    })]);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/workspace/archive`)
+      .expect(200);
+
+    expect(res.headers['content-type']).toContain('application/gzip');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="workspace bundle.tar.gz"');
+    expect(res.body.toString('utf8')).toBe('zip-bytes');
   });
 });
 
@@ -536,5 +586,108 @@ describe('POST /api/sandboxes/:sandbox_id/chat', () => {
       .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
       .send({ messages: [{ role: 'user', content: 'hi' }] })
       .expect(503);
+  });
+
+  test('persists the delivered exchange when conversation_id is present', async () => {
+    const convId = '11111111-1111-4111-8111-111111111111';
+    mockGetConversation.mockImplementation(async () => (
+      makeConversationRecord({ id: convId, sandbox_id: SANDBOX_ID })
+    ));
+
+    await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
+      .send({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openclaw-default',
+        conversation_id: convId,
+      })
+      .expect(200);
+
+    expect(mockAppendMessages).toHaveBeenCalledWith(convId, [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hello!' },
+    ]);
+  });
+
+  test('returns 500 when persistence fails after a non-streaming reply', async () => {
+    const convId = '22222222-2222-4222-8222-222222222222';
+    mockGetConversation.mockImplementation(async () => (
+      makeConversationRecord({ id: convId, sandbox_id: SANDBOX_ID })
+    ));
+    mockAppendMessages.mockImplementation(async () => {
+      throw new Error('db down');
+    });
+
+    const res = await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
+      .send({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openclaw-default',
+        conversation_id: convId,
+      });
+
+    expect(res.status).toBe(500);
+    expect(String(res.body.detail ?? '')).toContain('persist');
+  });
+
+  test('persists the streamed exchange once the assistant stream completes', async () => {
+    const convId = '33333333-3333-4333-8333-333333333333';
+    mockGetConversation.mockImplementation(async () => (
+      makeConversationRecord({ id: convId, sandbox_id: SANDBOX_ID })
+    ));
+    mockAxiosPost.mockImplementation(async () => ({
+      status: 200,
+      data: Readable.from([
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" there!"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    }));
+
+    const res = await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
+      .send({
+        messages: [{ role: 'user', content: 'Hi' }],
+        model: 'openclaw-default',
+        conversation_id: convId,
+        stream: true,
+      })
+      .expect(200);
+
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(mockAppendMessages).toHaveBeenCalledWith(convId, [
+      { role: 'user', content: 'Hi' },
+      { role: 'assistant', content: 'Hello there!' },
+    ]);
+  });
+
+  test('emits a persistence_error event when streamed persistence fails after the reply', async () => {
+    const convId = '44444444-4444-4444-8444-444444444444';
+    mockGetConversation.mockImplementation(async () => (
+      makeConversationRecord({ id: convId, sandbox_id: SANDBOX_ID })
+    ));
+    mockAppendMessages.mockImplementation(async () => {
+      throw new Error('db down');
+    });
+    mockAxiosPost.mockImplementation(async () => ({
+      status: 200,
+      data: Readable.from([
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    }));
+
+    const res = await request()
+      .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
+      .send({
+        messages: [{ role: 'user', content: 'Hi' }],
+        model: 'openclaw-default',
+        conversation_id: convId,
+        stream: true,
+      })
+      .expect(200);
+
+    expect(res.text).toContain('event: persistence_error');
+    expect(res.text).toContain('chat_exchange_persistence_failed');
   });
 });

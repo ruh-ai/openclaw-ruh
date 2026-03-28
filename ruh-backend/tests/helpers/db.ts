@@ -16,19 +16,17 @@ export async function setupTestDb(): Promise<void> {
 
   // Import and initialize after env is set
   const { initPool } = await import('../../src/db');
-  const store = await import('../../src/store');
-  const convStore = await import('../../src/conversationStore');
+  const { runSchemaMigrations } = await import('../../src/schemaMigrations');
 
   initPool();
-  await store.initDb();
-  await convStore.initDb();
+  await runSchemaMigrations();
 
   pool = new Pool({ connectionString: url });
 }
 
 export async function truncateAll(): Promise<void> {
   if (!pool) return;
-  await pool.query('TRUNCATE sandboxes, conversations, messages RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE sandboxes, agents, conversations, messages, control_plane_audit_events, system_events RESTART IDENTITY CASCADE');
 }
 
 export async function teardownTestDb(): Promise<void> {

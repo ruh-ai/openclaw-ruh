@@ -9,6 +9,14 @@ export function getContainerName(sandboxId: string): string {
   return `openclaw-${sandboxId}`;
 }
 
+export interface ManagedSandboxContainer {
+  sandbox_id: string;
+  container_name: string;
+  state: string;
+  running: boolean;
+  status: string;
+}
+
 export function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
@@ -115,4 +123,39 @@ export async function dockerContainerRunning(
     timeoutMs,
   );
   return exitCode === 0 && output.trim() === 'true';
+}
+
+export function parseManagedSandboxContainerList(output: string): ManagedSandboxContainer[] {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [container_name = '', state = '', ...statusParts] = line.split('\t');
+      const status = statusParts.join('\t').trim();
+      const sandbox_id = container_name.startsWith('openclaw-')
+        ? container_name.slice('openclaw-'.length)
+        : container_name;
+      return {
+        sandbox_id,
+        container_name,
+        state,
+        running: state === 'running',
+        status,
+      };
+    })
+    .filter((entry) => entry.container_name.startsWith('openclaw-'));
+}
+
+export async function listManagedSandboxContainers(
+  timeoutMs = 10_000,
+): Promise<ManagedSandboxContainer[]> {
+  const [exitCode, output] = await dockerSpawn(
+    ['ps', '-a', '--format', '{{.Names}}\t{{.State}}\t{{.Status}}'],
+    timeoutMs,
+  );
+  if (exitCode !== 0) {
+    return [];
+  }
+  return parseManagedSandboxContainerList(output);
 }
