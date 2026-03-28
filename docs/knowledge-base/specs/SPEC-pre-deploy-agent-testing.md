@@ -38,12 +38,13 @@ The review phase in `agent-builder-ui` should let operators send trial prompts t
 
 ### Review UI contract
 
-- `ReviewAgent.tsx` exposes a `Test Agent` action before the user proceeds to configure/deploy.
+- `ReviewAgent.tsx` and the embedded Co-Pilot review step in `WizardStepRenderer.tsx` each expose a `Test Agent` action before the user deploys.
 - The test surface is builder-local and resettable:
   - it shows the active agent name
   - it keeps its own short message history separate from `useOpenClawChat`
   - closing the panel clears the test-only history and any pending error/loading state
-- The review test surface sends the current review snapshot through `buildSoulContent(...)` so the test reflects the latest name/rules/skills shown to the operator.
+- Both review surfaces build the current review snapshot from one shared helper and send it through `buildSoulContent(...)` so the test reflects the latest saved-config contract shown to the operator: name, rules, selected skills, persisted tool readiness, structured trigger support/runtime state, and accepted builder improvements.
+- The injected SOUL must remain safe for browser-visible testing: raw credential values, tokens, callback URLs, and similar secret-bearing details are excluded from the prompt summary.
 
 ### Client transport contract
 
@@ -56,7 +57,9 @@ The review phase in `agent-builder-ui` should let operators send trial prompts t
   - `agent-builder-ui/app/api/openclaw/route.ts`
   - `agent-builder-ui/lib/openclaw/api.ts`
   - `agent-builder-ui/lib/openclaw/agent-config.ts`
+  - `agent-builder-ui/lib/openclaw/copilot-flow.ts`
   - `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`
+  - `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`
 - Keep the first slice narrow: no persisted transcripts, no deployed-sandbox reuse, and no extra backend service.
 - Add low-cost regression coverage around the request body and injected gateway payload before broadening into end-to-end browser tests.
 
@@ -64,5 +67,11 @@ The review phase in `agent-builder-ui` should let operators send trial prompts t
 
 - Unit: `sendToArchitectStreaming()` forwards `mode` and `soulOverride` to `/api/openclaw`
 - Unit: a bridge helper builds `agent:test:<session_id>` session keys and injects the `[SYSTEM]` / `[USER]` payload wrapper
-- Unit: `buildSoulContent()` continues to include the agent name, skills, and rules used by review-mode test chat
-- Manual: open review, send a test prompt, confirm the test chat stays separate from the architect builder history
+- Unit: `buildSoulContent()` includes the agent name, skills, rules, and a safe connector/trigger/improvement summary used by review-mode test chat
+- Unit: the shared review snapshot builder preserves projected `toolConnections[]`, runtime inputs, and `triggers[]` when either review surface prepares its isolated test session
+- Browser: open the embedded Co-Pilot review step, send a test prompt, and confirm the test chat stays separate from the architect builder history
+- Manual: open either review surface, send a test prompt, and confirm the test chat stays separate from the architect builder history
+
+## Related Learnings
+
+- [[LEARNING-2026-03-26-soul-config-context-gap]] — the review-test transport and deploy-time prompt should reuse one safe saved-config summary instead of drifting away from the Review/Deploy contract

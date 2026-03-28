@@ -56,29 +56,58 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-agent-persistence]] — Backend persistence for agents (PostgreSQL table + REST CRUD API)
 - [[SPEC-agent-model-settings]] — Agent LLM provider & model selector (Settings tab, client-side, no backend changes)
 - [[SPEC-agent-builder-gateway-error-reporting]] — Architect bridge reports terminal provider-auth failures without mislabeling them as gateway outages
+- [[SPEC-architect-bridge-retry-safety]] — Builder architect requests use one stable request identity, abort cleanly, and fail closed after gateway acceptance
+- [[SPEC-architect-exec-approval-policy]] — Builder architect bridge classifies exec approvals, auto-allows only a narrow safe set, and denies the rest visibly
 - [[SPEC-agent-builder-architect-protocol-normalization]] — Builder bridge normalizes newer architect payloads into the stable create-flow contract
+- [[SPEC-architect-structured-config-handoff]] — Builder preserves architect-emitted `tool_connections` and `triggers` through AG-UI draft state and reopen
+- [[SPEC-google-ads-agent-creation-loop]] — `/agents/create` uses Google Ads as the proving case for persisted MCP-style tool metadata and supported trigger definitions
+- [[SPEC-agent-builder-channel-persistence]] — builder-selected messaging channels persist through save, reopen, and deploy handoff as truthful planned state
+- [[SPEC-agent-discovery-doc-persistence]] — approved PRD/TRD discovery docs persist through draft autosave, save, reopen, and Improve Agent review
+- [[SPEC-agent-create-deploy-handoff]] — `/agents/create` hands new agents into the real first-deploy route instead of saving and exiting to the list
+- [[SPEC-agent-improvement-persistence]] — Builder recommendations become metadata-only saved agent state across review, reopen, and deploy
+- [[SPEC-tool-integration-workspace]] — `/tools` and `/agents/create` share a truthful tool-research workspace plus fail-closed connector setup for `mcp`, `api`, and `cli`
+- [[SPEC-copilot-config-workspace]] — `/agents/create` moves Co-Pilot controls into the Agent's Computer Config tab and uses builder-aware workspace auto-focus
+- [[SPEC-agent-builder-gated-skill-tool-flow]] — `/agents/create` locks downstream tabs until purpose metadata generates a real skill graph, resolves those skills against the registry, and blocks deploy on unresolved custom skills
 - [[SPEC-pre-deploy-agent-testing]] — Review-phase test chat reuses the architect bridge with isolated `agent:test:*` sessions and SOUL prompt injection
+- [[SPEC-gateway-tool-events]] — Structured sandbox tool events let chat UIs react to live tool execution with workspace/tab updates
 - [[SPEC-agent-builder-session-token-hardening]] — Agent Builder auth moves to HttpOnly cookies plus a same-origin BFF so browser JS never handles bearer tokens
+- [[SPEC-agent-builder-auth-gate]] — Builder pages fail closed behind middleware and session-bootstrap redirects while token hardening remains a follow-on
+- [[SPEC-agent-builder-bridge-auth]] — `/api/openclaw` validates the caller session server-side and rejects cross-site bridge requests before gateway access
 - [[SPEC-web-security-headers]] — Browser-facing apps emit baseline CSP, anti-framing, nosniff, referrer, and permissions headers with HTTPS-only edge HSTS
 - [[SPEC-chat-conversation-boundaries]] — Chat proxy only reuses a conversation session key when the conversation belongs to the target sandbox
+- [[SPEC-atomic-chat-persistence]] — Backend-owned chat delivery now persists successful conversation exchanges and reports streamed persistence failures explicitly
 - [[SPEC-agent-edit-config-persistence]] — Improve Agent persists metadata and architect config before hot-pushing running sandboxes
 - [[SPEC-agent-config-apply-contract]] — Sandbox config apply becomes a verified fail-closed contract for deploy and hot-push flows
 - [[SPEC-agent-sandbox-health-surface]] — Deployed-agent surfaces poll sandbox status and use explicit runtime `container_running` instead of DB-only liveness guesses
 - [[SPEC-backend-request-validation]] — Shared backend request schemas and deterministic fail-fast 4xx validation for high-risk write/proxy routes
+- [[SPEC-backend-config-schema]] — Centralized typed backend env parsing, defaults, and startup-fail validation contract
+- [[SPEC-backend-schema-migrations]] — Ordered backend schema ledger and startup migration runner for PostgreSQL evolution
 - [[SPEC-backend-shell-command-safety]] — Shared backend shell-quoting and path-normalization contract for configure-agent and cron mutations
+- [[SPEC-agent-readable-system-events]] — Backend-owned structured system-event history plus optional Langfuse bridge correlation for agent-readable observability
+- [[SPEC-local-langfuse-docker]] — Repo-local Docker deployment and env wiring for a self-hosted Langfuse UI on localhost
+- [[SPEC-sandbox-runtime-reconciliation]] — Backend reconciles sandbox DB rows with Docker runtime truth and exposes admin drift report/repair flows
 - [[SPEC-deployed-chat-browser-workspace]] — Deployed-agent Browser tab consumes structured browser SSE frames for timeline, preview, and takeover state
 - [[SPEC-deployed-chat-files-and-artifacts-workspace]] — Deployed-agent Files tab lists sandbox outputs, previews safe artifacts, and exposes downloads under a bounded workspace-root contract
+- [[SPEC-deployed-chat-artifact-preview]] — Deployed-agent Files tab classifies outputs by artifact type, renders richer previews, and exposes a gallery-oriented browse mode
+- [[SPEC-deployed-chat-code-control-handoff]] — Deployed-agent Files tab adds session-scoped code handoff summaries, copy actions, and bounded workspace bundle export
+- [[SPEC-deployed-chat-task-mode]] — Manus-style task plan decomposition, Code Editor tab, and auto-switching ComputerView for deployed-agent chat
+- [[SPEC-deployed-chat-workspace-history]] — Deployed-agent conversations persist bounded `workspace_state` so Browser workspace history survives refresh and reopen
+- [[SPEC-deployed-chat-task-and-terminal-history]] — Deployed-agent conversations persist bounded task-plan and terminal replay in the shared workspace history envelope
 - [[SPEC-graceful-shutdown]] — Backend shutdown contract for draining requests, terminating SSE streams, and closing the DB pool within a bounded grace period
 - [[SPEC-sandbox-conversation-cleanup]] — Sandbox deletion purges dependent conversation history and direct conversation routes fail closed after delete
 - [[SPEC-shared-codex-oauth-bootstrap]] — New sandboxes can seed shared OpenClaw/Codex auth state and default to `openai-codex/gpt-5.4`
+- [[SPEC-sandbox-bootstrap-config-apply-contract]] — Sandbox create fails closed unless required bootstrap config writes land and verify before `result`
 - [[SPEC-shared-codex-retrofit]] — Existing running sandboxes and the standalone builder gateway can be retrofitted in place to the shared Codex auth model
 - [[SPEC-agent-learning-and-journal]] — Contract for daily agent journals and reusable KB learning notes
 - [[SPEC-automation-agent-roles]] — Repo-local role contracts for recurring maintainer agents
 - [[SPEC-analyst-project-focus]] — Human-owned `Project Focus` document that steers `Analyst-1` backlog recommendations with a defined fallback path
 - [[SPEC-feature-at-a-time-automation-contract]] — `Analyst-1` curates one complete feature package and `Worker-1` finishes one feature package per run
+- [[SPEC-selected-tool-mcp-runtime-apply]] — Deploy/runtime config writes only selected configured MCP connectors and clears stale runtime state
 - [[SPEC-control-plane-audit-log]] — Shared durable audit-event contract for backend mutations and architect approval actions
 - [[SPEC-test-coverage-automation]] — Repo automation that adds one bounded, validated test improvement per run
 - [[SPEC-conversation-history-pagination]] — Cursor-based bounded reads for conversation lists and per-conversation message history across both chat UIs
+- [[SPEC-deployed-chat-workspace-memory]] — Deployed-agent chat persists reusable workspace instructions, continuity notes, and safe pinned references per agent
+- [[SPEC-agui-protocol-adoption]] — Replace custom ChatEvent/ChatTransport with AG-UI protocol standard for agent-frontend communication
 
 ---
 
@@ -108,11 +137,26 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Work on the agent builder chat UI | [[008-agent-builder-ui]] |
 | Work on the developer dashboard UI | [[009-ruh-frontend]] |
 | Change deployment config | [[010-deployment]] |
+| Understand agent-readable system logs and observability | [[SPEC-agent-readable-system-events]] + [[002-backend-overview]] |
+| Run local Langfuse for builder tracing | [[SPEC-local-langfuse-docker]] + [[010-deployment]] |
 | Understand shared Codex OAuth sandbox bootstrap | [[SPEC-shared-codex-oauth-bootstrap]] + [[003-sandbox-lifecycle]] |
 | Understand shared Codex retrofit for running sandboxes | [[SPEC-shared-codex-retrofit]] + [[003-sandbox-lifecycle]] |
+| Understand forge sandbox creation and promotion | [[004-api-reference]] + [[011-key-flows]] |
 | Understand browser security headers and CSP policy | [[SPEC-web-security-headers]] + [[010-deployment]] |
+| Understand browser/VNC and preview proxy surfaces | [[004-api-reference]] + [[009-ruh-frontend]] |
 | Understand deployed-chat files and artifact previews | [[SPEC-deployed-chat-files-and-artifacts-workspace]] + [[008-agent-builder-ui]] |
+| Understand deployed-chat artifact classification and gallery previews | [[SPEC-deployed-chat-artifact-preview]] + [[008-agent-builder-ui]] |
+| Understand deployed-chat code handoff and workspace export | [[SPEC-deployed-chat-code-control-handoff]] + [[008-agent-builder-ui]] |
+| Understand task plan mode, code editor, and auto-switch | [[SPEC-deployed-chat-task-mode]] + [[008-agent-builder-ui]] |
+| Understand deployed-chat workspace history replay | [[SPEC-deployed-chat-workspace-history]] + [[008-agent-builder-ui]] |
+| Understand deployed-chat task and terminal replay history | [[SPEC-deployed-chat-task-and-terminal-history]] + [[008-agent-builder-ui]] |
+| Adopt AG-UI protocol for agent-frontend communication | [[SPEC-agui-protocol-adoption]] + [[008-agent-builder-ui]] |
+| Understand the unified Co-Pilot Config workspace | [[SPEC-copilot-config-workspace]] + [[008-agent-builder-ui]] |
+| Understand saved PRD/TRD discovery-doc persistence | [[SPEC-agent-discovery-doc-persistence]] + [[008-agent-builder-ui]] |
+| Understand purpose-gated skill inference and deploy blocking in Co-Pilot | [[SPEC-agent-builder-gated-skill-tool-flow]] + [[008-agent-builder-ui]] |
+| Research or integrate a tool for an agent | [[SPEC-tool-integration-workspace]] + [[008-agent-builder-ui]] |
 | Understand a user journey end-to-end | [[011-key-flows]] |
+| Investigate sandbox runtime drift or repair DB/container skew | [[003-sandbox-lifecycle]] + [[SPEC-sandbox-runtime-reconciliation]] |
 | Understand or author repo automations | [[012-automation-architecture]] |
 | Understand the learning-note and daily-journal workflow | [[013-agent-learning-system]] |
 | Understand repo-local maintainer agent roles | [[012-automation-architecture]] + [[SPEC-automation-agent-roles]] |

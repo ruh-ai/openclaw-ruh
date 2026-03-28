@@ -16,6 +16,7 @@ Applying agent config to a running sandbox must become a verified, fail-closed c
 - [[008-agent-builder-ui]] — deploy and hot-push flows currently treat any HTTP 200 as success
 - [[011-key-flows]] — sandbox deploy flow currently attaches a sandbox before config apply is proven
 - [[SPEC-agent-edit-config-persistence]] — saved agent state should remain the source of truth before any runtime push is attempted
+- [[SPEC-selected-tool-mcp-runtime-apply]] — selected configured MCP connectors are part of the fail-closed runtime apply contract
 
 ## Specification
 
@@ -107,7 +108,7 @@ Required rules:
 
 Each step result should include:
 
-- `kind`: `soul` | `skill` | `cron`
+- `kind`: `soul` | `skill` | `cron` | `runtime_env` | `mcp` | `webhook`
 - `target`: deterministic identifier such as `SOUL.md`, normalized `skill_id`, or cron name
 - `ok`: boolean
 - `message`: user-safe summary

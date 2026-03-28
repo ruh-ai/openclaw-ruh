@@ -2,6 +2,10 @@
 
 This directory is the human-readable catalog for recurring repo-maintainer agents in `openclaw-ruh-enterprise`.
 
+## Product Context
+
+**Ruh.ai is the place where enterprises create digital employees with a soul** — AI assistants you love to work with, who understand you and feel like real teammates. The platform has two surfaces: the **Agent Builder** (`agent-builder-ui`) for creating assistants, and the **Client Application** (`ruh-frontend`, future desktop app) where users work alongside them daily. The **Google Ads agent** is the canonical proving case — all features are validated against it. See `docs/project-focus.md` for current priorities.
+
 ## Structure
 
 - `agents/` is the readable source of truth for role definitions

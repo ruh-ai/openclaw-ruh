@@ -1,6 +1,6 @@
 # SPEC: Deployed Chat Files And Artifacts Workspace
 
-[[000-INDEX|← Index]] | [[008-agent-builder-ui]] | [[011-key-flows]]
+[[000-INDEX|← Index]] | [[008-agent-builder-ui]] | [[011-key-flows]] | [[SPEC-deployed-chat-artifact-preview]]
 
 ## Status
 
@@ -15,6 +15,7 @@ The deployed-agent chat page now exposes a bounded Files workspace so operators 
 - [[004-api-reference]] — documents the workspace list/read/download route contract
 - [[008-agent-builder-ui]] — owns the deployed-agent Files tab, preview panes, and run-scoped workspace state
 - [[011-key-flows]] — explains how operators move from a chat run to inspecting sandbox files and artifacts
+- [[SPEC-deployed-chat-artifact-preview]] — extends the first slice with artifact-aware classification, rich previews, and an output gallery
 
 ## Specification
 

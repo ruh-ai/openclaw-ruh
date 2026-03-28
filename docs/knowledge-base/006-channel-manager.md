@@ -6,7 +6,9 @@
 
 ## Overview
 
-The channel manager handles Telegram and Slack configuration for a running sandbox. All operations communicate with the OpenClaw process inside the Docker container via `docker exec`.
+The channel manager handles Telegram and Slack runtime configuration for a running sandbox. All operations communicate with the OpenClaw process inside the Docker container via `docker exec`.
+
+This is separate from the saved-agent builder metadata contract in `agentStore.ts`: builder `channels[]` can currently describe `telegram`, `slack`, or `discord` as planned/configured/unsupported product state, but only Telegram and Slack have sandbox runtime routes here today.
 
 **File:** `ruh-backend/src/channelManager.ts`
 
@@ -16,7 +18,7 @@ The channel manager handles Telegram and Slack configuration for a running sandb
 
 OpenClaw stores its channel config in `~/.openclaw/openclaw.json` inside the container. The channel manager reads/writes this config using two methods:
 
-1. **Read:** `node -e "process.stdout.write(fs.readFileSync('.openclaw/openclaw.json', 'utf8'))"` — reads raw JSON
+1. **Read:** `node -e "process.stdout.write(fs.readFileSync('/root/.openclaw/openclaw.json', 'utf8'))"` — reads raw JSON
 2. **Write:** `openclaw config set <dotted.key> <value>` — uses OpenClaw CLI to set individual keys
 
 After any write, the gateway is restarted for changes to take effect.

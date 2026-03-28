@@ -1,0 +1,234 @@
+# Agent Creation Architecture v2
+**Status:** Draft — approved for implementation
+**Date:** 2026-03-29
+**Replaces:** Shared architect sandbox model
+
+---
+
+## The Problem with v1
+
+The current architecture runs all agent creation sessions through one shared OpenClaw container (the "architect sandbox"). This means:
+
+- The architect and the deployed agent are separate containers — the builder never touches the agent's real home
+- "Deploy" is a configuration push, not a natural continuation of the build
+- Testing requires a separate deploy step
+- Shipping means exporting state, not committing a workspace that already exists
+- One broken architect container takes down the builder for everyone
+
+---
+
+## v2 Core Idea
+
+> **The container IS the agent from day one.**
+
+When a user creates a new agent, we spin up a dedicated Docker container immediately. The Architect — our own agent that understands how to build agents using our creation flow — runs inside that container and builds the workspace directly. When building is done, the same container becomes the live agent. Ship means pushing its home directory to GitHub.
+
+No separate "architect container." No "deploy" step that reconstructs state. The agent always lives in one place.
+
+---
+
+## Container Lifecycle
+
+```
+[ Name + Description submitted ]
+          ↓
+  POST /api/sandboxes/create
+  → New Docker container spun up
+  → OpenClaw gateway starts
+  → Architect SOUL loaded into container
+  → agent record saved: status = "building"
+          ↓
+  [ Build Phase ]
+  User chats with the Architect in the container
+  Architect writes workspace files directly:
+    SOUL.md         ← agent personality, purpose, rules
+    skills/         ← skill definitions
+    tools/          ← MCP tool configurations
+    .openclaw/      ← triggers, workflows, config
+  UI shows live workspace preview
+          ↓
+  [ Test Phase ]  ← no new container, same one
+  Container switches: Architect SOUL → Agent SOUL
+  User chats with the actual agent
+  Can flip back to build mode to iterate
+          ↓
+  [ Ship Phase ]
+  User connects GitHub (OAuth, once per account)
+  Workspace pushed to repo
+  Repo = agent template
+  agent record: status = "shipped"
+          ↓
+  [ Live ]
+  Container stays running as the deployed agent
+  Future changes: open agent → back to build mode → iterate → re-ship
+```
+
+---
+
+## The Architect Agent
+
+The Architect is not a generic LLM prompt. It is a purpose-built OpenClaw agent with its own SOUL.md that encodes:
+
+- Our creation flow (name → purpose → skills → tools → triggers → personality)
+- How to scaffold a workspace for a new agent
+- How to write SOUL.md, skill definitions, and .openclaw config
+- How to ask the right questions at each stage
+- How to transition the container from build mode to agent mode
+
+The Architect SOUL.md is version-controlled in this repo and pushed into every new container at creation time. When we improve the Architect, all future agents benefit.
+
+**The Architect is the product.** Building a better Architect is how we build better agents.
+
+---
+
+## Container Modes
+
+Each container operates in one of two modes, controlled by which SOUL.md is active:
+
+| Mode | Active SOUL | What it does |
+|------|-------------|--------------|
+| `building` | Architect SOUL | Guides creation, writes workspace files, asks questions |
+| `live` | Agent SOUL | Runs as the deployed agent, responds to triggers/channels |
+
+Switching modes is a lightweight operation — swap the active config, restart the OpenClaw process inside the container. No data is lost. The workspace persists.
+
+---
+
+## Workspace Layout (OpenClaw standard)
+
+We use OpenClaw's existing workspace structure. The Architect writes into these paths inside the container:
+
+```
+/home/node/.openclaw/
+  workspace/
+    SOUL.md              ← agent identity, personality, rules, purpose
+    skills/
+      {skill-id}/
+        index.md         ← skill description and instructions
+        tools.yml        ← tools this skill uses
+    tools/
+      {tool-id}.yml      ← MCP tool config (credentials injected at runtime)
+    triggers/
+      {trigger-id}.yml   ← webhook / schedule / event definitions
+    channels/
+      {channel-id}.yml   ← Slack, Telegram, etc.
+    .openclaw/
+      config.yml         ← agent metadata, model, sandbox settings
+      workflow.yml       ← execution flow between skills
+```
+
+---
+
+## GitHub Integration
+
+**Connection:** GitHub OAuth, once per Ruh.ai account. Token stored encrypted per org.
+
+**On Ship:**
+1. User selects "Ship Agent"
+2. If no repo connected: prompt to connect GitHub + create or select repo
+3. System commits the agent's `/home/node/.openclaw/workspace/` to the repo
+4. Commit message: `ship: {agent-name} v{version}`
+5. Tag: `v{version}`
+
+**Repo structure** (what gets pushed):
+```
+/
+  SOUL.md
+  skills/
+  tools/
+  triggers/
+  channels/
+  .openclaw/config.yml
+  .openclaw/workflow.yml
+  README.md              ← auto-generated by the Architect
+```
+
+**Future — Reproduce from repo:**
+```
+git clone {repo}
+POST /api/sandboxes/create { source: "github", repo: "{url}" }
+→ New container spins up, workspace restored from repo
+→ Agent is live immediately
+```
+
+---
+
+## API Changes Required
+
+### New endpoints
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| `POST` | `/api/agents/create` | Create agent record + spin up container in one call |
+| `GET` | `/api/agents/{id}/workspace` | Read live workspace file tree from container |
+| `POST` | `/api/agents/{id}/mode` | Switch container between `building` and `live` |
+| `POST` | `/api/agents/{id}/ship` | Push workspace to GitHub, tag release |
+| `GET/POST` | `/api/github/connect` | OAuth flow for GitHub connection |
+
+### Modified endpoints
+
+| Method | Path | Change |
+|--------|------|--------|
+| `POST` | `/api/openclaw` | Route to agent's own container (not shared architect) |
+| `POST` | `/api/agents/{id}/deploy` | Deprecated — replaced by `/mode` switch |
+
+---
+
+## UI Changes Required
+
+### Create flow
+
+**Before (v1):** Name → chat with shared architect → configure → deploy to new container
+
+**After (v2):**
+1. Name + one-line description → submit
+2. Container spins up (loading state: "Setting up your agent's workspace...")
+3. Chat opens — this IS the agent's container, Architect is already inside
+4. Architect guides the build conversationally, writes files live
+5. Workspace panel (sidebar) shows files being created in real time
+6. "Test" button appears when Architect signals the workspace is ready
+7. Test mode — chat with the agent directly
+8. "Ship" button — GitHub connect + push
+
+### Workspace panel (new)
+
+A live file tree showing what the Architect has written so far. Clicking a file shows its contents. This makes the "building" phase feel real — you can see the agent taking shape.
+
+### Status indicator
+
+Replace current "Creating agent..." spinner with a meaningful status:
+- `Setting up workspace` → `Architect is thinking` → `Writing skills` → `Ready to test` → `Live`
+
+---
+
+## The Google Ads Agent — proving case
+
+Every architectural decision above is judged against this scenario:
+
+> A user opens the builder, describes a Google Ads Campaign Manager agent.
+> The Architect asks the right questions, writes a workspace with:
+> - A SOUL that understands Google Ads campaign strategy
+> - Skills for campaign creation, budget management, performance reporting, keyword suggestions
+> - Google Ads MCP tool configuration
+> - A daily trigger for performance checks
+>
+> User tests it — talks to the agent, asks it to review a campaign.
+> Agent responds correctly using the skills.
+> User ships it — workspace goes to GitHub.
+> Done.
+
+If this flow feels natural and the resulting agent works, the architecture is right.
+
+---
+
+## Implementation Order
+
+1. **Architect SOUL.md** — write the Architect agent that knows our creation flow
+2. **Container-per-agent on create** — POST /api/agents/create spins up the container
+3. **Route builder chat to agent's container** — not shared architect
+4. **Mode switching** — building ↔ live
+5. **Workspace panel** — live file tree in the UI
+6. **GitHub OAuth + ship** — connect + push
+7. **Reproduce from repo** — stretch goal
+
+Start with 1 and 2. Everything else builds on top.

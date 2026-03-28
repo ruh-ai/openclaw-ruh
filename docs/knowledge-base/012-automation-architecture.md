@@ -17,7 +17,7 @@ For the maintainer roles `Analyst-1` and `Worker-1`, the unit of work is now one
 - Automation config: `$CODEX_HOME/automations/<automation_id>/automation.toml`
 - Automation memory: `$CODEX_HOME/automations/<automation_id>/memory.md`
 - Repo-local role contracts: `agents/*.md` mirrored to `.agents/agents/*.md`
-- Analyst steering artifact: `docs/project-focus.md`
+- Focus steering artifact: `docs/project-focus.md`
 - Repo-facing work products: `TODOS.md`, `docs/knowledge-base/`, `docs/knowledge-base/learnings/`, `docs/journal/`, and any code/docs files the automation was explicitly designed to maintain
 
 The memory file is the continuity layer between runs. Each run should read it first if present, avoid duplicating prior analysis, and write a concise summary of what changed or what decision was made before returning.
@@ -31,7 +31,7 @@ An automation run in this repo should usually follow this sequence:
 1. Read the matching repo-local role contract first when the automation is `Analyst-1`, `Worker-1`, or `Tester-1`
 2. Read `docs/knowledge-base/000-INDEX.md` and the most relevant linked notes
 3. Read `TODOS.md` before making any non-trivial decision or edit
-4. When the automation is `Analyst-1`, read `docs/project-focus.md` if it exists before choosing a new feature package
+4. When the automation is `Analyst-1` or `Tester-1`, read `docs/project-focus.md` if it exists before choosing work
 5. Inspect the current repo state relevant to the automation goal
 6. Make one bounded, explainable update
 7. Decide whether the run produced a durable learning
@@ -54,7 +54,7 @@ This keeps automation runs aligned with the same handoff discipline expected of 
 - Prefer feature packages that lead to a user-testable or operator-testable outcome after a successful worker run
 - Append a daily journal entry for every non-trivial run
 - Only create a KB learning note when the run produces durable insight another agent should reuse
-- Treat `docs/project-focus.md` as human-owned steering input for `Analyst-1`; read it when present, but do not overwrite it unless a human explicitly asks
+- Treat `docs/project-focus.md` as human-owned steering input for focus-aware maintainer automations; `Analyst-1` uses it to prioritize missing feature packages and `Tester-1` uses it to prioritize coverage or manual validation that stabilizes the active lane. Do not overwrite it unless a human explicitly asks
 - Do not invent product behavior; document only what the codebase, KB, and backlog support
 - If an automation edits instructions or KB notes, keep Obsidian `[[wikilinks]]` intact and update `[[000-INDEX]]`
 
@@ -75,7 +75,7 @@ This repo keeps named maintainer-agent role contracts in two places:
 
 These folders currently define `Analyst-1`, `Worker-1`, and `Tester-1`. The role definitions are documented in [[SPEC-automation-agent-roles]]. If one copy changes, update the mirrored copy in the same diff so humans and tooling keep the same contract.
 
-For the live recurring automations with those same ids, matching names are not sufficient. Each live prompt under `$CODEX_HOME/automations/<role>/automation.toml` must explicitly read the matching repo role file (`agents/<role>.md` or `.agents/agents/<role>.md`) and treat it as part of the runtime contract. For `Analyst-1`, the runtime contract also includes `docs/project-focus.md` when that file exists.
+For the live recurring automations with those same ids, matching names are not sufficient. Each live prompt under `$CODEX_HOME/automations/<role>/automation.toml` must explicitly read the matching repo role file (`agents/<role>.md` or `.agents/agents/<role>.md`) and treat it as part of the runtime contract. For `Analyst-1` and `Tester-1`, the runtime contract also includes `docs/project-focus.md` when that file exists.
 
 ---
 
@@ -153,31 +153,36 @@ Requirements:
 - Read the matching repo-local role contract immediately after memory: `agents/tester-1.md` (or `.agents/agents/tester-1.md` if your tooling expects the mirror). Treat that file's mission, inputs, outputs, guardrails, and success criteria as part of this automation's runtime contract.
 - Read the knowledge base first, starting at docs/knowledge-base/000-INDEX.md, then inspect the notes most relevant to the target area you choose
 - Read TODOS.md before making a decision and avoid duplicating active work or recently documented gaps
+- Read `docs/project-focus.md` if it exists and treat it as human-owned steering input; do not edit it unless a human explicitly asks
+- If `docs/project-focus.md` has `Status` `active` and at least one item under `Current Focus Areas`, prefer one bounded test target or one bounded manual-verification target that materially stabilizes that active feature lane before falling back to repo-wide coverage work
 - Inspect the current test setup across ruh-backend, ruh-frontend, and agent-builder-ui before choosing work
-- Choose exactly one target per run: a missing unit test, integration test, contract test, component test, or E2E regression that materially improves reliability
+- Choose exactly one target per run: a missing unit test, integration test, contract test, component test, E2E regression, or one bounded Playwright manual verification of a focus-area workflow that materially improves reliability
 - Prefer the cheapest stable test layer first: unit before integration, integration before E2E
 - Add or improve tests directly in the repo when the change is bounded and you can verify it with the narrowest relevant command
+- Use Playwright manual verification selectively, only when browser-level evidence is the best next step for a UI or workflow-heavy focus-area scenario and you can keep the run bounded to one scenario
 - Only modify production code when a minimal, low-risk seam is required to make the test possible; do not broaden the task into unrelated feature work
-- If no safe bounded patch is available, add exactly one concrete TODO entry describing the missing coverage gap instead of forcing a risky change
+- If a Playwright manual verification run uncovers a regression and a safe bounded automated follow-up fits the run, prefer landing that regression test; otherwise add exactly one concrete TODO entry with the failing scenario and repro context
+- If no safe bounded patch or safe manual-verification follow-up is available, add exactly one concrete TODO entry describing the missing coverage gap instead of forcing a risky change
 - If the run produces durable testing or architecture insight, create or update a note under docs/knowledge-base/learnings/ and link any affected KB notes or specs
-- Append a journal entry to docs/journal/YYYY-MM-DD.md describing what target was chosen, what was verified, and whether the run patched tests or created a TODO fallback
+- Append a journal entry to docs/journal/YYYY-MM-DD.md describing what target was chosen, whether the run patched tests, ran Playwright manual verification, or created a TODO fallback, and what was verified
 - If the automation changes repo automation expectations or prompt contracts, update docs/knowledge-base/012-automation-architecture.md, docs/knowledge-base/013-agent-learning-system.md, and the repo instruction files
-- Run the narrowest relevant verification command for the tests you touched and record the result accurately
+- Run the narrowest relevant verification command for the tests you touched, or record the Playwright manual-verification outcome accurately when the run used browser automation
 - Update the automation memory file with what target was chosen, what changed, what was verified, and what should be avoided or revisited next run
-- Return a short inbox item that says whether tests were added or a TODO fallback was created
+- Return a short inbox item that says whether tests were added, Playwright manual verification was performed, or a TODO fallback was created
 ```
 
-Use this as the default prompt when creating or regenerating the repo's recurring test-coverage automation. It keeps each run narrow, evidence-based, role-bound, and aligned with the repo's requirement that automated work be understandable to the next agent.
+Use this as the default prompt when creating or regenerating the repo's recurring test-coverage automation. It keeps each run narrow, evidence-based, role-bound, aligned with the repo's requirement that automated work be understandable to the next agent, and biased toward the active project-focus lane when one exists.
 
 ### When Reusing This Prompt
 
-- Keep the automation scoped to one feature package recommendation per run
+- Keep the automation scoped to one bounded testing decision per run
 - Reuse the same prompt unless the repo workflow or required output changes materially
 - If you change this prompt, update `CLAUDE.md` (and therefore `agents.md`, which mirrors it) plus [[013-agent-learning-system]] in the same change so interactive agents and automations stay aligned
 
 For the test-coverage automation specifically:
 
-- Keep the automation scoped to one validated test improvement or one TODO fallback per run
+- Keep the automation scoped to one validated test improvement, one bounded Playwright manual-verification scenario, or one TODO fallback per run
+- Allow one bounded Playwright manual-verification scenario per run only when it is the best way to validate the active focus lane and the run still leaves behind an actionable result
 - Reuse the canonical test-coverage prompt above instead of shortening it into a vague "increase coverage" request
 - If the automation gains new write permissions or broader patch authority, update this note, [[013-agent-learning-system]], and `CLAUDE.md` together in the same change
 
@@ -186,7 +191,7 @@ For the test-coverage automation specifically:
 ## Related Specs
 
 - [[SPEC-automation-agent-roles]] — defines the repo-local role contracts and mirror rule for `Analyst-1`, `Worker-1`, and `Tester-1`
-- [[SPEC-analyst-project-focus]] — defines the `docs/project-focus.md` steering artifact and the analyst fallback rules
+- [[SPEC-analyst-project-focus]] — defines the `docs/project-focus.md` steering artifact and the analyst/tester fallback rules
 - [[SPEC-feature-at-a-time-automation-contract]] — defines the feature-package unit of work and the complete-feature expectation for maintainer runs
 - [[SPEC-agent-learning-and-journal]] — defines the shared journal and durable-learning contract for all agent runs
 - [[SPEC-test-coverage-automation]] — specifies the execution model, guardrails, and fallback behavior for the repo's test-coverage automation

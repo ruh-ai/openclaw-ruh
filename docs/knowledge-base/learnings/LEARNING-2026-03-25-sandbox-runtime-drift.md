@@ -30,4 +30,5 @@ While reviewing the repo for the highest-leverage untracked backlog gap, the san
 - [[003-sandbox-lifecycle]]
 - [[004-api-reference]]
 - [[005-data-models]]
+- [[SPEC-sandbox-runtime-reconciliation]]
 - [Journal entry](../../journal/2026-03-25.md)

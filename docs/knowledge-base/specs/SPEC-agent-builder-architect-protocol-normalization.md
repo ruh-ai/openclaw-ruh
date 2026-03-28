@@ -53,6 +53,7 @@ For the new shape, the bridge must normalize into the legacy builder-friendly sh
 - `system_name` is always present
 - skill descriptions should prefer the architect's `purpose`, then `description`, then `name`
 - `depends_on` should be derived from the declared workflow when possible, otherwise fall back to sequential ordering
+- explicit `tool_connections` and `triggers` should be normalized into the existing saved-agent-compatible metadata shapes described by [[SPEC-architect-structured-config-handoff]]
 
 ### Error handling
 

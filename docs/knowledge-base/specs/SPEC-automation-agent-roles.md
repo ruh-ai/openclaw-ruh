@@ -8,14 +8,14 @@ implemented
 
 ## Summary
 
-Defines repo-local role contracts for the recurring maintainer agents `Analyst-1`, `Worker-1`, and `Tester-1`. The repo now stores these contracts in both a visible `agents/` catalog for humans and a hidden `.agents/agents/` mirror for local agent tooling, with an explicit rule that both copies must stay aligned and that every role follows the repo-wide journal and durable-learning workflow. `Analyst-1` also honors a human-owned `docs/project-focus.md` steering document when it is active, and the maintainer contract now treats one `TODOS.md` entry as one feature package for analyst and worker runs.
+Defines repo-local role contracts for the recurring maintainer agents `Analyst-1`, `Worker-1`, and `Tester-1`. The repo now stores these contracts in both a visible `agents/` catalog for humans and a hidden `.agents/agents/` mirror for local agent tooling, with an explicit rule that both copies must stay aligned and that every role follows the repo-wide journal and durable-learning workflow. `Analyst-1` and `Tester-1` also honor a human-owned `docs/project-focus.md` steering document when it is active, and the maintainer contract now treats one `TODOS.md` entry as one feature package for analyst and worker runs.
 
 ## Related Notes
 
 - [[012-automation-architecture]] — explains where maintainer automations fit and now points to the repo-local agent contracts
 - [[001-architecture]] — distinguishes maintainer agents from product runtime services
 - [[013-agent-learning-system]] — defines the shared journal and durable-learning requirements all roles must follow
-- [[SPEC-analyst-project-focus]] — defines the active-focus artifact and fallback rules that extend the `Analyst-1` role
+- [[SPEC-analyst-project-focus]] — defines the active-focus artifact and fallback rules that extend the `Analyst-1` and `Tester-1` roles
 - [[SPEC-feature-at-a-time-automation-contract]] — defines the feature-package unit of work for `Analyst-1` and `Worker-1`
 
 ## Specification
@@ -50,9 +50,12 @@ Defines repo-local role contracts for the recurring maintainer agents `Analyst-1
 
 #### `Tester-1`
 
-- Selects one bounded test-coverage gap
+- Reads `docs/project-focus.md` when it exists
+- Prioritizes one bounded coverage gap or one bounded Playwright manual verification that materially stabilizes the active focus lane when a concrete focus is defined
+- Selects one bounded test-coverage or verification target
 - Prefers unit tests before broader layers
 - Adds or improves tests directly when safe
+- May use Playwright automation for one bounded manual verification scenario when browser-level evidence is the best next step
 - Appends a dated journal entry for the run
 - Writes a KB learning note when the test work reveals durable insight
 - Falls back to one concrete `TODOS.md` task when direct test work is unsafe
@@ -79,7 +82,7 @@ When any repo-local maintainer agent role changes:
 - `.agents/agents/*.md` uses concise frontmatter plus execution-oriented instructions
 - The role definitions describe operator-layer behavior only; they do not add product runtime features
 - Active automation prompts under `$CODEX_HOME/automations/` should be kept aligned with these role contracts and explicitly reference the matching role file
-- `Analyst-1` now depends on the repo-visible `docs/project-focus.md` artifact when a human wants to steer backlog discovery explicitly
+- `Analyst-1` and `Tester-1` now depend on the repo-visible `docs/project-focus.md` artifact when a human wants to steer backlog discovery or reliability work explicitly
 - `Analyst-1` and `Worker-1` now share a feature-at-a-time contract: one curated feature package, one feature-complete worker run
 
 ## Test Plan
@@ -89,4 +92,5 @@ When any repo-local maintainer agent role changes:
 - Verify live prompts under `$CODEX_HOME/automations/analyst-1/`, `$CODEX_HOME/automations/worker-1/`, and `$CODEX_HOME/automations/tester-1/` explicitly reference their matching role file
 - Verify [[000-INDEX]], [[001-architecture]], [[012-automation-architecture]], and [[013-agent-learning-system]] link to this spec
 - Verify the `Analyst-1` role files and live automation prompt all mention `docs/project-focus.md` and the fallback behavior
+- Verify the `Tester-1` role files and live automation prompt all mention `docs/project-focus.md`, focus-lane prioritization, and the bounded Playwright manual-verification rule
 - Verify the `Analyst-1` and `Worker-1` role files plus live prompts all describe one feature package per run rather than one isolated task per run

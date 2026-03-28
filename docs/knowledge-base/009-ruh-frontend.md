@@ -23,6 +23,8 @@ components/
   SandboxForm.tsx       — create new sandbox (SSE progress display)
   SandboxResult.tsx     — show sandbox details after creation
   ChatPanel.tsx         — chat with selected sandbox
+  HistoryPanel.tsx      — paginated conversation list + rename/delete
+  MissionControlPanel.tsx — overview + crons + channels tabs
   CronsPanel.tsx        — manage cron jobs
   ChannelsPanel.tsx     — configure Telegram/Slack channels
 __tests__/
@@ -67,15 +69,20 @@ Shows sandbox details after creation: URL, gateway token, SSH command, status.
 
 Chat interface for a selected sandbox.
 - Creates/loads conversations via `POST /api/sandboxes/:id/conversations`
-- Sends messages via `POST /api/sandboxes/:id/chat` (with `conversation_id`)
-- Appends messages via `POST /api/sandboxes/:id/conversations/:conv_id/messages`
+- Sends messages via `POST /api/sandboxes/:id/chat/ws` (with `conversation_id`)
 - Loads only the newest transcript window on open and adds an explicit older-history fetch instead of eagerly rendering the full transcript
-- Supports streaming responses
+- Supports streaming responses, tool/lifecycle status updates, and streamed `persistence_error` reporting when the assistant reply was delivered but could not be saved
 
 ### `HistoryPanel`
 
 - Loads the newest paginated conversation page first from `GET /api/sandboxes/:id/conversations`
 - Uses an explicit `Load more` affordance to fetch older conversations instead of eagerly loading the whole sandbox history
+
+### `MissionControlPanel`
+
+- `Overview` tab shows explicit sandbox status from `GET /api/sandboxes/:id/status`, quick links, SSH command, and a lightweight conversation count
+- `Crons` tab embeds `CronsPanel`
+- `Channels` tab embeds `ChannelsPanel`
 
 ---
 
@@ -131,8 +138,9 @@ npx playwright test # E2E
 
 ## Related Learnings
 
-- [[LEARNING-2026-03-25-conversation-history-pagination-gap]] — the dev chat history UI still fetches full conversation lists and full transcripts, so larger persisted histories need a bounded load-more contract before page-open cost scales poorly
+- [[LEARNING-2026-03-28-repo-testability-audit]] — the developer UI still embeds fetch, SSE, pairing, and save/restart side effects directly inside large client components, which pushes tests toward UI-heavy harnesses
+- [[LEARNING-2026-03-25-conversation-history-pagination-gap]] — captured the earlier dev-chat full-history read gap before cursor pagination plus load-more behavior shipped
 - [[LEARNING-2026-03-25-sandboxform-sse-terminal-state]] — `SandboxForm` must guard terminal SSE UI state against stale EventSource callback closures
-- [[LEARNING-2026-03-25-session-backed-chat-history-replay]] — `ChatPanel` currently replays the full transcript even though conversation-backed chat already forwards a persistent gateway session key
+- [[LEARNING-2026-03-25-session-backed-chat-history-replay]] — `ChatPanel` still replays persisted transcript windows in addition to gateway session-key continuity, which is the current tradeoff behind refresh-safe history
 - [[LEARNING-2026-03-25-channel-config-false-success]] — `ChannelsPanel` currently shows a saved/restarted state for any 200 response even though backend channel-save helpers can log failed apply steps without failing the overall response
 - [[LEARNING-2026-03-25-web-security-headers-gap]] — captures the original missing-header gap and why this UI's direct browser-to-backend calls require an env-aware `connect-src`

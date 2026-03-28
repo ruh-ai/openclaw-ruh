@@ -18,15 +18,4059 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 
 ## Active Work Log
 
-### TASK-2026-03-25-85: Add persistent workspace memory to deployed-agent chat
+> Focus window: through Friday, March 27, 2026, maintainer runs should treat agent creation, Google Ads agent buildout, MCP-backed configuration UX, and creation-loop improvements as the only priority lane. Deployed-chat Manus-parity packages are deferred unless they directly unblock that lane.
+
+### TASK-2026-03-28-196: Make local Langfuse tracing work through the builder bridge
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/bridge-auth.ts`, `agent-builder-ui/lib/openclaw/bridge-auth.test.ts`, `agent-builder-ui/lib/openclaw/langfuse.ts`, `agent-builder-ui/lib/openclaw/langfuse.test.ts`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/app/api/openclaw/route.test.ts`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-builder-bridge-auth.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-local-builder-bridge-auth-gap.md`
+- Summary: `Completed the builder-side local Langfuse traceability fix. `requireAuthenticatedBridgeSession()` now permits a localhost-only development bypass when both the request origin and configured backend target are local and `NODE_ENV=development`, and completed Langfuse bridge traces now force-flush before the route returns. Focused Bun coverage now proves the bypass boundary and flush behavior, and live verification confirmed a real Node-based `/api/openclaw` request on `localhost` enters the traced bridge path and emits Langfuse SDK span-processing logs without weakening the non-local auth contract.`
+- Next step: `If the self-hosted Langfuse UI still appears empty, investigate the Langfuse deployment or worker/storage path rather than revisiting builder bridge auth; the builder route now reaches and flushes the tracing layer in local development.`
+- Blockers: `None for the builder bridge. The remaining empty-UI symptom, if any, is on the local Langfuse stack side rather than the builder auth boundary.`
+
+### TASK-2026-03-28-195: Investigate why local Langfuse shows no bridge data
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-local-builder-bridge-auth-gap.md`
+- Summary: `Checked the live local Langfuse deployment against the running `agent-builder-ui` process to explain why the UI is empty. The current builder dev server on port `3001` was started before `agent-builder-ui/.env.development.local` existed, so it has no `LANGFUSE_*` env in process and cannot export traces. Even after a restart, the local bridge only enters `withLangfuseBridgeTrace()` after `requireAuthenticatedBridgeSession()` passes; in this repo-only local setup that still fails on backend `GET /users/me`, so `/api/openclaw` returns `auth_unavailable` before any Langfuse observation is created. As implemented, Langfuse only receives successful/accepted architect bridge traces, not backend `system_events` or generic sandbox runtime events, so an empty project is expected until a traced architect request actually succeeds.`
+- Next step: `Restart `agent-builder-ui` so it loads `LANGFUSE_*`, then either point the builder at a real auth backend or add a truthful local bridge-auth bypass before expecting `/api/openclaw` activity to appear in Langfuse.`
+- Blockers: `Local `/api/openclaw` still depends on backend `GET /users/me`, so repo-only development cannot emit bridge traces until that auth dependency is satisfied or bypassed.`
+
+### TASK-2026-03-28-194: Deploy a repo-local Langfuse stack for builder tracing
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/plans/2026-03-28-local-langfuse-docker-design.md`, `docs/plans/2026-03-28-local-langfuse-docker.md`, `docs/knowledge-base/specs/SPEC-local-langfuse-docker.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/010-deployment.md`, `.gitignore`, `langfuse/`, `scripts/`, `agent-builder-ui/.env.example`, `agent-builder-ui/.env.development.local`
+- Summary: `Completed the repo-local Langfuse deployment for builder tracing. The repo now has an isolated `langfuse/` Docker Compose stack plus `scripts/langfuse-local.sh` to generate ignored bootstrap secrets, auto-pick free host ports, start/stop/reset the stack, and sync `agent-builder-ui/.env.development.local` with matching `LANGFUSE_*` values. Verification confirmed the UI is live at `http://localhost:3002`, the seeded `langfuse@local.dev` admin login works, and the headless bootstrap created the `openclaw-local` org plus `openclaw-ruh-enterprise` project. Because `5433` was already occupied locally by `devpulse_postgres`, the script correctly auto-bumped Langfuse Postgres to `127.0.0.1:5434` and persisted that mapping in `langfuse/.env`.`
+- Next step: `Restart `agent-builder-ui` if the local dev server is already running so the new `LANGFUSE_*` overlay is loaded, then send a real architect request and inspect the trace in Langfuse.`
+- Blockers: `None.`
+
+### TASK-2026-03-28-193: Probe local system bring-up and runtime usability
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-local-builder-bridge-auth-gap.md`
+- Summary: `Brought up the local backend, developer UI, and builder UI to verify the repo can still run as a system after the recent builder refactor. Backend (`8000`), `ruh-frontend` (`3000`), and `agent-builder-ui` (`3001`) all boot locally, and the builder/create page renders in dev mode. The main runtime gap is the shared builder bridge: `POST /api/openclaw` still requires an `accessToken` cookie plus backend `GET /users/me`, but the local backend does not expose `/users/me`, so the live create-flow chat fails with `auth_unavailable` even when a cookie is supplied.`
+- Next step: `If local builder chat should work against this repo alone, either add the expected backend `/users/me` contract, point builder auth validation at the real auth service in local env, or add an explicit dev-only bridge-auth bypass that matches the current middleware/session-bootstrap dev behavior.`
+- Blockers: `Builder create-flow chat is not locally runnable end to end against the current backend alone because `/api/openclaw` depends on a session-validation route the backend does not implement.`
+
+### TASK-2026-03-28-192: Land builder bridge testability refactor slice and verify it
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/*`, `agent-builder-ui/package.json`, `agent-builder-ui/e2e/*`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/008-agent-builder-ui.md`
+- Summary: `Completed the first bounded refactor from the repo-wide testability audit without colliding with the already-dirty worktree. The builder bridge now delegates session auth, approval-policy decisions, and gateway-response parsing to focused helper modules with dedicated Bun coverage; `agent-builder-ui` now has a real npm-backed unit-test contract; and verification-driven fixes landed for production typecheck/build plus auth-aware mocked Playwright create-flow smoke coverage.`
+- Next step: `Refresh the remaining historical create-agent Playwright file to the current create-flow UI and repair the Playwright worker restart dependency mismatch (`Cannot find module 'playwright-core/lib/utils'`) if the team wants the full browser suite green again.`
+- Blockers: `The delivered slice is verified, but the broader `agent-builder-ui/e2e/create-agent.spec.ts` file is not fully green yet: the updated auth-aware smoke path passes, while older assertions against the current runtime-tab/stepper flow still fail and a later worker restart hit a local Playwright module-resolution problem.`
+
+### TASK-2026-03-28-191: Rebuild agent-readable system logging with structured events and Langfuse correlation
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/plans/2026-03-28-agent-readable-logging-design.md`, `docs/plans/2026-03-28-agent-readable-logging.md`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/specs/SPEC-agent-readable-system-events.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-agent-readable-system-events.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/010-deployment.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/systemEventStore.ts`, `ruh-backend/tests/helpers/db.ts`, `ruh-backend/tests/unit/systemEventStore.test.ts`, `ruh-backend/tests/unit/systemEventsApp.test.ts`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/langfuse.ts`, `agent-builder-ui/lib/openclaw/langfuse.test.ts`, `agent-builder-ui/package.json`, `agent-builder-ui/package-lock.json`, `agent-builder-ui/yarn.lock`
+- Summary: `Completed the first shipped agent-readable logging slice. The backend now owns a durable redacted `system_events` ledger plus three read routes (`/api/system/events`, `/api/sandboxes/:sandbox_id/system-events`, `/api/agents/:id/system-events`) and emits structured sandbox-create / forge lifecycle rows with stable request correlation. The architect bridge now has optional Langfuse/OpenTelemetry tracing on the Node side, records bounded request milestones, and returns `trace_id` in the final SSE result when tracing is enabled. KB notes, spec, and deployment docs now describe the hybrid boundary truthfully.`
+- Next step: `Expand `system_events` coverage to the next highest-value runtime/control-plane flows instead of widening Langfuse-only tracing first; keep PostgreSQL-backed events as the canonical agent-readable log.`
+- Blockers: `None.`
+
+### TASK-2026-03-28-190: Audit repo-wide testability bottlenecks
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-repo-testability-audit.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/009-ruh-frontend.md`
+- Summary: `Completed a repo-wide static audit focused on what makes backend, builder, and developer UI code expensive to test. The dominant issues are monolithic transport/orchestration modules, stateful React pages and hooks that synchronize multiple stores and side effects directly, singleton/global dependencies (env, fetch, WebSocket, localStorage, in-memory stream maps), and an implicit agent-builder unit-test workflow that depends on Bun globals without a documented package script.`
+- Next step: `Use the audit plan to land bounded refactors in this order: extract a backend app factory plus router modules, isolate sandbox/bootstrap orchestration behind injected ports, split the builder bridge into auth/transport/normalization/policy adapters, move create-flow state into pure reducers or a dedicated state machine, and introduce shared API client modules plus a documented unit-test command for agent-builder-ui.`
+- Blockers: `None. The audit was static only; it did not attempt broad code changes inside the already-dirty worktree.`
+
+### TASK-2026-03-28-189: Refresh the Obsidian KB against the live repo
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `docs/journal/2026-03-28.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/006-channel-manager.md`, `docs/knowledge-base/007-conversation-store.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/009-ruh-frontend.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-tool-research-plan-persistence-gap.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-operator-defined-runtime-input-gap.md`
+- Summary: `Completed a core KB truthfulness refresh against the live repo. The canonical notes now cover the shipped API/data-model/frontend contract for forge sandboxes, runtime-env patching, restart/browser/preview routes, paginated history, developer chat over `POST /chat/ws`, current builder auth behavior, and the persisted `channels[]`/`forge_sandbox_id`/`vnc_port` fields. The pass also corrected spec-vs-code drift by marking `toolConnections[].researchPlan` persistence and `runtimeInputs[].source = operator_defined` as planned follow-on behavior instead of shipped backend truth, and repaired the filtered wikilink graph to zero broken links and zero orphans.`
+- Next step: `Run a future `/kb audit` follow-up focused on the older learning/spec archive if the team wants to reduce the remaining strict backlink debt; the core notes are now truthful and discoverable for day-to-day agent orientation.`
+- Blockers: `None for the refresh itself. A filtered graph scan now reports zero broken links and zero orphans, but a strict backlink scan still finds broad pre-existing reverse-link debt across the older learning/spec archive.`
+
+### TASK-2026-03-28-188: Persist Co-Pilot channel selections through draft autosave and resume
 - Status: `active`
 - Owner: `Analyst-1`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-builder-channel-persistence.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-copilot-channel-draft-persistence-gap.md`, `docs/journal/2026-03-28.md`
+- Summary: `The saved-agent channel contract shipped, but the default Co-Pilot draft contract still drops live channel edits before final completion. `buildNormalizedDraftPayload()` in `builder-metadata-autosave.ts` persists skills, tool connections, triggers, improvements, and discovery docs, but it never includes `channels`, even though `SaveAgentDraftInput`, `saveAgentDraft()`, `PATCH /api/agents/:id/config`, and the backend store all already accept `channels[]`. `page.tsx` separately mirrors `runtimeInputs` and `discoveryDocuments` into `updateAgentConfig()`, but there is no equivalent draft/update path for `coPilotStore.channels`. That means an operator can select Slack, Telegram, or Discord in the default `/agents/create` flow, see `Draft saved`, refresh or leave, and resume a draft that silently reopens without the latest channel plan unless they had already reached final save/deploy. No current active or deferred TODO explicitly owns this channel-specific draft-autosave seam: TASK-2026-03-26-117 owns route-entry resume policy, TASK-2026-03-26-139 owns autosaving skills/tools/triggers, and TASK-2026-03-27-167 closed the saved-agent channel contract after explicit save/reopen/deploy.`
+- Operator-testable outcome: `After one worker run, a human can select one or more channels in the default Co-Pilot create flow, wait for `Draft saved`, refresh or leave `/agents/create`, and resume the same draft with the exact planned Slack/Telegram/Discord selections intact. Starting fresh must still clear those channels intentionally, final save/deploy must continue to use the same `channels[]` contract, and no runtime credentials may leak through the draft path.`
+- Next step: `Extend the safe Co-Pilot draft snapshot so channel selections participate in the same persisted draft contract as other non-secret Configure metadata: include `channels[]` in `buildNormalizedDraftPayload()`, ensure channel edits trigger the same draft-save loop or config patch path that already persists runtime inputs/discovery docs, seed resumed drafts from the saved `channels[]` value, and add one focused browser regression showing `Draft saved` after channel selection really restores the same planned channels on resume/reopen.`
+- Blockers: `None. This is intentionally narrower than the existing draft-recovery, configure-autosave, and channel-persistence packages: those tasks cover route-entry policy, safe autosave for skills/tools/triggers, and the saved-agent `channels[]` contract after explicit save/update, while this package owns the still-missing bridge from live channel edits into the draft record the route resumes.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the default `/agents/create` path should be the truthful proving case, and the shipped product now tells operators that safe draft state is being saved continuously while they work.
+- `SPEC-agent-builder-channel-persistence` explicitly says draft save and config-patch flows should update `channels[]`, but `buildNormalizedDraftPayload()` omits `channels` entirely and therefore cannot deliver that contract for AG-UI autosave.
+- `use-agents-store.ts:saveAgentDraft()` already supports `draft.channels ?? existing?.channels ?? []`, which means the backend/store path is ready; the missing seam is that the autosave caller never supplies the live Co-Pilot channel state.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` already added channel persistence to final completion paths and separately mirrors other safe draft-only state such as `runtimeInputs` and `discoveryDocuments`, so channels are the remaining non-secret builder selection that can still be lost after `Draft saved`.
+- This is materially user-facing: losing selected channels after a refresh or leave-and-return makes the default Co-Pilot shell overstate what its draft indicator actually protects, even though channels are now part of the saved agent contract elsewhere.
+
+#### What to build
+
+1. **Safe draft payload parity for channels** (`agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, related tests/helpers):
+   - Include `channels[]` in the normalized draft payload beside the other safe persisted builder metadata.
+   - Keep the payload non-secret: persist only planned/configured channel metadata already allowed on the saved agent contract, never runtime bot credentials or pairing secrets.
+   - Preserve compatibility with existing drafts that have no `channels[]` yet.
+
+2. **Autosave trigger and page plumbing** (`agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`):
+   - Ensure channel edits participate in the same draft-save lifecycle as the rest of the Co-Pilot safe snapshot instead of waiting for final completion.
+   - Reuse the existing autosave/config-patch flow rather than creating a channel-only persistence path.
+   - Keep fresh-start resets from TASK-2026-03-26-117 compatible so intentionally starting over clears channel state cleanly.
+
+3. **Resume/reopen truthfulness** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/hooks/use-agents-store.ts`):
+   - Seed resumed Co-Pilot drafts from the saved `channels[]` contract so the channel step, review summary, and deploy handoff reopen with the same planned channels the operator last saved.
+   - Keep Improve Agent and explicit `agentId` reopen behavior aligned with that same saved channel metadata.
+   - Avoid regressing final save/deploy behavior that already persists channels correctly.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused autosave/store tests, KB notes above):
+   - Add focused test coverage proving the draft payload now includes `channels[]` and that repeated autosaves preserve stronger saved channel states.
+   - Add one browser regression where the operator selects channels, sees `Draft saved`, refreshes or resumes, and still sees the same planned channels.
+   - Update KB notes/spec backlinks so future draft/autosave work does not assume channel persistence was already complete on the pre-completion draft path.
+
+#### Test suite
+
+**Focused frontend/store coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, adjacent create-flow helpers):
+- `buildNormalizedDraftPayload()` includes `channels[]` from the current safe Co-Pilot snapshot.
+- Draft autosave does not leak runtime channel credentials while persisting the planned/configured channel metadata.
+- Resumed draft seeding preserves saved `channels[]` and does not overwrite a stronger existing saved channel status unnecessarily.
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the default Google Ads create flow, select one or more channels, wait for `Draft saved`, refresh or resume, and confirm the same planned channels reappear.
+- Choose a fresh-start path and confirm previous channel selections do not leak into the new session.
+- Finish save or deploy after resume and confirm the persisted channel summary still matches the last autosaved channel plan.
+
+#### Evaluation — task is done when
+
+- [ ] `Draft saved` in the Co-Pilot shell includes the latest safe `channels[]` selection, not only skills/tools/triggers metadata
+- [ ] Refreshing or resuming `/agents/create` no longer drops selected channels that were already covered by draft autosave
+- [ ] Starting fresh still clears prior channel selections intentionally
+- [ ] Final save, Improve Agent reopen, and deploy handoff remain aligned with the same saved `channels[]` contract
+- [ ] Focused tests and one browser regression lock the channel-draft persistence contract in place
+
+### TASK-2026-03-28-187: Cover connector summary downgrade truthfulness on reopen
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-28`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/tools/tool-integration.ts`, `agent-builder-ui/lib/tools/tool-integration.test.ts`, `docs/knowledge-base/learnings/LEARNING-2026-03-28-connector-summary-downgrade-truthfulness.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/journal/2026-03-28.md`
+- Summary: `Completed one bounded Google Ads MCP-first regression fix in `reconcileToolConnections()`. Added unit coverage proving a reopened connector without saved credentials downgrades to `missing_secret` and no longer keeps the stale "Credentials stored securely" copy beside the required-credentials warning, then normalized the shared helper so credential status summaries stay mutually exclusive during reopen/finalize transitions.`
+- Next step: `Avoid reworking `tool-integration.ts` next run unless connector-status behavior itself changes. Prefer an unowned Google Ads or AG-UI seam that still lacks focused coverage.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-186: Persist custom-built Google Ads skills through save, reopen, and deploy
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/skills/skill-registry.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/app.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-builder-gated-skill-tool-flow.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-custom-built-skill-reopen-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The Google Ads proving case can now generate or operator-build agent-local skill markdown, but the saved/reopen path still treats those skills as unresolved again after the first save. `markSkillBuilt()` in `copilot-state.ts` stamps `skill_md` onto the selected node and `pushAgentConfig()` already forwards that markdown to `configure-agent`, where `ruh-backend/src/app.ts` prefers request `skill_md` over the registry or stub fallback. But `resolveSkillAvailability()` only upgrades skills when they have a registry match, native mapping, or an in-memory `builtSkillIds` hit, and `createCoPilotSeedFromAgent()` never reconstructs `builtSkillIds` from persisted `skillGraph[].skill_md`. The backend registry also has no seeded Google Ads skills today, so a credible Google Ads agent can be custom-built, saved, reopened, and then immediately regress to `needs_build`, falsely blocking deploy and nudging operators back toward the `# TODO: Implement this skill` stub path despite already having saved custom skill content. No current active or deferred TODO owns this saved custom-skill truthfulness seam.`
+- Operator-testable outcome: `After one worker run, a human building or improving a Google Ads agent can click `Build Custom Skill` for an unresolved Google Ads capability, save or autosave the draft, reopen Improve Agent later, and still see that skill as `Custom Built` with its saved markdown attached. The reopened agent must remain deployable without rebuilding the same skill, and deploying it must write the saved custom `SKILL.md` content into the sandbox instead of falling back to the stub placeholder.`
+- Next step: `Land one bounded custom-skill persistence slice: treat persisted `skillGraph[].skill_md` as first-class evidence of a `custom_built` skill during availability resolution and Co-Pilot seed hydration, preserve that status in the skills UI and deploy gating after save/reopen, and extend focused frontend/browser coverage so the Google Ads proving case can build a custom skill once and keep it through reopen and deploy without regressing to `needs_build`.`
+- Blockers: `None. This composes with the existing skill-registry and deploy-readiness work instead of duplicating it: the registry package already covers seeded skills and honest stub fallback, while this package owns the missing persisted path for agent-local custom skills when the proving-case Google Ads skills do not have registry matches.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads agent should become a credible end-to-end proving case, but the seeded backend registry still contains only generic skills such as `skill-creator`, `slack-reader`, `web-scraper`, `github-pr-fetcher`, `email-sender`, and `http-fetch`; there are no Google Ads registry entries to rescue the proving-case skills on reopen.
+- `agent-builder-ui/lib/skills/skill-registry.ts` marks unmatched skills as `needs_build` unless they are native, registry-matched, or explicitly listed in `builtSkillIds`. Persisted `skillGraph[].skill_md` is not currently considered, even though that markdown is the durable artifact the operator already approved.
+- `agent-builder-ui/lib/openclaw/copilot-state.ts:markSkillBuilt()` stamps `skill_md` onto the node for deploy, but `createCoPilotSeedFromAgent()` in `agent-builder-ui/lib/openclaw/copilot-flow.ts` only restores `skillGraph` and `selectedSkillIds`; it does not rebuild the `builtSkillIds` evidence needed for the reopened skills step to keep the same `custom_built` status.
+- `ruh-backend/src/app.ts` already honors request `skill_md` first when writing sandbox skills, which means the runtime contract is ready for persisted custom skills; the missing seam is that the builder can forget those saved custom skills and block or confuse the operator before deploy.
+- `docs/knowledge-base/specs/SPEC-agent-builder-gated-skill-tool-flow.md` explicitly defines `custom_built` as an agent-local draft path and says deployment should only fail closed while a required skill is still `needs_build`. Reopening a saved custom skill as unresolved is therefore a code-vs-spec mismatch, not just a nice-to-have polish issue.
+
+#### What to build
+
+1. **Persisted custom-skill availability contract** (`agent-builder-ui/lib/skills/skill-registry.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, related types/helpers):
+   - Treat a saved `skillGraph` node with non-empty `skill_md` as `custom_built` during availability resolution even when there is no registry match.
+   - Reconstruct any derived built-skill state from persisted `skillGraph[].skill_md` during reopen or seed hydration so Improve Agent uses the same truth the deploy payload already has.
+   - Keep registry matches and native tools higher-priority where appropriate; this slice is about the agent-local custom-skill path, not replacing the registry.
+
+2. **Skills-step and deploy-gating truthfulness** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, related review helpers if needed):
+   - Ensure reopened custom-built Google Ads skills render with the `Custom Built` badge and explanatory copy instead of regressing to `Needs Build`.
+   - Keep deploy blocking aligned with that same persisted contract so a reopened custom-built skill does not disable `Deploy Agent` or force the operator to rebuild identical markdown.
+   - Preserve the existing `Build Custom Skill` affordance for genuinely unresolved skills.
+
+3. **Save/reopen/deploy continuity** (`agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `ruh-backend/src/app.ts` only if verification plumbing is needed):
+   - Confirm draft save, final save, and Improve Agent reopen all keep the saved `skill_md` on the same skill node the deploy path reads.
+   - Keep `pushAgentConfig()` and backend `configure-agent` using the persisted `skill_md` content so the reopened agent deploys the approved custom skill, not the stub fallback.
+   - Fail closed only when a required skill truly lacks both registry coverage and saved custom markdown.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/skills/skill-registry.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB notes above):
+   - Add focused tests proving persisted `skill_md` upgrades a reopened skill to `custom_built`.
+   - Extend the Google Ads proving case so an operator builds one custom skill, saves or autosaves, refreshes or reopens, and still sees the same skill as built and deployable.
+   - Update the KB notes so future skill-registry or deploy-readiness work treats saved custom markdown as part of the runtime-truthful contract.
+
+#### Test suite
+
+**Focused frontend/unit coverage** (`agent-builder-ui/lib/skills/skill-registry.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, relevant skills-step tests):
+- `resolveSkillAvailability()` returns `custom_built` when a skill node already carries saved `skill_md`, even without a registry entry.
+- `createCoPilotSeedFromAgent()` or the equivalent reopen path restores saved custom-built skill state so selected Google Ads skills do not regress to `needs_build`.
+- Skills-step UI and deploy gating treat persisted custom-built skills as resolved after reopen.
+
+**Google Ads browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent, use `Build Custom Skill` on an unresolved skill, save or autosave, refresh or reopen, and confirm the same skill still shows `Custom Built`.
+- Reopen Improve Agent and confirm the final `Deploy Agent` action is not blocked by that saved custom skill.
+- Complete deploy handoff and confirm the mocked configure payload still includes the saved `skill_md` instead of relying on the stub fallback.
+
+#### Evaluation — task is done when
+
+- [ ] Persisted `skillGraph[].skill_md` is treated as durable `custom_built` evidence across save and reopen
+- [ ] Reopened Google Ads skills no longer regress from `Custom Built` back to `Needs Build`
+- [ ] Deploy gating blocks only genuinely unresolved skills, not saved custom-built skills
+- [ ] Deploy/config-apply continues to write the saved custom `SKILL.md` content instead of the placeholder stub
+- [ ] Focused tests and the Google Ads browser proving case lock the custom-skill persistence contract end to end
+
+### TASK-2026-03-27-185: Cover explicit Google Ads tool hint normalization from architect connections
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.test.ts`
+- Summary: `Completed one bounded AG-UI create-flow regression in the active Google Ads lane. Added a failing unit test proving explicit architect `tool_connections[].tool_id` labels like "Google Ads API" were being preserved as raw ids instead of normalizing to the direct `google-ads` connector, then patched `normalizeToolHintId()` so explicit connection hints reuse the same keyword-driven mapping contract already applied to skill-graph metadata.`
+- Next step: `Avoid revisiting `builder-hint-normalization.ts` next run unless the architect starts emitting new connector labels or the supported direct-connector registry changes. Prefer another unowned Google Ads / AG-UI helper branch.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-184: Allow operator-defined runtime inputs in the Google Ads create loop
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepRuntimeInputs.tsx`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/lib/agents/runtime-inputs.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-operator-defined-runtime-input-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active Google Ads builder contract already documents a third runtime-input source, `operator_defined`, for non-secret values the operator adds manually, but the live codebase still only accepts `architect_requirement` and `skill_requirement`. `StepRuntimeInputs.tsx` is a list-only editor with no add/remove affordance, `agent-builder-ui/lib/agents/types.ts` omits `operator_defined`, and both `ruh-backend/src/validation.ts` plus `ruh-backend/src/agentStore.ts` reject or coerce anything outside the two generated sources. That means the product claims operators can carry custom runtime parameters through save/reopen/deploy, but the real Google Ads create path still cannot add one extra account id, reporting label, or other non-secret runtime override unless the architect guessed it first. No current active or deferred TODO directly owns bringing the documented `operator_defined` contract to life.`
+- Operator-testable outcome: `After one worker run, a human building or improving a Google Ads agent can add a custom non-secret runtime input from the Runtime Inputs step, choose whether it is required, save or autosave the draft, reopen Improve Agent later, and still see the same custom input preserved alongside architect- and skill-derived inputs. Review and deploy summaries must include the custom value in the same readiness model as generated inputs, and deploy/config-apply must write the custom key to `~/.openclaw/.env` while still failing closed when a required custom input is blank.`
+- Next step: `Land one bounded runtime-input parity slice: extend the frontend/backend runtime-input source enums to accept `operator_defined`, add a safe add/edit/remove affordance to `StepRuntimeInputs.tsx` and the default Co-Pilot Runtime Inputs step for non-secret custom keys, preserve those entries through `mergeRuntimeInputDefinitions()` plus create-session save/reopen flows, and add focused frontend/backend coverage proving custom runtime inputs survive save, reopen, and deploy readiness without broadening into secret storage or arbitrary config editing.`
+- Blockers: `None. This complements TASK-2026-03-27-183 instead of duplicating it: TASK-183 keeps `GOOGLE_ADS_CUSTOMER_ID` on the existing runtime-input lane, while this package enables the missing documented operator-defined branch of that same lane for additional non-secret runtime parameters the architect did not derive.`
+
+#### Why this is important now
+
+- `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md` and `docs/knowledge-base/004-api-reference.md` already say `runtimeInputs[].source` may be `operator_defined`, so the repo is currently documenting a capability that the codebase does not actually allow.
+- `agent-builder-ui/lib/agents/types.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/agentStore.ts`, and the `configure-agent` request type in `ruh-backend/src/app.ts` all still hard-code the runtime-input source union to `architect_requirement | skill_requirement`, which means custom operator-defined inputs cannot round-trip truthfully.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepRuntimeInputs.tsx` only edits whatever inputs already exist in the array. There is no operator-facing affordance to add or remove one extra runtime input when the architect missed it.
+- `agent-builder-ui/lib/agents/runtime-inputs.ts` already preserves existing inputs whose keys are not currently derived from the skill graph or agent rules, so the product is structurally close to supporting operator-defined inputs once the type and UI gaps are closed.
+- The Google Ads proving case often needs non-secret account-scoping values that the architect may not infer from the initial prompt alone. Without a custom runtime-input path, the MCP-first config story still depends too heavily on the architect predicting every operator-visible runtime parameter up front.
+
+#### What to build
+
+1. **Runtime-input contract parity** (`agent-builder-ui/lib/agents/types.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`):
+   - Extend the runtime-input source enum to include `operator_defined` everywhere the saved-agent and configure-agent contracts touch it.
+   - Keep the payload bounded and non-secret: this slice is for operator-visible runtime values, not encrypted credentials or arbitrary key-value storage.
+   - Preserve backward compatibility for existing saved agents that only carry architect- or skill-derived inputs.
+
+2. **Operator-defined Runtime Inputs UX** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepRuntimeInputs.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, default Co-Pilot Runtime Inputs renderer as needed):
+   - Add one explicit affordance to create, edit, and remove custom runtime inputs from the shared Runtime Inputs step used by both Advanced Configure and the default Co-Pilot flow.
+   - Validate keys to an env-var-safe format and make the UI explicitly warn that secrets still belong in Connect Tools or credential routes, not in runtime inputs.
+   - Let the operator mark a custom input required or optional so deploy readiness and summaries can treat it truthfully.
+
+3. **Save, reopen, and deploy integration** (`agent-builder-ui/lib/agents/runtime-inputs.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, saved-agent helpers as needed):
+   - Preserve operator-defined inputs through `mergeRuntimeInputDefinitions()` so later skill regeneration or review edits do not silently drop them.
+   - Ensure autosave, final save, Improve Agent reopen, and deploy/readiness summaries all read the same combined runtime-input array instead of splitting custom values onto a side channel.
+   - Keep `POST /api/sandboxes/:sandbox_id/configure-agent` writing custom runtime inputs into `~/.openclaw/.env` and failing closed when any required custom input remains blank.
+
+4. **Regression coverage and docs** (`agent-builder-ui` runtime-input tests, `ruh-backend` validation/store tests, KB notes above):
+   - Add focused coverage proving `operator_defined` inputs validate, persist, normalize, and survive reopen.
+   - Extend the Google Ads proving case so one custom non-secret input can be added, saved, reopened, and reflected in deploy readiness.
+   - Update KB notes so future agents treat operator-defined runtime inputs as a real shipped part of the runtime-input contract rather than aspirational documentation.
+
+#### Test suite
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepRuntimeInputs.tsx`, `agent-builder-ui/lib/agents/runtime-inputs.test.ts`, related create-page/Co-Pilot tests):
+- The shared Runtime Inputs step can add, edit, mark required, and remove an `operator_defined` input without disturbing architect- or skill-derived entries.
+- `mergeRuntimeInputDefinitions()` preserves operator-defined inputs when the skill graph or agent rules change.
+- Save/reopen and Co-Pilot seed paths keep the custom input in the same runtime-input array the rest of the UI reads.
+
+**Backend contract coverage** (`ruh-backend/tests/unit/validation.test.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, narrow route/request tests as needed):
+- `runtimeInputs[].source = "operator_defined"` validates on create, patch, and configure-agent payloads.
+- Agent-store normalization preserves `operator_defined` instead of coercing it back to `architect_requirement`.
+- Configure-agent readiness fails closed for blank required custom inputs and still writes filled custom inputs into the runtime env step.
+
+**Google Ads proving case** (`agent-builder-ui/e2e/create-agent.spec.ts` or equivalent focused browser coverage):
+- Build a Google Ads agent, add one custom runtime input such as `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, save or autosave, refresh or reopen Improve Agent, and confirm the same custom input persists.
+- Mark the custom input required, leave it blank, and confirm review/deploy summaries report it as a blocker.
+- Fill the value and confirm the same readiness surface unblocks without forcing the operator through Connect Tools.
+
+#### Evaluation — task is done when
+
+- [ ] The saved-agent and configure-agent runtime-input contracts accept `operator_defined` everywhere they currently accept architect- or skill-derived inputs
+- [ ] The shared Runtime Inputs step lets operators add and remove bounded non-secret custom inputs in both Advanced and Co-Pilot flows
+- [ ] Operator-defined inputs survive autosave, save, reopen, and Improve Agent without being dropped by later runtime-input merges
+- [ ] Review and deploy/readiness summaries treat required custom inputs the same way they treat generated runtime-input blockers
+- [ ] Focused frontend/backend tests and the Google Ads proving case lock the operator-defined runtime-input contract end to end
+
+### TASK-2026-03-27-183: Keep Google Ads customer ID on the runtime-input contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/lib/agents/runtime-inputs.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-google-ads-customer-id-contract-split.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded Google Ads contract cleanup. The direct-connector registry no longer includes `GOOGLE_ADS_CUSTOMER_ID`, Connect Tools saves Google Ads from its secret-bearing fields only and points operators to Runtime Inputs for the customer id, and the proving-case runtime input label now reads `Google Ads Customer ID` so the surviving operator-facing entry point is explicit. Focused Bun coverage locked the registry, runtime-input, and deploy-summary contract without broadening into unrelated credential-validation work.`
+- Operator-testable outcome: `After one worker run, a human building a Google Ads agent enters OAuth secrets and developer token only in Connect Tools, enters `GOOGLE_ADS_CUSTOMER_ID` only in the Runtime Inputs step, and sees save/reopen/review/deploy use that single runtime-input source of truth. The Google Ads connector can reach its saved status without forcing Customer ID through encrypted credential storage, while deploy/readiness still blocks correctly until the separate runtime input is filled.`
+- Next step: `Treat this seam as closed. Follow-on work, if needed, should build on the separate connector-validation package (TASK-2026-03-27-182) rather than reintroducing non-secret identifiers to credential forms.`
+- Blockers: `None. Browser-level Playwright proof was not added in this run because recent maintainer runs on this host already documented Chromium launch permission failures; focused Bun coverage passed and the UI contract change stayed bounded to the documented seam.`
+
+#### Why this is important now
+
+- `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md` and `docs/knowledge-base/004-api-reference.md` both say runtime inputs such as `GOOGLE_ADS_CUSTOMER_ID` are distinct from encrypted connector credentials and should remain readable through the normal saved-agent contract.
+- `agent-builder-ui/lib/agents/runtime-inputs.ts` already labels `GOOGLE_ADS_CUSTOMER_ID` as a first-class runtime input with operator-facing copy, so the product has already committed to Customer ID living in the runtime-input path.
+- `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts` still includes `GOOGLE_ADS_CUSTOMER_ID` in the Google Ads credential field list, which means the direct-connection form treats that non-secret value like an encrypted secret.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx` computes `allFilled` from every credential field in the registry, so this split is not cosmetic: the sidebar can block or mislabel Google Ads connection state unless Customer ID is typed into the wrong form.
+- Leaving the split in place undermines the active Google Ads proving case because operators must decide whether Customer ID belongs in Connect Tools or Runtime Inputs, and future agents can no longer trust connector status or saved config summaries to reflect one clean source of truth.
+
+#### What to build
+
+1. **Registry and direct-connection contract cleanup** (`agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, helper types as needed):
+   - Remove `GOOGLE_ADS_CUSTOMER_ID` from the Google Ads encrypted credential field list so the direct connector requires only true secret-bearing auth material plus the developer token.
+   - Preserve backward compatibility for already-saved agents by keeping any prior metadata readable without requiring the old duplicated field going forward.
+   - Document the rule in code comments or helper naming if needed: non-secret account identifiers belong in `runtimeInputs[]`, not the credential registry.
+
+2. **Connect Tools save/status alignment** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, related tool-connection helpers):
+   - Recompute Google Ads `allFilled` / save-enable behavior from the reduced secret-only credential set so Connect Tools can reach its saved state without asking for Customer ID.
+   - Keep the existing encrypted save route and status-summary contract for true secrets; do not broaden this into a generic credential redesign.
+   - Make any missing Customer ID guidance point operators toward Runtime Inputs instead of reintroducing a second form.
+
+3. **Runtime-input source-of-truth proof** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, review/deploy summaries as needed):
+   - Ensure review, reopen, and deploy continue to read `GOOGLE_ADS_CUSTOMER_ID` only from `runtimeInputs[]`, with no fallback to connector credential drafts or encrypted credential summaries.
+   - Keep deploy/readiness fail closed when Customer ID is blank even if the Google Ads connector itself is otherwise configured.
+   - Avoid coupling this slice to the broader credential-handoff or discovery-doc tasks beyond the minimal integration needed for the Google Ads create path.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused component/helper tests, KB notes above):
+   - Add focused coverage proving the Google Ads Connect Tools sidebar no longer renders or requires Customer ID in the encrypted credential form.
+   - Extend the Google Ads proving case so save/reopen shows Customer ID only in Runtime Inputs while the connector remains truthfully saved from its secret fields.
+   - Update KB/learning backlinks so future agents reuse the corrected split contract instead of adding more non-secret identifiers to credential forms.
+
+#### Test suite
+
+**Focused frontend coverage** (`agent-builder-ui` unit/component tests):
+- Google Ads direct-connector fields exclude `GOOGLE_ADS_CUSTOMER_ID`.
+- Connect Tools can save the Google Ads connector from its secret-only field set without asking for Customer ID.
+- Review/deploy readiness still report Customer ID through `runtimeInputs[]`, not connector summaries.
+
+**Google Ads proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- The Runtime Inputs step shows `Google Ads Customer ID`, while the Connect Tools sidebar for Google Ads does not.
+- Saving and reopening the same agent preserves Customer ID in Runtime Inputs and Google Ads credential state in Connect Tools without duplicating the field across both surfaces.
+- Deploy remains blocked when Runtime Inputs omit Customer ID, even if Google Ads secrets are configured.
+
+#### Evaluation — task is done when
+
+- [x] The Google Ads direct-connector form no longer includes `GOOGLE_ADS_CUSTOMER_ID` as an encrypted credential field
+- [x] The Runtime Inputs contract is the only saved/operator-facing owner of Customer ID for the Google Ads proving case
+- [x] Connect Tools status and first-save credential handoff still work for Google Ads using only the true secret-bearing fields
+- [x] Review, reopen, and deploy summaries no longer present two conflicting entry points for Customer ID
+- [x] Focused tests lock the credential-vs-runtime-input split in place; browser-level Playwright proof remains host-blocked and was not part of this completed bounded slice
+
+### TASK-2026-03-27-181: Cover create-flow review readiness summaries for tools, triggers, and runtime inputs
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/operator-config-summary.test.ts`
+- Summary: `Completed one bounded Google Ads create-flow unit coverage improvement for the shared review/deploy summary helpers. Added focused assertions in `operator-config-summary.test.ts` proving Review surfaces cron schedules and unsupported webhook states truthfully, runtime-input cards keep their provided vs missing labels, and deploy readiness stays blocked when Google Ads credentials, an unsupported webhook, and a missing required runtime input are all present in the same saved config. No production code change was required because the helper contract already behaved correctly.`
+- Next step: `Avoid revisiting `operator-config-summary.ts` next run unless the review/deploy summary contract itself changes. Prefer another unowned AG-UI or Google Ads create-flow gap.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-184: Align Co-Pilot deploy-readiness tests with advisory create-flow gating
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Completed one bounded AG-UI create-flow test repair in the active Google Ads lane. `copilot-flow.ts` already documents that missing runtime inputs, connector credentials, and unsupported triggers are advisory warnings during initial create flow, but `copilot-flow.test.ts` still expected those warnings to hard-block deploy. Updated the helper coverage so it now locks the current contract instead: deploy remains blocked by missing purpose data, missing skill selection, or unresolved selected skills, while warning-only `deploySummary` states stay non-blocking during first deploy.`
+- Next step: `Avoid revisiting `evaluateCoPilotDeployReadiness()` next run unless product requirements change. Prefer a different unowned create-flow seam or a browser-level Google Ads proof once the environment is stable.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-182: Split stored Google Ads credentials from verified connector readiness
+- Status: `completed`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/lib/tools/tool-integration.ts`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-connector-readiness-validation-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active Google Ads / MCP-first focus now persists connector selections, encrypted credentials, and selected-tool runtime apply, but the live readiness contract still treats "secret exists" as equivalent to "connector is configured." `ConnectToolsSidebar.tsx` marks a direct connector `configured` immediately after `saveToolCredentials()` returns `ok`, `fetchCredentialSummary()` only reports `{ toolId, hasCredentials, createdAt }`, and `reconcileToolConnections()` upgrades any credential-backed connector with saved secrets back to `configured` on reopen. The backend then writes those secrets into `.openclaw/mcp.json` during deploy, but there is still no saved distinction between credentials merely being stored and the Google Ads connector actually being validated against a usable runtime contract. That leaves the primary `/agents/create` path overstating readiness: operators can save bad or stale Google Ads credentials, reopen the agent later, and still see `configured` until a much later runtime failure proves otherwise. No current active or deferred TODO explicitly owns that stored-vs-verified connector seam.`
+- Operator-testable outcome: `After one worker run, a human configuring Google Ads in `/agents/create` or Improve Agent can tell whether the connector is only carrying stored secrets or has actually passed a bounded validation step. Saving invalid or stale credentials must no longer reopen as a green `configured` connector; instead the builder and deploy surfaces should show a distinct validation-needed or validation-failed state with actionable copy. A successful validation should persist safe proof of readiness so Review, reopen, and deploy all agree on the same verified connector status without exposing raw secret values.`
+- Next step: `Write the bounded connector-validation spec first, then implement one Google Ads proving-case slice that separates secret storage from verified connector readiness: extend the saved credential summary/status model, add a backend validation or probe path that can classify stored-vs-valid Google Ads credentials safely, thread that result into Connect Tools plus deploy summaries, and update browser/backend coverage so the default create flow no longer claims a connector is configured merely because encrypted secrets exist.`
+- Blockers: `None. This is intentionally narrower than the existing credential handoff, selected-tool MCP apply, and deploy-readiness packages: those tasks ensure secrets are stored safely, selected tools are materialized exactly, and deploy blocks on missing selections, while this package owns the remaining truthfulness gap between "credentials saved" and "connector actually verified."`
+
+#### Why this is important now
+
+- `docs/project-focus.md` asks for an MCP-first Google Ads configuration experience grounded in real connector state, but the current status model only answers "do encrypted secrets exist?" rather than "does this connector still validate for runtime use?"
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx` calls `saveToolCredentials()` and then immediately builds a `configured` tool connection, even though the save route only confirms encrypted persistence and does not validate the Google Ads credential set.
+- `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts:fetchCredentialSummary()` plus `ruh-backend/src/agentStore.ts:getAgentCredentialSummary()` expose only `hasCredentials` and `createdAt`, so reopen flows cannot distinguish "stored but never checked" from "previously validated" or "known invalid."
+- `agent-builder-ui/lib/tools/tool-integration.ts:reconcileToolConnections()` upgrades any credential-backed connector with saved secrets back to `configured`, which means stale, rotated, or malformed Google Ads credentials can masquerade as ready again after refresh or Improve Agent reopen.
+- `ruh-backend/src/app.ts` currently decrypts and writes selected MCP credentials into `.openclaw/mcp.json`, but it does not persist any safe last-validation result back onto the agent contract, so the product has no durable way to reflect whether a connector was merely stored or actually verified against runtime expectations.
+
+#### What to build
+
+1. **Verified connector-status model** (`agent-builder-ui/lib/agents/types.ts`, `ruh-backend/src/agentStore.ts`, validation/schema helpers, KB/spec docs):
+   - Extend the saved connector/credential summary contract so Google Ads can distinguish at least `missing_secret`, `stored_secret` or equivalent pending-validation state, `configured` for verified readiness, and one explicit validation-failed state.
+   - Keep the browser-facing payload safe: surface timestamps, masked reason text, and validation outcome metadata only; do not echo raw tokens, refresh secrets, or decrypted credential content.
+   - Preserve backward compatibility so older agents with only `configured` or `missing_secret` still reopen deterministically and can be migrated into the stricter readiness model on first read or first validation.
+
+2. **Backend validation or probe path** (`ruh-backend/src/app.ts`, credential helpers, focused route/integration tests):
+   - Add one bounded server-side validation path for credential-backed MCP connectors, starting with Google Ads as the proving case, so the backend can classify saved secrets as valid, pending validation, or invalid with an operator-safe failure reason.
+   - Reuse existing saved credentials and runtime package mappings instead of inventing a second secret store. The validation path may run during credential save, on explicit reconnect, or as a deploy preflight as long as the saved status semantics become truthful and deterministic.
+   - Fail closed on validation ambiguity: if the backend cannot verify the connector safely, keep it out of the final `configured` state and report a clear next step rather than silently upgrading the status.
+
+3. **Builder and deploy UI truthfulness** (`StepConnectTools.tsx`, `ConnectToolsSidebar.tsx`, `agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`):
+   - Surface the new stored-vs-verified distinction directly in Connect Tools, Review, and Deploy so operators can see whether Google Ads is merely carrying saved secrets or has passed validation.
+   - Keep optimistic UX bounded: after credential entry, show validating or stored-secret feedback until verification succeeds; do not paint the connector as configured solely because the encrypted write returned `200`.
+   - Make validation failures actionable and sticky across save/reopen so Improve Agent and later deploy attempts do not regress to a misleading green state.
+
+4. **Regression coverage and docs** (`agent-builder-ui` helper/component/browser tests, `ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`, KB/spec notes above):
+   - Add focused tests proving saved credential summary no longer collapses every secret-bearing connector into `configured`.
+   - Add one Google Ads browser proving case where invalid credentials remain blocked or validation-failed after refresh/reopen, and one happy-path case where verified credentials reopen as configured.
+   - Update the tool-integration KB/spec notes so future connector work treats secret persistence and verified runtime readiness as separate milestones, not the same status.
+
+#### Test suite
+
+**Backend contract coverage** (`ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`):
+- Saving Google Ads credentials returns a safe stored/validation result instead of implicitly declaring the connector configured.
+- Failed validation persists an operator-safe failure state that ordinary agent reads and credential summary routes can report without leaking secrets.
+- Successful validation persists a durable verified state and timestamp that survive later reads and do not require rehydrating plaintext credentials.
+
+**Frontend/state coverage** (`agent-builder-ui/lib/tools/tool-integration.ts`, Connect Tools component tests, review/deploy summary helpers):
+- `reconcileToolConnections()` and related helpers preserve the stored-vs-verified distinction instead of promoting every secret-bearing connector to `configured`.
+- Connect Tools and review/deploy summaries render the new validation-needed or validation-failed states with actionable copy.
+- Refreshing or reopening an agent with bad Google Ads credentials does not regress to a misleading configured badge.
+
+**Google Ads browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Enter invalid or incomplete Google Ads credentials, save or autosave, refresh or reopen, and confirm the connector remains non-configured with an explicit validation-needed or validation-failed state.
+- Enter a valid Google Ads credential set, complete the bounded validation path, and confirm Review plus Deploy reopen with the connector as verified/configured.
+- Deploy surfaces the same saved validation state and does not imply that stored-but-unverified credentials are runtime-ready.
+
+#### Evaluation — task is done when
+
+- [ ] The saved Google Ads connector contract distinguishes stored secrets from verified runtime readiness
+- [ ] Saving credentials alone no longer makes Connect Tools, Review, or Deploy report the connector as configured
+- [ ] Invalid or stale Google Ads credentials reopen in an explicit validation-needed or validation-failed state with safe operator guidance
+- [ ] A successful validation persists safe readiness evidence that later reads can show without exposing secrets
+- [ ] Frontend and backend tests lock the stored-vs-verified connector contract for the Google Ads proving path
+
+### TASK-2026-03-27-180: Cover runtime-backed webhook trigger normalization in AG-UI create flow
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/response-normalization.ts`, `agent-builder-ui/lib/openclaw/response-normalization.test.ts`
+- Summary: `Completed one bounded AG-UI create-flow regression around architect structured trigger normalization. Added a focused unit test proving the canonical runtime-backed `webhook-post` trigger must stay `supported`, then patched `normalizeTriggers()` so the fallback status honors that supported id instead of downgrading it to `unsupported` before review/configure/deploy reuse the saved trigger contract.`
+- Next step: `Avoid reopening this normalized `webhook-post` seam next run. Prefer a different active-focus create-flow gap, ideally another low-cost unit branch in AG-UI shared-bridge or Google Ads config truthfulness.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-179: Emit shared-bridge intermediate updates for progressive AG-UI builder state
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/app/api/openclaw/forge-chat/route.ts`, `agent-builder-ui/lib/openclaw/intermediate-updates.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/api.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/app/api/openclaw/route.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-shared-bridge-intermediate-update-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the shared-bridge producer parity slice. The bounded intermediate-update scanner now lives in shared code and is reused by both architect routes, the primary shared `/api/openclaw` bridge emits ordered `intermediate` SSE frames while assistant text grows, and `sendToArchitectStreaming()` now forwards those frames to the existing `BuilderAgent` consumer path on the normal shared-gateway route. Added focused route, SSE-client, and builder-agent regressions proving identity, discovered skills, tool hints, trigger hints, and channel hints reach the default create flow before the final `ready_for_review` payload.`
+- Operator-testable outcome: `After one worker run, a human using the default shared architect path on `/agents/create` can watch the builder progressively populate the agent identity, discovered skills, tool suggestions, trigger suggestions, and channel hints before the final review payload arrives, with the same staged AG-UI behavior the forge-chat path already supports. The Google Ads proving case should visibly advance through purpose/skills/tools/triggers/channels on live shared-gateway runs instead of staying mostly static until the terminal `ready_for_review` response.`
+- Next step: `Optional follow-up only if a broader AG-UI run needs it: add browser-level coverage for the shared `/agents/create` Google Ads flow once local Playwright execution is available again.`
+- Blockers: `None. Focused shared-bridge and consumer verification passed; browser-level validation was intentionally left out of this bounded worker package.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the creation journey should be iterative and self-improving, but the main shared architect bridge still cannot surface the staged builder updates that make the create loop feel alive before review.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` already has a dedicated `onIntermediate` path that drives `WIZARD_UPDATE_FIELDS`, `WIZARD_SET_SKILLS`, `WIZARD_CONNECT_TOOLS`, `WIZARD_SET_TRIGGERS`, and `WIZARD_SET_CHANNELS`, so the product has already committed to progressive updates at the AG-UI consumer layer.
+- `agent-builder-ui/lib/openclaw/api.ts` already parses `event: intermediate` and forwards it through `sendToArchitectStreaming()`, but `agent-builder-ui/app/api/openclaw/route.ts` never sends that event on the shared architect path, leaving the shared-gateway implementation behind the forge path.
+- `agent-builder-ui/app/api/openclaw/forge-chat/route.ts` already contains a bounded `extractIntermediateUpdates()` scanner and emits `intermediate` SSE frames while content streams, which means the repo already has a concrete reference implementation for the missing shared-bridge behavior.
+- Leaving this gap open undermines the AG-UI adoption lane: the default `/agents/create` path still depends on terminal review payloads and local guesswork for progressive builder movement, even though the underlying shared bridge is the primary path operators hit most often.
+
+#### What to build
+
+1. **Shared-bridge intermediate event production** (`agent-builder-ui/app/api/openclaw/route.ts`, shared helper extraction if needed):
+   - Reuse or extract the bounded intermediate-update scanner from `forge-chat/route.ts` so the shared architect bridge can derive `identity`, `skill_discovered`, `tool_hint`, `trigger_hint`, and `channel_hint` updates from streamed architect text.
+   - Emit `event: intermediate` SSE frames on the shared `/api/openclaw` stream without regressing the existing `status`, `delta`, approval, and terminal `result` event contract.
+   - Keep the logic bounded and deterministic: dedupe emitted updates per run, preserve phase ordering, and avoid inventing unsupported connector or trigger ids.
+
+2. **Client propagation parity** (`agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`):
+   - Ensure `sendToArchitectStreaming()` keeps forwarding shared-path `intermediate` events exactly once and that `BuilderAgent` can trust them on the normal architect route rather than only on forge-backed runs.
+   - Keep copilot-mode text streaming intact so intermediate updates complement, rather than replace, the existing text delta path and final `ready_for_review` normalization.
+   - Avoid broadening into snapshot/delta or transcript work already covered by the AG-UI consumer tasks.
+
+3. **Primary create-flow verification** (`agent-builder-ui/app/api/openclaw/route.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`):
+   - Add focused route coverage proving streamed shared-gateway text now yields ordered `intermediate` SSE events for identity, skills, tools, triggers, and channels.
+   - Add builder-agent coverage proving those shared-path `intermediate` events advance the wizard progressively before the final `ready_for_review` payload arrives.
+   - Refresh one Google Ads create-flow browser regression so the default shared architect path visibly advances through staged builder state on the live AG-UI create surface.
+
+4. **Docs and contract updates** (`docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, learning note):
+   - Record that progressive builder updates are now a shared-bridge contract, not a forge-only behavior.
+   - Link the learning note so future AG-UI work knows the producer parity seam was the missing blocker for truthful staged builder updates on the primary path.
+
+#### Test suite
+
+**Shared bridge and AG-UI unit coverage** (`agent-builder-ui/app/api/openclaw/route.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/api.ts` tests as needed):
+- Shared `/api/openclaw` streaming emits ordered `intermediate` SSE events as architect text reveals identity, skill-file creation, tools, triggers, and channels.
+- `sendToArchitectStreaming()` forwards those shared-path `intermediate` events without dropping existing `status`, `delta`, approval, or `result` handling.
+- `BuilderAgent` progressively advances builder wizard state from shared-path intermediate updates before terminal `ready_for_review`.
+
+**Google Ads create-flow verification** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- The default shared architect path progressively surfaces agent name, discovered Google Ads skills, connector hints, and supported trigger hints before review opens.
+- The final `ready_for_review` payload still lands correctly after those progressive updates and does not double-emit contradictory wizard state.
+
+#### Evaluation — task is done when
+
+- [x] `/api/openclaw` emits real `intermediate` SSE frames on the shared architect path, not just on `forge-chat`
+- [x] `sendToArchitectStreaming()` and `BuilderAgent` consume those shared-path intermediate updates without regressing the existing stream contract
+- [ ] The default Google Ads `/agents/create` flow visibly advances through staged builder updates before the final review payload arrives
+- [x] Route and AG-UI tests cover shared-bridge intermediate production and progressive builder-state consumption
+- [x] KB/spec notes describe progressive builder updates as part of the shared architect bridge contract rather than forge-only behavior
+
+### TASK-2026-03-27-178: Cover raw architect structured-config aliases in wizard directives
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane regression around `parseWizardDirectives()` so explicit architect structured config still seeds the create flow when the parser sees raw alias fields such as `tool_id`, `required_env`, `trigger_id`, `name`, and `cron_expression` before or outside the broader normalization helper. The new red test exposed a real gap in explicit trigger parsing, and the fix stayed minimal by teaching `normalizeExplicitTriggers()` to honor the same alias fields instead of broadening the create-flow contract.`
+- Next step: `Pick a different AG-UI/create-flow seam next run; raw architect alias coverage in `wizard-directive-parser` is now locked.`
+- Blockers: `None`
+
+### TASK-2026-03-27-177: Persist approved discovery docs through save, reopen, and Improve Agent
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepDiscovery.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/tests/unit/validation.test.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-discovery-doc-persistence-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded discovery-doc persistence slice. The saved-agent contract now includes nullable approved `discoveryDocuments`, backend create/config validation and the agent store persist that field, draft autosave backfills the PRD/TRD pair onto the existing draft once it exists, Improve Agent reopen seeds the same documents back into Co-Pilot, and Review shows a compact approved-requirements summary so operators can verify the reopened Google Ads agent still reflects the approved discovery docs that generated it.`
+- Operator-testable outcome: `After one worker run, a human can use the default `/agents/create` flow to review and edit the PRD/TRD discovery documents for a Google Ads agent, approve them, save or autosave the draft, refresh or reopen the saved draft later through Improve Agent, and still see the same approved discovery docs available as the canonical requirements context for the builder. Review and any follow-on improvement flow should reference the same persisted requirements instead of falling back to only the generated skill graph and prose description.`
+- Next step: `Optional follow-up: add one browser-level `/agents/create` regression that edits discovery docs, waits for autosave, refreshes or reopens Improve Agent, and asserts the same PRD/TRD summary is still visible in Review.`
+- Blockers: `Focused backend/frontend unit verification passed. A browser-level reopen proof was not run in this automation because the repo still has unrelated host-dependent browser/test readiness gaps.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the creation loop should be iterative and self-improving, but the newest first-class discovery artifact in that loop vanishes as soon as the user leaves the page or reopens the draft.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` now forces the primary create path through discovery before skill generation, so the PRD/TRD pair is no longer optional side content; it is the requirements input that shapes the Google Ads build.
+- `agent-builder-ui/lib/openclaw/copilot-state.ts` keeps `discoveryDocuments` only in the in-memory Co-Pilot store, and `clearSkillGraph()` resets the whole discovery branch, so the approved docs have no durable contract today.
+- `agent-builder-ui/hooks/use-agents-store.ts` and the backend `agents` record persist `skillGraph`, `workflow`, `agentRules`, `runtimeInputs`, `toolConnections`, `triggers`, `improvements`, and `channels`, but nothing for the discovery docs that produced those fields.
+- `agent-builder-ui/lib/openclaw/copilot-flow.ts:createCoPilotSeedFromAgent()` can only reopen skills/config/review state, so Improve Agent cannot show or reuse the approved PRD/TRD context that generated the current agent behavior.
+- Leaving this gap open weakens operator trust in the active Google Ads proving case: the builder now asks for requirement approval up front, but the product cannot later show what was actually approved when the same agent is reopened or improved.
+
+#### What to build
+
+1. **Saved discovery-doc contract** (`agent-builder-ui/hooks/use-agents-store.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, shared types as needed):
+   - Add one bounded persisted field for approved discovery documents on the agent record, covering the PRD/TRD pair and their edited section content.
+   - Keep the shape safe and compact: titles plus section arrays are enough; no transcript replay or raw hidden tool output.
+   - Preserve backward compatibility so existing agents without discovery docs still reopen cleanly.
+
+2. **Create/save/autosave wiring** (`agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`):
+   - Include approved discovery docs in the same draft/save path the Co-Pilot flow already uses for skill/config metadata.
+   - Ensure edits made inside `StepDiscovery.tsx` are what autosave and final save persist, not just the original generated documents.
+   - Keep the slice bounded: persist approved docs only once they exist, and do not block deploy when legacy agents have no discovery docs.
+
+3. **Reopen and Improve Agent seeding** (`agent-builder-ui/lib/openclaw/copilot-flow.ts`, related create-page seed helpers/UI):
+   - Seed the Co-Pilot store from saved discovery docs so refresh, resume, and Improve Agent reopen restore the same PRD/TRD pair instead of dropping straight into a doc-less review phase.
+   - Decide the narrowest truthful reopen behavior: either reopen directly to Review with the docs visible as persisted context, or reopen the discovery phase when the saved docs still need explicit reapproval after edits.
+   - Keep phase transitions compatible with the current skill graph so reopening does not accidentally regenerate a different agent without operator intent.
+
+4. **Operator-facing review surface and regression coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, focused store/backend tests, KB notes above):
+   - Add a compact Review summary of the persisted discovery docs or requirements highlights so the operator can see what requirements context the saved Google Ads build came from.
+   - Add focused tests proving approved docs survive autosave/save/reopen and Improve Agent rehydration.
+   - Extend the Google Ads browser proving case so a user can edit discovery docs, approve them, refresh or reopen, and still see the same persisted requirements context.
+
+#### Test suite
+
+**Backend/store coverage** (`ruh-backend/tests/unit/validation.test.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, focused Co-Pilot seed tests):
+- Saving a draft or agent with approved discovery docs persists the PRD/TRD payload and rehydrates it on read.
+- Legacy agents without discovery docs still validate and hydrate cleanly.
+- `createCoPilotSeedFromAgent()` restores persisted discovery docs into the Co-Pilot reopen contract instead of dropping them.
+
+**Create-flow and review coverage** (`agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, component tests, `agent-builder-ui/e2e/create-agent.spec.ts`):
+- Editing a PRD/TRD section before approval persists the edited content, not the initial generated text.
+- Refreshing, resuming, or opening Improve Agent keeps the same approved discovery docs available in the builder flow.
+- Review shows requirements context derived from the same persisted discovery docs the operator approved earlier.
+
+#### Evaluation — task is done when
+
+- [ ] Approved PRD/TRD discovery docs persist on the saved agent contract instead of living only in the transient Co-Pilot store
+- [ ] Draft autosave, full save, refresh, and Improve Agent reopen all restore the same discovery docs
+- [ ] Reopened Google Ads agents still expose the approved requirements context that generated the current skill graph and workflow
+- [ ] Legacy agents without discovery docs remain compatible and do not get blocked
+- [ ] Focused tests and the Google Ads browser proving case lock the discovery-doc persistence contract end to end
+
+### TASK-2026-03-27-176: Cover alternate structured-config field aliases in architect normalization
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/response-normalization.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane unit regression around `normalizeArchitectResponse()` proving `ready_for_review` structured config still lands in the saved-agent-compatible tool and trigger contract when the architect emits alternate field aliases such as `recommended_tool_id`, `config_summary`, `auth_kind`, `connector_type`, `trigger_id`, `name`, and `cron_expression`. The final assertion now reflects the real Google Ads readiness contract by expecting the normalized connector to remain `missing_secret` until credentials exist.`
+- Next step: `Pick a different AG-UI/create-flow normalization seam next run; alternate structured-config alias coverage is now locked.`
+- Blockers: `None`
+
+### TASK-2026-03-27-175: Cover explicit skill-graph tool ids without external API text
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane regression around the Connect Tools catalog path that derives cards from AG-UI skill-graph metadata. The new test proved the catalog dropped an explicit `tool_id: "google-ads"` branch whenever `external_api` text was missing, allowing weaker keyword heuristics to leak into the shortlist. Patched `inferToolsFromSkillGraph()` so explicit registry-backed tool ids are enough to surface the direct connector, then re-ran the focused Bun suite to green.`
+- Next step: `Avoid reusing this same explicit-`tool_id` catalog seam next run unless the skill-graph contract changes again; pick a different AG-UI or Google Ads branch.`
+- Blockers: `None`
+
+### TASK-2026-03-27-174: Fail-close the legacy Guided create-mode bypass
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/create-mode.ts`, `agent-builder-ui/app/(platform)/agents/create/create-mode.test.ts`, `agent-builder-ui/e2e/create-agent-wizard.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-guided-mode-contract-bypass.md`, `docs/journal/2026-03-27.md`
+- Summary: `Retired the legacy Guided create entry point instead of trying to force it to parity mid-focus-lane. `/agents/create` now treats Co-Pilot and Advanced as the only supported new-agent modes, the page-level mode contract fails closed from any legacy `wizard` request back to `copilot`, `ModeToggle` no longer renders a Guided button, and the shallow `handleWizardComplete()` save-and-return path is gone. Added a focused Bun regression for the create-mode contract and replaced the stale wizard Playwright suite with a retirement-oriented browser spec that asserts Guided is no longer reachable from the live page contract.`
+- Operator-testable outcome: `After one worker run, a human using `/agents/create` can no longer create a partial or misleading agent from the legacy Guided mode. Either the Guided entry point is removed/disabled and clearly steers the operator into the supported Co-Pilot path, or it is reworked to land on the same saved config + deploy handoff contract as Co-Pilot. In either case, a Guided flow must not be able to save an agent that drops connector state, runtime inputs, triggers, channels, improvements, or deploy-readiness checks.`
+- Next step: `If product wants to reuse the old template affordances later, reintroduce them inside the supported Co-Pilot contract instead of reviving a separate save path. Keep future browser coverage anchored on the absence of Guided from the mode toggle until a full parity redesign exists.`
+- Blockers: `Focused Bun + ESLint verification passed. The new Playwright retirement spec could not be executed in this sandbox because Chromium launch is blocked by the host Mach-port permission error.`
+
+#### Why this mattered
+
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` exposed `ModeToggle` with a live `wizard` option for new agents, so the bypass was reachable from the main create surface rather than dead code.
+- `handleWizardComplete()` persisted only legacy shallow fields and then `router.push("/agents")`, bypassing the active create-to-deploy contract and newer readiness gating work.
+- `WizardContext.tsx` defines `WizardOutput` without `toolConnections`, `runtimeInputs`, `triggers`, `channels`, `improvements`, credential summaries, or deploy-routing context, so the Guided path could not preserve the same product state even if the rest of the repo now could.
+- `PhaseBehavior.tsx` still derives trigger choices from `MOCK_TRIGGER_CATEGORIES`, which conflicts with the runtime-backed trigger truthfulness expected elsewhere in the lane.
+- Leaving this path live would have kept undermining the operator trust the current focus lane is trying to establish: a new agent could still be created from a first-class UI surface while silently dropping the state that Co-Pilot, Review, Deploy, and backend config-apply depend on.
+
+#### What to build
+
+1. **Fail-closed entry contract** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `ModeToggle`, related mode-entry helpers):
+   - Remove, disable, or explicitly gate the `wizard` entry point unless it can honor the same saved config contract as Co-Pilot.
+   - If the toggle remains visible temporarily, label it as unsupported and prevent completion from creating agents until it shares the real contract.
+   - Preserve a clear operator path into the supported Co-Pilot flow instead of leaving a dead-end or silent downgrade.
+
+2. **Guided-affordance salvage path** (`agent-builder-ui/app/(platform)/agents/create/_config/wizard-templates.ts`, Co-Pilot entry helpers/UI copy as needed):
+   - Keep any useful structured prompts, templates, or tone scaffolding by moving them into the supported create entry path rather than keeping a second creation contract alive.
+   - Reuse existing Co-Pilot purpose/discovery/config state where possible instead of duplicating another store.
+
+3. **Completion and contract alignment** (`agent-builder-ui/app/(platform)/agents/create/_components/wizard/WizardShell.tsx`, `WizardContext.tsx`, save/deploy helpers if Guided remains supported):
+   - If the worker chooses parity over retirement, `WizardOutput` and completion must project into the same `toolConnections[]`, `runtimeInputs[]`, `triggers[]`, channels, improvements, encrypted-credential handoff, and first-deploy routing contract already used elsewhere.
+   - A Guided completion must not route straight back to `/agents` after creating an agent that still needs deploy/config work.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent-wizard.spec.ts`, focused component tests, KB notes above):
+   - Add one browser or component regression that proves the Guided entry point can no longer create a shallow agent that bypasses deploy/config truthfulness.
+   - Update KB/spec text so future agents understand that `/agents/create` now has one supported creation contract, even if it exposes multiple UX affordances.
+
+#### Test suite
+
+**Create-flow coverage** (`agent-builder-ui/e2e/create-agent-wizard.spec.ts`, focused page/component tests):
+- Verify the mode toggle no longer allows a legacy Guided path to create an agent that skips deploy/configure.
+- If Guided is retired, verify the UI steers operators into the supported Co-Pilot path with no stale wizard save route.
+- If Guided remains supported, verify completion reaches the same deploy handoff and preserves tool/trigger/runtime-input state instead of routing back to `/agents`.
+
+**Focused state/contract coverage** (`page.tsx`, wizard helpers, or save/deploy helper tests):
+- Prove `handleWizardComplete()` can no longer save the old partial payload shape.
+- Prove a Guided-origin creation cannot drop structured config fields that the rest of the create lane treats as required product state.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` no longer exposes a supported-looking Guided path that saves only the legacy shallow agent payload
+- [ ] Operators who choose Guided are either redirected into Co-Pilot or kept on a completion path that preserves the same runtime-truthful config contract
+- [ ] Guided-origin agent creation cannot bypass encrypted credential handoff, runtime-input persistence, trigger truthfulness, or deploy-routing readiness
+- [ ] KB/spec docs explicitly reflect the supported create-mode contract so future backlog work does not assume the legacy bypass is acceptable
+
+### TASK-2026-03-27-173: Make deploy-time MCP config honor the selected tool contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/tests/unit/skillRegistryApp.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-selected-tool-mcp-runtime-apply.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/specs/SPEC-agent-config-apply-contract.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-selected-tool-mcp-apply-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the deploy-time MCP selection contract. `configure-agent` now loads the saved agent record, derives the runtime MCP set only from `tool_connections` entries that are both `configured` and `connectorType: "mcp"`, rewrites `~/.openclaw/mcp.json` to that exact set on every apply, writes an empty `mcpServers` map when all direct connectors were cleared, and returns a fail-closed `mcp` step failure when a selected tool lacks credentials, lacks a runtime mapping, cannot decrypt, or the file write fails. Added the missing KB spec/backlinks plus focused route regressions that prove stale saved credentials no longer leak deselected tools back into sandbox runtime state.`
+- Operator-testable outcome: `After one worker run, a human can configure a Google Ads connector, save or reopen the agent, remove a previously configured connector such as GitHub, and deploy with confidence that the sandbox receives exactly the selected runtime-ready MCP servers and no stale extras. Unsupported/manual-plan tools never appear in `.openclaw/mcp.json`, clearing all selected connectors removes or empties the MCP config cleanly, and any selected-connector decrypt or MCP-write failure blocks deploy with an explicit `mcp` step failure instead of reporting a successful config apply.`
+- Next step: `If broader confidence is needed later, add a deploy-page or end-to-end create/deploy proving case that inspects the runtime-selected MCP set after a real Google Ads connector change. Avoid reopening the backend selector logic unless the supported MCP registry or credential model changes again.`
+- Blockers: `Focused backend verification passed. No browser-level deploy proving case was run in this automation.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` requires an MCP-first configuration experience whose runtime behavior matches the saved connector state, but the current deploy/apply contract still treats encrypted credentials as the runtime source of truth even when the operator has changed the saved `toolConnections[]` selection.
+- `ruh-backend/src/app.ts` `configure-agent` route currently receives `agent_id` but not `toolConnections[]`, then calls `agentStore.getAgentCredentials(agent_id)` and writes `.openclaw/mcp.json` from every stored credential it can decrypt. That means runtime apply cannot distinguish selected connectors from stale or deselected ones.
+- The same route skips MCP writing entirely when no credentials are present, so a sandbox can keep a previously written `.openclaw/mcp.json` even after the saved agent contract no longer selects any direct connectors.
+- MCP decrypt and `.openclaw/mcp.json` write failures currently only append `steps[]` entries; the route still records a success audit event and returns `{ ok: true, applied: true }`, which violates the fail-closed config-apply expectation already established elsewhere in the builder and deploy specs.
+- `docs/knowledge-base/008-agent-builder-ui.md`, [[SPEC-google-ads-agent-creation-loop]], and [[SPEC-tool-integration-workspace]] all describe `toolConnections[]` as the safe operator-facing contract that deploy/runtime config reuses. The current backend behavior is now a code-vs-doc mismatch, not just a missing enhancement.
+- TASK-2026-03-26-113 already owns whether deploy should be blocked before runtime apply begins. This package is the next seam after that gate: even a ready deployment must not materialize extra connectors or silently survive MCP-apply failures once runtime config starts.
+
+#### What to build
+
+1. **Selection-aware MCP apply contract** (`docs/knowledge-base/specs/SPEC-selected-tool-mcp-apply.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`):
+   - Define one canonical backend rule for deploy-time MCP materialization: only saved `toolConnections[]` entries with `connectorType: "mcp"` and `status: "configured"` are eligible to become runtime MCP servers.
+   - Treat encrypted credentials as a secret store that augments the selected connector contract, not as the selector itself.
+   - Document exact behavior for zero selected connectors, deselected stale credentials, unsupported/manual-plan tools, and missing or undecryptable credentials.
+
+2. **Exact-write and fail-closed backend apply path** (`ruh-backend/src/app.ts`, helper(s) if needed):
+   - Load the saved agent record for `agent_id`, derive the selected configured MCP connector ids from `toolConnections[]`, and build `.openclaw/mcp.json` only from that explicit set.
+   - When no eligible connectors remain, remove or rewrite `.openclaw/mcp.json` so stale MCP servers do not survive from an earlier deploy.
+   - Fail the whole `configure-agent` route on any selected-connector decrypt, package-resolution, or MCP-file write error, returning a non-2xx response with structured `mcp` step detail instead of success.
+
+3. **Deploy-surface diagnostics and contract reuse** (`agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`):
+   - Preserve and surface the backend `mcp` step result so operators can tell whether the runtime received the selected Google Ads connector set, a cleared config, or a fail-closed MCP error.
+   - Keep frontend expectations aligned with the backend contract: Deploy should not imply that all stored credentials are active runtime tools when the saved connector contract says otherwise.
+   - Reuse the same saved `toolConnections[]` language already shown in Review/Deploy summaries instead of inventing a second runtime-tool model.
+
+4. **Regression coverage and docs** (`ruh-backend/tests/unit/agentCredentialsApp.test.ts`, `ruh-backend/tests/integration/agentCrud.test.ts`, focused deploy-path tests, KB/spec notes above):
+   - Add focused backend coverage proving deselected or unsupported tools are excluded from `.openclaw/mcp.json`, zero selected connectors clear stale MCP config, and selected-tool decrypt/write failures return non-2xx with `mcp` step details.
+   - Add one deploy-path regression proving a saved agent with both selected and stale credentials only materializes the selected configured connector set.
+   - Update KB/spec notes so future tool-runtime work assumes selection-aware MCP apply as the runtime contract.
+
+#### Test suite
+
+**Backend contract coverage** (`ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`):
+- `configure-agent` writes `.openclaw/mcp.json` only for selected `configured` MCP connectors, even when other credentials are still stored on the agent.
+- When the saved agent has no selected configured connectors, MCP apply removes or empties any prior `.openclaw/mcp.json` instead of leaving stale runtime tool state behind.
+- A selected connector whose credentials cannot be decrypted, whose package cannot be resolved, or whose MCP file cannot be written fails the route with `ok: false`, `applied: false`, and at least one structured `mcp` step.
+
+**Deploy-path verification** (`agent-builder-ui` focused deploy tests or mocked browser flow):
+- A saved agent that deselects a previously configured connector no longer deploys that connector at runtime.
+- Deploy surfaces the backend `mcp` step result clearly enough that an operator can tell whether the exact selected Google Ads connector set was applied.
+- The happy path still works: a saved Google Ads connector with valid credentials deploys and reports a successful MCP step.
+
+#### Evaluation — task is done when
+
+- [ ] `configure-agent` derives runtime MCP servers from selected configured `toolConnections[]`, not from every stored credential on the agent
+- [ ] Deselected or unsupported/manual-plan connectors never reappear in `.openclaw/mcp.json` during deploy or hot-push
+- [ ] Clearing the selected connector set removes or empties stale MCP runtime config instead of leaving old servers behind
+- [ ] Selected-tool decrypt or MCP-write failures return a fail-closed apply result with structured `mcp` step details
+- [ ] Deploy-path tests prove the sandbox runtime tool surface matches the saved connector contract exactly
+- [ ] KB/spec notes describe credentials as secret input to the selected connector contract, not as the runtime selector themselves
+
+### TASK-2026-03-27-172: Cover explicit architect tool and trigger hints in builder parsing
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added a bounded focus-lane regression around the architect-to-builder handoff so explicit `tool_connections[]` and structured `triggers[]` can seed the same Google Ads and webhook/schedule hints the builder previously derived only from keywords. This keeps the test automation aligned with the active Google Ads / AG-UI creation lane without broadening into the full saved-config handoff package.`
+- Next step: `When the structured handoff package lands, extend coverage upward into `wizard-directive-parser` or `BuilderAgent` so the builder proves it prefers explicit architect config over fallback heuristics end to end.`
+- Blockers: `None. This tester run stayed at the unit layer to avoid conflicting with broader in-flight create-flow edits.`
+
+### TASK-2026-03-27-171: Stabilize Simple Helper Agent deploy against stream disconnects and cached-image stalls
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/tests/e2e/sandboxCreate.test.ts`, `ruh-backend/tests/unit/sandboxManager.test.ts`, `docs/journal/2026-03-27.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/specs/SPEC-sandbox-bootstrap-config-apply-contract.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-sandbox-stream-disconnect-and-cached-image-pull.md`
+- Summary: `Retried the live Simple Helper Agent deploy on localhost:3001 and confirmed the earlier bootstrap-verification fix worked, but two new runtime blockers remained. First, the sandbox-create SSE route still let `res.write(...)` failures abort `createOpenclawSandbox()` mid-bootstrap when the browser stream dropped, which left a partially built container and no saved sandbox row. Second, sandbox creation still forced `docker pull node:22-bookworm` even when the image was already cached locally, which let fresh deploys hang on repeated pull subprocesses. Patched the SSE routes to keep provisioning running after client disconnects, changed sandbox creation to inspect the base image and only pull when it is missing, added focused regressions, and re-ran the real browser deploy to a successful attach.`
+- Next step: `Optional hardening follow-up: enforce the existing timeout arguments in `dockerSpawn()` / `dockerExec()` so genuinely hung Docker subprocesses fail deterministically instead of relying on cache hits or manual intervention.`
+- Blockers: `None. Live deploy succeeded with sandbox `6434ea68-44bb-4d77-a2a1-abe2aebdd396` attached to the Simple Helper Agent.`
+
+### TASK-2026-03-27-170: Honor architect-emitted tool and trigger config in `/agents/create`
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/response-normalization.ts`, `agent-builder-ui/lib/openclaw/response-normalization.test.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-builder-architect-protocol-normalization.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/specs/SPEC-architect-structured-config-handoff.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-architect-structured-config-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded architect structured-config handoff. `ready_for_review` normalization now preserves explicit `tool_connections` and `triggers` in saved-agent-compatible shapes, wizard parsing and `BuilderAgent` prefer those explicit objects over hint heuristics when present, and AG-UI builder metadata/draft autosave now keep the same connector and trigger objects through draft save, reopen, and Improve Agent state hydration. Added the missing KB spec plus focused regressions proving the Google Ads connector and structured schedule survive normalization, builder metadata, and autosave instead of collapsing back to keyword inference.`
+- Operator-testable outcome: `After one worker run, a human can ask `/agents/create` for a Google Ads agent, receive a `ready_for_review` response that explicitly includes `tool_connections` and `triggers`, and see those same researched selections appear automatically in the primary Co-Pilot review/configure surfaces without relying on keyword fallback. Save, reopen, Improve Agent, and deploy summary must preserve the same connector identity and supported schedule the architect emitted, so the saved Google Ads agent reflects the researched runtime plan rather than a heuristic approximation.`
+- Next step: `Optional follow-up: wire a browser-level `/agents/create` proving case that asserts the explicit architect-emitted Google Ads connector and schedule reach the visible Review/Configure UI, not just the normalized builder metadata and autosave layers.`
+- Blockers: `Focused unit verification passed. A browser-level proving case was not run in this automation because the existing create-flow Playwright environment remains host-dependent.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly asks for a powerful Google Ads agent whose builder, review, configure, save, deploy, and improve loop all feel credible rather than generic, and that requires the create flow to honor researched structured runtime config instead of re-deriving it from loose hints.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` tells the architect to emit `tool_connections`, `triggers`, `cron_jobs`, and `soul_content` in the `ready_for_review` payload, which means the product already expects richer structured output than the live frontend contract accepts.
+- `agent-builder-ui/lib/openclaw/types.ts:ArchitectResponse` omits those fields, so any explicit architect payload for direct connectors or supported schedules is invisible to the rest of the builder code before save/review state is derived.
+- `agent-builder-ui/lib/openclaw/response-normalization.ts` and `wizard-directive-parser.ts` currently normalize only `skill_graph`, metadata, and requirement-derived hints, so the primary Co-Pilot surface keeps inferring Google Ads tool and trigger state from skills/rules even when the architect already returned the answer explicitly.
+- Existing Google Ads tasks already make `toolConnections[]` and `triggers[]` truthfully persist once they reach create-session state. The missing seam is earlier: the architect's researched config never becomes that state in the first place.
+
+#### What to build
+
+1. **Spec first** (`docs/knowledge-base/specs/SPEC-architect-structured-config-handoff.md` plus backlinks in the related notes):
+   - Define which architect-emitted fields are in scope for the first slice: at minimum `tool_connections`, `triggers`, and schedule-bearing trigger metadata that can map into the existing saved-agent contracts.
+   - Document precedence rules: explicit architect config wins over heuristic hint inference, while old payloads without those fields continue to fall back safely.
+   - Link the spec from `[[008-agent-builder-ui]]`, `[[SPEC-agent-builder-architect-protocol-normalization]]`, and `[[SPEC-google-ads-agent-creation-loop]]`.
+
+2. **Architect protocol and normalization** (`agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/lib/openclaw/response-normalization.ts`):
+   - Extend `ArchitectResponse` and the bridge normalization layer to preserve structured `tool_connections` and `triggers` from `ready_for_review` instead of dropping them on the floor.
+   - Keep backward compatibility with the legacy shape and the already-supported normalized `skill_graph` variants.
+   - Preserve enough schedule detail that the supported Google Ads cadence can map into the existing `cron-schedule` trigger contract without falling back to prose parsing.
+
+3. **Builder-state handoff** (`agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`):
+   - Prefer explicit architect-provided connector and trigger payloads when building wizard directives, AG-UI metadata, and draft-autosave inputs.
+   - Reuse the current saved-agent `toolConnections[]` and `triggers[]` schema so downstream review/configure/deploy surfaces do not need a second projection layer.
+   - Keep heuristic hint inference as fallback only for older architect responses that lack structured config.
+
+4. **Create/review/configure/deploy wiring** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `StepConnectTools.tsx`, `StepSetTriggers.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`):
+   - Seed the create-session and Co-Pilot state from the architect-emitted connector/trigger selections so the operator sees the researched Google Ads config immediately on first review.
+   - Ensure review and deploy summaries show the same explicit connector identity and supported schedule that came from the architect payload.
+   - Preserve save, reopen, and Improve Agent behavior by keeping those values in the existing saved-agent contract.
+
+5. **Regression coverage and proving case** (`agent-builder-ui/lib/openclaw/response-normalization.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, focused review/configure tests):
+   - Add focused normalization tests proving structured `tool_connections` and `triggers` survive bridge parsing.
+   - Add builder-agent tests proving explicit architect config takes precedence over keyword fallback hints.
+   - Extend the Google Ads create-flow fixture so a `ready_for_review` payload with direct `google-ads` connector metadata and a supported weekday trigger appears intact in review/configure/save/reopen.
+
+#### Test suite
+
+**Architect protocol tests** (`agent-builder-ui/lib/openclaw/response-normalization.test.ts`, route tests as needed):
+- A `ready_for_review` payload that includes `tool_connections` and `triggers` survives normalization without losing those fields.
+- Older payloads without structured config still normalize correctly and fall back to current hint inference.
+
+**Builder-state tests** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `builder-metadata-autosave` tests, parser tests):
+- `BuilderAgent` emits builder metadata that preserves explicit architect connector and trigger selections when present.
+- Explicit architect config wins over heuristic hint inference for the Google Ads connector and supported schedule.
+- Draft save payloads include the structured connector/trigger selections derived from the architect response rather than only the stale saved-agent fallback.
+
+**Create-flow verification** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused UI tests):
+- A Google Ads `ready_for_review` response with direct `google-ads` connector metadata auto-populates Connect Tools truthfully.
+- An architect-emitted weekday schedule reaches the trigger step and review summary without collapsing back to a generic default.
+- Saving and reopening the draft preserves the same architect-derived connector and trigger state.
+
+#### Evaluation — task is done when
+
+- [ ] The builder protocol models and preserves architect-emitted `tool_connections` and `triggers` from `ready_for_review`
+- [ ] `/agents/create` prefers explicit architect config over heuristic Google Ads tool/trigger inference when both are available
+- [ ] Review, Configure, save/reopen, and deploy summary all show the same architect-derived connector identity and supported schedule
+- [ ] Older architect payloads without structured config still work through the existing fallback path
+- [ ] Focused tests and the Google Ads browser proving case lock the structured-config handoff end to end
+
+### TASK-2026-03-27-169: Preserve AG-UI channel hints across seeded builder metadata
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI unit regression proving `createSeededBuilderMetadataState()` keeps `channelHints` when builder metadata is rehydrated from page-owned builder state, then patched the seed path so architect-suggested channel selections survive remount/reopen long enough for `useAgentChat()` to mirror them back into the Co-Pilot store. Also corrected the stale default-shape assertion so the focused metadata suite reflects the real `BuilderMetadataState` contract.`
+- Next step: `Pick a different AG-UI or Google Ads focus-lane regression next run; seeded channel-hint hydration is now covered.`
+- Blockers: `None`
+
+### TASK-2026-03-27-168: Verify Simple Helper Agent deploy flow on localhost:3001
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/tests/unit/sandboxManager.test.ts`, `docs/journal/2026-03-27.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/specs/SPEC-agent-create-deploy-handoff.md`, `docs/knowledge-base/specs/SPEC-sandbox-bootstrap-config-apply-contract.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-existing-agent-deploy-entrypoint-gap.md`
+- Summary: `Fixed both deploy blockers. `verifyBootstrapConfig()` now runs a shell-safe one-line Node script instead of a JSON-stringified multiline payload that reached Node as literal \\n escapes, and `handleComplete()` / `handleCoPilotComplete()` now route existing agents with zero attached sandboxes into the real deploy handoff instead of falling back to `/agents`. Added targeted regression coverage in `ruh-backend/tests/unit/sandboxManager.test.ts` and `agent-builder-ui/lib/agents/deploy-handoff.test.ts`.`
+- Next step: `Optional follow-up: refresh the older Improve Agent Playwright fixture so it matches the current Co-Pilot surface and can cover both the hot-push path and the undeployed-agent deploy handoff in browser automation.`
+- Blockers: `None for the shipped fix. A pre-existing/stale Improve Agent Playwright fixture still needs maintenance before it can serve as browser-level completion evidence for this path.`
+
+### TASK-2026-03-27-166: Cover explicit Google Ads connector hints in the create-flow tool catalog
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane unit regression for the Connect Tools catalog. The new test proves an explicit architect-emitted `tool_type: "mcp"` plus `tool_id: "google-ads"` hint in the skill graph is surfaced first as the real direct connector even when the surrounding use case text mentions another research keyword, protecting the truthful connector-identity contract from slipping back to generic keyword fallback.`
+- Next step: `Pick a different Google Ads or AG-UI focus-lane regression next run; this explicit connector-hint branch is now covered.`
+- Blockers: `None. This is a narrow unit-test-only slice chosen to avoid overlapping the larger active AG-UI and Google Ads feature packages already in flight.`
+
+### TASK-2026-03-27-165: Move forge workspace readiness onto the AG-UI builder contract
+- Status: `completed`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/hooks/use-architect-sandbox.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/ForgeProgress.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-agui-forge-state-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active focus still puts AG-UI adoption first, and the repo already has worker-ready TODOs for the broad cutover plus builder `StateSnapshot` / `StateDelta` adoption. The remaining unowned seam is the forge-backed builder workspace lifecycle: `builder-state.ts` still owns `forgeSandboxId`, `forgeSandboxStatus`, `forgeVncPort`, and `forgeError`, `ForgeProgress.tsx` still imports that legacy type and is not wired into the live create shell, while the AG-UI state models in `lib/openclaw/ag-ui/types.ts` and `builder-metadata-autosave.ts` carry none of that readiness data. At the same time `useAgentChat()` already routes builder runs through `BuilderAgent({ forgeSandboxId: activeSandbox?.sandbox_id })`, and the create/deploy flow still persists `forgeSandboxId` for fast-path promotion, so retiring `builder-state.ts` without a dedicated forge-state slice would either strand the browser-capable builder workspace outside the AG-UI contract or silently drop the only truthful readiness/error surface for that path.`
+- Operator-testable outcome: `After one worker run, a human using `/agents/create` can see truthful forge-workspace lifecycle state on the primary builder surface: when the architect sandbox is still unavailable the UI shows a bounded provisioning or unavailable state, when the browser-capable workspace is ready the create flow exposes that readiness consistently through the same AG-UI-backed builder contract, and when the forge path fails the operator sees an explicit recoverable error instead of a silent fallback. Saving, reopening, and handing off to `/agents/[id]/deploy` must preserve the same `forgeSandboxId` / readiness context so deploy fast-path promotion still works and the AG-UI cutover can retire `builder-state.ts` without regressing the builder workspace path.`
+- Next step: `Land the missing shared-state slice instead of leaving forge lifecycle on the legacy hook: extend the AG-UI builder metadata/state contract to own forge sandbox identity plus readiness/error fields, seed that state from `useArchitectSandbox()` and any saved agent `forgeSandboxId`, wire the create page plus `ForgeProgress` to read it from the AG-UI-backed builder path, and keep deploy fast-path promotion consuming the same saved forge identity. Add focused AG-UI/create-page tests proving forge readiness survives builder session changes and does not disappear during the snapshot/delta cutover.`
+- Blockers: `None. Existing TODOs cover the broad AG-UI cutover (`TASK-2026-03-26-98`) and builder snapshot adoption (`TASK-2026-03-26-137`), but neither package explicitly owns the forge lifecycle fields that still prevent `builder-state.ts` from being retired safely.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` lists AG-UI protocol adoption as the first delivery item, so untracked legacy-only forge state is now a concrete blocker to finishing that priority lane instead of optional polish.
+- `agent-builder-ui/lib/openclaw/builder-state.ts` still owns the only typed contract for `forgeSandboxId`, `forgeSandboxStatus`, `forgeVncPort`, and `forgeError`, which means the planned AG-UI snapshot cutover cannot fully delete that file yet without losing the workspace lifecycle state it alone carries.
+- `agent-builder-ui/lib/openclaw/ag-ui/types.ts` defines `AgentUIState` and `BuilderMetadataState`, but neither shape includes forge readiness or error metadata even though `useAgentChat()` already routes builder runs through `BuilderAgent({ forgeSandboxId: activeSandbox?.sandbox_id })`.
+- `agent-builder-ui/app/(platform)/agents/create/_components/ForgeProgress.tsx` still imports `ForgeSandboxStatus` from the legacy builder-state file and is currently unused, which is a strong signal that the browser-capable builder workspace path is not yet represented in the live AG-UI-backed UI contract.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` and `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx` still persist and consume `forgeSandboxId` for save/deploy promotion, so this state already has real product value and cannot be dropped as an implementation detail during the AG-UI migration.
+- Existing TODOs already cover builder metadata snapshots, transcript lifecycle, and broad legacy transport removal. No current package owns the narrower requirement that forge workspace readiness itself must move onto the shared AG-UI builder contract before the cutover can actually finish.
+
+#### What to build
+
+1. **Shared forge-state contract** (`agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`):
+   - Extend the AG-UI builder metadata/state shape with the forge lifecycle fields the create flow still needs: sandbox id, readiness status, VNC/browser port if available, and a bounded error string.
+   - Seed that state deterministically from the live architect sandbox fetch and any saved agent `forgeSandboxId` so draft resume and Improve Agent reopen do not invent a second source of truth.
+   - Treat this as migration work, not new decorative metadata: after this slice lands, the forge lifecycle should no longer require a separate legacy-only builder-state contract.
+
+2. **Create-flow wiring and operator surface** (`agent-builder-ui/hooks/use-architect-sandbox.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/ForgeProgress.tsx`):
+   - Wire the fetched architect/forge sandbox status into the AG-UI-backed builder state instead of keeping it implicit in `activeSandbox` only.
+   - Render `ForgeProgress` or an equivalent workspace-readiness indicator from that shared state on the live `/agents/create` surface so operators can tell whether browser-capable builder tools are ready, still provisioning, or failed.
+   - Keep failure handling explicit and fail closed: a missing or failed forge workspace should not silently look the same as a ready browser-backed builder run.
+
+3. **Save, reopen, and deploy consistency** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, related saved-agent helpers as needed):
+   - Preserve the same forge sandbox identity through autosave/final save so the deploy page can continue its fast-path promotion without depending on stale local state.
+   - Make Improve Agent and draft resume rehydrate the same forge identity/readiness contract instead of dropping back to an ambiguous blank workspace state.
+   - Ensure the AG-UI migration path can remove `builder-state.ts` only after the forge-backed builder and deploy handoff still work from the new shared contract.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, create-page/component tests, KB notes above):
+   - Add focused tests proving forge lifecycle fields seed and patch correctly through the AG-UI builder state, including resume/reopen cases where a saved agent already has `forgeSandboxId`.
+   - Add create-flow UI coverage for the operator-visible readiness surface so provisioning, ready, and failed states remain truthful after the cutover.
+   - Update the AG-UI KB/spec notes to record that the forge-backed builder workspace is part of the shared builder state contract rather than a side channel on the old hook.
+
+#### Test suite
+
+**Focused AG-UI state coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, adjacent state helpers):
+- Seeding builder metadata from a saved agent plus live architect sandbox state preserves `forgeSandboxId` and derives the expected readiness state.
+- Snapshot/delta updates can change forge status or error fields without requiring `builder-state.ts` callbacks.
+- Draft save and reopen paths do not lose the forge identity needed for later deploy promotion.
+
+**Create/deploy UI coverage** (`agent-builder-ui` component tests and existing browser harness if available):
+- `/agents/create` shows a truthful forge workspace state for provisioning, ready, and failed cases.
+- Reopening a saved draft or Improve Agent session keeps the same forge workspace identity visible.
+- `/agents/[id]/deploy` still sees the saved `forgeSandboxId` and can take the fast-path promotion when the forge sandbox is ready.
+
+#### Evaluation — task is done when
+
+- [ ] Forge sandbox identity plus readiness/error fields live in the AG-UI builder state contract instead of only in `builder-state.ts`
+- [ ] The live create flow renders a truthful forge workspace readiness surface from that shared state
+- [ ] Save, reopen, Improve Agent, and deploy promotion all preserve the same forge identity without relying on the legacy builder-state hook
+- [ ] `builder-state.ts` is no longer the only place that knows about forge workspace lifecycle state
+- [ ] Focused state/UI tests lock the forge-backed builder workspace contract before the broader AG-UI cutover removes the legacy hook
+
+### TASK-2026-03-27-167: Persist builder channel selections through save, deploy, and Improve Agent
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `ruh-backend/tests/unit/validation.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agent-builder-channel-persistence.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-agent-builder-channel-persistence-contract.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the saved `channels[]` contract for the builder flow. Backend schema/validation/store layers now persist `channels` on agent create, metadata patch, and config patch; the frontend store now hydrates and writes `channels[]`; Co-Pilot completion and Improve Agent reopen preserve the same selected Slack/Telegram/Discord plan; and the deploy handoff now shows planned channel state with an explicit follow-up to finish runtime channel setup after deploy instead of silently dropping back to web-chat-only behavior.`
+- Operator-testable outcome: `After one worker run, a human can choose one or more channels in the primary `/agents/create` flow, save or deploy the agent, reopen it through Improve Agent, and still see the same channel plan preserved as structured `channels[]` metadata instead of disappearing. Review, the embedded Co-Pilot summary, and the deploy handoff must all show the same planned/configured channel state, and the deployed-agent surface must give the operator a clear next step for selected channels rather than dropping back to implicit web-chat-only behavior. Existing agents without channel metadata must remain compatible and default cleanly to no extra channels selected.`
+- Next step: `Optional follow-up: add one browser-level create-flow regression once Playwright can run locally again, and then decide whether runtime channel setup should upgrade saved channel status from `planned` to `configured` automatically after post-deploy pairing succeeds.`
+- Blockers: `Focused unit verification passed. The DB-backed integration suite could not run on this host because PostgreSQL was unavailable (`ECONNREFUSED` on localhost:5432).`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the creation journey should stop treating configuration as decorative, and the current Channels step is purely decorative because it never survives persistence.
+- `agent-builder-ui/app/(platform)/agents/create/_config/generate-skills.ts` asks the architect to clarify communication channels during discovery, and `WizardStepRenderer.tsx` exposes a dedicated `Channels` phase in the primary Co-Pilot flow, so the product already asks operators to make a meaningful choice here.
+- `agent-builder-ui/app/(platform)/agents/create/_components/AgentConfigPanel.tsx`, `ReviewAgent.tsx`, and `buildCoPilotReviewData()` already know how to display selected channels, which means the UI contract is ahead of the saved/runtime contract and can currently mislead the operator.
+- `agent-builder-ui/lib/openclaw/copilot-flow.ts:createCoPilotSeedFromAgent()` already expects `agent.channels`, but `hooks/use-agents-store.ts:fromBackend()` never hydrates that field and the backend `agents` store/API contract does not persist it, so Improve Agent reopen cannot actually preserve the selected channels even though the reopen hook is designed for it.
+- `docs/knowledge-base/004-api-reference.md` and `docs/knowledge-base/005-data-models.md` currently document structured persistence for tools, runtime inputs, triggers, and improvements, but nothing equivalent for builder-selected channels despite the shipped UI surface.
+- The repo already has real runtime channel-management endpoints on `ruh-backend` and a `ChannelsPanel` in `ruh-frontend`; without persisting which channels the builder intended, the agent-builder flow has no truthful bridge into those existing runtime surfaces.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-agent-builder-channel-persistence.md`):
+   - Define the saved `channels[]` contract for agents, including the initial statuses (`planned`, `configured`, `unsupported`) and which surfaces are expected to read it.
+   - Decide whether channel selections belong on `POST /api/agents`, `PATCH /api/agents/:id`, `PATCH /api/agents/:id/config`, or a combination, and document backward-compatible behavior for existing agents with no channel metadata.
+   - Link the spec from `[[004-api-reference]]`, `[[005-data-models]]`, `[[008-agent-builder-ui]]`, and `[[011-key-flows]]`.
+
+2. **Persisted agent contract** (`ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/agents/types.ts`):
+   - Add `channels` to the backend `agents` record shape and migration ledger as JSONB with a safe empty-array default.
+   - Accept, validate, persist, and read `channels[]` through the agent CRUD/config routes and frontend store mappers without breaking older rows.
+   - Keep the contract bounded to safe metadata only; raw Slack/Telegram/Discord secrets still belong to the existing sandbox channel-config endpoints, not the saved agent record.
+
+3. **Create/improve/deploy wiring** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/AgentConfigPanel.tsx`):
+   - Include `channels[]` in both advanced and Co-Pilot completion payloads, draft/update flows, and Improve Agent reopen seeding so the same selections survive save and later editing.
+   - Ensure review and config summary surfaces read the saved contract rather than ephemeral in-memory selections only.
+   - Make the deploy handoff or deployed-agent summary show selected channels as explicit `planned` / `configured` states with a clear follow-up action instead of dropping back to implicit web-chat-only behavior.
+
+4. **Channel-runtime handoff, not secret-entry duplication** (`agent-builder-ui` deploy or post-deploy surface, `ruh-frontend/components/ChannelsPanel.tsx` if a bridge/link is needed):
+   - Reuse the existing runtime channel-management surfaces instead of inventing a second secret-entry UI inside the builder.
+   - Give operators a bounded handoff from selected builder channels into the runtime configuration step for the deployed sandbox, while keeping unconfigured channels visibly `planned`.
+   - Preserve truthfulness: selecting Slack or Telegram in the builder should never imply that tokens are already configured.
+
+5. **Regression coverage and docs** (`ruh-backend/tests/integration/`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/docs above):
+   - Add backend CRUD/config tests proving `channels[]` round-trips and defaults safely for pre-existing agents.
+   - Add frontend seed/store tests proving save, reopen, and Improve Agent preserve selected channels.
+   - Extend the focused create-flow proving case so a selected Slack or Telegram channel remains visible after save/reopen/deploy handoff.
+
+#### Test suite
+
+**Backend persistence coverage** (`ruh-backend/tests/integration/`, `ruh-backend/tests/unit/` as needed):
+- `POST /api/agents` persists structured `channels[]` metadata and `GET /api/agents/:id` returns it unchanged
+- `PATCH /api/agents/:id` or `PATCH /api/agents/:id/config` updates `channels[]` without clobbering existing tool/runtime/trigger metadata
+- Older agents with no `channels` column data still read as `[]`
+
+**Frontend store and reopen coverage** (`agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, create-flow helper tests):
+- `fromBackend()` hydrates `channels` and `saveAgentDraft()` / completion paths send them back
+- `createCoPilotSeedFromAgent()` and Improve Agent reopen preserve selected channels instead of defaulting back to web chat only
+- Review/config summary surfaces show the same persisted channels after save and refetch
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the primary `/agents/create` flow, selecting Slack or Telegram survives save and Improve Agent reopen
+- The deploy handoff still shows the same selected channels with truthful `planned` status if credentials are not configured yet
+- The UI exposes a clear operator handoff into the runtime channel setup path instead of silently dropping the selections
+
+#### Evaluation — task is done when
+
+- [ ] Builder-selected `channels[]` persist on the saved agent record and round-trip through backend CRUD/config APIs
+- [ ] New-agent save, deploy handoff, and Improve Agent reopen preserve the same channel selections
+- [ ] Review/config/deploy surfaces show saved channel state rather than ephemeral in-memory selections only
+- [ ] Selected channels remain clearly `planned` until the runtime channel setup is actually configured
+- [ ] Existing agents without channel metadata remain backward compatible
+- [ ] Focused backend/frontend/browser tests lock the channel-persistence contract in place
+
+### TASK-2026-03-27-163: Make Configure skill selection shape the saved runtime contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-selected-skills-runtime-contract-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the selected-skill projection slice for the Google Ads create flow. `create-session-config.ts` now owns one `projectSelectedSkillsRuntimeContract()` helper that canonicalizes the chosen skill ids, filters the saved `skillGraph`, prunes `workflow.steps` plus node/step dependencies to the kept subset, and drops runtime-input requirements that only existed for deselected skills. Both the advanced Configure completion path and the default Co-Pilot completion path now persist that projected contract before save/deploy/hot-push, so the saved agent record and downstream SOUL/config-apply payload no longer keep deselected skills alive just because they existed in the original architect graph.`
+- Operator-testable outcome: `After one worker run, a human can build a Google Ads agent, deselect one generated skill such as `budget-pacing-report`, save or deploy the agent, and then reopen Review, Deploy, or Improve Agent and see only the kept skill(s) reflected in the saved `skillGraph`, workflow summary, runtime-input requirements, SOUL/test-chat context, and config-apply payload. Deselected skills must no longer survive only because they were present in the original architect graph.`
+- Next step: `If browser execution becomes available again on this host, extend the Google Ads Playwright proving case so it deselects one skill before save/deploy and asserts the persisted `skill_graph` plus runtime payload only contain the kept subset. Otherwise pick a different active focus-lane package next run.`
+- Blockers: `Focused unit/runtime verification passed. Browser-level Playwright coverage was not run in this automation because prior runs on this host already observed Chromium launch failure `MachPortRendezvousServer ... Permission denied (1100)`.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly calls out Choose Skills as one of the config surfaces that must stop being decorative and must shape the persisted record plus runtime deploy/configure path.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx` and the Co-Pilot store already let operators curate a specific selected-skill subset, so the product currently creates an expectation that deselection materially changes the agent.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` currently resolves selected ids only into `skills[]` display labels but still persists `skillGraph: effectiveGraph` and `workflow: workflow ?? ...` unchanged in both `handleComplete()` and `handleCoPilotComplete()`.
+- `agent-builder-ui/lib/openclaw/agent-config.ts` uses the full saved `skillGraph` as the source of truth for SOUL skill sections and the backend `skills` payload written during config apply, so deselected skills still ship to the sandbox even when the saved agent's `skills[]` list is smaller.
+- Existing TODOs cover autosaving selected skills, review-confirm persistence, and Google Ads runtime-input/tool/trigger truthfulness, but no active package owns the still-missing projection from selected-skill UI state into the canonical runtime contract.
+
+#### What to build
+
+1. **Selected-skill projection helper** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, adjacent helper if needed):
+   - Define one helper that takes the generated `skillGraph`, selected skill ids, and existing workflow and returns the projected runtime contract for the chosen subset.
+   - Filter `skillGraph` to selected nodes only, preserve deterministic ordering, and prune or rebuild workflow steps so no saved step references a removed skill.
+   - Recompute any graph-derived runtime-input requirements from the filtered graph so deselecting a skill can remove no-longer-needed requirements without deleting separately persisted operator-entered values that are still relevant.
+
+2. **Persist the projected contract in both create shells** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts` as needed):
+   - Make both `handleComplete()` and `handleCoPilotComplete()` persist the projected `skillGraph`/workflow/runtime-input contract instead of only rewriting the shallow `skills[]` list.
+   - Keep save/reopen behavior truthful: Review, Deploy, Improve Agent reopen, and autosaved drafts should all read the same filtered saved contract rather than mixing selected ids with the unfiltered original graph.
+   - Preserve existing accepted-improvement, tool, and trigger projections so this slice tightens the skill contract without reopening unrelated config surfaces.
+
+3. **Runtime and review truthfulness** (`agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`):
+   - Ensure SOUL generation, review summaries, deploy summaries, and hot-push/config apply all consume the projected saved skill graph and workflow, not the pre-deselection architect graph.
+   - Keep the operator-visible summary aligned with runtime reality: if a skill is deselected, it should disappear from review/deploy copy and from the config payload sent to the backend.
+   - Fail closed if deselection would leave the agent with no runnable skills or an invalid workflow rather than silently deploying a stale full graph.
+
+4. **Regression coverage and docs** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/agent-config.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB notes above):
+   - Add focused tests proving selected-skill projection filters `skillGraph`, prunes workflow steps, and recalculates graph-derived runtime-input requirements deterministically.
+   - Add one Google Ads browser regression where the operator deselects one generated skill, reaches Review or Deploy, and confirms the removed skill no longer appears in the persisted/deployed contract after save or reopen.
+   - Update KB notes to state clearly that Choose Skills now changes the saved runtime contract rather than only the display-level `skills[]` list.
+
+#### Test suite
+
+**Focused projection coverage** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/agent-config.test.ts`):
+- Selecting a subset of generated skills filters the saved `skillGraph` and produces a workflow that references only kept skills.
+- Graph-derived runtime inputs are recomputed from the filtered graph without dropping still-valid saved values.
+- SOUL/config-apply payload generation uses the projected saved graph rather than the original unfiltered graph.
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent, deselect one generated skill, save or deploy, and confirm Review/Deploy no longer show the removed skill.
+- Reopen Improve Agent or the saved draft and confirm the filtered skill graph persists instead of silently restoring the removed skill.
+- Final deploy/hot-push sends only the selected-skill contract downstream.
+
+#### Evaluation — task is done when
+
+- [ ] Deselecting a skill in Configure or Co-Pilot changes the saved `skillGraph` and workflow, not just the display `skills[]` list
+- [ ] Review, Deploy, SOUL/test-chat, and config apply all read the same projected selected-skill contract
+- [ ] Graph-derived runtime inputs stay aligned with the selected-skill subset
+- [ ] Reopen, resume, and Improve Agent preserve the filtered contract instead of resurrecting deselected skills
+- [ ] Focused tests and the Google Ads browser proving case lock the selected-skill runtime contract end to end
+
+### TASK-2026-03-27-162: Cover accepted connector projection merge branch
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Add one bounded unit test in the active Google Ads creation lane to cover the accepted-improvement projection path when a weaker saved/manual Google Ads connection should be upgraded to the canonical connector state without duplicating the entry.`
+- Next step: `Pick a different bounded create-flow regression next run; this merge-path coverage is now in place.`
+- Blockers: `None`
+
+### TASK-2026-03-27-164: Cover Co-Pilot reopen seed for accepted Google Ads connector improvements
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Add one bounded unit regression in the active Google Ads create/improve lane to prove `createCoPilotSeedFromAgent()` projects accepted `connect-google-ads` improvements into the reopened Co-Pilot tool state even when the saved agent record still has no persisted `toolConnections[]`.`
+- Next step: `Pick a different bounded Co-Pilot create/improve regression next run; this reopen-seed coverage is now in place.`
+- Blockers: `None`
+
+### TASK-2026-03-27-161: Bring pre-deploy Test Agent to the default Co-Pilot review flow
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/copilot-workspace.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-pre-deploy-agent-testing.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-copilot-test-agent-parity-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded default Co-Pilot review parity slice for the active Google Ads focus lane. `WizardStepRenderer.tsx` now exposes a resettable embedded `Test Agent` panel on the review step, the panel uses the existing `mode: "test"` architect bridge path with `buildSoulContent(...)`, and both review surfaces now share one review-snapshot helper in `copilot-flow.ts` so selected skills, projected tool state, runtime inputs, triggers, and accepted improvements stay aligned with deploy-time SOUL generation.`
+- Operator-testable outcome: `After one worker run, a human building or improving a Google Ads agent in the default Co-Pilot flow can reach the embedded review step, open `Test Agent`, send trial prompts such as “What tools and triggers are configured?” or “How would you optimize my account?”, and get responses grounded in the same current review snapshot they see on screen. The test session must stay isolated from the architect build chat, use the same safe saved-config prompt contract as the advanced Review screen, and let the operator close or reset it without leaving the primary Co-Pilot shell.`
+- Next step: `Pick a different active Google Ads or AG-UI package next run; this review-test parity slice is closed unless a future browser-enabled host exposes a product bug in the embedded panel.`
+- Blockers: `Focused unit verification passed. The added Playwright regression could not run on this host because Chromium launch still fails before app code executes with `MachPortRendezvousServer ... Permission denied (1100)`.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the default `/agents/create` Co-Pilot shell is the primary Google Ads proving path, so a pre-deploy validation loop that exists only behind the advanced Review fallback leaves the main operator journey incomplete.
+- `docs/knowledge-base/specs/SPEC-pre-deploy-agent-testing.md` and `docs/knowledge-base/008-agent-builder-ui.md` describe review-phase agent testing as part of the builder contract, but in code only `ReviewAgent.tsx` currently exposes the actual `Test Agent` UI and transport call.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` renders the embedded review phase as summaries for skills, tools, runtime inputs, triggers, and improvements, yet it offers no button or drawer for trial prompts before the footer hands off to `Deploy Agent`.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` already computes the same readiness blockers the operator needs before deploy, which means the default shell has enough saved-config context to support testing; it is missing the review-time interaction loop itself.
+- Existing active tasks cover Connect Tools context, credential handoff, runtime-input parity, schedule fidelity, accepted trigger/workflow improvements, and AG-UI migration, but no current TODO package owns Co-Pilot test-agent parity on the primary review surface.
+
+#### What to build
+
+1. **Co-Pilot review test panel** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `CoPilotLayout.tsx`):
+   - Add a visible `Test Agent` action to the embedded review phase without forcing the operator into the advanced Review screen.
+   - Keep the panel resettable and isolated like the existing advanced drawer: opening it should not mutate the builder transcript, and closing it should clear test-only history and loading/error state.
+   - Preserve the current fast review cadence so `Deploy Agent` remains available once the operator is satisfied.
+
+2. **Shared review snapshot and prompt contract** (`agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, shared helpers as needed):
+   - Build the Co-Pilot test snapshot from the live default-shell state: selected skills, rules, runtime inputs, tool connections, structured triggers, and accepted improvements after projection.
+   - Reuse the same safe `buildSoulContent()` contract the advanced Review drawer and deploy path already use so browser-visible testing and deploy-time prompt generation stay aligned.
+   - Keep the prompt safe: no raw credentials, callback URLs, or other secret-bearing detail should enter the test surface.
+
+3. **Transport reuse instead of a parallel stack** (`agent-builder-ui/lib/openclaw/api.ts`, Co-Pilot review component wiring):
+   - Use the existing `sendToArchitectStreaming(..., { mode: "test", soulOverride })` path so the default shell keeps the same isolated `agent:test:*` session semantics as the advanced Review screen.
+   - Ensure the test transcript stays local to the Co-Pilot review panel and does not pollute the main builder chat or AG-UI draft metadata stream.
+   - Keep failure handling explicit and resettable so a bad test prompt does not block the broader create flow.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused Co-Pilot/review helper tests, KB/spec notes above):
+   - Add focused tests proving the Co-Pilot review snapshot uses the same saved-config contract as the advanced Review drawer.
+   - Extend the Google Ads browser fixture so the default Co-Pilot path opens `Test Agent`, sends one prompt, and validates the isolated review-time response path before deploy.
+   - Update KB/spec notes to clarify that pre-deploy testing now exists on both the advanced Review screen and the default Co-Pilot review surface once the package lands.
+
+#### Test suite
+
+**Focused frontend/review coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/`, `agent-builder-ui/lib/openclaw/`):
+- The embedded Co-Pilot review snapshot includes projected tool connections, runtime-input readiness, structured triggers, and accepted improvements before generating `soul_override`.
+- Opening and closing the Co-Pilot `Test Agent` panel keeps its transcript isolated from the main builder chat and clears test-only state on reset.
+- The default-shell test path reuses the same safe `buildSoulContent()` contract as the advanced Review drawer instead of building a divergent prompt summary.
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the Google Ads default Co-Pilot flow, the embedded review step exposes a `Test Agent` action before deploy.
+- Sending a prompt through that panel returns a review-local response without adding a new architect message to the main builder transcript.
+- The response reflects current saved-config context such as connector readiness, runtime-input status, or supported trigger state, and closing the panel resets the test transcript.
+
+#### Evaluation — task is done when
+
+- [ ] The default Co-Pilot review step exposes a builder-local `Test Agent` action instead of requiring the advanced Review fallback
+- [ ] The embedded test panel uses the same safe saved-config prompt contract as the advanced Review drawer and deploy-time SOUL generation
+- [ ] Co-Pilot review testing stays isolated from the main builder chat and can be reset without leaving the default shell
+- [ ] The Google Ads proving case can be sanity-checked from the primary `/agents/create` path before first deploy
+- [ ] Focused tests and one browser regression lock the Co-Pilot pre-deploy test-loop parity in place
+- [ ] KB/spec notes document pre-deploy testing as available on both review surfaces once the slice ships
+
+### TASK-2026-03-27-159: Pass Google Ads use-case context into Co-Pilot Connect Tools research
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-copilot-connect-tools-use-case-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded Co-Pilot Connect Tools context-fidelity slice for the Google Ads focus lane. The default embedded Co-Pilot renderer now passes the live saved description into `StepConnectTools`, the connect-tool catalog now treats Google Ads use-case text as focused evidence for prioritizing the direct `google-ads` connector instead of leaving it buried in the generic supported list, and focused unit coverage now proves both the embedded use-case helper and the Google Ads shortlist ordering contract. KB/spec text and the existing learning note were updated to record that the default Co-Pilot Tools path must stay in parity with the advanced Configure path for use-case-aware research.`
+- Operator-testable outcome: `After one worker run, a human creating or improving a Google Ads agent in the default Co-Pilot flow can open Tools and see Research & Connect already grounded in the current agent purpose or saved description. The shortlist and research output should reflect the Google Ads use case without retyping it in the sidebar, and changing the Co-Pilot description or reopening Improve Agent should update the same embedded tool-research context consistently.`
+- Next step: `Pick a different active Google Ads or AG-UI package next run; this context-fidelity slice is closed unless browser-level verification later exposes a separate issue.`
+- Blockers: `Focused unit verification passed. Browser-level Playwright coverage for the embedded sidebar remains unrun in this automation because prior runs on this host already observed Chromium launch failure `MachPortRendezvousServer ... Permission denied (1100)`.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the default `/agents/create` path should be the primary Google Ads proving case, so the embedded Co-Pilot tool-research step should not be weaker than the advanced Configure fallback.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx` already passes `agentDescription` into `StepConnectTools` as `agentUseCase`, which means the advanced path has richer research context than the default Co-Pilot shell today.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` mounts `StepConnectTools` without `agentUseCase`, even though `useCoPilotStore()` already carries the live `description` and Improve Agent seeds that value from the saved agent.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts` explicitly uses `agentUseCase` alongside the skill graph to infer the focused research seed and shortlist ordering, so dropping the description changes product behavior rather than being a dead prop omission.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx` forwards `agentUseCase` into `ToolResearchWorkspace.initialUseCase`, so the embedded sidebar currently auto-researches with less context than the repo's own tool-integration contract expects.
+- Existing active tasks cover credential storage, runtime-input parity, trigger fidelity, accepted-improvement projection, and deploy gating, but no current TODO package owns making the main Co-Pilot tool-research loop consume the same use-case context the advanced Configure path already has.
+
+#### What to build
+
+1. **Thread Co-Pilot purpose into Connect Tools** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` as needed):
+   - Pass the current Co-Pilot description or saved-agent description into `StepConnectTools` as `agentUseCase` on the embedded path.
+   - Keep the source of truth simple: use the same purpose text the operator already edits in the Co-Pilot store rather than inventing a new research-only field.
+   - Ensure Improve Agent reopen and draft recovery seed the same context so tool research stays grounded after refresh or reopen.
+
+2. **Use-case-aware catalog and research behavior** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `ConnectToolsSidebar.tsx` if needed):
+   - Make the embedded Co-Pilot Tools step feed that use case into the focused research seed and the sidebar's auto-research call.
+   - Preserve the truthful connector-status contract; this package is about recommendation quality and context, not about changing saved tool metadata semantics.
+   - Keep unsupported/manual-plan seeds bounded so the use-case context sharpens the recommendation instead of reintroducing filler cards.
+
+3. **Browser and reopen parity** (`agent-builder-ui/e2e/create-agent.spec.ts`, saved-agent seed helpers if needed):
+   - Prove that changing the Co-Pilot description affects the embedded tool-research context without needing to re-enter the use case inside the sidebar.
+   - Ensure Improve Agent reopens with the saved description already driving Connect Tools research.
+   - Keep the default Google Ads proving case aligned with the advanced Configure path so both surfaces recommend the same real connector when given the same use case.
+
+4. **Regression coverage and docs** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, browser coverage, KB/spec notes):
+   - Add focused tests proving `agentUseCase` materially changes the focused research seed or shortlist on the embedded path.
+   - Add one Google Ads browser regression confirming the sidebar research text is grounded in the existing Co-Pilot description without manual re-entry.
+   - Update KB/spec notes so future agents know the default Co-Pilot tool-research path must carry the same use-case context as the advanced Configure surface.
+
+#### Test suite
+
+**Focused frontend/unit coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, related Co-Pilot tests as needed):
+- The embedded Co-Pilot Tools step passes the current agent description into `StepConnectTools`.
+- `buildConnectToolCatalog()` uses that description on the embedded path to choose or order the focused research seed.
+- Improve Agent reopen seeds the same use-case context so the embedded tool-research loop does not regress to blank-context recommendations.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the Google Ads proving case, opening Research & Connect from the default Co-Pilot Tools step uses the existing agent description as context automatically.
+- Editing the Co-Pilot purpose text and reopening the Tools step updates the embedded research context.
+- Reopening Improve Agent preserves that context without forcing the operator to type the use case again in the sidebar.
+
+#### Evaluation — task is done when
+
+- [ ] The default Co-Pilot Connect Tools step passes the live agent description into `StepConnectTools`
+- [ ] The embedded catalog and research sidebar both use that description to ground Google Ads recommendations
+- [ ] Improve Agent reopen and draft recovery preserve the same tool-research context
+- [ ] The advanced Configure and default Co-Pilot paths no longer diverge on tool-research context for the same agent use case
+- [ ] Focused tests and one Google Ads browser regression prove the embedded research loop is use-case-aware
+
+### TASK-2026-03-27-158: Materialize accepted workflow improvements into saved Google Ads config
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/specs/SPEC-agent-improvement-persistence.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-workflow-improvement-projection-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active focus still says the builder should surface workflow upgrades that can be accepted into saved agent state, but the live improvement system still has no worker-owned path for the `workflow` category. The repo already persists `improvements[]`, `workflow`, and `agentRules`; `ReviewAgent`, Co-Pilot reopen, deploy summaries, and hot-push all read the saved improvement metadata; and `AgentImprovement.kind` plus [[SPEC-agent-improvement-persistence]] explicitly allow `workflow` improvements. But `deriveImprovements()` only emits `tool_connection` recommendations today, TASK-2026-03-27-149 now owns the trigger projection follow-on, and `applyAcceptedImprovementsToConfig()` still projects accepted improvements only into `toolConnections[]`. That means accepted workflow/process guidance for the Google Ads proving case can be saved as a badge, yet still never change the actual saved `workflow` or `agentRules` that Review, SOUL/test chat, deploy, and Improve Agent hot-push use.`
+- Operator-testable outcome: `After one worker run, a human building or improving a Google Ads agent can accept one bounded builder workflow improvement, immediately see the resulting workflow or rule change reflected in Review and the embedded Co-Pilot review state, save or autosave the draft, reopen Improve Agent later, and deploy or hot-push the same saved workflow contract into the sandbox. The accepted workflow improvement must no longer remain metadata-only commentary: the operator should be able to point to a concrete saved runtime behavior change, such as an added workflow step or guardrail rule, that persisted because they accepted the recommendation.`
+- Next step: `Land one bounded `workflow` improvement slice on top of the existing improvement contract instead of inventing a parallel recommendation system. Extend the builder metadata path so one structured Google Ads workflow recommendation can exist in the same saved `improvements[]` model as tools and triggers, then teach the accepted-improvement projector to materialize that acceptance into the canonical saved `workflow` and/or `agentRules` contract used by Review, Co-Pilot, autosave, Improve Agent reopen, SOUL/test-chat summaries, deploy, and hot-push. Reuse the existing saved-state and review-confirm plumbing so accepted workflow improvements stay idempotent, do not duplicate steps or rules, and remain visible as both improvement metadata and concrete saved config.`
+- Blockers: `None. This is the remaining unowned piece of the active "iterative and self-improving" lane after connector projection shipped and trigger projection/schedule fidelity are already tracked separately: TASK-2026-03-27-149 owns `trigger` improvements becoming saved `triggers[]`, TASK-2026-03-27-153 owns supported schedule payload fidelity, and no current TODO package owns the still-missing `workflow` projection path.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the builder should surface workflow upgrades for the Google Ads agent and that accepted improvements should feed back into persisted agent state rather than disappearing in chat prose.
+- `agent-builder-ui/lib/agents/types.ts` and [[SPEC-agent-improvement-persistence]] already define `AgentImprovement.kind` as `tool_connection | trigger | workflow`, so the saved contract was designed for this category and the repo now has a mismatch between documented scope and live behavior.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` currently derives only connector recommendations from `toolConnectionHints[]`, and `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts` projects accepted improvements only into `toolConnections[]`, so accepted workflow advice can never affect the actual saved runtime contract.
+- The saved-agent model already has the target surfaces needed to make workflow improvements real: `workflow` and `agentRules` persist through save/reopen, `ReviewAgent` and Co-Pilot read that saved config, and `agent-builder-ui/lib/openclaw/agent-config.ts` uses the same persisted workflow/rule state to build SOUL content and deploy-time config.
+- Leaving this gap open means the repo can claim the Google Ads creation loop is self-improving while still treating accepted workflow/process advice as descriptive metadata instead of product state that changes runtime behavior.
+
+#### What to build
+
+1. **Structured workflow-improvement source of truth** (`agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts` as needed):
+   - Define one bounded way for the builder path to surface a `workflow` improvement using structured metadata rather than transcript scraping.
+   - Prefer an explicit structured payload when available, but allow one deterministic Google Ads-focused derivation from existing builder metadata if the architect contract still needs a first producer.
+   - Keep the category narrow and testable: one workflow/rule upgrade that can be projected idempotently is enough for the first slice.
+
+2. **Accepted workflow-improvement projection into saved config** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`):
+   - Extend the existing accepted-improvement projector so accepted `workflow` items materialize a concrete change in the saved `workflow` and/or `agentRules` contract instead of remaining metadata-only.
+   - Preserve operator edits and stronger saved config: if the operator already applied an equivalent workflow or rule change manually, projection should be idempotent and non-duplicative.
+   - Keep the projection compatible with draft autosave, review-confirm write-back, Improve Agent reopen, and final save so one accepted workflow improvement does not fork into separate Co-Pilot and advanced-flow behavior.
+
+3. **Review, deploy, and hot-push truthfulness** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/lib/openclaw/agent-config.ts`, deploy/improve helpers as needed):
+   - Make Review and Co-Pilot show both the accepted workflow improvement metadata and the resulting concrete workflow/rule change in the same saved config surfaces the operator will deploy.
+   - Ensure SOUL/test-chat summaries, deploy, and Improve Agent hot-push all consume the projected saved workflow contract, not just the accepted-improvement badge list.
+   - Keep failure modes explicit: if a workflow improvement cannot be projected safely, the improvement should remain pending or surface a clear operator-action-needed state instead of pretending the runtime contract changed.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes above):
+   - Add focused tests proving one accepted `workflow` improvement becomes a deterministic saved `workflow` or `agentRules` change and remains idempotent across autosave, save, reopen, and Improve Agent.
+   - Extend the Google Ads browser proving case so the operator can accept the workflow improvement, see the changed review/deploy summary immediately, and reopen the same saved contract later.
+   - Update KB/spec notes so future improvement work treats workflow upgrades as part of the same persisted improvement-to-config projection path as tools and triggers.
+
+#### Test suite
+
+**Focused frontend/state coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`):
+- A builder-provided or deterministically derived Google Ads `workflow` improvement survives metadata refresh without losing accepted/dismissed state.
+- Accepting that workflow improvement projects one concrete saved `workflow` or `agentRules` change through the same create-session and Co-Pilot save paths used by the rest of the Google Ads config contract.
+- Reapplying the same accepted workflow improvement is idempotent and does not duplicate rules, steps, or saved improvements on reopen.
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent, accept the bounded workflow improvement, and confirm Review or embedded Co-Pilot immediately shows the resulting saved workflow/rule change.
+- Save, refresh, or reopen Improve Agent and confirm both the accepted improvement badge and the projected workflow/rule change are still present.
+- Complete deploy or improve/hot-push and confirm the same saved workflow contract is what the downstream deploy/config summary uses.
+
+#### Evaluation — task is done when
+
+- [ ] The builder path can surface at least one bounded `workflow` improvement through structured metadata rather than transcript-only prose
+- [ ] Accepting that workflow improvement materializes a concrete saved `workflow` or `agentRules` change instead of remaining metadata-only
+- [ ] Review, Co-Pilot, save/reopen, Improve Agent, and deploy/hot-push all read the same projected workflow contract
+- [ ] The projection is idempotent and does not duplicate existing operator-edited steps or rules
+- [ ] Focused tests and the Google Ads browser proving case lock the workflow-improvement contract end to end
+
+### TASK-2026-03-27-157: Persist researched tool plans as durable config state
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/types.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/tools/_components/ToolResearchWorkspace.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/lib/tools/tool-integration.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-tool-research-plan-persistence-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the durable research-plan contract for research-backed connectors. `toolConnections[]` can now persist a bounded `researchPlan` payload, `ConnectToolsSidebar.tsx` rehydrates that saved plan back into `ToolResearchWorkspace.tsx` on reopen, and Review plus Deploy now show compact method/setup/validation/source summaries instead of only a shallow status badge. Focused helper/store coverage locks the saved-plan round-trip and backward-compatible empty-plan behavior.`
+- Operator-testable outcome: `After one worker run, a human can research an unsupported or research-first tool in `/agents/create`, save that choice, refresh or reopen the draft or saved agent, and still see the concrete setup steps, agent-integration steps, validation checklist, recommended method/package, and source links that justified the manual plan. Review and Deploy should surface the same durable plan summary so an operator can continue the Google Ads tool-setup journey without rerunning tool research or reverse-engineering the decision from chat memory.`
+- Next step: `If host browser permissions are restored, add or run the Google Ads Playwright reopen regression for this saved-plan path. Otherwise pick a different unblocked focus-lane feature package next run.`
+- Blockers: `Focused code and unit/store verification passed. Browser-level Playwright coverage remains blocked on this host by the known Chromium launch permission failure (`MachPortRendezvousServer ... Permission denied (1100)`).`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Configure flow should be MCP-first and grounded in real connector state, but an unsupported tool currently becomes little more than a saved label plus status chip after the research sidebar closes.
+- `agent-builder-ui/app/(platform)/tools/_components/ToolResearchWorkspace.tsx` already produces rich structured guidance: recommended method, package, required credentials, setup steps, integration steps, validation steps, alternatives, and sources.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx` throws most of that away when saving: `buildConnection()` only keeps `configSummary`, connector type, auth kind, and status.
+- `agent-builder-ui/lib/agents/types.ts` defines `AgentToolConnection` without any place to persist the researched plan, so `useAgentsStore`, Review, Deploy, and Improve Agent reopen cannot show the operator what was previously researched.
+- `docs/knowledge-base/011-key-flows.md` currently says unsupported/manual tools save the research plan as metadata, but the live contract only stores a shallow summary. This is already a code-vs-KB mismatch in the active focus lane.
+- Existing TODOs cover truthful connector identity, encrypted credential handoff, runtime inputs, trigger truthfulness, accepted improvement projection, and schedule fidelity, but no current feature package owns making researched manual plans durable enough to survive save/reopen as actionable product state.
+
+#### What to build
+
+1. **Durable research-plan contract** (`agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, related backend payload mappers if needed):
+   - Add one bounded structured `researchPlan` shape for tool connections that can persist the architect's recommended method/package, setup steps, integration steps, validation steps, alternatives, and sources.
+   - Keep it metadata-only and safe for ordinary agent reads: no raw credentials, no bearer tokens, and no unbounded free-form transcript excerpts.
+   - Preserve backward compatibility so existing saved `toolConnections[]` without a plan still reopen cleanly.
+
+2. **Save the sidebar research result instead of flattening it** (`ConnectToolsSidebar.tsx`, `StepConnectTools.tsx`, `agent-builder-ui/lib/tools/tool-integration.ts`, configure types/helpers):
+   - When a researched manual plan or research-backed connector is saved, persist the structured `ToolResearchResult` payload into the new `researchPlan` field instead of reducing it to a short `configSummary` only.
+   - Keep direct one-click connectors truthful: direct credentials and configured/missing-secret state still live in the existing connector fields, while the research plan augments operator guidance rather than replacing the readiness contract.
+   - Ensure recommendation remaps to supported connector ids still preserve the researched justification and validation plan.
+
+3. **Reopen, Review, and Deploy visibility** (`StepConnectTools.tsx`, `ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, shared formatter helpers as needed):
+   - Reopened drafts and saved agents should render the stored research plan without rerunning architect research.
+   - Review and Deploy should expose a compact but actionable version of that saved plan for unsupported/manual connectors and research-backed supported connectors, including method/package, top setup steps, validation steps, and source links.
+   - Keep empty-state behavior explicit when no research plan exists so old records do not falsely imply richer guidance.
+
+4. **Regression coverage and docs** (`agent-builder-ui` helper/store tests, `agent-builder-ui/e2e/create-agent.spec.ts`, KB notes above):
+   - Add focused tests proving a saved `ToolResearchResult` round-trips through the saved agent contract and rehydrates the same plan on reopen.
+   - Add one Google Ads browser regression where the operator saves a research-backed manual plan, refreshes or reopens, and still sees the same setup/validation/source details.
+   - Update the builder KB/spec notes so future MCP-first work treats unsupported/manual connectors as durable researched plans, not just status badges.
+
+#### Test suite
+
+**Focused frontend/store coverage** (`agent-builder-ui` tool-integration helpers, store mappers, review/deploy formatters):
+- `ToolResearchResult` fields round-trip through saved `toolConnections[]` without losing setup, integration, validation, or source details.
+- Older saved `toolConnections[]` without `researchPlan` remain readable and fail closed to an explicit empty-plan state.
+- Supported direct connectors can still be `configured` / `missing_secret` while also carrying a safe researched guidance payload when one exists.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Research a Google Ads-adjacent unsupported/manual-plan tool, save it, refresh or reopen the draft, and confirm the same research plan details still render.
+- Open Review or Deploy for that saved agent and confirm the same method/package plus setup/validation summary is visible without rerunning tool research.
+- Confirm direct-connector credential flows still avoid exposing raw secret values even when the saved connection now carries durable research guidance.
+
+#### Evaluation — task is done when
+
+- [ ] Saved `toolConnections[]` can carry a bounded structured research plan instead of only a short `configSummary`
+- [ ] Research-backed manual plans survive save, refresh, Improve Agent reopen, and Review/Deploy without rerunning architect research
+- [ ] Review and Deploy surfaces show enough of the saved plan for an operator to continue setup and validation work directly
+- [ ] The saved contract stays safe: no raw credentials or secret-bearing fields leak into normal agent reads
+- [ ] Focused tests and one Google Ads browser regression prove researched tool plans remain durable across reopen
+- [ ] KB notes describe unsupported/manual connectors as durable researched plans rather than shallow saved badges
+
+### TASK-2026-03-27-160: Cover blank saved schedule fallback in trigger catalog
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane unit regression for trigger reopen normalization. The new `trigger-catalog` coverage proves a reopened supported `cron-schedule` with blank saved title, description, and schedule fields falls back to the catalog defaults plus the default weekday cron instead of preserving empty state through the create/save/reopen loop.`
+- Next step: `Pick a different Google Ads or AG-UI seam next run; avoid reusing `trigger-catalog` blank-field fallback coverage unless the supported schedule contract changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-156: Cover runtime-input review item statuses
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/operator-config-summary.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane unit regression for the shared runtime-input review formatter. The new coverage proves `buildReviewRuntimeInputItems()` marks whitespace-only required values as `Missing value`, preserves `Provided` for filled optional values, and falls back to the runtime-input key when no user-facing label was saved so Co-Pilot, Review, and Deploy keep the same fail-closed status copy.`
+- Next step: `Pick a different Google Ads or AG-UI seam next run; avoid reusing the operator-config summary helpers unless the runtime-input label/status contract changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-155: Cover BuilderAgent ready_for_review fallback description
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane regression for `ready_for_review` responses that omit `content`. The new builder-agent test proves the synthesized fallback review summary must flow through both `SKILL_GRAPH_READY.content` and `WIZARD_UPDATE_FIELDS.description`, and the implementation now reuses the same fallback text for the wizard metadata handoff instead of leaving draft descriptions blank when the architect returns only structured graph data.`
+- Next step: `Pick a different AG-UI or Google Ads seam next run; avoid reusing this fallback-description path unless the builder review-summary contract changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-154: Cover stale architect callbacks in create-chat state
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/hooks/use-openclaw-chat.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane regression in `use-openclaw-chat` proving a superseded architect request cannot leak stale status callbacks, approval events, or a late `agent_response` into the active create-chat session after a newer request takes over.`
+- Next step: `Pick a different AG-UI transport or create-flow seam next run; avoid reusing `use-openclaw-chat` stale-request handling unless the request lifecycle or approval callback contract changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-153: Preserve Google Ads schedule intent through create, reopen, and deploy
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-google-ads-schedule-fidelity-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active Google Ads focus says the proving-case agent should keep a truthful weekday schedule through build, review, configure, save, reopen, and deploy, but the live create flow still collapses schedule intent into a hard-coded fallback. `wizard-directive-parser.ts` and `builder-agent.ts` already receive architect schedule metadata (`schedule_description`, `cron_expression`, `requirements.schedule`), yet the downstream trigger path only preserves the id `cron-schedule`: `detectTriggerHintIds()` emits ids only, `trigger-catalog.ts` seeds every supported schedule with the same default `0 9 * * 1-5`, and `StepSetTriggers.tsx` exposes no editor for the actual schedule payload. That means a Google Ads agent asking for a different cadence can still look correctly configured while save/reopen/deploy silently normalize it back to the default weekday cron unless an operator edits raw rule text elsewhere. None of the current active focus-lane packages own this schedule-fidelity seam.`
+- Operator-testable outcome: `After one worker run, a human can build or improve a Google Ads agent in `/agents/create`, see the architect-derived schedule preserved as structured trigger state instead of a generic default, adjust that supported schedule in the trigger step, save or autosave the draft, reopen it later, and reach Review/Deploy with the same schedule still visible. Deploying the agent should send the same saved cron into `configure-agent`, so the sandbox schedule the operator gets matches what the builder and review surfaces showed.`
+- Next step: `Land one bounded schedule-fidelity slice instead of a general trigger redesign: preserve structured schedule detail from architect metadata or a shared schedule-normalization helper, extend the supported `cron-schedule` selection path so `StepSetTriggers` and the default Co-Pilot trigger phase can display and edit that schedule, thread the same value through create-session state plus Co-Pilot seed/reopen helpers, and update the Google Ads Playwright fixture plus focused trigger/config tests so save/reopen/deploy all keep the same supported schedule instead of falling back to `0 9 * * 1-5`.`
+- Blockers: `None. This composes with TASK-2026-03-27-149 (accepted trigger improvements), TASK-2026-03-27-147 (runtime-input parity), and the existing trigger-truthfulness/readiness work rather than duplicating them: those packages already own which trigger ids are supported and how readiness is displayed, while this new package owns the missing fidelity of the supported schedule payload itself.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` and [[SPEC-google-ads-agent-creation-loop]] treat the Google Ads agent plus its weekday schedule as the proving case for the active builder lane, so silently normalizing every supported schedule back to the default cron undermines the core acceptance path.
+- `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts` and `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` already capture architect schedule metadata into rules and trigger hints, which means the repo has the source data for a truthful schedule contract today.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.ts` currently turns any selected `cron-schedule` trigger into `existing?.schedule ?? "0 9 * * 1-5"`, so the saved trigger contract cannot distinguish architect-requested timing from the fallback unless some other path pre-populates `schedule`.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx` shows supported-vs-unsupported trigger state, but it still offers no bounded editor or visible fidelity check for the schedule string that deploy will actually use.
+- `agent-builder-ui/lib/openclaw/agent-config.ts:buildCronJobs()` already prefers `triggers[].schedule` over regex parsing from `agentRules`, so once the UI preserves the real schedule the deploy path can already consume it without a backend redesign.
+- Existing active tasks cover AG-UI state ownership, accepted trigger improvements, runtime-input parity, and draft persistence, but no current TODO package owns the narrower contract that the selected supported schedule itself must remain truthful across create, reopen, and deploy.
+
+#### What to build
+
+1. **Structured schedule seed from architect metadata** (`agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, shared helpers as needed):
+   - Preserve the minimal schedule detail needed for the Google Ads proving case from architect metadata (`cron_expression`, normalized weekday/time intent, or a bounded derived schedule object) instead of reducing everything to the trigger id `cron-schedule`.
+   - Keep the contract fail-closed: if the architect provides only vague schedule language that cannot be normalized safely, surface that explicitly and fall back to the current default only when the UI labels it as operator action still needed.
+   - Reuse one normalization path so AG-UI, the advanced Configure flow, and the default Co-Pilot flow do not invent separate schedule defaults.
+
+2. **Supported schedule editing in the trigger UI** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`):
+   - Extend the supported `cron-schedule` card so operators can inspect and adjust the actual schedule payload that will be saved and deployed.
+   - Keep the first slice bounded and operator-testable: a simple weekday/time or validated cron editor is acceptable as long as the saved `triggers[].schedule` value is explicit and visible.
+   - Preserve the existing supported/unsupported trigger truthfulness; this package is about the fidelity of the supported schedule payload, not about broadening which trigger kinds can deploy.
+
+3. **Save, autosave, reopen, and improve parity** (`agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, related reopen/autosave helpers):
+   - Thread the chosen schedule through the same create-session and Co-Pilot seed contracts used by the rest of the Google Ads config state so refresh, draft autosave, and Improve Agent reopen keep the same saved value.
+   - Keep accepted trigger improvements and explicit operator edits compatible: if another package projects a supported schedule trigger, that projected trigger should carry the same schedule payload and remain editable.
+   - Ensure review/readiness surfaces render the exact saved schedule details that deploy will later consume, not an inferred placeholder.
+
+4. **Regression coverage and docs** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes):
+   - Add focused tests proving architect-derived schedule detail is preserved into `triggers[].schedule`, survives save/reopen, and does not revert to the default cron when a different supported schedule was chosen.
+   - Extend the Google Ads Playwright proving case so the operator can see the supported schedule, change it, save or reopen, and still deploy with the same value.
+   - Update KB/spec notes so future trigger work treats schedule payload fidelity as part of the shipped Google Ads trigger contract rather than assuming trigger-id truthfulness alone is sufficient.
+
+#### Test suite
+
+**Focused frontend/unit coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`):
+- A Google Ads architect response with explicit schedule metadata seeds a supported `cron-schedule` trigger with the normalized non-default schedule instead of `0 9 * * 1-5`.
+- Editing the supported schedule preserves the same `triggers[].schedule` value through create-session projection, Co-Pilot seed/reopen, and review formatting.
+- Existing saved schedule values survive autosave and reopen without being replaced by the fallback default.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent, inspect or edit the supported schedule in the default create flow, and confirm Review shows the same schedule detail.
+- Save, refresh, or reopen the draft and confirm the supported schedule is still the operator-selected value.
+- Complete the deploy handoff and confirm the mocked `configure-agent` payload uses that same saved schedule.
+
+#### Evaluation — task is done when
+
+- [ ] The Google Ads builder path preserves structured schedule detail instead of collapsing every supported schedule to `0 9 * * 1-5`
+- [ ] Operators can inspect and edit the supported schedule in the create flow without dropping back to raw rule text
+- [ ] Save, autosave, reopen, and Improve Agent keep the same `triggers[].schedule` value the operator last saw
+- [ ] Review and deploy surfaces show the same schedule detail the runtime will receive
+- [ ] Focused tests and the Google Ads browser proving case lock the schedule-fidelity contract end to end
+
+### TASK-2026-03-27-152: Cover BuilderAgent forge transport contract
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane unit regression for the forge-sandbox builder transport path. The new test proves `BuilderAgent` routes forge-backed create runs through `sendToForgeSandboxChat()`, keeps the user prompt free of the system instruction on that path, sends the architect system instruction separately only on the first forge run, and still emits the returned assistant text as a normal AG-UI message.`
+- Next step: `Pick a different AG-UI or Google Ads seam next run, preferably around transcript reduction in `use-agent-chat.ts` or Co-Pilot runtime-input parity instead of more builder transport coverage.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-151: Commit Co-Pilot connector credentials once a draft agent exists
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-copilot-credential-handoff-after-draft-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active focus treats the default `/agents/create` Co-Pilot shell as the primary Google Ads proving path, but its Connect Tools step never switches from pre-save credential-draft mode into the encrypted saved-credential path after draft autosave creates a real agent id. `WizardStepRenderer.tsx` mounts `StepConnectTools` without `agentId`, `ConnectToolsSidebar.tsx` therefore always takes the `!agentId` branch that stores direct-connector values only in local `credentialDrafts`, and `createCoPilotSeedFromAgent()` later reseeds reopened drafts with `credentialDrafts: {}`. In practice, an operator can enter Google Ads credentials, see a configured connector and `Draft saved`, refresh or reopen the draft, and find the same connector downgraded back to `missing_secret` because the Co-Pilot path never handed those credentials into `PUT /api/agents/:id/credentials/:toolId` once the draft record already existed.`
+- Operator-testable outcome: `After one worker run, a human can start a Google Ads agent in the default Co-Pilot flow, enter Google Ads credentials before or just after the first draft save, and once a real draft agent id exists the builder securely commits those credentials through the existing encrypted credential route instead of leaving them stranded in ephemeral state. Refreshing, resuming, or reopening that draft must keep the Google Ads connector truthfully `configured` when credential commit succeeded, while failed commits or deleted credentials still reopen as `missing_secret` with no raw values exposed.`
+- Next step: `Keep the existing no-secret-autosave rule, but thread the live draft agent id into the Co-Pilot Connect Tools path and add one bounded post-autosave credential-handoff step: when autosave or route seeding yields a persisted agent id and pending `credentialDrafts` exist, commit them through the existing credential API, reconcile the connector summary/status from saved credential state, clear the in-memory drafts after success, and surface fail-closed feedback if the encrypted write fails. Then extend the Google Ads Playwright fixture plus focused store/component tests so the default Co-Pilot path proves configured-vs-missing-secret truthfulness across autosave, refresh, and reopen.`
+- Blockers: `None. This is distinct from TASK-2026-03-26-139, which correctly keeps raw credential drafts out of autosaved draft payloads; the missing package is the handoff from ephemeral drafts to encrypted saved credentials once autosave has already created the draft record.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the default Co-Pilot `/agents/create` path should be the truthful Google Ads proving case, so connector credential handling cannot stay weaker there than in the advanced/save-completion path.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` currently renders `StepConnectTools` with `initialConnected` and `initialCredentialDrafts` only; it never passes `agentId`, so the embedded Connect Tools flow cannot save credentials directly even after autosave creates a draft id.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx` explicitly treats `!agentId` as a local-only first-save path: it returns the entered values through `onSave(..., values)` instead of calling `saveToolCredentials()`, and it labels the summary as `Credentials saved for first agent save`.
+- `agent-builder-ui/lib/openclaw/copilot-flow.ts` reseeds reopened drafts with `credentialDrafts: {}`, so any credentials that never made it onto the encrypted credential route are intentionally unrecoverable on resume.
+- `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md` and `docs/knowledge-base/011-key-flows.md` already define the desired boundary: raw drafts stay ephemeral only until the first agent save returns an id, then pending credentials must be committed through `PUT /api/agents/:id/credentials/:toolId` and reopened status must reconcile against the saved credential summary.
+- No current TODO entry owns that transition specifically. TASK-2026-03-26-139 covers safe metadata autosave and explicitly excludes credential drafts from persistence, while TASK-2026-03-27-147 covers runtime-input parity instead of credential handoff.
+
+#### What to build
+
+1. **Pass the persisted draft identity into Co-Pilot Connect Tools** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `page.tsx`, related props/helpers):
+   - Thread the effective draft or saved `agentId` and current agent use case into the embedded `StepConnectTools` path once autosave or route seeding provides a real agent record.
+   - Preserve the current pre-save behavior before an id exists: typed secret values remain in-memory only and must not leak into autosaved draft metadata.
+   - Keep the embedded flow aligned with the advanced Configure path instead of creating a Co-Pilot-only credential API.
+
+2. **Add a post-draft credential handoff for pending Co-Pilot drafts** (`agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `page.tsx`, `ConnectToolsSidebar.tsx` as needed):
+   - When a draft id appears and the Co-Pilot store still has pending `credentialDrafts`, commit those drafts through the existing encrypted credential route and update tool readiness from the saved result.
+   - Clear in-memory credential drafts after a successful commit so refresh and reopen rely on saved credential summary, not stale raw values.
+   - If a credential commit fails, degrade the connector back to `missing_secret` or keep it blocked, and surface explicit feedback instead of leaving a false `configured` badge.
+
+3. **Truthful reopen and disconnect behavior** (`StepConnectTools.tsx`, `ConnectToolsSidebar.tsx`, store/reconcile helpers):
+   - Reopened drafts and Improve Agent entry should continue to seed `credentialDrafts: {}` while deriving connector status from the saved credential summary, so no raw secrets ever reappear in browser state.
+   - Disconnecting a saved Google Ads connector from the embedded Co-Pilot flow must still delete the encrypted credential envelope and immediately update metadata to match.
+   - Keep the supported/manual-plan distinction truthful when research recommends a different connector id.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused frontend tests, KB notes above):
+   - Add one Google Ads Co-Pilot browser regression where credentials entered before or shortly after draft autosave survive refresh and reopen as saved `configured` connector state.
+   - Add focused tests covering the moment a draft id appears with pending `credentialDrafts`, successful encrypted commit, failed commit fallback, and reopen seeding with an empty credential-draft bag but truthful saved status.
+   - Update the affected KB notes so future agents understand the distinction between excluded raw draft persistence and required post-draft encrypted credential handoff.
+
+#### Test suite
+
+**Focused frontend/store coverage** (`agent-builder-ui` Co-Pilot, connect-tool, and autosave helpers):
+- `WizardStepRenderer` or the Co-Pilot wrapper passes the persisted draft `agentId` into `StepConnectTools` once one exists.
+- Pending Co-Pilot `credentialDrafts` commit through the saved-agent credential API after draft creation and then clear from in-memory draft state.
+- Failed credential commits leave the connector in a fail-closed `missing_secret` state and surface explicit feedback instead of preserving a false `configured` badge.
+- Reopened drafts seed no raw credential values but do reconcile the connector back to `configured` when the credential summary says the encrypted secret exists.
+
+**Operator verification**:
+- Build a Google Ads agent in the default Co-Pilot flow, enter direct-connector credentials, wait for `Draft saved`, refresh or reopen the draft, and confirm the connector still appears `configured`.
+- Repeat with a forced credential-save failure and confirm the flow reports the failure and reopens as `missing_secret`.
+- Disconnect the saved Google Ads connector from Co-Pilot and confirm the encrypted credential envelope is deleted and the metadata updates immediately.
+
+#### Evaluation — task is done when
+
+- [ ] The default Co-Pilot Connect Tools step stops treating every credential entry as pre-save local state once a real draft agent id exists
+- [ ] Pending credential drafts transition onto the existing encrypted saved-credential route after autosave creates the draft record
+- [ ] Refreshing, resuming, or reopening a Google Ads draft preserves truthful `configured` vs `missing_secret` connector state without exposing raw credential values
+- [ ] Failed credential commits fail closed and do not leave false `configured` status in Review or Deploy
+- [ ] Focused tests and Google Ads browser coverage prove the credential handoff works across autosave and reopen
+- [ ] KB notes describe the ephemeral-draft versus encrypted-saved credential boundary accurately
+
+### TASK-2026-03-27-150: Cover SandboxAgent structured tool_start editor sync
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI transport regression around route-level `tool_start` events for code tools. `SandboxAgent` now preserves object-shaped `input` payloads instead of dropping them, so `finishCustomToolStep()` still emits `EDITOR_FILE_CHANGED` for structured `write_file` payloads and keeps the chat code editor aligned with the actual edited path.`
+- Next step: `Pick a different AG-UI or Google Ads seam next run; avoid more `SandboxAgent` tool-event coverage unless route-level payload shapes or workspace-tab behavior change again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-149: Project accepted builder trigger improvements into saved Google Ads config
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-improvement-persistence.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-trigger-improvement-projection-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active Google Ads focus still says builder-surfaced process improvements should feed back into persisted product state instead of disappearing in chat prose, but the shipped improvement system still stops at connector advice. `AgentImprovement` already allows `trigger` and `workflow` kinds, `wizard-directive-parser.ts` plus `builder-agent.ts` already normalize schedule metadata and trigger hints, and Review/Deploy already render accepted improvements from saved state. But `deriveImprovements()` in `builder-metadata-autosave.ts` only emits `tool_connection` recommendations, and `applyAcceptedImprovementsToConfig()` in `create-session-config.ts` only projects accepted improvements into `toolConnections[]`. That means the Google Ads proving case can persist a "connect Google Ads" recommendation, yet cannot accept a builder recommendation that turns architect-provided weekday cadence into a saved supported schedule trigger. Trigger/process guidance still collapses back into transient review copy or chat text instead of becoming the saved config contract the focus document asks for.`
+- Operator-testable outcome: `After one worker run, a human building a Google Ads agent in `/agents/create` can see a builder recommendation to add the architect-derived weekday schedule when the current trigger selection is empty, unsupported, or manual-only. Accepting that recommendation immediately projects one supported `cron-schedule` trigger with the normalized schedule into Co-Pilot review, the advanced Review surface, save/reopen, Improve Agent reopen, and the deploy summary, so the accepted builder recommendation becomes visible persisted product state instead of advisory prose. If the supported schedule is already present, the recommendation should not appear or should stay non-duplicative, and dismissing it should remain sticky across autosave and reopen.`
+- Next step: `Extend the existing improvement contract instead of inventing a second recommendation system: preserve enough schedule metadata in the AG-UI builder snapshot to derive one bounded `trigger` recommendation from trigger hints plus architect schedule metadata, teach the accepted-improvement projector to materialize that recommendation into the canonical structured `triggers[]` contract, and update review/deploy/test coverage so the Google Ads proving case shows accepted trigger improvements as real saved trigger state across create, reopen, and deploy.`
+- Blockers: `None. This composes with the existing improvement-persistence package, trigger-catalog truthfulness package, and runtime-input/deploy-gating packages rather than replacing them: those slices already own saved improvement metadata, truthful trigger status, and readiness enforcement, while this new package owns the still-missing projection of accepted builder trigger guidance into real saved config.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the creation process should become iterative and self-improving, with approved improvements feeding back into persisted agent config instead of remaining chat-only commentary.
+- `agent-builder-ui/lib/agents/types.ts` already defines `AgentImprovement.kind` as `tool_connection | trigger | workflow`, which means the saved contract was intentionally designed to carry more than connector reminders.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` currently derives only `connect-google-ads` and `connect-google-workspace` recommendations from `toolConnectionHints[]`; it ignores `triggerHints[]`, even though the same builder metadata already carries them.
+- `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts` and `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` already normalize schedule metadata (`schedule_description`, `cron_expression`, `requirements.schedule`) plus trigger hints like `cron-schedule`, so the repo has the raw structured data needed to produce one truthful trigger recommendation without transcript scraping.
+- `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts` only projects accepted improvements into `toolConnections[]`, so accepting a future trigger recommendation would currently have no effect on saved `triggers[]` state even though Review and Deploy already know how to render persisted trigger readiness.
+- Existing active tasks cover AG-UI transcript ownership, runtime-input parity, deploy readiness, and webhook hardening, but no current TODO package owns turning accepted builder trigger advice into the same saved-config truth contract already used for tools.
+
+#### What to build
+
+1. **Trigger-improvement derivation from builder metadata** (`agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, builder metadata tests):
+   - Extend the metadata snapshot so it preserves the minimal schedule detail needed for one bounded trigger recommendation, reusing structured architect fields or normalized rules rather than scraping transcript text.
+   - Derive one Google Ads-focused `trigger` improvement when the builder metadata indicates a schedule-capable agent but the current saved/session trigger state is empty, unsupported, or manual-only.
+   - Preserve existing operator decisions by recommendation id the same way connector improvements already do, so accepted or dismissed trigger recommendations stay stable across autosave and reopen.
+
+2. **Accepted trigger-improvement projection into canonical config** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, save/reopen helpers):
+   - Extend the accepted-improvement projector so an accepted trigger recommendation materializes a real structured `triggers[]` entry instead of remaining metadata-only.
+   - Reuse the existing trigger catalog/status contract so the projected trigger lands as a supported `cron-schedule` selection with the normalized architect-derived schedule, not as a parallel ad hoc trigger shape.
+   - Keep projection non-destructive: do not duplicate an already selected supported trigger, and do not overwrite a stronger operator-edited trigger definition unless the projected recommendation is the only source of that trigger.
+
+3. **Review, reopen, and deploy truthfulness** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, Co-Pilot review helpers, deploy summary surfaces as needed):
+   - Make Review and Co-Pilot show the accepted trigger improvement as real saved trigger state immediately after acceptance, just as accepted connector improvements already update tool state.
+   - Ensure save, autosave, Improve Agent reopen, and deploy read paths all keep that accepted trigger visible through the same `triggers[]` contract so the operator never has to remember which trigger came from an accepted builder suggestion.
+   - Keep dismissed trigger recommendations persisted so the builder does not re-suggest the same accepted-or-rejected schedule every time the draft reopens.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes):
+   - Add focused tests proving trigger improvements are derived from structured builder metadata, preserve prior decision state, and project into saved `triggers[]` only when appropriate.
+   - Add browser coverage for the Google Ads proving case showing that accepting the schedule recommendation updates the visible trigger readiness immediately and survives save/reopen.
+   - Update KB/spec notes so future improvement work treats trigger/workflow categories as part of the same persisted improvement contract rather than assuming connector recommendations are the whole system.
+
+#### Test suite
+
+**Focused frontend/unit coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`):
+- A builder response with weekday schedule metadata plus no supported saved trigger derives one `trigger` improvement with a stable id and preserved prior decision state.
+- Accepting that recommendation projects one supported `cron-schedule` trigger into the same saved/session trigger contract used by review, save, reopen, and deploy.
+- Existing supported trigger selections suppress duplicate projected recommendations, while dismissed recommendations stay dismissed on reopen.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the Google Ads proving case, Review or Co-Pilot shows the schedule recommendation when the current trigger set is empty or unsupported-only.
+- Accepting the recommendation updates the visible trigger summary to a supported schedule without manual trigger re-entry.
+- Saving, refreshing, or reopening the draft keeps both the accepted improvement state and the projected supported trigger visible.
+
+#### Evaluation — task is done when
+
+- [ ] The builder improvement system derives at least one bounded `trigger` recommendation from structured Google Ads schedule metadata instead of only `tool_connection` reminders
+- [ ] Accepting that recommendation projects a real structured supported trigger into saved/session `triggers[]` state
+- [ ] Review, Co-Pilot, save/reopen, Improve Agent reopen, and deploy all read the accepted trigger through the same saved config contract
+- [ ] Dismissed or already-satisfied trigger recommendations do not reappear as duplicates on autosave or reopen
+- [ ] Focused tests and one Google Ads browser regression prove accepted trigger improvements become durable product state rather than chat-only advice
+
+### TASK-2026-03-27-148: Cover SandboxAgent native tool-call finalization once
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane regression for `SandboxAgent` native OpenAI `tool_calls`. The new unit test proves a streamed tool call closed by `finish_reason: "tool_calls"` must not emit a second `TOOL_CALL_END` when the assistant later sends the final `stop`, and the transport now clears finalized native tool-call buffers after closing them once.`
+- Next step: `Pick a different AG-UI transport or transcript seam next run; avoid reusing this native tool-call finalization path unless the sandbox transport starts tracking multi-call replay or OpenAI finish-reason semantics change.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-146: Cover Google Ads runtime-input merge helpers
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/runtime-inputs.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane unit test file for the runtime-input helper layer that seeds and preserves configure-state env values. The new coverage proves `extractRuntimeInputKeys()` dedupes mixed skill-graph and agent-rule requirements into canonical uppercase keys, and `mergeRuntimeInputDefinitions()` keeps saved `GOOGLE_ADS_CUSTOMER_ID` labels, values, and metadata while appending no-longer-required saved inputs instead of dropping them during create or improve reopen.`
+- Next step: `Pick a different focus-lane seam next run, preferably one around AG-UI transcript ownership or Google Ads configure persistence rather than more helper-only runtime-input coverage.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-143: Cover BuilderAgent copilot ready-for-review transcript ordering
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded AG-UI focus-lane regression around copilot-mode \`ready_for_review\` streaming and fixed the adjacent event ordering. `BuilderAgent` now emits `SKILL_GRAPH_READY` and wizard metadata before the delayed copilot `TEXT_MESSAGE_END`, so `useAgentChat()` can suppress the duplicate review-summary transcript finalizer during review handoff. The focused builder-agent test file now also mocks both architect API exports and reflects the shipped direct \`google-ads\` connector hint.`
+- Next step: `Pick a different AG-UI or Google Ads seam next run; avoid reusing this builder-agent ordering path unless transcript ownership moves further into \`useAgentChat()\` or the ready-for-review event contract changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-142: Cover Improve Agent skill-label trim on Co-Pilot reopen
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded Google Ads focus-lane regression around Improve Agent reopen seeding. `createCoPilotSeedFromAgent()` now trims saved skill labels before the case-insensitive lookup, so padded human-readable skills still remap onto canonical ids like `google-ads-audit` instead of reopening Co-Pilot with broken selected-skill state.`
+- Next step: `Pick a different focus-lane seam next run, preferably connector identity truthfulness or create-flow browser reliability rather than another Co-Pilot seed-normalization edge case.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-141: Promote the real Google Ads MCP connector through the builder flow
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/tools/tool-integration.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/app.ts`, `ruh-backend/tests/unit/agentCredentialsApp.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-google-ads-connector-contract-split.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the Google Ads connector truthfulness package for the active create-flow lane. The builder registry now exposes a first-class direct \`google-ads\` MCP connector with Google Ads credential fields, explicit Google Ads hints now normalize to \`google-ads\` instead of collapsing onto Google Workspace, the connect-tool catalog prefers the direct Ads connector over a research-only placeholder, and accepted builder improvements plus review/reopen projection now preserve the same \`google-ads\` identity the backend runtime already provisions. KB/spec notes were updated to document the corrected contract.`
+- Operator-testable outcome: `After one worker run, a human can build a Google Ads agent in `/agents/create`, open Connect Tools, choose a real `Google Ads` direct connector with its own credential form instead of a Google Workspace remap or manual-plan placeholder, save that encrypted credential state, reopen the draft or saved agent, and reach Review/Deploy with the same `google-ads` connector shown as `configured` or `missing_secret`. Deploy-time runtime config must still write the same `google-ads` MCP server the backend already knows how to provision, and the Google Ads create-flow acceptance coverage should assert that the proving-case path stays on that direct connector identity end to end.`
+- Next step: `Use TASK-2026-03-27-143 as the next Google Ads package: required non-secret runtime env inputs such as \`GOOGLE_ADS_CUSTOMER_ID\` still are not persisted or deploy-gated, even though connector identity is now truthful.`
+- Blockers: `Focused unit coverage passed. Full Playwright create-flow verification remains available as a follow-on, and `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts` still has a pre-existing unrelated import failure for missing \`sendToForgeSandboxChat\` export in \`lib/openclaw/api.ts\`.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the active lane should build a credible Google Ads agent end to end, but the current create flow still routes explicit Google Ads intent away from the one direct connector the backend already supports.
+- `ruh-backend/src/app.ts` already maps saved `google-ads` credentials to `@anthropic/google-ads-mcp` during `configure-agent`, so runtime support exists today instead of being purely speculative.
+- `docs/knowledge-base/004-api-reference.md` and `ruh-backend/tests/unit/agentCredentialsApp.test.ts` already document and verify encrypted credential routes using `toolId: "google-ads"` and Google Ads credential keys.
+- `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts` does not define `google-ads`, and `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts` currently rewrites `"google ads"` and `google_ads` onto `google`, so the operator-facing builder path understates the repo's real runtime contract.
+- `agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, and several review/config summary tests still treat `google-ads` as the proving-case connector identity, which means the repo is already paying for both models at once.
+
+#### What to build
+
+1. **Frontend registry alignment** (`agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `ConnectToolsSidebar.tsx`, related types/helpers):
+   - Add a first-class `google-ads` connector definition to the builder registry with the credential fields the existing backend credential contract expects.
+   - Keep `google` / Google Workspace available as its own connector for Gmail/Drive/Sheets cases instead of using it as a catch-all substitute for Ads.
+   - Reuse the existing encrypted credential routes and fail-closed status model (`available`, `missing_secret`, `configured`) rather than inventing a second storage path.
+
+2. **Truthful builder-hint and catalog identity** (`agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/lib/tools/tool-integration.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`):
+   - Stop normalizing explicit Google Ads builder metadata onto `google` when the intent, saved record, or research result is a real Ads integration.
+   - Preserve the existing fail-closed manual-plan behavior only for tools that truly lack direct runtime support; do not keep using it for Google Ads now that the backend already exposes a direct MCP package.
+   - Make saved/reopened drafts, Co-Pilot seeds, and latest-recommendation cards preserve the same `google-ads` identity the runtime uses.
+
+3. **Review, deploy, and reopen consistency** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, summary helpers/tests as needed, `ruh-backend/src/app.ts` only if runtime env passthrough needs a small follow-on fix):
+   - Ensure Review, Improve Agent reopen, and Deploy surfaces display `Google Ads` as the selected connector when that is what the saved config uses, not Google Workspace or a generic manual plan.
+   - Keep deploy-readiness gating compatible with TASK-2026-03-26-113 so `missing_secret` Google Ads remains blocked until credentials exist, while `configured` Google Ads stays deployable.
+   - Verify the frontend credential field contract matches what backend runtime provisioning and credential tests already expect for `google-ads`.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused frontend tests, `ruh-backend/tests/unit/agentCredentialsApp.test.ts`, KB notes above):
+   - Update acceptance and store tests so the Google Ads proving-case path stays on `google-ads` from builder hint through save/reopen/deploy, while Google Workspace remains a separate connector.
+   - Add focused coverage proving explicit Google Ads hints no longer collapse to `google`, and that reconnect/reopen flows preserve `google-ads` credential status truthfully.
+   - Update KB/spec notes to document the real split that existed and the corrected direct-connector contract once shipped.
+
+#### Test suite
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, connect-tool catalog tests, builder-hint normalization tests, Co-Pilot seed tests):
+- Explicit Google Ads architect hints normalize to `google-ads`, while Workspace-specific hints still normalize to `google`.
+- Connect Tools can render and reopen a first-class `Google Ads` direct connector without collapsing it into manual-plan or Workspace fallback state.
+- Saved draft and reopen logic preserve `google-ads` connector status as `configured` or `missing_secret` across Co-Pilot and Improve Agent entry.
+
+**End-to-end builder coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- The Google Ads proving-case flow shows `Google Ads` as the connector that can be configured directly.
+- Saving credentials, reopening the agent, and returning to Review/Deploy preserves the same `google-ads` connector identity and readiness state.
+- The acceptance fixture no longer mixes `google-ads` runtime assumptions with a frontend registry that only supports `google`.
+
+**Backend/runtime verification** (`ruh-backend/tests/unit/agentCredentialsApp.test.ts`, targeted configure-agent coverage if needed):
+- Credential routes still encrypt and store `google-ads` without echoing secrets.
+- Runtime MCP config generation still writes the `google-ads` server definition when that connector is selected and credential material exists.
+
+#### Evaluation — task is done when
+
+- [ ] The builder exposes `google-ads` as a first-class direct connector instead of forcing a Google Workspace remap or manual-plan placeholder for the proving-case flow
+- [ ] Explicit Google Ads builder hints, saved drafts, and reopened agents preserve the same `google-ads` connector identity the backend runtime already uses
+- [ ] Review, Improve Agent, and Deploy surfaces describe the Google Ads connector truthfully as `configured` or `missing_secret`
+- [ ] Acceptance and focused tests cover the direct Google Ads connector path end to end
+- [ ] KB/spec notes describe the corrected frontend/backend connector contract clearly enough that future AG-UI or config work does not reintroduce the split
+
+### TASK-2026-03-27-143: Persist and gate required runtime env inputs for Google Ads agents
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/lib/agents/runtime-inputs.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepRuntimeInputs.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/app.ts`, `agent-builder-ui/lib/agents/operator-config-summary.test.ts`, `agent-builder-ui/lib/openclaw/agent-config.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `ruh-backend/tests/unit/validation.test.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `ruh-backend/tests/integration/agentCrud.test.ts`, `ruh-backend/tests/unit/skillRegistryApp.test.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-agent-runtime-env-requirements-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Shipped the per-agent runtime-input contract for the Google Ads proving case. Saved agents now persist metadata plus operator-entered values in \`runtimeInputs[]` / \`runtime_inputs\`, the Advanced `/agents/create` Configure flow adds a dedicated Runtime Inputs step, Review plus Deploy summarize missing-vs-complete runtime inputs separately from connector state, and backend config apply fails closed on missing required values before writing the saved runtime env payload into \`~/.openclaw/.env\` for deploy and hot-push flows.`
+- Operator-testable outcome: `After this worker run, an operator can open `/agents/create`, switch to Advanced, build a Google Ads agent, enter `GOOGLE_ADS_CUSTOMER_ID` in the dedicated Runtime Inputs step, save or reopen the agent without losing it, and see Deploy/Improve Agent config pushes fail closed when a required runtime input is blank. When present, backend config apply reports a `runtime_env` step and writes the saved values into the sandbox runtime environment before the agent runs.`
+- Next step: `Do not reopen this runtime-input contract unless the saved model changes again. The clean follow-on is Co-Pilot parity and browser coverage: surface the same runtime-input editor in the default Co-Pilot stepper and extend the Google Ads Playwright flow to assert missing-input blocking plus reopen persistence.`
+- Blockers: `Focused frontend and backend verification passed. The DB-backed integration test \`cd ruh-backend && bun test tests/integration/agentCrud.test.ts\` is still blocked locally by missing Postgres (\`ECONNREFUSED ::1:5432\`), so no integration-level database proof was available in this sandbox.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads path should become a credible end-to-end agent, but the live builder only turns required runtime inputs into a rule string instead of a saved, deployable contract.
+- `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/app/(platform)/agents/create/_config/generate-skills.ts`, and `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` all extract `requirements.required_env_vars`, but they only append `Requires env: ...` to `agentRules`.
+- `agent-builder-ui/app/(platform)/agents/create/_components/AgentConfigPanel.tsx` can display env vars in the builder snapshot, but that panel is read-only and there is no persisted `SavedAgent` or backend `AgentRecord` field for runtime inputs.
+- `ruh-backend/src/app.ts` `POST /api/sandboxes/:sandbox_id/configure-agent` writes SOUL, skills, cron jobs, MCP credentials, and webhook provisioning, but it does not load or write per-agent runtime env vars; the only `.openclaw/.env` write in the repo is sandbox bootstrap in `ruh-backend/src/sandboxManager.ts`.
+- Even after TASK-2026-03-27-141 lands, a `configured` Google Ads connector can still produce a non-runnable agent if required account/customer identifiers remain missing, so the current product still overstates deploy readiness.
+
+#### What to build
+
+1. **Persisted runtime-input model** (`ruh-backend/src/agentStore.ts`, backend validation routes, `agent-builder-ui/hooks/use-agents-store.ts`, shared types):
+   - Add one structured per-agent runtime-input contract for non-secret env requirements returned by the architect, rather than burying them inside `agentRules`.
+   - Represent both the requirement metadata (`key`, label/description, required-ness/source) and the current saved value or completion state in a way that ordinary agent reads can use safely.
+   - Keep secret connector credentials on the existing encrypted credential endpoints; this package is for operator-supplied runtime parameters such as account ids or customer ids that the generated skills require.
+
+2. **Configure and reopen UX** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `ConfigureAgent.tsx`, builder snapshot/review helpers):
+   - Surface required runtime inputs as a first-class Configure concern with editable fields and clear missing/complete status.
+   - Seed that state from architect requirements and skill-node `requires_env`, but let saved drafts and Improve Agent reopen preserve the operator-entered values.
+   - Keep the Google Ads proving case opinionated: the flow should explicitly call out `GOOGLE_ADS_CUSTOMER_ID` or similar required inputs next to the connector state instead of forcing the operator to infer them from free-form rules.
+
+3. **Fail-closed readiness and config apply** (`agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `ruh-backend/src/app.ts`):
+   - Extend create/deploy/improve readiness so missing runtime inputs block deploy with the same truthfulness as missing credentials or unsupported triggers.
+   - Update backend config apply to write saved runtime inputs into the sandbox environment before the agent runs, not just into SOUL prose.
+   - Keep hot-push and first-deploy behavior aligned so Improve Agent cannot claim success while a running sandbox is missing newly required env inputs.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused frontend/store tests, `ruh-backend/tests/unit/`, KB/spec notes above):
+   - Add the Google Ads proving-case assertion that required runtime inputs are visible, persist across save/reopen, and block deploy when empty.
+   - Add backend coverage proving config apply writes runtime inputs and fails closed when required values are absent.
+   - Update KB/spec notes so future create-flow and runtime work treat required env inputs as part of the saved config contract, not as advisory rule text.
+
+#### Test suite
+
+**Focused frontend/store coverage** (`agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/hooks/use-agents-store.ts`, shared helpers):
+- Architect-required env vars seed one structured runtime-input state shape instead of only appending `Requires env:` strings.
+- Entered runtime inputs survive draft autosave, reopen, and Improve Agent hydration on the Google Ads path.
+- Review/deploy summary helpers expose missing runtime-input blockers distinctly from `missing_secret` connector blockers.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Start the Google Ads create flow, confirm the required runtime-input field (for example `GOOGLE_ADS_CUSTOMER_ID`) is visible, and verify deploy stays blocked until it is filled.
+- Save or autosave the draft, refresh or reopen the agent, and confirm the same runtime-input value and readiness state return.
+- Complete the flow with both connector credentials and runtime inputs present, and verify deploy succeeds on the same proving-case path.
+
+**Backend verification** (`ruh-backend/tests/unit/`, `ruh-backend/tests/integration/` as needed):
+- Agent create/config routes persist the runtime-input contract and do not leak encrypted connector secrets into it.
+- `configure-agent` writes the saved runtime inputs into the sandbox environment and returns a deterministic readiness/config-apply failure when required values are missing.
+- Existing happy-path config apply still succeeds when all required runtime inputs are present.
+
+#### Evaluation — task is done when
+
+- [ ] Required runtime inputs from architect output are stored as structured saved agent config rather than only as free-form rules
+- [ ] The Google Ads create and Improve Agent flows let operators enter, save, and reopen runtime inputs such as `GOOGLE_ADS_CUSTOMER_ID`
+- [ ] Review and deploy surfaces report missing runtime inputs explicitly and fail closed until they are resolved
+- [ ] Backend config apply writes saved runtime inputs into the sandbox runtime environment instead of leaving them as prompt-only prose
+- [ ] Browser and focused backend/frontend tests lock the runtime-input contract into the Google Ads proving case
+- [ ] KB/spec notes describe required runtime inputs as part of the saved create/deploy contract clearly enough that future connector or AG-UI work does not drop them again
+
+### TASK-2026-03-27-144: Make AG-UI message events the live transcript contract
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-agui-message-lifecycle-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `The active focus still puts AG-UI adoption first, but the live chat hook is not actually consuming AG-UI's message lifecycle as the transcript contract. `BuilderAgent` and `SandboxAgent` already emit `TEXT_MESSAGE_START` / `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_END`, yet `useAgentChat()` ignores start/end, pushes a special-case assistant message when `skill_graph_ready` arrives, and then appends a second final assistant turn by rebuilding text from `liveResponse` plus `deltaMachine.getRawBuf()`. That means AG-UI is still being used mostly as a transport envelope while transcript ownership remains local hook logic, which keeps builder and deployed chat exposed to duplicate or empty assistant turns, special-case `ready_for_review` handling, and a non-standard message model that blocks the interop goal described in [[SPEC-agui-protocol-adoption]].`
+- Operator-testable outcome: `After one worker run, a human can use both `/agents/create` and `/agents/[id]/chat` and see each assistant turn stream, finalize, and replay from one AG-UI message-lifecycle contract instead of a custom finalizer. Clarifications, `ready_for_review`, ordinary agent replies, and sandbox chat responses should each produce exactly one assistant message per run, with steps/browser/task-plan metadata attached to that same turn, no duplicate post-run transcript entries, and no fallback `No response received.` placeholder when the AG-UI stream already completed normally.`
+- Next step: `Keep the in-flight AG-UI state and cutover packages in place, but add the currently unowned transcript slice: teach `useAgentChat()` to treat `TEXT_MESSAGE_START` / `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_END` as the authoritative assistant-message reducer, attach tool/browser/task-plan metadata to the same in-progress message record, stop injecting the special `skill_graph_ready` assistant message and the separate post-run `liveResponse` finalizer as the source of truth, and tighten builder/sandbox agent tests so message-emission order stays consistent across clarification, `ready_for_review`, ordinary replies, and sandbox streaming runs. Then refresh one builder and one deployed-chat browser regression so the UI proves the AG-UI transcript contract holds end to end.`
+- Blockers: `None. This should compose with TASK-2026-03-26-98 (broad AG-UI cutover) and TASK-2026-03-26-137 (builder snapshot/delta state) instead of duplicating them: those packages own state-model migration and legacy abstraction removal, while this package owns the still-missing AG-UI message-lifecycle adoption seam for transcript rendering and replay.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says AG-UI protocol adoption should lead the builder roadmap, but the live hook still reconstructs assistant turns outside the AG-UI transcript lifecycle, so the create and deployed-chat surfaces are not yet running on the standard message contract.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` already emits `TEXT_MESSAGE_START` / `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_END` for clarification, `ready_for_review`, and ordinary agent replies, yet the same file still emits `skill_graph_ready` as a separate custom event carrying duplicate conversational content.
+- `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts` only reduces `TEXT_MESSAGE_CONTENT`, ignores `TEXT_MESSAGE_START` / `TEXT_MESSAGE_END`, appends an assistant message immediately for `skill_graph_ready`, and then appends another final assistant message from `liveResponse` after the Observable completes.
+- `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts` already emits full AG-UI run/message/tool lifecycle events for deployed chat, so the remaining mismatch is on the consumer side rather than a lack of event production.
+- Existing TODOs cover AG-UI state snapshots, Google Ads builder state, deploy gating, and broad cutover cleanup, but no current task owns replacing the local transcript assembler with the AG-UI message lifecycle itself.
+
+#### What to build
+
+1. **Transcript reducer on AG-UI message events** (`agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, helper types as needed):
+   - Track in-progress assistant turns by `messageId` and treat `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, and `TEXT_MESSAGE_END` as the authoritative transcript reducer for both builder and deployed-agent modes.
+   - Keep middleware-derived side effects such as code-block extraction, browser events, and task-plan parsing, but attach their resulting metadata to the same in-flight assistant message instead of creating a separate final transcript entry at Observable completion.
+   - Preserve the live streaming UX in `TabChat.tsx` while making the finalized `messages[]` array derive from AG-UI message events rather than `liveResponse` plus a custom post-run append.
+
+2. **Builder and sandbox emitter alignment** (`agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, focused tests):
+   - Keep custom events for non-transcript metadata such as builder state, browser workspace frames, and editor-file notifications, but ensure conversational text for clarification, `ready_for_review`, and normal replies flows through the AG-UI text-message lifecycle exactly once.
+   - Remove or narrow any message-content duplication between `skill_graph_ready` payloads and text events so the hook no longer needs a special-case assistant-message insertion for builder review handoff.
+   - Confirm sandbox and builder agents both terminate text messages deterministically before `RUN_FINISHED` and do not rely on hook-local fallback text reconstruction.
+
+3. **Replay and UI integration** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `use-agent-chat.ts`, history helpers if needed):
+   - Ensure the message object that reaches the UI already contains the finalized text, steps, task-plan summary, and browser snapshot for that assistant turn, so replay and future persistence work read one transcript shape.
+   - Preserve the `ready_for_review` affordance and builder auto-advance behavior, but drive them from the same finalized assistant turn plus state/custom metadata instead of a parallel transcript path.
+   - Fail closed on empty runs: if AG-UI never produced a text message, surface a structured error or explicit empty-state message instead of silently inventing a nominal assistant reply.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, KB notes/spec):
+   - Add focused tests proving the hook finalizes exactly one assistant transcript message from AG-UI message events for clarification, `ready_for_review`, and ordinary responses.
+   - Add coverage proving `ready_for_review` still auto-advances Review without reintroducing a duplicate transcript message.
+   - Add one builder and one deployed-chat browser regression showing streamed replies finalize once, keep their steps/browser metadata attached, and do not append a second post-run assistant message.
+
+#### Test suite
+
+**Focused AG-UI unit coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, hook tests as needed):
+- Builder clarification and `ready_for_review` responses emit one text-message lifecycle and keep non-transcript metadata on custom/state events only.
+- Sandbox chat runs finalize the assistant turn from AG-UI message events without requiring hook-local fallback text reconstruction.
+- The hook produces exactly one finalized assistant transcript entry per completed run and still preserves task-plan/browser/tool metadata on that same entry.
+
+**Browser regression coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`):
+- The Google Ads builder flow can stream to `ready_for_review`, auto-open Review, and show one assistant transcript entry for the architect turn instead of a duplicate review-summary append.
+- A deployed-agent chat run streams, completes, and leaves behind one assistant transcript entry with its steps or browser/task metadata still attached after completion.
+
+#### Evaluation — task is done when
+
+- [ ] `useAgentChat()` treats AG-UI `TEXT_MESSAGE_START` / `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_END` as the authoritative assistant transcript contract
+- [ ] `ready_for_review`, clarification, and ordinary replies each finalize as exactly one assistant message instead of a custom event plus a second post-run append
+- [ ] Builder and sandbox agents keep custom events for metadata only and no longer require duplicated conversational content to make the UI work
+- [ ] Builder and deployed chat still render live steps, browser/task-plan metadata, and review auto-advance behavior after the transcript reducer migration
+- [ ] Focused tests and browser regressions prove the AG-UI transcript lifecycle works end to end without duplicate or placeholder assistant turns
+
+### TASK-2026-03-27-145: Harden public webhook delivery against replay and oversized payloads
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/tests/unit/agentWebhookApp.test.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/specs/SPEC-agent-webhook-trigger-runtime.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-webhook-delivery-hardening-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the replay-safe webhook hardening slice for the shipped `webhook-post` runtime. `POST /api/triggers/webhooks/:public_id` now requires `x-openclaw-delivery-id`, rejects payloads above `64 KiB`, reserves `{ public_id, delivery_id }` in a dedicated `webhook_delivery_dedupes` table before sandbox invocation, returns a deterministic `409 duplicate` response on replay, and keeps safe trigger last-delivery metadata separate from the backend-only replay ledger. Focused backend tests and KB/spec notes were updated to match the shipped contract.`
+- Operator-testable outcome: `After one worker run, a human or external caller can send the same signed webhook delivery twice and see the second request return a deterministic duplicate/replayed outcome instead of invoking the sandbox again. The public webhook route also rejects oversized or malformed payloads with a clear 4xx contract before sandbox delivery, while successful first-time deliveries still return the documented accepted response and update safe delivery metadata for operators.`
+- Next step: `If operators later need provider-specific retry windows or audit-grade delivery history, extend the dedicated replay ledger or audit layer instead of moving delivery ids into `agents.triggers` or normal agent reads.`
+- Blockers: `None. Focused backend verification passed for the hardening contract; DB-backed migration verification still depends on a local Postgres test database if broader integration evidence is needed.`
+
+#### Why this is important now
+
+- `ruh-backend/src/app.ts` `POST /api/triggers/webhooks/:public_id` only checks `x-openclaw-webhook-secret`, locates the trigger by `public_id`, and forwards `req.body` directly into the sandbox with no delivery identifier, replay window, or duplicate suppression.
+- [[SPEC-agent-webhook-trigger-runtime]] documents the v1 shared-secret contract and explicitly says future hardening should extend that shipped path rather than replacing it ad hoc, but no current TODO package owns that next hardening step.
+- The shipped spec and completion notes mention payload-size limits and idempotency behavior as part of the route contract, yet the live route currently relies on generic request parsing and `stream: false` delivery without a dedicated webhook-specific abuse boundary.
+- This route is public by design once the one-time secret is revealed on deploy, so a duplicated signed request can spend model/runtime capacity or cause duplicate downstream side effects even when the original delivery already succeeded.
+- Existing backlog items cover generic route rate limiting, create idempotency, audit logging, and control-plane auth, but none specifically harden the shipped public webhook runtime against replayed signed deliveries or oversized payloads.
+
+#### What to build
+
+1. **Replay-safe delivery identity contract** (`ruh-backend/src/app.ts`, `docs/knowledge-base/specs/SPEC-agent-webhook-trigger-runtime.md`, API docs):
+   - Define one explicit delivery identity input for public webhook requests and document whether it is required or generated when absent.
+   - Treat duplicate or replayed ids as a first-class route outcome with a deterministic 2xx/4xx response contract rather than silently invoking the sandbox twice.
+   - Keep the scope narrow to the shipped signed POST path; do not broaden into a generic event bus or queueing redesign.
+
+2. **Persisted dedupe ledger and safe delivery metadata** (`ruh-backend/src/agentStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `docs/knowledge-base/005-data-models.md`):
+   - Add a bounded per-trigger delivery ledger or equivalent metadata that can remember recent delivery ids, timestamps, and outcomes long enough to suppress immediate replay.
+   - Keep stored data safe and compact: no raw webhook secret, no unbounded payload archive, and explicit retention or size limits.
+   - Update operator-visible safe metadata only after the dedupe decision is known so duplicate deliveries do not look like fresh successful runs.
+
+3. **Fail-closed route hardening** (`ruh-backend/src/app.ts`, validation helpers if needed):
+   - Enforce an explicit webhook payload-size/type boundary before sandbox invocation.
+   - Reject malformed, missing-id, or replayed requests before the sandbox session key is used.
+   - Preserve the current happy path for a first valid signed delivery with an active sandbox.
+
+4. **Focused backend verification and docs** (`ruh-backend/tests/unit/agentWebhookApp.test.ts`, `docs/knowledge-base/004-api-reference.md`, KB/spec note above):
+   - Add unit coverage for first delivery success, duplicate/replayed delivery rejection, missing or malformed delivery id behavior, and payload-size rejection.
+   - Document the public caller contract clearly enough that operators know how retries should behave and future agents do not reintroduce replay-unsafe behavior.
+
+#### Test suite
+
+**Backend unit coverage** (`ruh-backend/tests/unit/agentWebhookApp.test.ts` and adjacent helpers as needed):
+- A first signed webhook delivery with a new delivery id reaches the active sandbox and records the safe delivery outcome.
+- Repeating the same signed delivery id does not invoke the sandbox a second time and returns the documented duplicate/replay response.
+- Missing, malformed, or oversized payloads fail with the documented 4xx response before sandbox delivery.
+- Invalid secrets still fail before dedupe or sandbox invocation.
+
+**Operator verification**:
+- Deploy an agent with `webhook-post`, send one valid signed request with a delivery id, and confirm the route returns the documented accepted response.
+- Repeat the same signed request with the same delivery id and confirm the route reports duplicate/replayed delivery without rerunning the agent.
+- Send an oversized or invalid webhook body and confirm the route rejects it before touching the sandbox.
+
+#### Evaluation — task is done when
+
+- [ ] Public webhook delivery has an explicit replay/duplicate contract instead of blindly forwarding every valid signed request
+- [ ] The backend stores only the bounded metadata needed to suppress recent duplicate deliveries
+- [ ] Oversized or malformed public webhook payloads fail closed before sandbox invocation
+- [ ] First-time signed deliveries still reach the active sandbox successfully and keep safe delivery metadata up to date
+- [ ] Focused backend tests cover first delivery, duplicate/replayed delivery, invalid secret, and payload-size rejection
+- [ ] KB/API docs describe the replay-safe public webhook contract clearly enough for operators and future agents
+
+### TASK-2026-03-27-147: Add runtime-input parity to the default Co-Pilot Google Ads flow
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-copilot-runtime-input-parity-gap.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the default Co-Pilot runtime-input parity slice for the Google Ads proving path. The Co-Pilot store and saved-agent seed now carry \`runtimeInputs[]\`, the embedded Config-tab stepper inserts a real Runtime Inputs phase between Tools and Triggers, the inline review summary renders runtime-input rows through the shared readiness formatter, and the footer \`Deploy Agent\` CTA now stays disabled until required values such as \`GOOGLE_ADS_CUSTOMER_ID\` are present. The mocked Google Ads Playwright proving case was updated to cover blocked review state, value entry, successful deploy handoff, and saved-agent reopen persistence in the default shell.`
+- Operator-testable outcome: `A human using the default \`/agents/create\` Co-Pilot path for a Google Ads agent can now open Runtime Inputs, enter \`GOOGLE_ADS_CUSTOMER_ID\`, see \`Action needed before deploy\` while the field is blank, then reach \`Ready to deploy\` only after the value is present. After save/deploy, reopening the same agent through \`Build\` shows the saved runtime-input value in the same Co-Pilot Runtime Inputs step.`
+- Next step: `Keep the saved runtime-input contract unified across both builder shells. The clean follow-on is broader Co-Pilot config autosave parity plus browser-capable execution evidence for the updated Google Ads Co-Pilot flow once a host can launch Playwright Chromium successfully.`
+- Blockers: `Focused Co-Pilot unit coverage passed. The updated Playwright scenario is still environment-blocked in this sandbox because Chromium fails to launch with `bootstrap_check_in ... MachPortRendezvousServer ... Permission denied (1100)`, so browser verification remains host-blocked rather than product-blocked.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the Google Ads agent and the default create flow should be the proving case, so leaving runtime-input truthfulness only in the Advanced flow keeps the primary operator path behind the shipped saved/deploy contract.
+- `agent-builder-ui/lib/openclaw/copilot-state.ts` currently stores `connectedTools`, `credentialDrafts`, and `triggers`, but it has no `runtimeInputs` state or action at all.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` renders `purpose → skills → tools → triggers → review`, never mounts `StepRuntimeInputs`, and its review summary only explains tools and triggers.
+- `agent-builder-ui/lib/openclaw/copilot-flow.ts` currently builds Co-Pilot review readiness with `runtimeInputs: []`, so the embedded review contract can overstate readiness even when the saved agent contract contains required runtime inputs.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` enables the final deploy CTA based on purpose metadata, generated skills, and resolved custom skills only; it does not consider missing credentials, unsupported triggers, or missing runtime inputs.
+- `agent-builder-ui/e2e/create-agent.spec.ts` still expects the default Google Ads Co-Pilot fixture to reach `Ready to deploy` immediately after Tools and Triggers even though the same architect fixture requires `GOOGLE_ADS_CUSTOMER_ID`.
+
+#### What to build
+
+1. **Co-Pilot state and seed parity** (`agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`):
+   - Add `runtimeInputs` to the Co-Pilot Zustand store, its hydrate/snapshot shape, and the saved-agent seed path so new-agent drafts and Improve Agent reopen both carry the same runtime-input metadata and values.
+   - Reuse `mergeRuntimeInputDefinitions()` and the page-owned `createSessionConfig` contract instead of creating a parallel runtime-input inference path.
+   - Keep raw credential drafts separate; only the non-secret runtime-input model should enter Co-Pilot state.
+
+2. **Embedded Runtime Inputs phase** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, existing `StepRuntimeInputs.tsx`):
+   - Insert a `Runtime Inputs` phase between `Tools` and `Triggers` in the embedded Config tab stepper.
+   - Reuse the shipped `StepRuntimeInputs` component with live store-backed change handlers so the default Co-Pilot shell can edit the same `runtimeInputs[]` contract as the Advanced flow.
+   - Preserve the current purpose/skills gating while making runtime-input edits durable in the same session and reopen path.
+
+3. **Truthful review and deploy gating** (`agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`):
+   - Pass Co-Pilot `runtimeInputs` through `buildDeployConfigSummary()` so the embedded review step shows missing runtime-input blockers instead of only tool/trigger blockers.
+   - Surface runtime-input rows in the inline review summary, using the same status language the richer Review and Deploy surfaces already use.
+   - Base the final Co-Pilot `Deploy Agent` enablement on the shared readiness contract, not only on skill generation/build status, so missing runtime inputs fail closed before handoff.
+
+4. **Google Ads regression coverage** (`agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` tests if needed, `agent-builder-ui/e2e/create-agent.spec.ts`):
+   - Add focused coverage proving Co-Pilot review reports `Action needed before deploy` when required runtime inputs are blank and flips to `Ready to deploy` only after values are entered.
+   - Extend the Google Ads Playwright proving case so the default Co-Pilot flow visits Runtime Inputs, persists `GOOGLE_ADS_CUSTOMER_ID` across save/reopen or draft reload, and keeps the final CTA blocked until the value exists.
+   - Keep the Advanced configure coverage intact; this package is parity for the primary shell, not a replacement of the existing editor.
+
+#### Test suite
+
+**Focused Co-Pilot/unit coverage** (`agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, stepper/store tests as needed):
+- `createCoPilotSeedFromAgent()` hydrates saved `runtimeInputs[]` for Improve Agent reopen.
+- `buildCoPilotReviewData()` includes runtime-input readiness and reports `Action needed before deploy` when required values are missing.
+- The embedded stepper carries runtime-input changes through the review summary without dropping them on phase changes.
+
+**Browser proving case** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- The default Google Ads Co-Pilot flow shows a dedicated Runtime Inputs step between Tools and Triggers.
+- Leaving `GOOGLE_ADS_CUSTOMER_ID` blank keeps the embedded review summary and final CTA in a blocked state.
+- Entering the value, saving or reloading, and reopening the same draft preserves the runtime-input value and flips readiness truthfully.
+
+#### Evaluation — task is done when
+
+- [ ] The default Co-Pilot builder has first-class `runtimeInputs[]` state and a visible Runtime Inputs phase instead of forcing operators into the Advanced fallback for required env values
+- [ ] Improve Agent reopen and new-agent draft recovery preserve saved runtime-input values in the Co-Pilot store
+- [ ] The embedded Co-Pilot review summary uses the shared readiness contract and reports missing runtime inputs distinctly from missing connector credentials or unsupported triggers
+- [ ] The final Co-Pilot `Deploy Agent` CTA fails closed while required runtime inputs are blank
+- [ ] The Google Ads Playwright proving case covers missing-input blocking plus reopen persistence in the default Co-Pilot flow
+- [ ] KB learnings/spec links make it clear that runtime-input truthfulness must land in both the advanced and default builder paths together
+
+### TASK-2026-03-27-140: Preserve accepted builder improvements across AG-UI metadata refreshes
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded unit regression in the active Google Ads create-flow lane covering the AG-UI builder-metadata reducer path where a later `skill_graph_ready` payload re-emits an improvement the operator already accepted. The new test proves `mergeImprovements()` keeps the existing `accepted` status instead of downgrading the improvement back to `pending`, which protects improvement persistence and autosave truthfulness during repeated builder metadata refreshes.`
+- Next step: `Choose a different focus-lane seam next run, preferably autosaved Configure state or AG-UI snapshot persistence rather than another improvement-status reducer branch.`
+- Blockers: `None.`
+
+### TASK-2026-03-27-142: Add create-session reopen seed regression
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-27`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/journal/2026-03-27.md`
+- Summary: `Added one bounded `agent-builder-ui` unit regression in the active Google Ads create-flow lane covering `createInitialCreateSessionConfig()` when a saved draft is reopened. The new test proves the helper remaps saved review labels like `Google Ads Audit` back onto canonical skill ids while still projecting the accepted Google connector improvement into truthful `missing_secret` tool state, so draft reseeding stays aligned with the reopen contract without requiring production-code changes.`
+- Next step: `Pick a different focus-lane seam next run; avoid reusing `create-session-config.test.ts` unless the draft seed/reopen contract, accepted-improvement projection, or review-to-config mapping changes again.`
+- Blockers: `None.`
+
+### TASK-2026-03-26-138: Add review snapshot trigger-metadata regression
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression in the active Google Ads create/improve lane so review-mode test snapshots keep persisted trigger metadata even when the editable review draft only preserves the trigger title. The new `buildReviewAgentSnapshot()` test covers the title-only branch separately from the store save-path trigger-label regression already added earlier today.`
+- Next step: `Pick a different focus-lane seam next run, preferably in Co-Pilot review readiness or AG-UI state flow rather than another `ReviewAgent` trigger branch.`
+- Blockers: `None.`
+
+### TASK-2026-03-26-139: Persist Co-Pilot configure selections into autosaved drafts
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-copilot-draft-config-persistence-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `The default Co-Pilot shell now surfaces `Draft saved`, but that autosave contract still only persists builder metadata plus accepted-improvement projections, not the operator's live Configure choices. `buildNormalizedDraftPayload()` in `builder-metadata-autosave.ts` still writes `toolConnections: agent?.toolConnections ?? []` and `triggers: agent?.triggers ?? []`, while the actual Co-Pilot edits live in `useCoPilotStore().selectedSkillIds`, `connectedTools`, and `triggers` until `handleCoPilotComplete()` finally saves them in `page.tsx`. As a result, the product can claim the draft is saved even though a resumed or reopened draft still falls back to stale skills, tool readiness, and trigger selections from the older saved agent snapshot.`
+- Operator-testable outcome: `After one worker run, a human can build a Google Ads agent in the default Co-Pilot flow, deselect or keep a specific skill set, connect Google or leave it in `missing_secret`, choose supported or manual-plan triggers, wait for `Draft saved`, and then refresh, leave and resume, or reopen that draft without losing those safe Configure choices. The resumed draft must show the same selected skills, tool readiness metadata, and trigger state the operator last saw before leaving, while credential drafts remain ephemeral and are not exposed by draft recovery.`
+- Next step: `Extend the safe draft payload so autosave derives persisted `skills`, `toolConnections`, and `triggers` from the current Co-Pilot configure state instead of only the last saved agent snapshot. Wire those fields into the same autosave trigger path used for builder metadata, keep credential drafts excluded from persistence, then add focused autosave/store tests and one browser regression proving `Draft saved` after Configure edits really restores those edits on resume/reopen.`
+- Blockers: `None. This should compose with TASK-2026-03-26-117 rather than replace it: TASK-117 owns the route-entry resume-vs-fresh contract, while this package owns what a saved Co-Pilot draft actually contains once the operator edits skills, tools, or triggers. It also composes with TASK-2026-03-26-137's AG-UI snapshot migration by using the same canonical state source when that lands.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says choices made in Connect Tools, Choose Skills, and Set Triggers should shape persisted agent state, and one desired outcome is that a human can return later without losing important Google Ads configuration.
+- `agent-builder-ui/app/(platform)/agents/create/_components/AgentConfigPanel.tsx` shows `Saving draft…` / `Draft saved` in the default Co-Pilot shell, which tells the operator the in-progress builder state is durable.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` still normalizes draft payloads from builder metadata and the last saved agent record; it does not read `useCoPilotStore().connectedTools`, `triggers`, or the current selected-skill subset before writing the backend draft.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx:handleCoPilotComplete()` is currently the first place the live Co-Pilot `selectedSkillIds`, `connectedTools`, and `triggers` are written into `persistAgentEdits()` or `saveAgent()`, so draft autosave overstates what will survive resume/reopen.
+- TASK-2026-03-26-117 already scopes the route-entry resume choice, but that package cannot restore truthful Configure state unless the autosaved draft record itself includes the latest safe Configure selections.
+
+#### What to build
+
+1. **Safe autosaved configure contract** (`agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/hooks/use-agents-store.ts`):
+   - Extend draft normalization so the autosaved backend draft reflects the current selected-skill subset plus safe `toolConnections[]` and `triggers[]` from the active Co-Pilot state.
+   - Keep the contract safe on readback: credential drafts, raw secrets, and other ephemeral connector input must remain in-memory only.
+   - Preserve accepted-improvement projection and existing stronger saved readiness states instead of downgrading `configured` connectors when autosave runs again.
+
+2. **Autosave trigger and state plumbing** (`agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`):
+   - Make Co-Pilot edits to selected skills, connected tools, and triggers participate in the same debounced autosave loop that currently tracks builder metadata.
+   - Avoid creating a second parallel draft contract; reuse one canonical snapshot so AG-UI migration work can later swap the source cleanly.
+   - Ensure draft-save status only reports `saved` after the safe Configure selections for that snapshot have actually been persisted.
+
+3. **Resume and reopen alignment** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, route seed helpers, `agent-builder-ui/lib/openclaw/copilot-flow.ts`):
+   - Seed resumed Co-Pilot sessions from the newly persisted safe Configure fields so draft recovery and Improve Agent reopen show the same selected skills, tools, and triggers the operator last saved.
+   - Keep the existing first-save credential handoff fail-closed: resumed drafts may show `missing_secret` or `configured` metadata, but must not surface raw credential values.
+   - Preserve compatibility with TASK-2026-03-26-117 so resume-vs-fresh behavior and draft contents converge on one truthful contract.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB notes above):
+   - Add focused tests proving autosave writes selected skills, projected tool connections, and structured trigger metadata from live Co-Pilot state rather than the stale saved-agent fallback.
+   - Add one browser regression where the operator changes Configure selections, sees `Draft saved`, resumes or reopens the draft, and finds the same safe selections restored.
+   - Document the distinction between safe persisted Configure metadata and intentionally ephemeral credential drafts so future draft-recovery work does not reintroduce secret leakage.
+
+#### Test suite
+
+**Focused frontend/store coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, related create-flow helpers):
+- Autosave payloads derive `skills`, `toolConnections`, and `triggers` from the current Co-Pilot snapshot, not just from `agent?.toolConnections` / `agent?.triggers`.
+- Accepted-improvement projection remains idempotent across repeated autosaves and does not downgrade stronger saved connector states.
+- Credential drafts stay excluded from persisted draft payloads even when connector metadata is autosaved.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent in Co-Pilot, change skills/tools/triggers, wait for `Draft saved`, refresh or resume, and confirm the same safe Configure choices reappear.
+- Reopen the saved draft or Improve Agent path and confirm selected skills plus connector/trigger readiness still match the last autosaved Co-Pilot state.
+- Final deploy or save still uses the same draft identity and does not create a duplicate record after the autosaved Configure edits.
+
+#### Evaluation — task is done when
+
+- [ ] `Draft saved` in the Co-Pilot shell means the latest safe selected skills, tool metadata, and trigger metadata were actually persisted
+- [ ] Resumed drafts and Improve Agent reopen restore those safe Configure selections instead of falling back to stale saved-agent config
+- [ ] Credential drafts remain ephemeral and never leak through draft persistence or draft recovery
+- [ ] Focused tests and browser coverage prove the autosaved Configure contract survives refresh/reopen on the Google Ads path
+- [ ] KB notes describe the autosaved-draft contract accurately once this slice ships
+
+### TASK-2026-03-26-137: Add Google Workspace builder-hint normalization regression
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression in the active Google Ads create-flow lane and fixed the shared normalization map so builder metadata that names the supported connector as "Google Workspace" now resolves to the real \`google\` connector id instead of dropping the MCP-first tool hint.`
+- Next step: `Avoid reusing this seam next run; look for a different bounded focus-lane gap in builder helper coverage or a nearby create-flow unit branch that still lacks regression protection.`
+- Blockers: `None.`
+
+### TASK-2026-03-26-136: Bring Co-Pilot review to saved-config readiness parity
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the default Co-Pilot review parity slice for the Google Ads create flow. `WizardStepRenderer.tsx` now derives its review-time tool cards, trigger cards, and deploy-readiness summary from one shared `buildCoPilotReviewData()` helper that reuses the same `operator-config-summary.ts` formatter layer already used by Review and Deploy, so the embedded `/agents/create` review step now shows `Configured`, `Needs credentials`, `Manual setup`, supported-vs-unsupported trigger state, and the shared `Ready to deploy` vs `Action needed before deploy` contract instead of flat name lists. The review step also keeps accepted-improvement connector projections live because it reads the current Co-Pilot tool state, and the Google Ads create-flow Playwright fixture plus focused Bun coverage were updated to lock that parity in place.`
+- Operator-testable outcome: `A human building a Google Ads agent in the default Co-Pilot flow can now reach the review phase and see readiness-grade connector and trigger detail before deploy: each selected connector shows its safe runtime status, each trigger shows supported vs unsupported state, and the same deploy-readiness summary used elsewhere is visible inside the embedded review shell.`
+- Next step: `Use this shared review-time readiness contract while finishing TASK-2026-03-26-113 so the actual deploy CTA logic and backend preflight fail closed on the same blocker categories the review surface now teaches.`
+- Blockers: `None. Focused Bun verification passed for the new review-data helper and the shared formatter contract. The Playwright fixture was updated for the review assertions but was not executed in this run.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads creation journey should use real MCP-backed readiness and should not hide unsupported runtime gaps behind decorative UI, but the current default review step still renders only plain connector and trigger names.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` currently summarizes tools with `store.connectedTools.map((t) => t.name).join(", ")` and triggers with `store.triggers.map((t) => t.title || t.id).join(", ")`, so the operator cannot tell from Co-Pilot review whether Google is `configured`, still `missing_secret`, or only a manual plan.
+- The same review step only blocks on unresolved custom skills today; it does not surface the richer config-readiness context that `agent-builder-ui/lib/agents/operator-config-summary.ts` already formats for Review and Deploy.
+- `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx` already uses `buildReviewToolItems()` and `buildReviewTriggerItems()`, which means the repo has one shared safe formatter contract but the primary Co-Pilot shell is not consuming it.
+- `docs/knowledge-base/008-agent-builder-ui.md` and `SPEC-google-ads-agent-creation-loop.md` now describe Review as showing persisted connector readiness and trigger support details, so the current Co-Pilot review surface is a code-vs-doc mismatch on the product's default builder path.
+
+#### What to build
+
+1. **Shared Co-Pilot review formatter path** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts` if needed):
+   - Derive Co-Pilot review data from the same structured formatter layer already used by `ReviewAgent` and Deploy instead of flattening tools/triggers into comma-separated names.
+   - Include accepted-improvement projection before formatting so the review surface reflects the same current connector state the operator would save or deploy.
+   - Keep the representation safe for browser display: show status labels and config-safe detail text, not raw credential values or callback URLs.
+
+2. **Operator-visible blocker and readiness copy** (`WizardStepRenderer.tsx`, `CoPilotLayout.tsx` if needed):
+   - Add one explicit readiness summary to the Co-Pilot review phase, using the same blocker categories already recognized elsewhere (`missing_secret`, unsupported/manual-plan trigger state, unresolved skills).
+   - Make the review surface explain what action is needed next, not just that deploy is blocked.
+   - Keep the copy compatible with TASK-2026-03-26-113 so the future deploy gate can reuse the same reasons instead of teaching the operator two different contracts.
+
+3. **Default-flow review parity** (`WizardStepRenderer.tsx`, optional shared UI subcomponent if it reduces drift):
+   - Replace the current plain `SummaryRow` strings for tools and triggers with richer rows/cards that preserve status and detail text.
+   - Ensure accepted improvements immediately refresh the rendered connector state in the review step without waiting for a page transition.
+   - Preserve the existing quick review cadence; do not force operators into the separate advanced ReviewAgent screen just to understand runtime readiness.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused component/helper tests, KB notes above):
+   - Add one default Co-Pilot review regression for the Google Ads proving case that asserts `Needs credentials` or `Manual setup` / unsupported trigger copy is visible before deploy.
+   - Add focused formatter/UI coverage so future review-surface refactors cannot regress back to plain name lists.
+   - Update KB notes to describe the Co-Pilot review step as consuming the same saved-config readiness contract as Review/Deploy once the package lands.
+
+#### Test suite
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Build a Google Ads agent in the default Co-Pilot flow, reach the review step with a `missing_secret` Google connector or unsupported/manual-plan trigger, and assert the review surface shows the blocker/status copy before deploy is attempted.
+- Accept the Google Ads improvement in Co-Pilot review and assert the visible connector state updates immediately to the projected supported connector/manual-plan contract instead of staying a generic label.
+- Navigate back to Tools or Triggers from review and confirm the displayed blocker categories match the actual editable config state.
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/`, `agent-builder-ui/lib/agents/`):
+- Co-Pilot review derives tool and trigger rows from the shared formatter helpers rather than a duplicate string-only summary path.
+- Accepted improvement projection feeds the rendered review rows before final save/deploy.
+- Readiness summary text stays aligned with the blocker categories returned by the shared config-summary contract.
+
+#### Evaluation — task is done when
+
+- [ ] The default Co-Pilot review step shows connector readiness and trigger support details instead of only plain names
+- [ ] Operators can tell from Co-Pilot review whether a Google Ads agent is ready to deploy or still blocked by credentials/manual setup/unsupported triggers
+- [ ] Accepted improvements update the visible review-time connector state immediately in the Co-Pilot shell
+- [ ] The Co-Pilot review surface reuses the shared formatter/readiness contract already used by Review and Deploy instead of introducing another divergent summary model
+- [ ] Browser and focused frontend coverage lock the Google Ads Co-Pilot review parity behavior in place
+- [ ] KB notes describe the default Co-Pilot review surface accurately once the parity slice ships
+
+### TASK-2026-03-26-137: Replace custom builder metadata events with AG-UI state snapshots
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-agui-state-snapshot-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `The active focus says AG-UI adoption should lead the builder roadmap, but the live `/agents/create` contract still treats AG-UI mostly as a transport wrapper around bespoke builder metadata events. `builder-agent.ts` emits `EventType.CUSTOM` for `skill_graph_ready` plus wizard field/skills/tools/triggers/rules updates, `use-agent-chat.ts` only consumes those custom events and forwards the result into the legacy `BuilderState` callbacks, and `builder-metadata-autosave.ts` still seeds and hashes drafts from `BuilderState` instead of a canonical AG-UI snapshot/delta state model. That means every new Google Ads or Co-Pilot feature still has to teach the same metadata to AG-UI custom events, the page-owned `BuilderState`, and the Co-Pilot store separately, even though [[SPEC-agui-protocol-adoption]] says builder state should move onto `StateSnapshot` / `StateDelta`.`
+- Operator-testable outcome: `After one worker run, a human can open `/agents/create`, ask for a Google Ads agent, and see purpose, generated skills, tool hints, trigger hints, draft-save state, and review readiness flow through one AG-UI builder-state path instead of a custom-event-plus-legacy-store split. The same create flow should still autosave a safe draft, reopen it, and reach review/configure without regressions, but the authoritative contract should now be AG-UI `StateSnapshot` / `StateDelta` rather than `skill_graph_ready` and wizard metadata custom events.`
+- Next step: `Use [[SPEC-agui-protocol-adoption]] as the contract and land the missing builder-state slice that TASK-2026-03-26-98 leaves too broad: extend the AG-UI builder state type so it owns the current builder metadata and draft-save envelope, teach `BuilderAgent` to emit `STATE_SNAPSHOT` for `ready_for_review` plus bounded `STATE_DELTA` updates for fields/rules/tool hints/trigger hints/improvements, update `useAgentChat()` and `/agents/create` to reduce builder state from those AG-UI events instead of `BuilderState`, and keep only truly UI-local custom events such as explicit phase changes if they are still needed. Then refresh focused AG-UI tests plus the Google Ads create-flow browser coverage so the snapshot-driven contract is locked in before more focus-lane work lands on top of it.`
+- Blockers: `None. This is a focused prerequisite inside the broader AG-UI cutover from TASK-2026-03-26-98, not a replacement for that task. TASK-98 still owns deleting the remaining legacy transport/state files; this package owns the untracked snapshot/delta builder-state seam that those deletions depend on.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` puts `AG-UI Protocol Adoption (Option C)` first in the delivery order, but the builder still uses custom metadata events plus `BuilderState` as its real state contract, so the top steering item is only partially represented in the live create flow.
+- [[SPEC-agui-protocol-adoption]] explicitly says `ready_for_review` should map to `StateSnapshot` and incremental builder state should use `StateDelta`, yet `builder-agent.ts` still emits only `EventType.CUSTOM` payloads for `skill_graph_ready` and the wizard metadata events.
+- `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts` has no live `STATE_SNAPSHOT` / `STATE_DELTA` reducer path for builder metadata; instead it routes builder metadata through `commitBuilderMetadataEvent()` and then mirrors the patch into `onBuilderStateChange`, which keeps the legacy create-page store alive inside the AG-UI path.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` still imports `BuilderState` and seeds draft autosave from that legacy shape, so draft persistence is also tied to the split state model.
+- Existing TODOs cover the broad AG-UI cutover, Google Ads config truthfulness, and Co-Pilot surfaces, but no current feature package owns the narrower builder-state migration from custom events to real AG-UI snapshots/deltas. Without that seam, each new focus-lane change keeps deepening the same three-store coupling.
+
+#### What to build
+
+1. **Canonical AG-UI builder state model** (`agent-builder-ui/lib/openclaw/ag-ui/types.ts`, adjacent helpers):
+   - Extend the AG-UI state contract so it can carry the builder metadata currently split across `BuilderState`, `BuilderMetadataState`, and the Co-Pilot store: identity fields, graph/workflow/rules, tool and trigger hints, improvements, draft-save state, and any session metadata the builder genuinely needs.
+   - Keep browser/task-plan/editor state separate where appropriate, but stop treating builder metadata as an out-of-band custom-event payload.
+   - Define one serialization-friendly shape that `StateSnapshot` and `StateDelta` can own going forward.
+
+2. **BuilderAgent snapshot/delta emission** (`agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, focused tests):
+   - Emit `EventType.STATE_SNAPSHOT` for `ready_for_review` with the normalized builder state described in the spec instead of `CustomEventName.SKILL_GRAPH_READY` as the canonical payload.
+   - Emit bounded `EventType.STATE_DELTA` updates for follow-on field/rule/tool/trigger/improvement changes rather than proliferating wizard metadata custom events for each new builder field.
+   - Keep true custom events only for product-specific behaviors that are not builder state, such as explicit phase control if that still cannot be expressed as state.
+
+3. **Snapshot-driven create flow and autosave** (`agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`):
+   - Replace the current `commitBuilderMetadataEvent()` and `onBuilderStateChange` bridge with snapshot/delta reduction into the authoritative AG-UI builder state.
+   - Move draft autosave seeding and hash tracking off the legacy `BuilderState` import so autosave follows the same AG-UI snapshot the UI reads.
+   - Update `/agents/create` and Co-Pilot synchronization so the page consumes the AG-UI state directly and only derives local UI state where strictly necessary.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB notes/spec):
+   - Add focused tests proving `ready_for_review` emits a real AG-UI state snapshot and follow-on metadata updates emit deltas instead of only custom events.
+   - Add reducer/autosave coverage that proves draft persistence still works from the snapshot-driven builder state.
+   - Refresh the Google Ads create-flow browser path so purpose, skills, tool hints, trigger hints, and review readiness still appear correctly after the snapshot migration.
+
+#### Test suite
+
+**Focused AG-UI unit coverage** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, reducer/autosave tests):
+- `BuilderAgent` emits `STATE_SNAPSHOT` for `ready_for_review` with normalized Google Ads builder state.
+- Follow-on architect metadata changes emit `STATE_DELTA` patches that the reducer applies deterministically.
+- Draft autosave hashes and persisted payloads are derived from the AG-UI builder state instead of the legacy `BuilderState` shim.
+
+**Builder-flow regression coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused create-page tests as needed):
+- The Google Ads create flow still updates purpose, skills, tool hints, trigger hints, and review readiness after the snapshot/delta migration.
+- Draft autosave, refresh or reopen, and review handoff still operate on the same builder state contract.
+- No regression reintroduces the old custom-event-only builder metadata path as the authoritative create-flow state source.
+
+#### Evaluation — task is done when
+
+- [ ] `BuilderAgent` emits canonical AG-UI `STATE_SNAPSHOT` / `STATE_DELTA` events for builder metadata instead of relying on `skill_graph_ready` plus wizard metadata custom events
+- [ ] `useAgentChat()` and draft autosave reduce builder metadata from AG-UI state events rather than the legacy `BuilderState` bridge
+- [ ] `/agents/create` and Co-Pilot consume one authoritative builder-state contract without teaching the same metadata to multiple parallel stores
+- [ ] The Google Ads create flow still reaches review with truthful purpose, skills, tool hints, trigger hints, and draft-save behavior after the migration
+- [ ] KB/spec notes document the builder snapshot/delta seam as part of the shipped AG-UI contract
+
+### TASK-2026-03-26-134: Persist Review-edited skills and triggers into the saved Google Ads config flow
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-review-edit-persistence-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the review-confirm persistence seam for the active Google Ads create flow. `create-session-config.ts` now owns one helper that maps review-edited skill labels back onto canonical graph ids, rebuilds confirmed trigger selections against the structured trigger contract, and reapplies accepted improvement projections into the same page-owned session snapshot. `page.tsx` now uses that helper from `ReviewAgent` confirm, so Configure, review-time test chat, and final save/deploy all read the confirmed review state instead of silently falling back to stale pre-review skills/triggers.`
+- Operator-testable outcome: `After one worker run, a human can open `/agents/create`, build a Google Ads agent, change skills or trigger selections in Review, click Confirm, and see those exact edits survive into Configure, the review-time `Test Agent` path, and the final save/deploy payload. Reopening Improve Agent for the same record should show the edited Google Ads skill/trigger contract instead of the pre-edit defaults, and focused browser or unit coverage should prove the Review-confirm path no longer drops those edits.`
+- Next step: `If a browser-capable host is available later, run the Google Ads create-flow review/edit scenario in Playwright to add end-to-end evidence on top of the focused session-state regression added here.`
+- Blockers: `None. Focused Bun coverage for the review-confirm projection contract passed in this run; broader browser verification remains environment-dependent.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads creation loop should be iterative and self-improving, but the current Review step still has editable sections whose changes do not survive the Confirm boundary.
+- `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx` exposes editable `Skills` and `Triggers` sections and returns them in `ReviewAgentOutput`, so operators are explicitly invited to shape the saved Google Ads contract at Review time.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` currently handles `onConfirm()` by updating only `name`, `rules`, and `improvements`; it never projects `output.skills` or `output.triggers` back into `createSessionConfig`, even though final completion still reads that page-owned session state.
+- `handleComplete()` later resolves persisted skills from `createSessionConfig.selectedSkills` and persisted triggers from `createSessionConfig.triggers`, which means Review edits are silently overwritten by stale pre-review values instead of the confirmed review surface.
+- Existing TODOs cover in-flight Configure state, saved config truthfulness, accepted improvement projection, deploy readiness, and SOUL/test-agent context, but no current task owns the missing Review-confirm seam where user-approved edits are dropped before save.
+
+#### What to build
+
+1. **Review-confirm state projection** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `create-session-config.ts`):
+   - Treat `ReviewAgentOutput` as authoritative input for the same page-owned create-session config contract used by Configure and final save.
+   - When Review is confirmed, project edited `skills[]` and `triggers[]` back into `createSessionConfig` instead of keeping them as display-only data.
+   - Preserve the existing name/rules/improvements flow while ensuring review-confirm writes one coherent session snapshot rather than partial overrides.
+
+2. **Canonical skill and trigger mapping** (`create-session-config.ts`, review helpers as needed):
+   - Add a shared helper that maps Review-edited skill names back onto current `skillGraph` ids so the persisted config still uses the canonical skill identifiers expected by save/deploy.
+   - Keep trigger persistence on the structured `triggers[]` contract already used elsewhere in the Google Ads path; do not fall back to `triggerLabel` text parsing.
+   - Fail closed when a Review edit no longer maps cleanly to the current graph or trigger catalog: preserve the user-visible choice, but surface or record an explicit unsupported/manual state rather than silently inventing a runtime-ready contract.
+
+3. **Review/Test/Configure alignment** (`page.tsx`, `ReviewAgent.tsx`, `agent-config.ts` only if needed):
+   - Make the post-confirm Review → Configure flow read the updated session state immediately so operators see their edits reflected without a save round-trip.
+   - Keep the review-time `Test Agent` path aligned with the same confirmed review data so the operator is not testing one config while saving another.
+   - Ensure Improve Agent reopen and final save/deploy both consume the confirmed review state rather than the older pre-review defaults.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused session-state tests, KB/spec notes above):
+   - Add one regression proving that editing Review skills or triggers survives Confirm and is still visible when Configure opens.
+   - Add coverage proving that final save/deploy uses the confirmed review state for the Google Ads path rather than the stale pre-review session snapshot.
+   - Document the Review-confirm contract so future create-flow work treats editable Review sections as authoritative state, not decorative display controls.
+
+#### Test suite
+
+**Focused frontend/state coverage** (`agent-builder-ui/app/(platform)/agents/create/`):
+- Review-confirm maps edited skill names back to canonical `selectedSkills` ids used by the saved agent contract.
+- Review-confirm updates structured `triggers[]` in session state, and final completion persists those values without reverting to pre-review state.
+- If a Review edit no longer matches a canonical graph node or runtime-backed trigger, the state path fails closed instead of silently restoring the old default.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the Google Ads create flow, edit Review skills or triggers, click Confirm, and assert Configure opens with those exact edits already applied.
+- Complete save/deploy and assert the saved agent record carries the confirmed skill/trigger contract instead of the original defaults.
+- Reopen Improve Agent for that saved Google Ads agent and confirm the review/config surfaces still reflect the Review-confirmed state.
+
+#### Evaluation — task is done when
+
+- [ ] Confirming Review writes edited `skills[]` and `triggers[]` back into the page-owned create-session state
+- [ ] Configure opens with the Review-confirmed Google Ads skill/trigger choices instead of stale pre-review defaults
+- [ ] Final save/deploy persists the Review-confirmed contract, not the older session snapshot
+- [ ] Review-time `Test Agent` and Improve Agent reopen no longer drift from the confirmed review state
+- [ ] Focused automated coverage proves the Review-confirm seam no longer drops user-approved edits
+
+### TASK-2026-03-26-133: Make SOUL and review test chat honor saved Google Ads config
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/lib/openclaw/agent-config.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-pre-deploy-agent-testing.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-soul-config-context-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the bounded prompt-contract slice for the Google Ads create lane. `ReviewAgent.tsx` now builds the Test Agent snapshot through one helper that preserves persisted `toolConnections[]`, structured `triggers[]`, and accepted improvements, while `buildSoulContent()` now emits a shared safe `Configured Tools And Triggers` summary for review-mode test chat and deploy-time `soul_content`. The summary preserves operator-relevant readiness state such as `configured`, `missing_secret`, `supported`, and `manual plan only`, but strips secret-bearing summary details like tokens and callback URLs.`
+- Operator-testable outcome: `A human can now reach Review for a Google Ads agent, click `Test Agent`, and get behavior grounded in the same saved config they just reviewed: the injected SOUL mentions the selected connector state, missing-secret/manual-plan caveats, accepted improvements, and supported trigger contract instead of only a generic trigger label. The same structured context is written during deploy, so a deployed Google Ads agent can accurately explain what integrations and trigger behavior are configured.`
+- Next step: `Stay in the same focus lane but move to a different package, with `TASK-2026-03-26-113` (deploy-readiness fail-closed) or `TASK-2026-03-26-131` (post-accept run recovery) as the clean next worker-ready choices.`
+- Blockers: `None. This should compose with TASK-2026-03-26-106, TASK-2026-03-26-113, and TASK-2026-03-26-129 rather than replace them: those tasks make the UI and deploy gate truthful, while this package makes the review-time test loop and deployed runtime prompt consume the same saved contract.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the creation loop should be iterative and self-improving, but the current Review "Test Agent" path still validates only a generic skills-and-rules prompt rather than the saved Google Ads connector and trigger state the operator is actually configuring.
+- `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx` builds `reviewAgentSnapshot` with `name`, `skills`, `rules`, and a flattened `triggerLabel`, but it omits `toolConnections` and structured `triggers`, so the test drawer cannot exercise the saved config contract now shown elsewhere in Review.
+- `agent-builder-ui/lib/openclaw/agent-config.ts` uses the same `buildSoulContent()` output for `soul_override` in review-mode test chat and for real `pushAgentConfig()`, which means this is not just a drawer mismatch; the deployed runtime prompt also lacks truthful connector and trigger context.
+- `buildSoulContent()` currently emits only one legacy `- Your trigger: ${agent.triggerLabel}` line, so a Google Ads agent cannot distinguish `configured` versus `missing_secret` connectors or supported versus manual-plan trigger state even when the product already knows those facts.
+- Existing TODOs cover review/deploy display truthfulness, deploy fail-closed behavior, accepted-improvement projection, and AG-UI cutover, but no current task owns the missing prompt-contract seam between saved config metadata and the SOUL/test-agent loop.
+
+#### What to build
+
+1. **Safe SOUL config-context contract** (`agent-builder-ui/lib/openclaw/agent-config.ts`, helper module as needed):
+   - Extend `buildSoulContent()` to include a compact, non-secret summary of selected tool connections and structured triggers instead of only the flattened legacy `triggerLabel`.
+   - Distinguish states the model should understand operationally: `configured`, `missing_secret`, and `unsupported/manual-plan` connectors; supported schedule triggers versus non-runtime-ready trigger ideas.
+   - Keep the content safe for browser-visible review testing and sandbox writes: no raw credential values, secrets, callback URLs, or overly verbose prose dumps.
+
+2. **Review test-agent snapshot parity** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, review types/helpers as needed):
+   - Build the test-agent snapshot from the same persisted `toolConnections[]`, `triggers[]`, and accepted-improvement state already shown in Review instead of reconstructing a reduced display-only object.
+   - Keep the test drawer isolated from the architect conversation exactly as today while making its injected SOUL representative of the real saved config.
+   - Ensure edits made in Review before clicking `Test Agent` are reflected in the snapshot the same way they are reflected in the visible review cards.
+
+3. **Deploy/runtime prompt alignment** (`agent-builder-ui/lib/openclaw/agent-config.ts`, deploy/apply call sites only if needed):
+   - Reuse the same SOUL config-context helper for deploy-time `pushAgentConfig()` so the runtime prompt matches what the operator validated in Review.
+   - Preserve existing cron/MCP apply behavior; this slice is about making the prompt truthful, not duplicating backend readiness logic already covered by other tasks.
+   - Keep the wording specific enough that a deployed Google Ads agent can answer “what tools and triggers do you have?” accurately from its own prompt context.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/agent-config.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes above):
+   - Add unit coverage proving `buildSoulContent()` includes safe connector and trigger context while omitting secrets.
+   - Add one review-flow regression proving the `Test Agent` drawer uses the saved Google Ads config contract rather than only generic skills/rules text.
+   - Document the prompt-contract expectation so future Review/deploy work treats SOUL generation as part of the saved-config truthfulness surface, not an unrelated prompt helper.
+
+#### Test suite
+
+**Focused prompt/Review coverage** (`agent-builder-ui/lib/openclaw/agent-config.test.ts`, review-focused tests as needed):
+- `buildSoulContent()` includes safe summaries for configured, missing-secret, and unsupported/manual-plan connector states without leaking credential values.
+- Structured trigger definitions are represented from `triggers[]`, and the SOUL no longer relies solely on `triggerLabel`.
+- The review-mode test snapshot passes persisted tool/trigger metadata through to `buildSoulContent()` instead of dropping them on the floor.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- In the Google Ads review flow, open `Test Agent`, send a prompt like “What tools and triggers are configured?”, and assert the response reflects the current saved connector and trigger status rather than only generic skills/rules prose.
+- Cover one not-ready case (`missing_secret` or unsupported/manual-plan) so the review test loop proves the agent understands that the config is incomplete before deploy.
+
+#### Evaluation — task is done when
+
+- [ ] `buildSoulContent()` consumes persisted tool and trigger metadata rather than only skills, rules, and `triggerLabel`
+- [ ] Review’s `Test Agent` path injects the same saved Google Ads config contract the operator sees in Review
+- [ ] Deploy-time `soul_content` stays aligned with the review-tested prompt contract
+- [ ] The SOUL output remains safe: no raw secrets, credential values, or unsupported internal-only details leak into browser-visible review text
+- [ ] Focused automated coverage proves both SOUL generation and the Google Ads review/test path use the saved config truthfully
+- [ ] KB/spec notes describe the SOUL/test-agent contract as part of the saved-config truthfulness surface
+
+### TASK-2026-03-26-131: Surface post-accept architect-run recovery before operators fork a new run
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-architect-bridge-retry-safety.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-post-accept-run-recovery-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `The bridge retry-safety slice now does the safe transport-level thing: when the socket drops after `chat.send` is accepted, `/api/openclaw` returns a typed `error` payload with the stable `request_id` and warns that the architect run may still be finishing remotely instead of blindly resending the prompt. But the builder product layer still has no contract for that state. `sendToArchitectStreaming()` preserves the payload, yet `BuilderAgent` reduces every `response.type === "error"` case to a generic `RUN_ERROR`, `useAgentChat()` keeps no "uncertain completion" envelope in builder state, and `TabChat` / Co-Pilot therefore give the operator no explicit fork-or-reset decision before the next send. This leaves `/agents/create` prone to duplicate architect runs precisely in the edge case the retry-safety work exposed. The next slice should preserve post-accept disconnect context end to end and require an explicit operator choice before a new architect run is started from an uncertain previous state.`
+- Operator-testable outcome: `After one worker run, a human using `/agents/create` who hits a mocked or real post-accept architect disconnect sees a dedicated recovery state instead of only a generic failure. The UI explains that the previous run may still be finishing remotely, preserves the affected request context, and does not silently or accidentally resend on the next action. The operator can explicitly choose a safe next step such as "Start new run anyway" or "Reset session", and browser coverage proves that recovery state in the current multi-textarea Co-Pilot shell.`
+- Next step: `Add one bounded frontend recovery contract for accepted-run disconnects. Start by giving the existing post-accept bridge path a deterministic error code, preserve `request_id` plus the original prompt or summary in AG-UI builder state when that code appears, render a dedicated recovery banner in builder mode that blocks implicit resend, and only mint a fresh request/session when the operator explicitly chooses to fork. Then refresh `agent-builder-ui/e2e/create-agent.spec.ts` to cover the mocked post-accept disconnect path on the current create shell.`
+- Blockers: `None. This should compose with TASK-2026-03-25-33 and TASK-2026-03-26-111 instead of replacing them: TASK-33 made the bridge fail closed at the acceptance boundary, TASK-111 covers stalled-run timeout and lifecycle truthfulness, and this package owns the remaining operator recovery contract after a run has already been accepted.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` keeps the Google Ads create journey as the top lane, and a post-accept disconnect is currently one of the easiest ways for an operator to duplicate work or abandon a run without knowing whether the architect is still finishing remotely.
+- `agent-builder-ui/app/api/openclaw/route.ts` already emits a typed post-accept failure response with `request_id` and the warning that the architect run may still be running remotely, so the raw recovery signal exists today.
+- `agent-builder-ui/lib/openclaw/api.ts` preserves that response as a normal `ArchitectResponse`, but `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` flattens every `error` response into a generic `RUN_ERROR` and drops the acceptance-boundary semantics.
+- `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts` and `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx` have no builder-state field or UI surface for "run status unknown but maybe still active", so the operator’s only visible option is effectively to resend.
+- Existing TODOs cover bridge retry safety, stalled-run timeout handling, draft recovery, and deploy readiness, but no current task owns the narrower product contract between the typed post-accept bridge error and the next operator action.
+
+#### What to build
+
+1. **Deterministic post-accept error shape** (`agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/api.ts`, shared types/helpers as needed):
+   - Add a stable machine-readable code or subtype for the existing post-accept disconnect path instead of relying on message text only.
+   - Preserve `request_id`, session id, and any safe summary text the frontend needs to explain the ambiguous state without log inspection.
+   - Keep pre-accept transport failures on the existing retry/error path so the new contract remains limited to the accepted-run boundary.
+
+2. **Builder-state uncertainty envelope** (`agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, related AG-UI state/types):
+   - Carry the post-accept disconnect result into builder-visible state instead of collapsing it into an indistinguishable generic run error.
+   - Persist enough context for the operator to decide safely: prompt excerpt, `request_id`, whether the session rotated, and whether starting a new run will intentionally fork from an uncertain previous run.
+   - Clear that envelope only when the operator explicitly resets or chooses to start a new run anyway.
+
+3. **Explicit recovery UX in builder mode** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, builder page wiring as needed):
+   - Render a dedicated recovery banner or card that explains the previous architect run may still be finishing remotely.
+   - Block implicit resend from the default submit path while the uncertainty envelope is active; require an explicit fork or reset action first.
+   - Keep already-saved safe draft metadata intact so the operator can recover without losing the earlier builder work.
+
+4. **Regression coverage and docs** (`agent-builder-ui/app/api/openclaw/route.test.ts`, focused AG-UI/chat tests, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes above):
+   - Add one route/client regression proving post-accept disconnects return the deterministic code plus `request_id`.
+   - Add one builder/UI regression proving the uncertainty envelope survives long enough to render the recovery state and requires explicit fork/reset before a new request starts.
+   - Refresh browser coverage so the current create shell asserts the recovery banner or actions using selectors that match the multi-textarea Co-Pilot layout.
+
+#### Test suite
+
+**Bridge and client coverage** (`agent-builder-ui/app/api/openclaw/route.test.ts`, `agent-builder-ui/lib/openclaw/api.test.ts`, focused AG-UI tests):
+- A post-accept WebSocket drop returns the deterministic uncertainty code plus the original `request_id`.
+- `BuilderAgent` and `useAgentChat()` preserve uncertainty metadata instead of reducing it to an indistinguishable generic error.
+- Starting a replacement run requires an explicit fork/reset action once that uncertainty state is active.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Mock a post-accept disconnect on `/agents/create` and assert the operator sees the dedicated uncertain-run recovery state instead of only a generic failure.
+- Verify the normal submit path is blocked or redirected until the operator explicitly chooses to start a new run anyway or reset.
+
+#### Evaluation — task is done when
+
+- [ ] Post-accept architect disconnects have a deterministic frontend-visible error code instead of message-text parsing only
+- [ ] Builder-mode state preserves `request_id` and uncertainty context long enough for the operator to act on it
+- [ ] `/agents/create` no longer drops straight from "run may still be finishing remotely" into an indistinguishable generic error/resend path
+- [ ] Operators must make an explicit fork or reset decision before starting a new architect run after a post-accept disconnect
+- [ ] Focused automated coverage proves the bridge shape, builder-state preservation, and current create-shell recovery UI contract
+- [ ] KB/spec notes describe the post-accept recovery contract as a follow-on to retry safety rather than an automatic retry path
+
+### TASK-2026-03-26-130: Protect configured connector state from repeated tool recommendations
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded focus-lane unit regression around the Google Ads create flow proving that a repeated research recommendation for the supported `google` connector does not downgrade or disconnect an already configured saved connector in the Connect Tools catalog during reopen/review.`
+- Next step: `Pick a different focus-lane regression next run; avoid reusing this same catalog edge unless production behavior changes.`
+- Blockers: `None`
+
+### TASK-2026-03-26-135: Cover create-session review-state improvement projection
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded focus-lane unit regression around `deriveCreateSessionReviewState()` so the Google Ads review surface keeps projecting accepted builder tool improvements into truthful connector state and preserves stronger touched-session connector readiness instead of regressing to the weaker projected default.`
+- Next step: `Choose a different create/improve regression next run; avoid reusing this same review-state projection seam unless `create-session-config.ts` changes again.`
+- Blockers: `None`
+
+### TASK-2026-03-26-129: Apply accepted builder improvements to real Google Ads config state
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-improvement-persistence.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-improvement-acceptance-config-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the first bounded improvement-projection slice for the Google Ads lane. Accepted `tool_connection` improvements now flow through a shared projector in `create-session-config.ts`, which maps the builder’s Google recommendation onto the truthful `google` connector, preserves stronger saved states such as `configured`, and otherwise projects a fail-closed `missing_secret` connector into review state, Co-Pilot state, autosaved drafts, Improve Agent reopen, and final save/deploy payloads. Accepting the recommendation no longer leaves it as a disconnected badge.`
+- Operator-testable outcome: `After one worker run, a human building or improving a Google Ads agent can accept the builder recommendation to connect Google Ads and immediately see the agent's config state change in a truthful way: the matching supported connector or explicit manual-plan entry appears in Connect Tools and Review, save/reopen preserves both the accepted improvement and the projected tool connection, and deploy readiness/tool summaries now reflect that accepted action instead of showing the improvement only as a separate badge.`
+- Next step: `Move to the next Google Ads focus-lane package; do not revisit this projector unless a new recommendation category needs to extend the same shared contract.`
+- Blockers: `None. Focused config-projection and AG-UI autosave Bun coverage passed, and lint passed on the touched create-flow files.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says approved builder improvements should feed back into persisted agent config instead of disappearing in chat prose, but the current implementation only persists the recommendation metadata.
+- `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx` and `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx` only toggle `improvements[].status`; they do not mutate `toolConnections[]`, `triggers[]`, or any other saved config field when an improvement is accepted.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` derives a concrete recommendation id and `targetId` (`connect-google-ads` / `google-ads`), but no downstream consumer uses that target to reconcile the saved config.
+- `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx` merely lists accepted improvements as a summary block, so a recommendation can be “accepted” while deploy readiness and saved connector state remain unchanged.
+- Existing TODOs cover persisted improvement metadata, truthful connector catalogs, truthful trigger catalogs, deploy-readiness fail-closed behavior, and upstream builder-hint normalization, but no current task owns the missing acceptance-to-config projection seam itself.
+
+#### What to build
+
+1. **Accepted-improvement projection helper** (`agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, shared helper/module as needed):
+   - Define one idempotent projector that takes accepted builder improvements plus the current saved/session config and returns the projected config state.
+   - Scope the first shipped slice to `tool_connection` improvements, specifically the Google Ads recommendation, instead of inventing a generic automation engine for every future recommendation kind.
+   - Reuse the truthful connector identity rules already established in the Connect Tools catalog so acceptance never recreates the fake direct `google-ads` connector contract.
+
+2. **Review and Co-Pilot acceptance wiring** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`):
+   - When the operator accepts the Google Ads connection recommendation, update the live create/improve session state in the same interaction instead of waiting for a later manual re-entry in Connect Tools.
+   - Keep dismiss behavior metadata-only; only accepted improvements should project changes into config.
+   - Preserve existing edit/reopen semantics so the operator can still refine or remove the projected connector choice manually afterward.
+
+3. **Persistence and reopen alignment** (`agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, store/save helpers as needed, `connect-tool-catalog.ts` if needed):
+   - Persist both the accepted improvement decision and the resulting projected connector state through draft save, full save, and Improve Agent reopen.
+   - Make projection idempotent so reopening or re-deriving the same recommendation does not duplicate tool entries or downgrade a connector that is already `configured` or has a richer saved summary.
+   - Keep the contract fail-closed: if the recommendation only maps to a manual plan, persist that truthful unsupported/manual-plan entry instead of pretending a live connector was configured.
+
+4. **Regression coverage and docs** (`agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, KB/spec notes above):
+   - Add coverage proving that accepting `connect-google-ads` changes the saved/session connector state, not just the recommendation badge.
+   - Cover a reopen path where the accepted improvement and projected connector are both present and remain aligned.
+   - Update KB/spec notes so future builder-improvement work treats acceptance as a config mutation contract, not only a persisted annotation.
+
+#### Test suite
+
+**Focused state/store coverage** (`agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/lib/openclaw/ag-ui/`, `agent-builder-ui/hooks/`):
+- Accepting the Google Ads tool-connection improvement projects one truthful connector or manual-plan entry into session/saved config.
+- Re-applying the same accepted improvement is idempotent and does not duplicate entries or downgrade stronger saved status such as `configured`.
+- Dismissing or leaving the recommendation pending does not mutate connector state.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Accept the Google Ads improvement in review or Co-Pilot and verify Connect Tools/Review now show the projected connector state without manual re-entry.
+- Save, reopen Improve Agent, and confirm both the accepted improvement and projected connector remain visible and aligned.
+- Verify deploy summaries/readiness react to the projected connector state instead of treating the acceptance as a disconnected note.
+
+#### Evaluation — task is done when
+
+- [ ] Accepting the first shipped Google Ads builder recommendation changes real config state instead of only flipping `improvements[].status`
+- [ ] The projected connector state uses the truthful connector/manual-plan contract already used by Connect Tools
+- [ ] Save, reopen, and Improve Agent flows preserve both the accepted recommendation and the projected config change without duplicating entries
+- [ ] Deploy/review summaries reflect the projected config state, not just a standalone accepted-improvement badge
+- [ ] Focused automated coverage proves acceptance is idempotent, truthful, and does not override stronger saved connector state
+- [ ] KB/spec notes describe improvement acceptance as a bounded config-projection contract for future recommendation categories
+
+### TASK-2026-03-26-128: Cover legacy webhook reopen normalization
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.test.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression in the active Google Ads trigger-truthfulness lane for saved trigger reopen behavior where a legacy generic `webhook` id could retain stale supported status because it bypassed the runtime-backed trigger catalog. `buildTriggerSelections()` now normalizes that legacy generic webhook path to `unsupported` on reopen, matching the existing `chat-command` downgrade and preventing Review/Deploy from over-promising an undeployed runtime path.`
+- Next step: `Pick a different trigger or Improve Agent seam next run; avoid revisiting legacy webhook reopen normalization unless saved trigger ids or runtime-backed webhook support change again.`
+- Blockers: `None`
+
+### TASK-2026-03-26-124: Cover create-session skill-graph fallback seeding
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression in the active Google Ads create-flow lane for the create-session seed path that falls back to the current skill graph when a saved draft or reopened agent has graph metadata but no explicit persisted skills list yet. This keeps coverage focused on the shared Review/Configure helper without overlapping the recent name-normalization or touched-state tests.`
+- Next step: `Pick a different active-lane seam next run; avoid revisiting create-session fallback seeding unless future work changes how drafts or reopened agents populate `skills[]` versus `skillGraph`.``
+- Blockers: `None`
+
+### TASK-2026-03-26-125: Replace mock trigger selection with a truthful runtime-backed trigger catalog
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/trigger-catalog.test.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/specs/SPEC-agent-webhook-trigger-runtime.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-trigger-catalog-contract.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the trigger-selection truthfulness package for the Google Ads create lane. Added a shared runtime-backed trigger catalog so only `cron-schedule` is deployable today, `webhook-post` stays visible as a manual-plan idea, and legacy saved `chat-command` selections normalize back to `unsupported` on reopen instead of remaining falsely deployable. `StepSetTriggers.tsx` now uses that helper for card status, AI suggestions, selection summaries, and save/reopen rebuilding, and the targeted Playwright specs were updated to assert the truthful deployable/manual-plan states.`
+- Operator-testable outcome: `After one worker run, a human building a Google Ads agent in `/agents/create` sees a trigger picker that distinguishes what can be deployed today from what is only planned. The UI can still show future webhook or event ideas, but they are clearly marked unsupported/manual-plan and are not auto-suggested or counted as deployable selections. A supported schedule trigger remains selectable, survives save/reopen, and appears consistently in Review/Deploy as the only current runtime-backed trigger path unless TASK-2026-03-25-25 later adds real webhook support.`
+- Next step: `If a Playwright-capable host is available, rerun the three updated create-flow browser cases for trigger truthfulness and then continue the separate deploy-readiness or webhook-runtime packages from the same saved trigger contract.`
+- Blockers: `No product/code blocker. In this sandbox, actual Playwright Chromium execution still fails at launch with `bootstrap_check_in ... MachPortRendezvousServer ... Permission denied (1100)`, so browser verification is limited to Playwright test discovery plus focused Bun coverage.`
+
+### TASK-2026-03-26-126: Cover Improve Agent Co-Pilot skillGraph fallback seeding
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression in the active Google Ads improve-agent lane for `createCoPilotSeedFromAgent()`, covering the saved-agent path where `skills[]` is empty but a persisted `skillGraph` exists. The new test proves Improve Agent still seeds selected skills from the graph and opens in the review-ready Co-Pilot state without overlapping the create-session tests added earlier today.`
+- Next step: `Pick a different Improve Agent or Co-Pilot seam next run; avoid revisiting skillGraph fallback seeding unless saved-agent hydration semantics change again.`
+- Blockers: `None`
+
+### TASK-2026-03-26-132: Cover Google Ads connector hint normalization from architect metadata
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.ts`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI unit regression for the active Google Ads create lane and patched the minimal normalization gap it exposed. `detectToolHintIds()` now treats spaced `Google Ads API` metadata in `external_api` or `native_tool` as the supported `google` connector hint, so builder metadata, Configure defaults, and downstream autosave stay truthful even when the architect does not use underscored ids.`
+- Next step: `Avoid reusing this same spaced Google Ads metadata seam next run; prefer a different AG-UI helper or create-flow state branch unless architect payload shapes change again.`
+- Blockers: `None`
+
+### TASK-2026-03-26-134: Cover builder trigger hint normalization from requirements metadata
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/builder-hint-normalization.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI unit regression in the active Google Ads create lane for `detectTriggerHintIds()`, covering the requirements-driven path where architect output mixes scheduled execution intent with inbound callback language. The new test locks the shared normalization helper to emit both the deployable `cron-schedule` hint and the explicit manual-plan `webhook-post` hint when those signals arrive through `requirements.schedule` and callback-oriented requirement metadata, protecting builder defaults and autosave from drifting back to partial trigger inference.`
+- Next step: `Avoid reusing this same combined schedule-plus-callback hint seam next run; prefer a different AG-UI or Google Ads create/improve branch unless architect requirement payload shapes change again.`
+- Blockers: `None`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly calls out `StepSetTriggers.tsx` as still mock-driven and says the Configure flow should expose only the narrow runtime-backed trigger options that actually work.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx` imports `MOCK_TRIGGER_CATEGORIES`, treats both `cron-schedule` and `chat-command` as supported via `SUPPORTED_TRIGGER_IDS`, and keeps a wide trigger catalog visible even though most of it has no runtime owner.
+- The same file's `Suggest with AI` action defaults to `chat-command` when it finds no schedule keywords, which means the happy-path builder UX can silently preselect a trigger that the current deploy/apply contract does not implement.
+- `agent-builder-ui/lib/openclaw/agent-config.ts` only turns supported schedule triggers into runtime config today, so the picker currently advertises more deployable surface area than the runtime can actually materialize.
+- [[SPEC-google-ads-agent-creation-loop]] says unsupported trigger cards may remain visible only if they are clearly marked unavailable and must not be presented as deployable behavior. The current picker violates that contract before the operator reaches Review or Deploy.
+
+#### What to build
+
+1. **Shared trigger-catalog contract** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, shared helper/module as needed, `agent-builder-ui/lib/openclaw/agent-config.ts`):
+   - Define one source of truth for the currently supported trigger surface used by the Google Ads create lane.
+   - Treat schedule as supported today, keep `webhook.post` visible only as an explicit planned/unsupported option until TASK-2026-03-25-25 lands, and stop labeling `chat-command` or other mock cards as deployable without a runtime owner.
+   - Keep the helper aligned with the existing saved `triggers[]` contract so later runtime packages extend the same trigger identities instead of inventing a new selector model.
+
+2. **Truthful picker and suggestion flow** (`StepSetTriggers.tsx`, `mockData.ts` or replacement data source, create-flow summaries as needed):
+   - Replace the `SUPPORTED_TRIGGER_IDS` hard-code and the mock-first suggestion path with catalog-driven support status.
+   - Do not auto-select unsupported triggers when the architect response is ambiguous; prefer a supported schedule suggestion or an explicit no-supported-trigger state that prompts the operator to choose intentionally.
+   - Keep future trigger ideas visible only if their unsupported/manual-plan state is obvious from the card list onward.
+
+3. **Saved-selection and operator-summary alignment** (`StepSetTriggers.tsx`, review/deploy helper surfaces only if needed, persisted trigger metadata contract as needed):
+   - Ensure the selections emitted from Configure preserve truthful `supported` vs `unsupported` status and the same trigger identity on save/reopen.
+   - Avoid counting unsupported cards as equivalent to deployable selections in the picker summary or downstream display text.
+   - Keep the Google Ads proving case opinionated: the picker should make the supported weekday schedule path easy to understand instead of nudging operators toward decorative event cards.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused helper/component tests, KB/spec notes above):
+   - Add coverage proving the create-flow trigger picker no longer defaults to `chat-command` or any other unsupported trigger when no real runtime-backed option was detected.
+   - Cover save/reopen for one supported schedule trigger and one explicit unsupported/manual-plan trigger card so the saved metadata remains truthful.
+   - Update KB/spec notes so future create-flow work treats trigger selection as runtime-backed catalog work, not a decorative mock gallery.
+
+#### Test suite
+
+**Focused frontend/state coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/`, helper tests as needed):
+- The trigger-catalog helper reports only runtime-backed trigger ids as supported for the current product slice.
+- `StepSetTriggers` no longer marks `chat-command` as supported or auto-selects it as the default suggestion.
+- Saved trigger selections preserve truthful `supported` vs `unsupported` status across configure reopen/save flows.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- The Google Ads create flow defaults to a supported schedule trigger or an explicit unsupported/manual-plan state, not a fake supported chat-command selection.
+- An unsupported trigger card can be shown as unavailable/manual-plan without being counted as a deployable choice.
+- A supported schedule trigger survives save and reopen with the same status and summary text.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` no longer presents `chat-command` or other mock trigger cards as supported when the runtime cannot deploy them
+- [ ] The trigger picker's AI/default suggestion path does not auto-select unsupported triggers
+- [ ] Supported vs unsupported trigger status is derived from one shared runtime-backed catalog instead of duplicated hard-coded booleans
+- [ ] Save/reopen flows preserve the truthful trigger status the operator saw during Configure
+- [ ] Browser or focused component coverage proves the Google Ads trigger picker no longer over-promises deployable runtime behavior
+
+### TASK-2026-03-26-127: Normalize architect builder hints to truthful connector and trigger contracts
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/specs/SPEC-agent-webhook-trigger-runtime.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-builder-hint-truthfulness-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the upstream builder-hint normalization package for the active Google Ads lane. Added a shared normalization helper so architect-derived Google Ads connector hints now emit the truthful supported connector id `google`, inbound-event ideas normalize to the manual-plan `webhook-post` hint, and `chat-command` is no longer injected as a default runtime path. AG-UI `skill_graph_ready` / wizard events now carry those normalized ids through the existing parser flow, and autosaved improvements now target `google`/`connect-google-workspace` instead of the fake `google-ads` connector identity.`
+- Operator-testable outcome: `After one worker run, a human asking for a Google Ads agent in `/agents/create` sees builder-generated recommendations and downstream Configure defaults that align with the truthful runtime surface: the builder can still suggest a Google Ads integration plan, but it points to a supported connector such as `google` or to an explicit unsupported/manual-plan research seed instead of a fake direct `google-ads` connector, and trigger hints default to the supported schedule path or an explicit unsupported/manual-plan state instead of silently seeding `chat-command`. Review and Improve Agent should no longer surface a persisted builder recommendation that targets an unsupported connector id when the product already knows the truthful catalog mapping.`
+- Next step: `Move to the next Google Ads focus-lane package; do not revisit builder hint ids unless the connector registry or webhook runtime contract changes again.`
+- Blockers: `None. Focused Bun coverage for parser normalization, AG-UI event emission, and autosave recommendation derivation all passed in this run.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads lane should use real connector state and only runtime-backed trigger options that actually work, but the AG-UI builder metadata still starts from older fake ids before the operator sees the Configure screens.
+- `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts` maps Google Ads keywords to `google-ads` and unconditionally appends `chat-command` to trigger hints, even though `mcp-tool-registry.ts` has no direct `google-ads` connector and the current runtime only materializes schedule triggers.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` folds those directives into `toolConnectionHints` and `triggerHints` on the canonical `skill_graph_ready` payload, so the inaccurate ids propagate beyond one local UI component into the AG-UI state contract itself.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts` derives the first persisted Google Ads improvement from `toolConnectionHints.includes("google-ads")` and writes `targetId: "google-ads"`, which means saved builder recommendations can still point operators at an unsupported connector identity even after the Connect Tools catalog became more truthful.
+- Existing TODOs cover visible trigger-card truthfulness, visible connector catalog truthfulness, deploy gating, and AG-UI cutover, but no active task owns the upstream architect-hint normalization seam or the stale tests that still lock in `google-ads` and `chat-command` as canonical builder metadata.
+
+#### What to build
+
+1. **Shared hint-normalization contract** (`agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, helper module as needed):
+   - Normalize architect-derived tool hints onto the truthful connector surface already used by Connect Tools: supported direct connectors keep their real ids, while domain-specific asks such as Google Ads become either a supported mapped connector (`google`) or an explicit unsupported/manual-plan seed rather than a fake direct connector id.
+   - Normalize trigger hints onto the runtime-backed trigger catalog: keep supported schedule hints, represent future webhook ideas as clearly unsupported/manual-plan ids, and stop treating `chat-command` as a default available runtime path.
+   - Keep the normalized identities stable enough that AG-UI state, review summaries, and saved metadata can reuse them without another ad hoc mapping layer.
+
+2. **AG-UI payload alignment** (`agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, related AG-UI types if needed):
+   - Emit normalized tool and trigger hints in `skill_graph_ready` and the wizard custom events instead of the raw legacy ids from the parser.
+   - Preserve the current conversational builder behavior and review transitions while making the metadata payload reflect the same truthful connector and trigger contract the Configure UI is converging on.
+   - Avoid adding another parallel hint shape; the AG-UI contract should stay the one canonical builder metadata surface.
+
+3. **Improvement-derivation and autosave truthfulness** (`agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, saved-improvement contract helpers as needed):
+   - Update derived Google Ads recommendations to target the truthful connector identity or explicit manual-plan target instead of always emitting `connect-google-ads`.
+   - Ensure autosaved builder metadata and reopened Improve Agent state do not carry stale fake ids after the normalization changes.
+   - Keep existing recommendation-status preservation intact so accepted vs dismissed state still survives normalization.
+
+4. **Regression coverage and docs** (`agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, KB/spec notes above):
+   - Replace assertions that currently lock in `google-ads` and `chat-command` as canonical builder hints.
+   - Add one focused regression proving a Google Ads architect response emits a truthful connector hint plus a schedule-only or clearly unsupported trigger hint.
+   - Document the normalized builder-hint contract so future create-flow and AG-UI work does not reintroduce fake connector or trigger ids upstream of Configure.
+
+#### Test suite
+
+**Focused builder metadata coverage** (`agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`):
+- Google Ads architect metadata no longer normalizes into a fake direct `google-ads` connector id when the truthful product contract is a supported `google` connector or an explicit manual-plan seed.
+- Builder trigger hints no longer include `chat-command` as the default runtime-backed suggestion when only schedule support exists today.
+- Derived improvement recommendations target the truthful connector identity and preserve recommendation status across metadata refreshes.
+
+**Operator-facing acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts` if a small browser assertion is needed, otherwise keep the change unit-scoped):
+- The Google Ads create path surfaces a truthful builder recommendation or default selection path that matches the updated connector and trigger identities instead of reintroducing fake ids upstream of Configure.
+
+#### Evaluation — task is done when
+
+- [ ] AG-UI builder metadata no longer treats `google-ads` as a direct supported connector id when the live catalog does not support it
+- [ ] Architect-derived trigger hints no longer default to `chat-command` as a deployable runtime path
+- [ ] Derived builder improvements and reopened Improve Agent state use the same truthful connector identity the Connect Tools catalog expects
+- [ ] Tests no longer lock the repo into `google-ads` and `chat-command` as canonical builder hints for the Google Ads proving case
+- [ ] KB/spec notes describe the upstream builder-hint normalization contract clearly enough that later AG-UI and create-flow work reuses it
+
+### TASK-2026-03-26-123: Replace mock Connect Tools discovery with a truthful connector catalog
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/connect-tool-catalog.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-connect-tools-discovery-gap.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-connect-tools-catalog-contract.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the truthful Connect Tools catalog package for the active Google Ads lane. The live list now starts from the supported connector registry plus any saved `toolConnections[]`, adds one focused research seed when the use case clearly names an unsupported tool such as Google Ads, and prioritizes the latest architect recommendation instead of restoring unrelated mock cards. The sidebar now lets a researched recommendation promote that seed into the actual supported connector id (for example `google`) so the operator fills the real credential form and saved metadata never claims a fake direct `google-ads` connector. Added focused Bun coverage for the catalog helper contract and documented the shipped behavior in the builder KB/spec notes.`
+- Operator-testable outcome: `After one worker run, a human building a Google Ads agent in `/agents/create` sees a truthful Connect Tools shortlist driven by the supported connector registry, current saved connection state, and the architect's research output instead of unrelated fallback cards. If Google Ads still lacks a one-click direct connector, the UI presents it as an explicit researched manual plan with `unsupported` status rather than a fake directly connectable card; if the research maps to a supported first-party connector such as Google Workspace, that connector is surfaced with the real `available` / `missing_secret` / `configured` states. Reopening the agent preserves the same connector or manual-plan choices without reintroducing mock defaults.`
+- Next step: `Run the matching Playwright create-flow coverage on a host where Chromium can launch, then move to the next open focus-lane feature package rather than revisiting catalog derivation.`
+- Blockers: `No product blocker. Browser verification still needs an environment where Playwright/Chromium can run; focused Bun coverage passed in this run.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly requires "real connector discovery or selection" in the Google Ads lane, but the current Configure step still begins from heuristic text matching and mock fallbacks rather than the product's real connector inventory.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx` imports `MOCK_TOOLS`, derives candidates from `TOOL_PATTERNS`, and returns the mock list whenever the skill graph is empty or unmatched, so the builder can still surface irrelevant tool cards that are not grounded in saved state or supported integrations.
+- The same file synthesizes a `google-ads` card from keywords, but `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts` does not define a `google-ads` direct connector. That means the focused proving case is still represented as an invented tool identity rather than a truthful supported connector or explicit manual plan.
+- `ConnectToolsSidebar.tsx` already embeds `ToolResearchWorkspace` and can save a researched manual integration plan with `status: "unsupported"`, so the repo already has the right truth-telling primitives; what is missing is making those primitives drive the primary Connect Tools list instead of sitting behind a mock-first catalog.
+- `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md` says `/agents/create` should share the truthful tool-research contract used by `/tools`, but the current list entry point still depends on mock cards and keyword heuristics before the operator even opens the sidebar. This is now a code-vs-spec mismatch in the active focus lane.
+
+#### What to build
+
+1. **Truthful connector-catalog helper** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, shared helper/module as needed, `mcp-tool-registry.ts`):
+   - Replace the current `TOOL_PATTERNS + MOCK_TOOLS` derivation with one helper that starts from the supported connector registry and merges in any already-saved `toolConnections[]`.
+   - Preserve persisted selections even when the current registry or research result changes, so reopen/edit flows do not hide the operator's chosen manual plan or configured connector.
+   - Remove the unrelated mock fallback cards from the live Google Ads create path; if there is no evidence for a connector, show an explicit empty or research-first state instead of decorative filler.
+
+2. **Research-driven Google Ads recommendation path** (`StepConnectTools.tsx`, `ConnectToolsSidebar.tsx`, `ToolResearchWorkspace.tsx`, types/helpers as needed):
+   - Use the architect research result as a first-class candidate source so the latest recommendation can add or prioritize a connector/manual-plan card in the list itself, not only inside the sidebar.
+   - When the research result maps to a supported first-party connector, surface that real connector card and preserve its actual readiness state from saved credentials or pending drafts.
+   - When the research result does not map to a supported direct connector, persist a manual-plan card with `status: "unsupported"` and the researched MCP/API/CLI summary instead of synthesizing a fake directly connectable `google-ads` card.
+
+3. **Operator-facing selection truthfulness** (`StepConnectTools.tsx`, `ConnectToolsSidebar.tsx`, review/deploy helpers only if needed):
+   - Keep the difference between `available`, `missing_secret`, `configured`, and `unsupported` visible from the card list onward so operators know whether they are choosing a live connector or saving a manual plan.
+   - Ensure save/reopen flows preserve the same connector identity and status that the card list displayed, without collapsing manual plans back into generic unsupported defaults.
+   - Keep the active Google Ads journey opinionated: the list should highlight the most relevant researched or supported connector choice first, not force operators to scan unrelated cards.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused helper tests, KB/spec notes above):
+   - Add coverage proving the Google Ads create path no longer falls back to unrelated mock tool cards when the skill graph is empty or when the architect recommendation resolves to a manual plan.
+   - Cover one reopen/edit path showing that a saved manual-plan or supported connector card stays visible with the same status.
+   - Update KB/spec notes so future work treats the connector catalog as research-and-registry-driven, not keyword-and-mock-driven.
+
+#### Test suite
+
+**Focused frontend/state coverage** (`agent-builder-ui/app/(platform)/agents/create/_components/configure/`, helper tests as needed):
+- The connector-catalog helper derives cards from the supported registry plus saved `toolConnections[]` and does not inject unrelated `MOCK_TOOLS` filler.
+- A researched manual-plan result remains visible as an `unsupported` card across save/reopen instead of disappearing when the skill graph changes.
+- A researched result that maps to a supported connector surfaces that connector with the real reconciled `available` / `missing_secret` / `configured` state.
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Start the Google Ads create flow and assert the Connect Tools list highlights the focused researched connector or manual plan instead of unrelated mock defaults.
+- Save a manual-plan or supported connector choice, reopen Improve Agent or the saved draft, and confirm the same choice is still shown with the same truthful status.
+- Verify the sidebar and list stay aligned on whether the chosen item is directly connectable now or still a manual integration plan.
+
+#### Evaluation — task is done when
+
+- [ ] `StepConnectTools` no longer seeds the live Google Ads path from `MOCK_TOOLS` fallback cards
+- [ ] The Connect Tools list is driven by real supported connectors, saved connection state, and the architect's research result
+- [ ] Google Ads is shown either as a truthful supported connector recommendation or as an explicit manual plan, not as a fake direct connector
+- [ ] Reopen/edit flows preserve the same connector or manual-plan identity and readiness status
+- [ ] Browser and/or focused helper tests prove the focused create flow no longer falls back to unrelated mock connector defaults
+- [ ] KB/spec notes describe the Connect Tools catalog as registry-and-research-driven rather than mock-driven
+
+### TASK-2026-03-26-122: Cover builder wizard-state prompt injection
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI unit regression so `BuilderAgent` now has direct coverage for forwarding the live Co-Pilot wizard state into the architect prompt. The same narrow run also exposed a stale mock-call assertion in the existing session-rotation test, so that assertion now matches the current `sendToArchitectStreaming(sessionId, message, callbacks, options)` contract and the file passes cleanly again.`
+- Next step: `Avoid revisiting this request-assembly seam next run; prefer another active-lane unit branch in AG-UI builder metadata, use-agent-chat event reduction, or a focused create-page helper.`
+- Blockers: `None`
+
+### TASK-2026-03-26-121: Move Improve Agent onto the Co-Pilot workspace contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-improve-agent-copilot-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the existing-agent Co-Pilot adoption package for the active Google Ads builder lane. `/agents/create?agentId=<id>` now re-enters saved agents in Co-Pilot mode by default, seeds the shared Co-Pilot store from the saved agent snapshot so purpose/skills/tools/triggers/review state is visible immediately, and keeps Improve Agent completion on the existing save-and-hot-push path instead of routing into the new-agent first-deploy handoff. Added focused Bun regression coverage for the new seeding/completion helpers and a Playwright regression for the saved-agent Build path, although the browser test still needs a host where Playwright can run.`
+- Operator-testable outcome: `After one worker run, a human can open a saved Google Ads agent from `/agents`, land in the Co-Pilot Improve Agent workspace instead of the legacy advanced-chat shell, and see the saved purpose, skills, tool connections, triggers, and accepted improvements preloaded into the same purpose → skills → tools → triggers → review flow used by new-agent creation. Finishing that flow still preserves existing-agent semantics: edits persist to the saved agent, running sandboxes hot-push when appropriate, and Improve Agent does not regress into the new-agent first-deploy handoff path.`
+- Next step: `Re-run `agent-builder-ui/e2e/create-agent.spec.ts` on a host that can launch Playwright/Chromium cleanly, with focus on the saved-agent Build path and post-save return-to-list behavior. Keep new-create draft recovery and deploy-readiness follow-ons scoped to TASK-2026-03-26-117 and TASK-2026-03-26-113.`
+- Blockers: `No product blocker. Browser execution remains unverified in this environment, so the new saved-agent Playwright regression was added but not run here.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says the current lane covers both `/agents/create` and the existing Improve Agent path, and one desired outcome is that a human can return later through Improve Agent without losing the important Google Ads configuration.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` initializes mode as `editingAgentId ? "chat" : "copilot"`, which means existing agents bypass the default Co-Pilot builder path before any saved-state hydration or stepper logic can run.
+- The same file hides the mode toggle when `existingAgent` is present, so operators cannot switch themselves back into Co-Pilot from the existing-agent chat shell even though `CoPilotLayout` already supports an `existingAgent` prop.
+- `docs/knowledge-base/008-agent-builder-ui.md` now documents the Co-Pilot workspace, purpose gating, draft autosave, persisted improvements, and review-step completion CTA as the main builder contract, but the Improve Agent entry path still does not use that contract.
+- Several active focus-lane tasks are already wiring deploy-readiness, draft recovery, and create-to-deploy behavior into the Co-Pilot flow. Leaving Improve Agent on the legacy shell would split the focused Google Ads journey across two different builder contracts and make future fixes harder to reuse.
+
+#### What to build
+
+1. **Existing-agent entry contract** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, shared helpers as needed):
+   - Change the existing-agent route so `Build` on a saved agent opens the Co-Pilot workspace by default instead of the legacy advanced-chat shell.
+   - Decide whether the legacy advanced-chat mode remains as an explicit opt-in escape hatch or is fully retired for Improve Agent; do not keep it as the silent default.
+   - Keep new-agent create entry behavior compatible with TASK-2026-03-26-117 so draft-recovery work and existing-agent reopen work do not fight over session ownership.
+
+2. **Saved-state hydration into Co-Pilot** (`agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `page.tsx` wiring):
+   - Add one explicit hydrator that seeds the Co-Pilot store from a saved agent's purpose, skill graph, selected skills, tool connections, triggers, rules, and accepted improvements.
+   - Ensure existing-agent reopen does not immediately clear that seeded state because of create-only purpose-generation effects or stale singleton store data.
+   - Keep builder autosave and saved-agent persistence aligned so Improve Agent edits continue updating the intended saved record rather than creating duplicate drafts.
+
+3. **Existing-agent completion semantics** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/hooks/use-agents-store.ts` if needed):
+   - Preserve existing-agent save and hot-push behavior when the operator finishes from the Co-Pilot review step.
+   - Keep Improve Agent clearly distinct from TASK-2026-03-26-119: existing agents should persist edits and push config where appropriate, not route through the new-agent first-deploy handoff.
+   - Make the completion/loading/error copy truthful for Improve Agent inside the Co-Pilot shell so operators can tell whether changes were saved, hot-pushed, or blocked.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused state tests, KB/spec notes above):
+   - Add browser coverage for the existing-agent `Build` path proving the page opens in Co-Pilot with the saved Google Ads config visible.
+   - Cover one completion path where Improve Agent persists edits and, when sandboxes already exist, keeps the current hot-push contract.
+   - Update KB/spec notes so future work treats Co-Pilot as the Improve Agent contract too, not just the new-agent creation surface.
+
+#### Test suite
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Open a saved Google Ads agent from `/agents`, assert the Co-Pilot stepper is visible, and confirm saved purpose, tools, triggers, and accepted improvements are present without re-entering them.
+- Make a bounded edit in the Co-Pilot Improve Agent flow, complete the flow, and assert the saved agent retains the updated config.
+- Cover an existing-agent case with a running sandbox and confirm completion stays on the existing save/hot-push contract instead of redirecting into the new-agent deploy handoff.
+
+**Focused frontend/state coverage** (`agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/lib/openclaw/`, `agent-builder-ui/hooks/`):
+- Existing-agent route entry seeds the Co-Pilot store from the saved agent snapshot exactly once and does not get overwritten by stale singleton state.
+- Improve Agent reload paths keep selected skills, tool connections, triggers, and improvements aligned between builder state and Co-Pilot state.
+- Existing-agent completion from Co-Pilot still calls the persisted edit path and does not create duplicate draft agents.
+
+#### Evaluation — task is done when
+
+- [ ] Clicking `Build` on an existing agent no longer hard-locks the operator into the legacy advanced-chat shell
+- [ ] Improve Agent opens in the Co-Pilot workspace with saved Google Ads purpose, skills, tools, triggers, and improvements already visible
+- [ ] Existing-agent completion from Co-Pilot preserves save-and-hot-push semantics instead of using the new-agent first-deploy handoff
+- [ ] Draft/session recovery work for new-agent creation remains compatible and does not leak stale Co-Pilot state into Improve Agent
+- [ ] Automated coverage proves the existing-agent `Build` path uses Co-Pilot and keeps the saved-config contract intact
+
+### TASK-2026-03-26-120: Cover create-session skill-name normalization
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded unit regression for the active Google Ads create/improve lane so create-session state keeps preselected skills aligned with the current skill graph even when a saved agent or draft still stores human-readable skill names instead of canonical ids. The new test locks the name-to-id normalization path used when `/agents/create` seeds selected skills from saved agent metadata.`
+- Next step: `Pick a different active-lane unit seam next run; avoid revisiting create-session skill-name normalization unless future work changes how saved drafts serialize skill selections.`
+- Blockers: `None`
+
+### TASK-2026-03-26-119: Make `/agents/create` hand off into the real first-deploy flow
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/lib/agents/deploy-handoff.ts`, `agent-builder-ui/lib/agents/deploy-handoff.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agent-create-deploy-handoff.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-create-deploy-handoff-gap.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-create-deploy-handoff-contract.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the create-to-deploy handoff package. New-agent and autosaved-draft completion paths now finalize pending first-save credential-backed tool connections and route to `/agents/<id>/deploy?source=create`, while Improve Agent stays on its save/hot-push path. The deploy page now recognizes create-source handoffs, shows a saved-state banner, and auto-starts only when the saved config summary is already ready.`
+- Operator-testable outcome: `Completing the Google Ads create path with `Deploy Agent` now lands on the real deploy route for the same saved agent instead of returning to the list. Saved connector, trigger, and accepted-improvement summaries are visible immediately on the deploy page, and ready configs can auto-start first deployment from that handoff.`
+- Next step: `Re-run the focused Playwright acceptance on a host that permits Chromium launch so the updated `/agents/create` → `/agents/[id]/deploy` contract is verified end to end in-browser. Continue TASK-2026-03-26-113 separately for fail-closed deploy blockers.`
+- Blockers: `No product/code blocker. Browser verification remains environment-blocked in this sandbox because Playwright Chromium fails to launch with `bootstrap_check_in ... MachPortRendezvousServer ... Permission denied (1100)`.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the Google Ads lane should work end to end through build, review, configure, save, deploy, and improve, but the current create page stops at save-only behavior even though the CTA says `Deploy Agent`.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` calls `saveAgent(...)` or `persistAgentEdits(...)`, optionally commits credentials through `saveToolCredentials(...)`, and then routes straight to `/agents` in both `handleComplete()` and `handleCoPilotComplete()`.
+- The actual first-deploy runtime lives in `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, where `startDeploy()` creates the sandbox, streams provisioning progress, pushes config, and attaches the sandbox to the agent, but the create flow never reaches that page for a brand-new agent.
+- `docs/knowledge-base/011-key-flows.md` still documents create as a single flow that reaches deploy after Review/Configure, so there is now a documented-contract mismatch between the KB and the shipped UI behavior.
+- TASK-2026-03-26-113 covers deploy-readiness and fail-closed blocking, but it does not currently own the fact that the create-page deploy action never enters the deploy workflow at all when the agent is new.
+
+#### What to build
+
+1. **Create-page completion contract** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, shared helpers as needed):
+   - Replace the current save-and-exit behavior behind `Deploy Agent` with one explicit handoff contract that persists the final builder/config snapshot, completes first-save credential writes, and then routes into the real deploy workflow for the saved agent id.
+   - Keep Improve Agent behavior distinct: existing-agent hot-push flows should preserve their current save/push semantics instead of being forced through first-deploy routing.
+   - Make sure the handoff uses the same saved draft or promoted agent identity rather than spawning duplicates when AG-UI draft autosave already created a draft record.
+
+2. **Deploy-surface create handoff** (`agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, route/query handling, summary copy):
+   - Accept the create-source handoff cleanly so the operator lands on the deploy surface for the agent they just built, with the same saved Google Ads connector, trigger, and improvement summary visible immediately.
+   - Decide whether the first slice should auto-start deployment on arrival or require one final explicit deploy confirmation on the deploy page, but make that behavior obvious and deterministic.
+   - Keep the deploy surface compatible with TASK-2026-03-26-113 so readiness blockers can stop the handoff truthfully instead of letting the create page pretend deployment already happened.
+
+3. **Post-save state and status truthfulness** (`agent-builder-ui/hooks/use-agents-store.ts`, create/deploy UI seams):
+   - Ensure the saved agent state after the handoff still reflects the committed credential result and finalized tool-connection statuses before deployment starts.
+   - Avoid treating “saved” as equivalent to “deployed” in create-flow copy or status transitions when no sandbox has been attached yet.
+   - Preserve accepted improvements and structured config metadata so the deploy page uses the same saved contract the operator just reviewed.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, KB notes above, learning note):
+   - Add or update browser coverage so the Google Ads create path proves `Deploy Agent` reaches the actual deploy workflow for the same agent id.
+   - Cover the case where first-save credential commit succeeds or fails, and confirm the post-create route reflects the real result instead of silently exiting to the list.
+   - Update KB notes once implemented so the documented create flow matches the shipped handoff semantics exactly.
+
+#### Test suite
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Complete the Google Ads create flow, click `Deploy Agent`, and assert the app routes to `/agents/<saved-id>/deploy` or otherwise enters the real first-deploy experience instead of returning to `/agents`.
+- Verify the deploy surface shows the same saved connector/trigger/improvement summary for that exact agent record immediately after the handoff.
+- Cover a first-save credential failure path and assert the operator gets a truthful error or blocked deploy state rather than a silent save-and-exit outcome.
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/hooks/use-agents-store.ts`):
+- New-agent create completion reuses the saved draft/promoted agent id and routes to the deploy handoff target.
+- Improve Agent completion keeps its existing save/hot-push behavior and does not regress into the new-agent first-deploy path.
+- First-save credential commits finalize tool-connection status before the handoff target renders deploy summaries.
+
+#### Evaluation — task is done when
+
+- [ ] Pressing `Deploy Agent` from `/agents/create` no longer exits to `/agents` without entering a deployment flow
+- [ ] The first deploy for a newly created Google Ads agent uses the same saved agent id and saved config snapshot that Review/Configure just confirmed
+- [ ] Improve Agent save/hot-push behavior remains distinct from the new-agent first-deploy handoff
+- [ ] Post-create deploy surfaces show truthful saved connector, trigger, and accepted-improvement state before deployment starts
+- [ ] Automated coverage proves the create-page deploy CTA reaches the real deploy workflow and no longer behaves like a save-only exit
+
+### TASK-2026-03-26-118: Preserve explicit empty create-session config in review
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded regression around the Google Ads create flow so Review keeps an operator's explicit "no tools" or "no triggers" choice instead of silently falling back to stale saved-agent config. The create-session helper now distinguishes untouched config from intentionally cleared config with per-section touched flags.`
+- Next step: `Pick another small active-lane unit seam in agent-builder-ui; avoid revisiting create-session empty-state handling unless the flow starts seeding touched flags from another entry point.`
+- Blockers: `None`
+
+### TASK-2026-03-26-117: Recover saved Co-Pilot drafts or start fresh on `/agents/create`
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-create-draft-recovery-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `The Google Ads create lane now autosaves a safe backend draft before Review, but `/agents/create` still has no deterministic session-entry contract for that draft. On a new create-page mount, `page.tsx` calls `resetBuilderState()` when there is no `agentId`, which drops `draftAgentId` and the route's only link to the saved draft record, while the global `useCoPilotStore()` is never reset or re-seeded for the new session. `CoPilotLayout.tsx` then reads the still-live singleton store and mirrors its `name` and `description` back into builder state, so a fresh `/agents/create` visit can either lose the autosaved draft entirely after refresh or leak stale purpose/tools/triggers from the previous build session into what looks like a new agent. This package gives `/agents/create` one explicit entry contract: resume the latest compatible draft intentionally or start a truly clean session that clears the stale Co-Pilot state.`
+- Operator-testable outcome: `After one worker run, a human can start building a Google Ads agent, wait for the draft autosave indicator, leave or refresh `/agents/create`, and return to a clear choice or deterministic recovery path instead of a split-brain session. Choosing Resume restores the saved draft's name, description, generated skills, accepted improvements, and any saved tool/trigger metadata into the live Co-Pilot workspace. Choosing Start Fresh clears the previous session's purpose, skills, tools, triggers, and improvements so the new create flow opens blank and does not silently reuse stale state from the last draft.`
+- Next step: `Implement one route-entry draft-session contract in `page.tsx`: detect the most relevant saved draft agent for create mode, add a resume-vs-start-fresh decision or equivalent deterministic policy, seed both builder state and the Co-Pilot store from the chosen draft when resuming, and explicitly reset both stores plus session ids when starting fresh. Then add browser coverage that proves refresh/leave-and-return can resume the autosaved Google Ads draft and that a fresh start does not leak the previous draft's state.`
+- Blockers: `None. This should compose with TASK-2026-03-26-104's live-draft autosave contract, TASK-2026-03-26-115's in-flight Configure state work, and TASK-2026-03-26-111's builder-run recovery work so `/agents/create` has one coherent session lifecycle instead of separate save, timeout, and config state seams.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the creation loop should be iterative and self-improving, but the current route-entry behavior cannot reliably continue the very draft that the product now autosaves as the operator works.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` resets `builderState` on every new-create mount when there is no `editingAgentId`, so the saved `draftAgentId`, `lastSavedHash`, and other route-owned recovery metadata disappear as soon as the operator refreshes or returns later.
+- The same page never resets or seeds `useCoPilotStore()` for a new `/agents/create` session, even though that store is a process-wide Zustand singleton rather than page-local state.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` immediately mirrors the singleton Co-Pilot `name` and `description` back into builder state and uses those values for the synthetic agent shell, so stale values can repopulate a supposedly new create session.
+- `agent-builder-ui/hooks/use-agents-store.ts` already persists draft agents through `saveAgentDraft()`, but there is no helper or route policy for selecting the most recent compatible draft or for discarding stale draft identity when the operator wants a clean start.
+- `agent-builder-ui/app/(platform)/agents/page.tsx` routes the primary create CTA straight to `/agents/create` with no draft-recovery affordance, so the product now has autosaved drafts without any visible continuation UX.
+
+#### What to build
+
+1. **Route-entry draft session contract** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, shared draft helpers as needed):
+   - Decide and implement one deterministic policy for new create-page entry: either prompt to resume the most recent draft or auto-resume it with an explicit start-fresh escape hatch.
+   - Restrict recovery to the intended draft scope so Improve Agent editing and explicit `agentId` loads keep their existing behavior.
+   - Keep the draft-selection rules simple and inspectable enough that future workers do not introduce duplicate drafts or surprise auto-resume behavior.
+
+2. **Unified state seeding and reset** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`):
+   - Add one explicit way to seed the Co-Pilot store and page-owned builder state from a saved draft so resumed sessions hydrate both layers from the same snapshot.
+   - Add one explicit fresh-start reset that clears the Co-Pilot singleton, rotates session ids, and drops stale `draftAgentId`/autosave hashes before the operator begins a new agent.
+   - Keep builder autosave working after resume so subsequent edits continue updating the same draft instead of spawning a duplicate agent record.
+
+3. **Create-flow UX and draft ownership cues** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `CoPilotLayout.tsx`, optional `/agents` list affordance if needed):
+   - Show concise operator-visible copy that explains whether the create page is resuming a draft or starting fresh.
+   - Make it obvious how to discard the resumed draft state when the operator wants a clean Google Ads build instead.
+   - Avoid surfacing secret-bearing connector drafts after refresh; only recover safe saved metadata and the existing in-memory-only drafts that are intentionally allowed.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused store/component tests, KB note + learning note):
+   - Add a browser or focused state regression for resume-after-refresh / leave-and-return on the autosaved Google Ads path.
+   - Add coverage proving a fresh create-session reset clears stale purpose, skills, tools, triggers, and improvements rather than leaking the previous draft.
+   - Document the create-session recovery contract so later AG-UI and config-state work uses the same session lifecycle assumptions.
+
+#### Test suite
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Start a Google Ads create session, wait for `Draft saved`, refresh or leave and return to `/agents/create`, and assert the route offers or performs draft resume with the saved builder metadata intact.
+- Choose the fresh-start path after a saved draft exists and assert the purpose fields, selected skills, tool summaries, triggers, and accepted improvements no longer show the previous draft's state.
+- Resume the draft, continue to Review or Configure, and confirm later saves still update the same underlying draft/agent identity instead of creating a duplicate record.
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/lib/openclaw/`):
+- New create-session entry seeds builder state and Co-Pilot state from the same saved draft snapshot.
+- Fresh-start reset clears both stores and rotates session identity so stale singleton values do not bleed into the next build.
+- Autosave after resume reuses the recovered `draftAgentId` and updates the existing draft record.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` has one explicit contract for resuming an autosaved draft versus starting a clean build
+- [ ] Refreshing or revisiting the create route no longer loses the saved draft identity created by AG-UI autosave
+- [ ] Starting a new agent no longer leaks stale `useCoPilotStore()` values from the previous create session
+- [ ] Resumed sessions hydrate name, description, generated skills, improvements, and saved tool/trigger metadata from the same draft snapshot
+- [ ] Continuing after resume still saves back into the same draft/agent record instead of creating duplicates
+- [ ] Automated coverage proves both draft recovery and fresh-start reset behavior on the Google Ads create path
+
+### TASK-2026-03-26-116: Preserve architect review summary in builder payload
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI regression for the active create-flow lane and fixed the adjacent payload seam. `BuilderAgent` now preserves the architect's actual `ready_for_review.content` inside `SKILL_GRAPH_READY` when a skill graph is present, instead of overwriting that review summary with generic canned copy, and the new unit test locks that behavior.`
+- Next step: `Avoid this payload-content seam next run; prefer a different AG-UI builder branch such as no-graph `ready_for_review` fallback handling, wizard-state request injection, or lifecycle-state propagation.`
+- Blockers: `None`
+
+### TASK-2026-03-26-115: Preserve in-flight Configure state across review and back-navigation
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.test.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-create-flow-in-flight-config-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `Shipped the pre-save create-session config contract for the Google Ads builder lane. `/agents/create` now owns one in-flight snapshot for `toolConnections`, `credentialDrafts`, selected skill ids, and `triggers`; Review and Configure both read that shared state; and final save now reuses the same snapshot instead of reverting to stale `workingAgent` data. Added a focused Bun regression for the precedence rules plus a Playwright browser regression covering Review ↔ Configure back-navigation on the Google Ads path.`
+- Operator-testable outcome: `After one worker run, a human can open `/agents/create`, reach Review, enter Configure, choose a Google Ads connector state and supported trigger, go back to Review, and still see those exact unsaved selections and readiness details without saving first. Returning to Configure preserves the same in-flight choices and credential draft status, and final save/deploy uses that same session state instead of reverting to the last persisted agent snapshot.`
+- Next step: `Use this page-owned create-session contract as the source of truth while finishing TASK-2026-03-26-113, so deploy-readiness and fail-closed save logic evaluate the same unsaved Google Ads config state before first save.`
+- Blockers: `Playwright execution remains blocked in this environment because the local Next dev server cannot be started offline cleanly (`next dev` attempts an SWC lockfile patch that requires registry access), so the new browser regression was added but not executed here.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the creation journey should preserve important Google Ads configuration choices and avoid decorative UI, but the current create session still discards unsaved Configure work as soon as the operator leaves the step.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` builds `reviewToolConnections` and `reviewTriggers` from `workingAgent?.toolConnections` and `workingAgent?.triggers`, so Review does not reflect new unsaved Configure choices for fresh agents or in-progress edits.
+- The same file passes only `workingAgent?.toolConnections` and `workingAgent?.triggers` back into `ConfigureAgent` as `initial*` props, so returning from Review to Configure rehydrates stale persisted data rather than the operator's latest in-flight state.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx` stores `toolConnections`, `credentialDrafts`, `selectedSkills`, and `selectedTriggers` in local `useState`, and those values are only emitted from `onComplete()`, so any back-navigation before final completion drops the current session's Google Ads config work.
+- `agent-builder-ui/e2e/create-agent.spec.ts` currently covers the happy-path save flow but does not assert that Review and Configure stay synchronized across back-navigation, so this regression can keep shipping unnoticed even after the saved contract improved.
+
+#### What to build
+
+1. **Create-session config source of truth** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, shared types/helpers as needed):
+   - Add one page-owned in-flight config state object for selected tools, credential drafts, selected skills, triggers, and any derived readiness metadata needed before save.
+   - Seed it from the saved agent when editing, but stop treating `workingAgent` as the only source of truth once the operator changes Configure choices in the current session.
+   - Keep the state compatible with both chat/review/configure mode and the Google Ads proving-case create path.
+
+2. **Review and Configure synchronization** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`):
+   - Make Review render tool and trigger summaries from the in-flight config state when present, not only from the last persisted agent snapshot.
+   - Convert `ConfigureAgent` from local-only ownership to a controlled or lifted-state model so leaving the step does not discard the current tool, trigger, or credential draft work.
+   - Keep Improve Agent edits, accepted improvements, and name/rule review edits aligned with the same in-flight state instead of maintaining parallel unsaved stores.
+
+3. **Completion and readiness handoff** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, related deploy-readiness helpers):
+   - Ensure final save/deploy reads the shared in-flight config state so the persisted payload matches what Review just showed.
+   - Preserve credential drafts safely in memory until the first successful save or credential commit, without broadening client-side secret exposure.
+   - Make the future deploy-readiness gate read this same unsaved state before first save so create-session truthfulness and deploy blocking do not diverge.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused component/store tests, KB note + learning note):
+   - Add at least one browser regression for Review → Configure → Review back-navigation on the Google Ads path.
+   - Cover the case where a new connector or trigger selection is visible in Review before save and still present when Configure is reopened.
+   - Document the create-session config contract so future workers do not reintroduce local-only Configure state.
+
+#### Test suite
+
+**Browser acceptance coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- Start a Google Ads create flow, change connector and trigger selections in Configure, return to Review, and assert the unsaved selections remain visible.
+- Reopen Configure from that same session and assert the previously chosen tool, trigger, and any credential draft summary still appear without saving first.
+- Complete save/deploy and verify the persisted agent reflects the same choices the pre-save Review surface showed.
+
+**Focused frontend coverage** (`agent-builder-ui/app/(platform)/agents/create/`, store/component tests as needed):
+- Page-owned in-flight config state survives view switches between Review and Configure.
+- Improve Agent edit sessions seed from saved state once, then prefer in-flight changes over stale `workingAgent` fallbacks.
+- Credential drafts remain ephemeral client state until the existing save/commit path runs.
+
+#### Evaluation — task is done when
+
+- [ ] Review and Configure in `/agents/create` both read the same in-flight config state before first save
+- [ ] Backing out of Configure no longer drops unsaved Google Ads connector or trigger choices
+- [ ] Returning to Configure restores the operator's current in-flight selections instead of stale persisted values
+- [ ] Final save/deploy uses the same config state Review displayed immediately beforehand
+- [ ] Browser coverage proves Review ↔ Configure synchronization on the Google Ads create path
+- [ ] KB/learning notes describe the create-session config contract clearly enough to prevent future regressions
+
+### TASK-2026-03-26-113: Fail closed when Google Ads deploy config is not runtime-ready
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `ruh-backend/src/app.ts`, `ruh-backend/tests/integration/`, `ruh-backend/tests/unit/`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agent-builder-gated-skill-tool-flow.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-google-ads-deploy-readiness-gap.md`, `docs/journal/2026-03-26.md`
+- Summary: `The Google Ads create lane now persists structured connector and trigger readiness, but the actual deploy path still treats "has purpose + resolved skills" as deployable even when runtime setup is not safe. In `CoPilotLayout.tsx`, `canDeploy` ignores `toolConnections[]` and `triggers[]`; in `agents/create/page.tsx`, both completion handlers save or promote the agent without checking for `missing_secret` tools or unsupported triggers; in `agents/[id]/deploy/page.tsx`, the operator can always start a new deployment from a flat summary card; and in `ruh-backend/src/app.ts`, `configure-agent` writes whatever it can and still returns success when the saved agent has no credential-backed MCP config to write. This package adds one shared deploy-readiness contract so Google Ads agents fail closed until the saved config is actually runnable, not merely well-described.`
+- Operator-testable outcome: `After one worker run, a human cannot deploy a Google Ads agent when its selected Google Ads connection is `missing_secret`, when only unsupported trigger selections remain, or when another saved runtime prerequisite is unmet. The builder and deploy page both explain the exact blockers and how to clear them, and a direct backend configure/deploy call fails with a deterministic readiness error instead of reporting a successful deploy that silently omits MCP or trigger setup. A configured Google Ads connector plus a supported schedule trigger still deploys successfully end to end.`
+- Next step: `Write the KB spec/design note for the deploy-readiness contract, then implement one bounded vertical slice: derive deploy blockers from persisted tool and trigger metadata, use that contract to disable or stop deploy actions in both `/agents/create` and `/agents/[id]/deploy`, and add a backend preflight in `configure-agent` that rejects not-ready agent configs even if the frontend is bypassed.`
+- Blockers: `None, but compose this with TASK-2026-03-26-106 and TASK-2026-03-25-25 so the UI truthfulness work and the trigger-runtime work reuse the same readiness rules instead of inventing parallel status logic.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly says not to ship decorative configuration that hides unsupported runtime gaps, but the current Google Ads lane still lets operators deploy saved agent records whose connector or trigger state is known to be incomplete.
+- `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx` computes `canDeploy` from purpose metadata, generated skill graph, and unresolved custom skills only; it never inspects `connectedTools` or `triggers`, so `missing_secret` and unsupported runtime states do not block the primary deploy CTA.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` persists or promotes the agent in `handleComplete()` and `handleCoPilotComplete()` without any readiness gate tied to `toolConnections[]` or `triggers[]`, so the saved-agent contract can already say "not ready" while the create flow still completes.
+- `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx` lets the operator start deployment from a summary card that shows only skill count plus `triggerLabel`, which means the explicit connector and trigger readiness state added in the Google Ads focus lane is not used to decide whether deployment is safe.
+- `ruh-backend/src/app.ts` writes MCP config only for credentials that already exist in secret storage and otherwise still returns `{ ok: true, applied: true }`, so a deploy with a selected but `missing_secret` Google Ads connection can look successful while silently omitting the runtime integration.
+- `docs/knowledge-base/specs/SPEC-agent-builder-gated-skill-tool-flow.md` already says required credential-backed tools should keep deploy on the `missing_secret` fail-closed path, but the current implementation only enforces that rule for unresolved skills. This is now a code-vs-spec mismatch, not just a missing enhancement.
+
+#### What to build
+
+1. **Shared deploy-readiness contract** (`agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, shared types/helpers as needed):
+   - Define one helper that evaluates whether a saved or in-flight agent is runtime-ready using selected skills, `toolConnections[]`, and `triggers[]`.
+   - Treat `missing_secret` credential-backed tools as blocking when the tool is selected for the agent's runtime contract, and treat unsupported trigger selections as blocking unless a supported alternative is also present and selected.
+   - Return structured blocker reasons the UI and backend can both surface directly instead of re-deriving status strings separately.
+
+2. **Builder-side fail-closed gating** (`agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, review/config step wiring as needed):
+   - Extend `canDeploy` and the final create completion path so the main `/agents/create` deploy CTA blocks not just unresolved skills but also not-ready connector or trigger state.
+   - Show actionable blocker copy in the builder footer or review surface so the operator knows whether they must connect Google Ads, remove an unsupported trigger, or otherwise fix config before deploy.
+   - Keep safe draft autosave intact; the agent can still be saved as a draft or reopened for improvement even when deploy is blocked.
+
+3. **Deploy-page and backend preflight** (`agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts` if needed):
+   - Add a deploy-page readiness summary that refuses to start sandbox creation when the saved agent is not runtime-ready.
+   - In `configure-agent`, load the saved agent contract for `agent_id`, validate selected tool and trigger readiness before any sandbox mutation, and return a deterministic non-2xx readiness error with structured step or blocker details when config is not runnable.
+   - Make this fail closed for hot-push and deploy flows alike so bypassing the frontend cannot create a partial Google Ads runtime.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, frontend helper tests, `ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`, KB/spec notes):
+   - Add coverage proving deploy is blocked for `missing_secret` Google Ads connections and unsupported trigger-only configs.
+   - Keep the happy path covered: a configured Google Ads connection plus a supported weekday schedule still deploys and applies config successfully.
+   - Document the deploy-readiness rules in the builder KB/spec layer so future create-flow work uses the same contract.
+
+#### Test suite
+
+**Frontend acceptance tests** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused helper tests):
+- The Co-Pilot create flow disables `Deploy Agent` when the selected Google Ads connection is `missing_secret` and explains the blocker.
+- The deploy page refuses to start a sandbox when the saved agent still contains unsupported trigger-only runtime state.
+- Once the Google Ads connection is configured and a supported schedule trigger is selected, the same flow unblocks and deploy proceeds normally.
+
+**Backend unit/integration tests** (`ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`):
+- `configure-agent` rejects an `agent_id` whose persisted tool connections or triggers are not runtime-ready before writing `SOUL.md`, skills, cron jobs, or MCP config.
+- The readiness error shape is deterministic enough for the frontend to map into deploy-blocked UI copy.
+- A valid configured-agent payload still applies MCP config and cron jobs successfully.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` does not let operators deploy a Google Ads agent whose selected connector or trigger state is known to be not runtime-ready
+- [ ] `/agents/[id]/deploy` surfaces the same blocker reasons and refuses to start sandbox creation until they are resolved
+- [ ] Backend `configure-agent` fails closed for not-ready saved agent configs instead of returning success after silently skipping MCP or trigger setup
+- [ ] The deploy-readiness contract is shared enough that builder, deploy page, and backend report the same blocker categories
+- [ ] Happy-path Google Ads deployment still succeeds when the connector is configured and at least one supported trigger/runtime path is present
+- [ ] KB/spec notes describe the deploy-readiness contract and its relation to saved tool/trigger metadata accurately
+
+### TASK-2026-03-26-112: Cover trigger-label refresh on Improve Agent draft saves
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded regression test around the Google Ads Improve Agent path and fixed the store helper so draft saves no longer reuse a stale saved trigger label when structured triggers change. Existing-agent draft saves now derive the label from updated structured triggers unless the operator explicitly supplied a custom label.`
+- Next step: `Look for the next smallest create/improve-flow regression in `agent-builder-ui` unit coverage, preferably around saved config truthfulness or AG-UI lifecycle state.`
+- Blockers: `None`
+
+### TASK-2026-03-26-111: Make `/agents/create` fail closed on hung architect runs
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-agent-create-session-hang.md`, `docs/journal/2026-03-26.md`
+- Summary: `The Google Ads creation lane still has a reliability hole that is not represented as a worker-ready package: live architect sessions can hang indefinitely after the bridge emits lifecycle phases through \`start\`, while the `/agents/create` UI remains on a generic \`Connecting…\` indicator and never gives the operator a bounded timeout, clear failure state, or retry affordance. The bridge and client already expose granular status phases (`connecting`, `authenticated`, `thinking`, `start`, `retrying`, `error`), but the builder surface does not project them into a truthful run state, so operators cannot distinguish a slow run from a wedged session or recover cleanly. This package makes the create flow fail closed on stalled architect runs, surfaces lifecycle progress in the Co-Pilot chat UI, and restores browser-level coverage for the real shell so the focused Google Ads path is usable and diagnosable instead of hanging opaquely.`
+- Operator-testable outcome: `After one worker run, a human can open `/agents/create`, start the Google Ads architect flow, see the live lifecycle progress instead of only `Connecting…`, and if the architect session stalls after `start` the UI moves into an explicit timed-out or error state with a retry or reset path rather than spinning forever. The same create-flow browser coverage should exercise the updated shell selectors and prove the status or error surface for at least one mocked stalled-run scenario.`
+- Next step: `Write a narrow spec or design note for builder-run lifecycle truthfulness, then ship one bounded vertical slice: thread bridge status phases into builder-visible state, add a client-side watchdog for runs that never reach `result`, render a clear timeout or error banner plus retry or reset affordance in the Co-Pilot chat shell, and refresh `agent-builder-ui/e2e/create-agent.spec.ts` to assert the new lifecycle or error behavior with the current multi-textarea UI.`
+- Blockers: `None. This should compose with TASK-2026-03-26-98 instead of waiting on the full AG-UI cutover: use the existing bridge status events and current builder chat path now, then let the later AG-UI cleanup absorb the same state contract instead of inventing another spinner-only path.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` makes the agent-creation journey the top priority through Friday, March 27, 2026, so a create flow that can hang indefinitely on a live architect session is a direct product blocker even when config persistence work is landing correctly.
+- `docs/knowledge-base/learnings/LEARNING-2026-03-26-agent-create-session-hang.md` already records reproducible live sessions that stall after `connecting` → `authenticated` → `thinking` → `start`, but there is still no worker-ready TODO entry turning that evidence into a fix package.
+- `agent-builder-ui/lib/openclaw/api.ts` already forwards status events from `/api/openclaw`, and `agent-builder-ui/app/api/openclaw/route.ts` already emits granular lifecycle phases plus typed retry and error states, so the repo has the raw signals needed to make the UI truthful today.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx` still renders only a generic `Connecting…` placeholder while `isLoading` is true and there are no steps or response text, which hides whether the bridge is still authenticating, actively thinking, retrying, or wedged.
+- `TODOS.md` currently tracks AG-UI cutover, saved-config truthfulness, and persisted improvement recommendations, but it does not contain a focused reliability package for stalled architect runs, timeout handling, or browser coverage refresh for the live create shell.
+- `agent-builder-ui/e2e/create-agent.spec.ts` was moved to a Google Ads proving case, but the related learning note shows its live selectors and failure expectations are still behind the current shell, so the highest-priority path lacks reliable browser regression coverage exactly where operators are getting stuck.
+
+#### What to build
+
+1. **Lifecycle contract for builder runs** (`agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/app/api/openclaw/route.ts`):
+   - Define the builder-facing run phases the UI should understand (`connecting`, `authenticated`, `thinking`, `start`, `retrying`, `timed_out`, `error`, `complete`).
+   - Preserve existing bridge semantics and request-id safety; do not reintroduce blind retries after gateway acceptance.
+   - Keep the contract narrow enough that the later AG-UI cleanup can adopt it without another state-model fork.
+
+2. **Fail-closed timeout and recovery UX** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, builder page wiring as needed):
+   - Replace the spinner-only initial loading state with lifecycle-aware status copy that reflects what the bridge is actually reporting.
+   - Add a bounded client-side watchdog for architect runs that never produce `result` after `start` or another terminal state.
+   - Surface an explicit timed-out or error state with a retry or reset action so the operator can recover without refreshing the page blindly.
+
+3. **Create-flow state integration** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, current builder-state or Co-Pilot store seams):
+   - Thread lifecycle and terminal failure state through the live `/agents/create` Co-Pilot path, not just the legacy chat helpers.
+   - Make retry or reset clear any stale in-flight markers while preserving safe draft state that has already been autosaved.
+   - Ensure the new status surface composes with draft autosave and does not regress the existing `Proceed to Review` or `Deploy Agent` flow when runs succeed normally.
+
+4. **Browser regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, learning note above):
+   - Refresh create-flow selectors for the current multi-textarea shell.
+   - Add at least one mocked stalled-run case that proves the UI surfaces lifecycle progress, then times out or errors instead of spinning forever.
+   - Document the builder-run lifecycle and the operator-visible timeout and retry behavior so future agents debug the bridge and UI as one contract.
+
+#### Test suite
+
+**Frontend/browser coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- A mocked happy-path architect run shows lifecycle progress, reaches review, and still completes the Google Ads create flow on the current shell.
+- A mocked stalled architect run that never emits `result` transitions into the new timeout or error state with a visible retry or reset affordance instead of remaining on `Connecting…`.
+- The refreshed selectors target the current create page reliably even when multiple textareas are rendered.
+
+**Focused unit/component coverage** (`agent-builder-ui/lib/openclaw/`, builder chat tests as needed):
+- Status callbacks from `sendToArchitectStreaming()` propagate lifecycle phases into the builder state layer.
+- The watchdog marks a run as timed out only when no terminal result arrives within the configured budget and does not fire after a successful completion.
+- Retry or reset clears stale loading state and preserves safe autosaved draft metadata.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` no longer leaves operators on a generic infinite `Connecting…` state for stalled architect sessions
+- [ ] The builder UI exposes truthful lifecycle progress and a terminal timeout or error state for hung runs
+- [ ] Operators can retry or reset a wedged architect run without losing already-saved safe draft state
+- [ ] Browser coverage exercises both the current Google Ads happy path and one stalled-run recovery path with current selectors
+- [ ] KB and learning docs describe the builder-run lifecycle and debugging contract accurately
+
+### TASK-2026-03-26-110: Cover AG-UI builder clarification normalization
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI builder regression for the active /agents/create lane. The new BuilderAgent unit test proves object-shaped clarification questions are normalized into one conversational assistant message instead of leaking raw fallback shapes when the architect bridge returns clarification payloads outside the older string-array assumption.`
+- Next step: `Avoid this clarification-normalization seam next run; prefer a different AG-UI builder branch such as wizard-state message injection, ready_for_review fallback text, or another Google Ads create-flow unit seam.`
+- Blockers: `None`
+
+### TASK-2026-03-26-108: Cover AG-UI builder session rotation after bridge failure
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI create-flow regression for architect-bridge failure recovery. The new Bun test proves \`BuilderAgent\` emits a run error, rotates away from the stale builder session id, and uses the rotated session on the next run instead of retrying on the failed conversation identity.`
+- Next step: `Avoid this failure-rotation seam next run; prefer a different AG-UI builder branch such as clarification normalization, state snapshot edge cases, or another Google Ads create-flow unit seam.`
+- Blockers: `None`
+
+### TASK-2026-03-26-107: Fix disabled completion action after agent review
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/journal/2026-03-26.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`
+- Summary: `Completed the bounded review-step CTA fix for `/agents/create`. The embedded Co-Pilot stepper no longer shows a dead disabled \`Next\` button on the final review phase; it now renders the same real \`Deploy Agent\` completion action used by the header, wired to the existing create/deploy handler and loading state so operators can finish creation from the review surface itself. The browser regression now clicks that embedded review CTA as the source-of-truth completion path.`
+- Next step: `No follow-up is needed for this UX regression. Any further work in this area should build on the remaining review/improve/deploy truthfulness package in TASK-2026-03-26-106 rather than revisiting the completion CTA wiring.`
+- Blockers: `None`
+
+### TASK-2026-03-26-109: Persist builder-surfaced improvement recommendations in saved agent state
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/types.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/mockData.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/lib/agents/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `ruh-backend/tests/unit/validation.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agent-improvement-persistence.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-agent-improvement-persistence-contract.md`, `docs/journal/2026-03-26.md`
+- Summary: `Shipped the bounded Google Ads improvement-persistence slice. Saved agents now carry a metadata-only \`improvements[]\` contract, backend validation/store paths round-trip it through create and config patch, AG-UI metadata reduction derives a structured Google Ads connector recommendation without transcript scraping, review surfaces can accept or dismiss that recommendation, Improve Agent reopens with the saved decision intact, and the deploy page now summarizes accepted improvements from saved state.`
+- Operator-testable outcome: `After one worker run, a human can create or improve a Google Ads agent, receive at least one structured builder recommendation such as a missing Google Ads connector requirement, schedule refinement, or workflow upgrade, accept it from the review/configure flow, save the agent, reopen Improve Agent, and still see that accepted improvement reflected in the saved agent state and deploy summary without re-reading chat history.`
+- Next step: `Use this new \`improvements[]\` field as the single source of truth while finishing TASK-2026-03-26-106, so richer review/deploy truthfulness work reads saved recommendation state instead of rebuilding ad hoc summary UI.`
+- Blockers: `None`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the creation loop should surface concrete process improvements and feed approved improvements back into persisted agent config, but there is no dedicated worker-ready package for that contract in `TODOS.md`.
+- `agent-builder-ui/lib/openclaw/copilot-state.ts` persists purpose, skills, connected tools, triggers, and rules, but it has no field for structured builder recommendations, acceptance state, or dismissed improvements.
+- `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts` and `wizard-directive-parser.ts` emit skills/tools/triggers/rules metadata, but they do not normalize any builder recommendation payload into canonical saved state.
+- `agent-builder-ui/hooks/use-agents-store.ts` and `ruh-backend/src/agentStore.ts` only persist the agent metadata already shipped for the Google Ads slice; there is no `improvements` or similar field in the saved-agent API contract.
+- `agent-builder-ui/e2e/create-agent.spec.ts` verifies Google Ads save/reload for tools and triggers, but there is still no acceptance case proving an approved recommendation becomes durable product state instead of transient chat output.
+- Without a first-class saved improvement contract, the Google Ads lane can keep adding smarter builder advice while still failing the focus requirement that accepted improvements remain visible and actionable after refresh, Improve Agent reopen, or deploy.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/005-data-models.md`):
+   - Define one bounded persisted improvement contract for the builder, including recommendation shape, acceptance state, safe display fields, and how accepted improvements relate to existing saved config.
+   - Specify which recommendation kinds are in scope for the first Google Ads slice, such as missing connector setup, supported-trigger refinement, or workflow/rule upgrades.
+   - Link the new spec bidirectionally with the builder UI, key-flows, and data-model notes.
+
+2. **Saved data model and API contract** (`ruh-backend/src/agentStore.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/schemaMigrations.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/agents/types.ts`):
+   - Add one metadata-only persisted field for builder recommendations and operator decisions, keeping raw secret material and chat transcripts out of the stored contract.
+   - Round-trip that field through create, config patch, fetch, and Improve Agent reload paths.
+   - Keep the contract compatible with existing draft autosave and saved Google Ads config metadata rather than creating a second persistence path.
+
+3. **Builder and review acceptance flow** (`agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-metadata-autosave.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`):
+   - Normalize one structured builder recommendation payload into the AG-UI/co-pilot state instead of leaving it only in free-form assistant text.
+   - Let the operator accept, defer, or dismiss the recommendation from a bounded review/configure surface.
+   - When accepted, thread the resulting recommendation state into the same saved-agent payload used by draft autosave, Improve Agent, and final save/deploy.
+
+4. **Operator-facing continuity** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, review/configure/deploy surfaces, KB notes):
+   - Show accepted or pending improvements after refetch so Improve Agent looks like a continuation of saved product state rather than a fresh chat session.
+   - Reflect accepted improvements in deploy/review summaries using safe metadata only, not raw prompts or transcript fragments.
+   - Keep the first slice narrow: one or two recommendation categories are enough if they survive end to end.
+
+5. **Regression coverage** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused AG-UI/store tests, `ruh-backend/tests/unit/` as needed):
+   - Add store or validation coverage for the new persisted improvement field and its fail-fast request contract.
+   - Extend the Google Ads acceptance path so a structured recommendation can be accepted, saved, reloaded, and shown again on Improve Agent or review/deploy.
+   - Cover the fail-closed case where unsupported or malformed recommendation payloads do not silently pollute saved agent state.
+
+#### Test suite
+
+**Backend/store contract tests** (`ruh-backend/tests/unit/`, `agent-builder-ui/hooks/use-agents-store.test.ts`):
+- The saved-agent create/config APIs round-trip structured improvement metadata without accepting unknown keys or leaking secret-bearing text.
+- Existing agents without the new field still load correctly, while accepted recommendations persist cleanly for new or edited Google Ads agents.
+
+**AG-UI / builder-state tests** (`agent-builder-ui/lib/openclaw/ag-ui/__tests__/`, focused co-pilot tests):
+- Builder metadata reduction can ingest the structured recommendation payload and keep acceptance state stable across subsequent builder events.
+- Draft autosave and Improve Agent reload paths do not drop accepted recommendations when other fields like skills, tools, or triggers change.
+
+**Operator acceptance tests** (`agent-builder-ui/e2e/create-agent.spec.ts`):
+- A Google Ads create/improve run can accept at least one recommendation, save the agent, reopen it, and still see the accepted recommendation reflected in the saved state.
+- Review or deploy surfaces show the accepted improvement without relying on transient chat content.
+
+#### Evaluation — task is done when
+- [ ] The saved agent contract has one authoritative metadata field for structured builder recommendations and operator decisions
+- [ ] The builder/AG-UI path can emit at least one structured recommendation without relying on transcript scraping
+- [ ] Accepting a recommendation persists through save, reload, and Improve Agent reopen for the Google Ads path
+- [ ] Review and/or deploy surfaces can explain accepted improvements from saved state rather than chat history
+- [ ] Tests cover the persisted recommendation contract at the store/API layer and in one Google Ads acceptance flow
+- [ ] KB/spec notes document the recommendation-state contract and how it composes with the existing Google Ads saved-config work
+
+### TASK-2026-03-26-106: Make review, improve, and deploy use the saved Google Ads config contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/types.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/review/mockData.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_config/wizard-templates.ts`, `agent-builder-ui/lib/agents/operator-config-summary.ts`, `agent-builder-ui/lib/agents/operator-config-summary.test.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the operator-facing saved-config slice for the Google Ads proving case. Review now renders persisted \`toolConnections[]\` and \`triggers[]\` directly, Improve Agent reuses that same saved metadata when the review surface is reopened, Deploy shows explicit readiness plus saved connector/trigger summaries instead of flattening everything into \`triggerLabel\`, and the remaining generic finance template/demo copy was replaced with Google Ads-focused defaults. A shared formatter layer now keeps Review and Deploy aligned on safe status copy for \`configured\`, \`missing_secret\`, and unsupported trigger/tool states.`
+- Operator-testable outcome: `After one worker run, a human can create or reopen a Google Ads agent, reach Review or Improve Agent, and see the actual saved connector metadata and structured trigger definitions instead of mock trigger chips or workflow-derived guesses. On Deploy, the summary and apply log clearly reflect the saved Google Ads MCP connection state and supported trigger/runtime contract, so the operator can tell whether the agent is ready, missing credentials, or carrying unsupported integrations before and after sandbox config apply.`
+- Next step: `Run the new Playwright deploy-surface regression in a host environment that can bind the local Next.js port; no additional code changes are expected for the shipped slice unless that browser run finds a UI mismatch.`
+- Blockers: `This sandbox cannot bind a local Next.js dev server port (\`listen EPERM\` on \`127.0.0.1:3001\`), so the added Playwright regression was not executed in-run.`
+
+#### Why this is important now
+
+- `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx` still fabricates review triggers from `workflow.steps.slice(0, 3)` and only supports `TriggerItem { icon, text }`, so the review step cannot show whether a Google Ads schedule trigger is supported, whether a webhook is unsupported, or whether a connector is still `missing_secret`.
+- `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx` summarizes the agent as `N skills · triggerLabel`, which throws away the persisted `toolConnections[]` and `triggers[]` contract right before the operator decides to deploy.
+- `agent-builder-ui/lib/openclaw/agent-config.ts` already applies structured triggers and credential-backed MCP config, so the operator surface is now less truthful than the runtime contract that actually configures the sandbox.
+- `agent-builder-ui/app/(platform)/agents/create/_config/wizard-templates.ts` still advertises generic demo templates headed by `finance-assistant`, which drifts from the current Google Ads proving-case focus and makes the review surface look more generic than the saved agent state underneath it.
+- The focus document explicitly requires that saved config choices shape review, save, deploy, and improve behavior; until these surfaces use the structured contract directly, the product still looks like decorative configuration even though the backend/store now preserve richer state.
+
+#### What to build
+
+1. **Truthful review contract** (`agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/types.ts`, create-page props):
+   - Replace workflow-step-derived trigger summaries with the persisted `triggers[]` model, including supported vs unsupported state and any saved schedule details that are safe to display.
+   - Add a review representation for tool connections so operators can see configured, missing-secret, and unsupported/manual integrations before save or deploy.
+   - Keep the review test-chat path working, but build its snapshot from the same saved-config contract the deploy/runtime code consumes.
+
+2. **Improve Agent parity** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/hooks/use-agents-store.ts`):
+   - Reopening an existing agent must hydrate Review/Config from persisted `toolConnections[]` and `triggers[]`, not from stale display-only fields.
+   - Accepted operator edits in review should preserve structured trigger/tool metadata instead of collapsing them back into `triggerLabel` or free-form text.
+   - Make the saved Google Ads config remain visible after refresh so Improve Agent looks like a continuation of the persisted agent, not a generic builder shell.
+
+3. **Deploy summary and readiness surface** (`agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/lib/openclaw/agent-config.ts`):
+   - Expand the deploy summary to show the real connector and trigger readiness for the saved agent, including masked/config-safe status text for `configured`, `missing_secret`, and `unsupported`.
+   - Reflect the saved supported-trigger contract in the deploy copy so operators can tell what runtime behavior will actually be applied.
+   - Keep secret values masked and avoid duplicating credential-entry UX on the deploy page.
+
+4. **Google Ads proving-case polish** (`agent-builder-ui/app/(platform)/agents/create/_config/wizard-templates.ts`, review/configure/deploy copy, KB/spec notes):
+   - Replace remaining generic demo defaults that make the builder drift away from the Google Ads proving case when the operator is in the focused lane.
+   - Align review/deploy labels and examples with the Google Ads optimizer path and the MCP-first connector contract already documented in the KB.
+   - Document that operator-facing review/deploy surfaces now read from the same structured saved-agent config contract as runtime apply.
+
+#### Test suite
+
+**Frontend component/store tests** (`agent-builder-ui/`):
+- Review and Improve Agent surfaces render persisted `toolConnections[]` and `triggers[]` instead of deriving trigger text from `workflow.steps`.
+- Existing-agent reopen paths preserve connector status and supported-trigger metadata after a refetch from the backend-backed store.
+- Editing review fields does not collapse structured trigger/tool metadata back into plain display strings.
+
+**Frontend acceptance tests** (`agent-builder-ui/e2e/create-agent.spec.ts` or adjacent focused flows):
+- The Google Ads proving-case path shows connector and trigger truth in Review before save/deploy.
+- Reopening Improve Agent after save still shows the persisted connector status and structured trigger selection.
+- Deploy shows the saved Google Ads connector/trigger readiness before the sandbox is created and the apply log remains consistent with that contract.
+
+#### Evaluation — task is done when
+
+- [ ] Review uses persisted `toolConnections[]` and `triggers[]` as the source of truth instead of workflow-step guesses or `triggerLabel`
+- [ ] Improve Agent reopens with the saved Google Ads connector/trigger state visible and editable without flattening it into text-only summaries
+- [ ] Deploy surfaces the saved connector readiness and supported-trigger contract clearly enough for an operator to decide whether deployment is safe
+- [ ] The Google Ads proving-case path no longer falls back to generic `finance-assistant` style defaults in these operator-facing surfaces
+- [ ] Automated coverage proves Review, Improve Agent, and Deploy all consume the structured saved-agent config contract
+
+### TASK-2026-03-26-105: Gate builder tabs on purpose metadata and make skills/tools registry-aware
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/skills/skill-registry.ts`, `agent-builder-ui/lib/tools/tool-integration.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/skillRegistry.ts`, `ruh-backend/tests/unit/skillRegistry.test.ts`, `ruh-backend/tests/unit/skillRegistryApp.test.ts`, `agent-builder-ui/lib/skills/skill-registry.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/lib/tools/tool-integration.test.ts`, `docs/plans/`, `docs/knowledge-base/specs/`, `docs/journal/2026-03-26.md`
+- Summary: `Shipped the first gated Co-Pilot builder slice. `/agents/create` now keeps the runtime workspace and downstream config phases locked until purpose metadata exists and the architect has generated a real skill graph, auto-generates skills after debounced `name + description` entry, resolves each generated skill against a read-only backend registry, lets operators mark missing skills as custom-built from an in-place SKILL.md draft, blocks deploy while any selected skill still needs a build, and updates tool research so the architect states the `CLI > MCP > API` preference order explicitly while still choosing the real best fit per tool.`
+- Next step: `Fold this slice into TASK-2026-03-25-05 if the repo needs a non-static registry, publishing workflow, or richer marketplace matching beyond the shipped read-only builder contract.`
+- Blockers: `None`
+
+### TASK-2026-03-26-104: Make AG-UI the live draft source for `/agents/create`
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `agent-builder-ui/hooks/use-openclaw-chat.test.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/plans/2026-03-26-agui-live-agent-info-autosave*.md`, `docs/journal/2026-03-26.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/specs/SPEC-copilot-config-workspace.md`
+- Summary: `Completed the AG-UI live-draft slice for /agents/create. Builder-mode AG-UI metadata now flows through useAgentChat as the canonical safe draft state, saveAgentDraft() creates or updates a backend draft record while the architect is still working, the Co-Pilot workspace surfaces live draft status and builder identity before review, and final deploy reuses draftAgentId so the existing draft is promoted to active instead of creating a duplicate agent. Browser regression coverage now proves both the pre-review draft save and the end-to-end Co-Pilot create path.`
+- Next step: `Build on this live draft seam in follow-on packages such as truthful review/improve/deploy config surfaces and the remaining AG-UI cutover cleanup; this autosave slice itself no longer needs follow-up work.`
+- Blockers: `None`
+
+### TASK-2026-03-26-103: Build a real Tools workspace and fail-closed connector setup
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/tools/`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/lib/openclaw/`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/`, `docs/plans/`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`, `docs/journal/2026-03-26.md`
+- Summary: `Shipped the tool-integration workspace and the truthful connector-status contract. The builder now has a real /tools page for researching MCP vs API vs CLI, the same research UI is reused inside Connect Tools, new-agent credential drafts stay ephemeral until the first agent save succeeds, and connector state now fails closed as configured, missing_secret, or unsupported instead of optimistic fake success. The saved metadata model also now preserves connectorType as mcp, api, or cli.`
+- Next step: `Expand browser-level create-flow coverage when the surrounding AG-UI/create-flow work stabilizes; the current shipped slice already has targeted unit and bridge coverage plus KB/journal updates.`
+- Blockers: `None`
+
+### TASK-2026-03-26-102: Move Co-Pilot into Config tab and auto-focus builder tools
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/WizardStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/AgentConfigPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/plans/`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the Co-Pilot workspace merge for /agents/create. The Agent's Computer Config tab now hosts the builder snapshot and embedded stepper/content in one surface, explicit builder phase changes force-focus Config, AG-UI builder events now receive the shared Co-Pilot store, and the create-flow Playwright coverage was refreshed to assert the in-config stepper plus the current end-to-end Co-Pilot save path.`
+- Next step: `If create-flow browser coverage is expanded again, convert the remaining legacy review/configure assertions in agent-builder-ui/e2e/create-agent.spec.ts into explicit wizard-mode tests instead of reusing Co-Pilot helpers.`
+- Blockers: `None`
+
+### TASK-2026-03-26-101: Cover split AG-UI tool-call wrapper parsing
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/event-middleware.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/event-middleware.test.ts`
+- Summary: `Added one bounded AG-UI regression covering split tool-call wrapper chunks. The new Bun test proved \`</tool_call>\` could leak into visible assistant text when it arrived after the closing \`</function>\` chunk, and the parser now strips that delayed wrapper before resuming normal writing output.`
+- Next step: `Prefer the next AG-UI coverage slice around other chunk-boundary or state-snapshot edge cases instead of revisiting this wrapper path.`
+- Blockers: `None`
+
+### TASK-2026-03-26-106: Cover AG-UI draft autosave retry after save failure
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-metadata-autosave.test.ts`, `docs/journal/2026-03-26.md`
+- Summary: `Added one bounded AG-UI autosave regression for the active \`/agents/create\` draft-persistence lane. The new Bun test proves the builder metadata autosave controller marks a failed draft save as \`error\` and still allows the same normalized payload to be retried successfully afterward, so a transient backend failure does not permanently suppress later saves for the same Google Ads draft metadata.`
+- Next step: `Avoid this autosave failure-retry seam next run; prefer a different AG-UI or Google Ads create-flow branch such as builder-state hydration, selector stability, or browser-level create-flow reliability once the harness is safe.`
+- Blockers: `None`
+
+### TASK-2026-03-26-100: Browser-check the agent creation flow
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/`, `agent-builder-ui/e2e/`, `docs/journal/2026-03-26.md`
+- Summary: `Completed a live browser verification pass against the default Co-Pilot create flow at /agents/create. The create shell renders and mocked SSE responses display correctly, but the live architect path is unreliable: the browser can remain stuck on \`Connecting…\` while the same \`/api/openclaw\` request either completes quickly or hangs indefinitely after the \`start\` lifecycle phase depending on the architect session. The current Playwright coverage for create-agent is also stale against the live UI because its textarea selectors now match multiple inputs.`
+- Next step: `Turn the verification into a bounded reliability package: instrument or time-bound builder sessions after \`start\`, surface architect lifecycle/timeout state in the Co-Pilot chat UI, and refresh \`agent-builder-ui/e2e/create-agent.spec.ts\` selectors so browser coverage matches the current create shell.`
+- Blockers: `None`
+
+### TASK-2026-03-26-102: Preserve pre-save connector credentials through first save on `/agents/create`
+- Status: `completed`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConnectToolsSidebar.tsx`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-create-flow-pre-save-credentials-gap.md`
+- Summary: `Completed as part of TASK-2026-03-26-103. New-agent connector drafts now stay in ephemeral in-memory state until the first agent save returns a real id, credential commits reuse the existing secure backend routes, failures leave the connector in \`missing_secret\` instead of \`configured\`, and reopen/improve paths reconcile metadata against saved credential summary instead of trusting optimistic local state.`
+- Operator-testable outcome: `After one worker run, a human can start a brand-new Google Ads agent on \`/agents/create\`, enter connector credentials before the agent exists in the backend, finish save/deploy, and later reopen Improve Agent to see the connection reflected as configured or missing-secret without the browser ever re-reading plaintext credentials. The same flow must work without forcing the operator to save first, navigate away, and re-enter secrets in a separate pass.`
+- Next step: `Reuse the shipped fail-closed handoff when browser-level Google Ads proving-case coverage is expanded; no separate credential-storage package is required now.`
+- Blockers: `None`
+
+### TASK-2026-03-26-99: Make Tester-1 focus-aware and Playwright-capable
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `CLAUDE.md`, `docs/project-focus.md`, `agents/tester-1.md`, `.agents/agents/tester-1.md`, `docs/knowledge-base/012-automation-architecture.md`, `docs/knowledge-base/013-agent-learning-system.md`, `docs/knowledge-base/specs/SPEC-test-coverage-automation.md`, `docs/knowledge-base/specs/SPEC-automation-agent-roles.md`, `docs/knowledge-base/specs/SPEC-analyst-project-focus.md`, `/Users/prasanjitdey/.codex/automations/tester-1/automation.toml`, `/Users/prasanjitdey/.codex/automations/tester-1/memory.md`, `docs/journal/2026-03-26.md`
+- Summary: `Updated the Tester-1 automation contract so scheduled test-improvement runs now bias toward the active \`docs/project-focus.md\` lane, prefer adding bounded coverage around that lane, and may occasionally run one bounded Playwright manual verification for a focus-area workflow when browser-level evidence is the best next step. Synced the live automation prompt, the mirrored role files, and the KB/spec/instruction docs so runtime behavior and documentation stay aligned.`
+- Next step: `Let the next Tester-1 run target the active AG-UI or Google Ads creation lane and choose either one bounded regression or one bounded Playwright verification scenario based on the safest stable layer available.`
+- Blockers: `None`
+
+### TASK-2026-03-26-98: Finish the AG-UI cutover for builder and deployed chat
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/builder-state.ts`, `agent-builder-ui/lib/openclaw/chat-transport.ts`, `agent-builder-ui/lib/openclaw/builder-chat-transport.ts`, `agent-builder-ui/lib/openclaw/agent-chat-transport.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `agent-builder-ui/e2e/tab-chat-task-plan.spec.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-agui-cutover-gap.md`
+- Summary: `The active project focus explicitly puts AG-UI protocol adoption first, but the repo still has no worker-ready feature package for finishing that migration. The current codebase is split across two abstractions: AG-UI packages and agents already exist in \`agent-builder-ui/lib/openclaw/ag-ui/*\`, and \`TabChat.tsx\` now consumes \`useAgentChat()\`, but the create flow still instantiates legacy \`createBuilderChatTransport()\` and \`useBuilderState()\`, \`use-agent-chat.ts\` still imports the old \`BuilderState\` type, and the legacy transport/state files remain live. \`TabChat.tsx\` also still contains stale pre-hook transport/state logic below the AG-UI hook path, so the builder and deployed-chat surfaces are not actually running on one clean shared event/state contract yet.`
+- Operator-testable outcome: `After one worker run, a human can use both \`/agents/create\` and \`/agents/<id>/chat\` through the AG-UI path only: builder clarifications and ready-for-review state still work, deployed chat still renders tool steps/browser/task-plan events correctly, and the legacy \`ChatTransport\` / \`BuilderState\` path is removed or fully inert with regression coverage proving the cutover.`
+- Next step: `Use [[SPEC-agui-protocol-adoption]] as the implementation contract, then finish the first complete cutover slice: move builder-mode state ownership onto the AG-UI state model, wire \`agents/create/page.tsx\` to the AG-UI builder agent/hook instead of the legacy transport prop, delete or retire the old transport/state modules, and update the existing create/deployed-chat tests to prove both flows still stream correctly.`
+- Blockers: `None, but this package should be treated as foundation work for TASK-2026-03-26-95 and TASK-2026-03-26-96. If another worker is already editing the create flow, they should absorb this cutover into that branch rather than landing more legacy-path code on top of the split abstraction.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` lists `AG-UI Protocol Adoption (Option C)` as the first suggested delivery item, ahead of the Google Ads create-flow work, so leaving it untracked means the active steering document and `TODOS.md` are out of sync.
+- `agent-builder-ui/package.json` already includes `@ag-ui/client` and `@ag-ui/core`, and `agent-builder-ui/lib/openclaw/ag-ui/` already defines `BuilderAgent`, `SandboxAgent`, shared AG-UI types, and `useAgentChat()`, so this is a partially landed migration rather than a speculative new direction.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx` still imports and instantiates `createBuilderChatTransport()` plus `useBuilderState()`, then passes a legacy `transport` prop into `TabChat`, which means the live builder entry point still depends on the abstraction the AG-UI spec says should be deleted.
+- `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts` still imports `BuilderState` from `../builder-state` and exposes builder-mode callbacks in terms of that old type, so the AG-UI layer is not yet the canonical state model described in the spec.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx` now consumes `useAgentChat()`, but it still carries a large stale block of pre-hook conversation/transport/state code below the hook-based path, which increases drift risk and obscures which code path is actually authoritative.
+- `docs/knowledge-base/specs/SPEC-agui-protocol-adoption.md` already defines the expected deletion targets (`chat-transport.ts`, `builder-chat-transport.ts`, `agent-chat-transport.ts`, `builder-state.ts`) and the builder/create-page refactor, but there is no TODO package making that spec actionable for a worker.
+
+#### What to build
+
+1. **Builder-mode cutover** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, AG-UI builder files):
+   - Replace the create-page legacy transport path with direct builder-mode use of the AG-UI builder agent/hook contract.
+   - Move builder-mode state ownership away from `useBuilderState()` so the create/review/configure phases read from the shared AG-UI state model instead of a parallel legacy store.
+   - Preserve session rotation, ready-for-review transitions, and improve-agent initialization behavior while removing the split-brain state path.
+
+2. **Legacy abstraction removal** (`agent-builder-ui/lib/openclaw/chat-transport.ts`, `builder-chat-transport.ts`, `agent-chat-transport.ts`, `builder-state.ts`, stale `TabChat.tsx` code):
+   - Delete or fully retire the old transport/state modules the AG-UI spec marks as replacement targets.
+   - Remove the dead or duplicate transport/state logic that still sits below the hook-based path in `TabChat.tsx`.
+   - Keep the final code path obvious enough that future workers do not reintroduce legacy event handling while implementing Google Ads or MCP-config features.
+
+3. **Shared event/state cleanup** (`agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `use-agent-chat.ts`, adjacent builder/deployed-chat consumers):
+   - Make the AG-UI state shape the single source of truth for builder and deployed-chat streaming state.
+   - Keep browser/task-plan/editor/tool-step behavior working for deployed chat while ensuring builder-mode readiness/clarification events also flow through the same contract.
+   - Align type names and helper boundaries with the spec so later middleware/state-delta phases build on the shipped cutover instead of another one-off shim.
+
+4. **Regression coverage and docs** (`agent-builder-ui/e2e/`, focused AG-UI unit tests, KB notes/spec):
+   - Add or update tests proving builder clarification and ready-for-review still work after the cutover.
+   - Keep deployed-chat browser/task-plan/tool-step tests green on the AG-UI-only path.
+   - Update KB notes/spec status and implementation notes so future create-flow work assumes AG-UI is the live contract rather than an aspirational side path.
+
+#### Test suite
+
+**Builder/deployed-chat regression tests** (`agent-builder-ui/e2e/`, focused hook/agent tests):
+- The create flow can stream architect responses, reach review, and carry builder state into review/configure without using the legacy transport prop.
+- Deployed chat still renders tool-step, browser-workspace, and task-plan updates through the AG-UI path after the legacy modules are removed.
+- Session rotation and builder clarification flows continue to work when the AG-UI builder agent encounters recoverable errors.
+
+**Type/contract verification** (`agent-builder-ui` typecheck plus targeted unit tests):
+- No live imports remain from `chat-transport.ts`, `builder-chat-transport.ts`, `agent-chat-transport.ts`, or `builder-state.ts`.
+- AG-UI builder/deployed-chat helpers expose one authoritative state contract instead of a parallel `BuilderState` shim.
+- Existing Google Ads and deployed-chat work can build on the shared AG-UI state without reintroducing legacy event handling.
+
+#### Evaluation — task is done when
+
+- [ ] `/agents/create` no longer depends on `createBuilderChatTransport()` or `useBuilderState()` for the live builder flow
+- [ ] The authoritative builder and deployed-chat streaming path runs through the AG-UI agents/hook only
+- [ ] Legacy transport/state files are deleted or fully retired with no live imports
+- [ ] `TabChat.tsx` no longer carries stale pre-hook transport/state logic that can drift from the AG-UI path
+- [ ] Builder review/configure transitions and deployed-chat browser/task-plan/tool-step rendering remain covered by automated regression tests
+- [ ] KB/spec notes describe AG-UI as the shipped runtime contract for these flows rather than a partial side implementation
+
+### TASK-2026-03-26-97: Add bounded conversationAccess unit coverage
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `ruh-backend/src/conversationAccess.ts`, `ruh-backend/tests/unit/conversationAccess.test.ts`
+- Summary: `Completed one bounded backend unit regression for direct conversation access. The test now proves \`getSandboxConversationRecord()\` calls the sandbox-scoped \`getConversationForSandbox(conversationId, sandboxId)\` helper and still returns the documented 404 when that scoped lookup yields no record, which better pins the fail-closed ownership contract than the older output-only assertion.`
+- Next step: `If a future Tester-1 run returns to ruh-frontend component coverage, treat the missing \`ts-node\` dependency for \`ruh-frontend/jest.config.ts\` as a harness task first instead of assuming Jest is runnable.`
+- Blockers: `None`
+
+### TASK-2026-03-26-96: Persist Google Ads create-flow connector and trigger contract
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/e2e/create-agent.spec.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/src/schemaMigrations.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
+- Summary: `Completed the first bounded implementation slice inside TASK-2026-03-26-95. Saved agents now persist structured Google Ads-oriented MCP tool metadata and supported trigger definitions, the configure flow can rehydrate those fields on reopen, deploy-time cron generation prefers the structured trigger contract, and the Playwright acceptance fixture now exercises a Google Ads optimizer path instead of the old finance-assistant demo. The backend/API shape stays metadata-only for connectors, so normal reads do not expose raw credential material.`
+- Next step: `Build the next Google Ads loop slice on top of this saved contract: improvement recommendations that persist back into agent state, plus real secret storage/runtime-backed webhook delivery from TASK-2026-03-25-20 and TASK-2026-03-25-25.`
+- Blockers: `No product blocker in code. Browser-level Playwright execution is currently blocked in this sandbox by Chromium launch permission errors (`MachPortRendezvousServer ... Permission denied`), so the Google Ads E2E was updated but could not be executed here.`
+
+### TASK-2026-03-26-95: Build the Google Ads agent creation loop with MCP-first config and iterative improvement
+- Status: `active`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `docs/project-focus.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/e2e/create-agent.spec.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
+- Summary: `Through Friday, March 27, 2026 the repo should strictly prioritize the agent creation journey, using a powerful Google Ads agent as the proving case. The current create flow still relies on mock connector catalogs, string-array configure outputs, heuristic trigger suggestions, and a finance-assistant E2E fixture in \`agent-builder-ui/e2e/create-agent.spec.ts\`. There is no MCP-first configuration contract, no Google Ads vertical slice that proves the agent can be created, configured, saved, deployed, and improved end to end, and no productized loop where the builder can surface process improvements and feed approved changes back into persisted agent state.`
+- Operator-testable outcome: `After one worker run, a human can open \`/agents/create\`, ask for a Google Ads agent, review a concrete Google Ads-oriented plan, configure real or credibly-modeled MCP-backed tool connections from the UI, carry at least one supported trigger through save/deploy, and see the builder surface explicit recommended improvements to the creation process that can be accepted into the saved agent configuration instead of disappearing in chat.`
+- Next step: `Start by writing \`docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md\`, then implement the first end-to-end vertical slice on \`/agents/create\`: Google Ads-specific builder fixtures or prompts, MCP-backed Connect Tools UI and persisted status, safe secret-aware connection storage, supported trigger/runtime mapping, and one persisted improvement-recommendation loop for the Google Ads agent path.`
+- Blockers: `None, but treat TASK-2026-03-25-02, TASK-2026-03-25-20, TASK-2026-03-25-05, and TASK-2026-03-25-25 as supporting work inside this focus lane rather than as parallel unrelated priorities.`
+
+#### Why this is important now
+
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/ConfigureAgent.tsx` still models the Configure phase as string arrays (`connectedTools`, `selectedSkills`, `selectedTriggers`), which is too weak to power a real connector/runtime-backed creation flow.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx` is still driven by `MOCK_TOOLS` plus a local `connected` boolean, so the UI implies real setup without persisting or validating any MCP-style configuration state.
+- `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx` still renders `MOCK_TRIGGER_CATEGORIES` and infers choices from prose, which means the UI can over-promise trigger support that the runtime does not actually provide.
+- `agent-builder-ui/app/(platform)/agents/create/page.tsx:handleComplete()` receives `ConfigureOutput`, but the create/save path still derives the persisted payload mostly from builder chat state and existing-agent fields rather than from a real config contract.
+- `agent-builder-ui/e2e/create-agent.spec.ts` proves only a generic finance-assistant path today, so the repo has no acceptance case for the exact Google Ads agent the project now wants to build and use as the quality bar.
+- Existing active tasks already expose the right foundations for this lane: `TASK-2026-03-25-02` (tool connections + triggers), `TASK-2026-03-25-20` (secret storage), `TASK-2026-03-25-05` (skill registry), and `TASK-2026-03-25-25` (real webhook/runtime trigger support). This package gives them one concrete operator-facing target instead of letting them drift as abstract platform work.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`):
+   - Define the Google Ads agent as the proving-case user journey for the builder.
+   - Specify the minimal MCP-backed connector contract needed for the first slice, the supported trigger/runtime surface, and the accepted process-improvement loop.
+   - Add backlinks in `[[008-agent-builder-ui]]`, `[[011-key-flows]]`, and any supporting create-agent specs this slice composes with.
+
+2. **Google Ads builder path** (`agent-builder-ui/app/(platform)/agents/create/page.tsx`, builder fixtures/tests, review flow):
+   - Add a focused Google Ads scenario so the create flow produces domain-specific skills, rules, and review output instead of a generic demo path.
+   - Use that scenario in at least one browser-level or component-level acceptance path so future changes are judged against the real target workflow.
+   - Keep the existing generic path working, but treat the Google Ads lane as the bar for what "good enough" means this week.
+
+3. **MCP-first Configure experience** (`ConfigureAgent.tsx`, `StepConnectTools.tsx`, `use-agents-store.ts`, backend agent/config APIs as needed):
+   - Replace mock-only connect/disconnect state with a persisted connector model that can express available, configured, missing-secret, and unsupported states for the Google Ads lane.
+   - Make the saved agent contract carry the meaningful configuration shape needed by deploy/runtime code instead of throwing most of the Configure step away.
+   - Keep the secret lifecycle aligned with `TASK-2026-03-25-20` so read paths never leak raw credential material.
+
+4. **Runtime-backed triggers and improvement loop** (`StepSetTriggers.tsx`, deploy/config paths, review/configure surfaces):
+   - Narrow the trigger UX to the types that actually work in the first slice, or clearly mark unsupported cards as unavailable.
+   - Add one persisted improvement-recommendation loop where the builder can suggest concrete next-step or process upgrades for the Google Ads agent and the operator can accept them into saved agent state.
+   - Ensure Improve Agent can reopen that saved state without degrading it back into chat-only commentary.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/create-agent.spec.ts`, focused frontend tests, backend/store tests, KB notes):
+   - Replace or extend the current generic create-agent E2E with a Google Ads scenario.
+   - Add tests proving MCP/config selections survive save/reload and do not leak secrets.
+   - Update builder KB/spec notes so future agents know the Google Ads lane is the current proving case and what the accepted config/improvement contract is.
+
+#### Test suite
+
+**Frontend acceptance tests** (`agent-builder-ui/e2e/`, focused component/store tests):
+- The create flow can build and save a Google Ads agent without losing the key domain-specific configuration in the Configure step.
+- MCP-backed configuration state survives save and reload as configured/missing/unsupported metadata rather than collapsing back to a local boolean.
+- Accepted improvement recommendations appear again when reopening Improve Agent instead of being lost in chat history.
+
+**Backend/store tests** (`ruh-backend/tests/unit/`, `agent-builder-ui/hooks/`):
+- Saved agent payloads can carry the new config shape needed by the Google Ads lane.
+- Read APIs return safe connector metadata only and never echo raw secret values.
+- Supported trigger selections persist and round-trip without falling back to regex-scraped prose rules.
+
+#### Evaluation — task is done when
+- [ ] `/agents/create` has a concrete Google Ads agent path that is covered by automated verification
+- [ ] The Configure flow uses persisted MCP-oriented state for the Google Ads lane instead of mock-only connect/disconnect toggles
+- [ ] Save/reload/deploy paths preserve the important Google Ads config choices and supported trigger selections
+- [ ] The builder can surface at least one accepted process-improvement recommendation that becomes persisted agent state
+- [ ] Secret-bearing config paths stay masked or safe on readback
+- [ ] KB/spec notes document the Google Ads creation loop and its supporting contracts
+
+### TASK-2026-03-26-94: Persist task-plan and terminal replay for deployed-agent chat
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-27`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/browser-workspace.ts`, `agent-builder-ui/lib/openclaw/browser-workspace.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `ruh-backend/src/chatPersistence.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/chatPersistence.test.ts`, `ruh-backend/tests/unit/conversationStore.test.ts`, `ruh-backend/tests/unit/validation.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-workspace-history.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-task-and-terminal-history.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-27-deployed-chat-task-terminal-history-contract.md`, `docs/journal/2026-03-27.md`
+- Summary: `Completed the bounded deployed-chat continuity slice on top of the existing browser-history envelope. `workspace_state` now accepts an optional `task` branch with bounded task-plan and structured terminal/process replay, the backend streaming persistence collector derives that state from successful assistant turns alongside browser replay, and historical message hydration now restores `taskPlan` plus `steps` so refresh or reopen keeps the Agent's Computer task-progress and terminal history instead of dropping back to transcript-only chat.`
+- Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, let an agent produce a structured task plan plus terminal/process activity, refresh the page or reopen that historical conversation from All Chats, and still see the same task-progress panel and terminal/reasoning history instead of an empty Agent's Computer panel. The replay must stay scoped to the original conversation and sandbox, and the page must degrade cleanly when older conversations have no persisted task/terminal state.`
+- Next step: `Treat the shared replay envelope as the continuity source of truth for future deployed-chat surfaces. The clean follow-on is another deferred workspace slice such as files/research/productization replay rather than reopening task/terminal persistence.`
+- Blockers: `None. Focused backend/frontend verification passed for the replay contract; browser-level operator proof is still deferred with the broader deployed-chat Manus-parity lane.`
+
+#### Why this is important now
+
+- `TabChat.tsx:mapPersistedMessageToChatMessage()` currently hydrates only `browserState` from persisted `workspace_state`, so the browser tab survives history loads while task-plan and terminal panels silently fall back to transcript-only chat.
+- `ComputerView` builds its Terminal tab from `messages.flatMap(m => m.steps ?? [])` and its task-progress header from `message.taskPlan`, but historical messages loaded from the backend never populate either field.
+- TASK-2026-03-26-92 added a visible Manus-style task-management surface and Code tab, but that operator context is still ephemeral because the persistence layer does not preserve it.
+- `SPEC-deployed-chat-workspace-history.md` intentionally left terminal/process, files, research, and productization replay out of scope for the first browser slice, so a follow-on package is required rather than assuming continuity is already solved.
+- This directly advances the active focus area for persistence parity and task continuity without inventing another top-level workspace category or duplicating the already-scoped live process-state work.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-task-and-terminal-history.md`):
+   - Define the first persisted replay slice for task plans, reasoning/terminal history, and any bounded file-open breadcrumbs that already exist in the live UI.
+   - Specify the `workspace_state` extension shape, size limits, and the rule for older conversations that only have browser replay data.
+   - Clarify how this slice composes with TASK-2026-03-25-80 so future structured process telemetry can extend the same replay contract instead of replacing it.
+   - Add backlinks in `[[004-api-reference]]`, `[[005-data-models]]`, `[[008-agent-builder-ui]]`, `[[011-key-flows]]`, and `[[SPEC-deployed-chat-workspace-history]]`.
+
+2. **Persisted replay contract** (`ruh-backend/src/validation.ts`, `ruh-backend/src/conversationStore.ts`, `ruh-backend/src/app.ts`):
+   - Extend message validation so `workspace_state` can carry bounded task-plan and terminal/process replay data alongside the existing browser payload.
+   - Keep the contract fail-closed for malformed or oversized replay payloads without changing the existing conversation append/read route shape.
+   - Preserve backward compatibility so browser-only history rows from TASK-2026-03-26-91 still load cleanly.
+
+3. **Frontend serialization and hydration** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, helper modules):
+   - Serialize the final assistant turn's task plan and bounded terminal/process history into `workspace_state` whenever those surfaces were used during the run.
+   - Hydrate historical messages back into `taskPlan` and `steps` so `ComputerView` can render replayed task progress and terminal history on refresh/reopen.
+   - Keep replay scoped per conversation and sandbox, and ensure conversations without persisted replay data show the documented empty state instead of stale data from another run.
+
+4. **UI replay behavior** (`TabChat.tsx`, `TaskPlanPanel.tsx`, `TaskProgressHeader.tsx`, and related helpers):
+   - Make the Agent's Computer header/task-progress strip reflect persisted history when the conversation is historical rather than live.
+   - Preserve the current live-stream behavior while avoiding duplicate terminal rows or double-applied task updates when a replayed conversation resumes.
+   - Keep any persisted step details bounded and readable so the replay is useful without storing unbounded raw tool output.
+
+5. **Regression coverage and docs** (`ruh-backend/tests/unit/`, `agent-builder-ui/lib/openclaw/*.test.ts`, `agent-builder-ui/e2e/`, KB/docs):
+   - Add backend validation and store coverage for the extended `workspace_state` envelope.
+   - Add frontend helper/component coverage proving task-plan and terminal replay rehydrate correctly from persisted history.
+   - Update KB/API/data-model notes so later files/research/productization replay slices extend one continuity model rather than inventing separate history stores.
+
+#### Test suite
+
+**Backend workspace-history tests** (`ruh-backend/tests/unit/`):
+- Message persistence accepts the bounded task-plan/terminal replay payload and returns it unchanged on historical reads.
+- Malformed, unsupported, or oversized replay payloads fail with the documented validation error instead of being silently stored.
+- Existing browser-only `workspace_state` rows remain readable after the schema/validator extension.
+
+**Frontend replay tests** (`agent-builder-ui/lib/openclaw/*.test.ts`, targeted component tests, and `agent-builder-ui/e2e/`):
+- A historical conversation payload containing task-plan and terminal replay data rehydrates the task-progress header, task list, and terminal rows after page load.
+- Refreshing or reopening the same conversation preserves replay state instead of reverting to an empty Agent's Computer panel.
+- Conversations without persisted task/terminal replay show the documented empty state and do not leak replay data from another conversation.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, run a prompt that produces a task plan and terminal activity, refresh, and confirm the same conversation still shows task progress plus terminal history.
+- Reopen that conversation later from All Chats and confirm the Agent's Computer panel still explains what happened without waiting for a new live stream.
+- Switch to a different conversation or sandbox and confirm replayed task/terminal state stays isolated to the original run.
+
+#### Evaluation — task is done when
+- [ ] Historical deployed-chat conversations can replay bounded task-plan state instead of losing task progress on refresh/reopen
+- [ ] Historical deployed-chat conversations can replay bounded terminal/process history instead of leaving the Terminal tab empty after reload
+- [ ] The extended `workspace_state` contract stays backward-compatible with existing browser-only replay rows
+- [ ] Replay remains scoped per conversation and sandbox with no stale cross-run leakage
+- [ ] Backend and frontend regression coverage prove task/terminal continuity survives refresh and historical reopen flows
+- [ ] KB/spec notes document the replay contract so later files/research/productization continuity work extends the same model
+
+### TASK-2026-03-26-93: Make sandbox bootstrap config apply fail-closed and verified
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/tests/unit/sandboxManager.test.ts`, `ruh-backend/tests/e2e/sandboxCreate.test.ts`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/010-deployment.md`, `docs/knowledge-base/specs/`
+- Summary: `Shipped the sandbox-bootstrap truthfulness contract. \`createOpenclawSandbox()\` now fails closed when required post-onboarding bootstrap mutations fail, treats browser/VNC setup as explicit optional degradation, verifies the final required config directly from \`~/.openclaw/openclaw.json\` before yielding \`result\`, and no longer ignores failures from auth-profile writes, Gemini compat patching, gateway token reads, env-file writes, or gateway start. Added the missing KB spec/backlinks and backend regression coverage for required-step failure, optional browser degradation, and the verification pass.`
+- Operator-testable outcome: `After one worker run, creating a sandbox either produces a runtime that has the documented required bootstrap config applied and verified, or the create flow fails/degrades explicitly before persisting a misleading healthy sandbox record. An operator can create a sandbox, confirm the documented chat/browser/tool capabilities are present through the backend-selected verification path, and receive a clear create-time error when a required bootstrap mutation fails instead of discovering the drift later through broken chat, missing browser features, or absent gateway settings.`
+- Next step: `If operators need the UI to distinguish "created without browser workspace" from an ordinary successful create, add an explicit degraded-state field to the sandbox create payload rather than inferring it only from log warnings. Otherwise, future sandbox-bootstrap changes should extend the same required-step + verification helper instead of reintroducing unchecked \`await run(...)\` calls.`
+- Blockers: `None`
+
+#### Why this is important now
+
+- `ruh-backend/src/sandboxManager.ts:createOpenclawSandbox()` checks installation, onboarding, shared-auth probe, and port-health outcomes, but it does not check the success of most subsequent `openclaw config set ...` commands that define the sandbox's runtime contract.
+- The same function ignores return values for browser/VNC startup commands, `~/.openclaw/.env` writes, and `openclaw gateway stop/run` startup commands before treating the sandbox as ready once the port probe succeeds.
+- `docs/knowledge-base/003-sandbox-lifecycle.md` documents these config mutations as part of the normal create flow, so the KB currently promises a stronger bootstrap contract than the runtime actually enforces.
+- TASK-2026-03-25-21 only closes the specific case where the gateway never becomes healthy; it does not catch the equally important case where the gateway starts but required config, browser tooling, or command-mode flags were skipped or rejected.
+- TASK-2026-03-25-49 may intentionally change gateway access defaults, but without a verified bootstrap-apply layer the repo can still silently miss whichever secure defaults the spec chooses.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-sandbox-bootstrap-config-apply-contract.md`):
+   - Define which sandbox-create mutations are required for a valid runtime versus optional best-effort enrichments.
+   - Document the failure contract for each class: fail create, emit explicit degraded state, or log non-fatal warning.
+   - Clarify how this contract composes with gateway-health checks, access-policy hardening, browser support, and future runtime-containment changes.
+   - Add backlinks in `[[003-sandbox-lifecycle]]`, `[[004-api-reference]]`, and `[[010-deployment]]`.
+
+2. **Verified bootstrap apply helper** (`ruh-backend/src/sandboxManager.ts` and extracted helper(s) if needed):
+   - Replace unchecked `await run(...)` calls for required config mutations with a helper that captures the command, exit outcome, bounded diagnostics, and whether failure is fatal.
+   - Group required create-time steps such as gateway endpoint enablement, command/tool profile settings, and any security-critical gateway config under one explicit apply sequence.
+   - Keep optional enhancements such as live browser/VNC support clearly separated so the runtime can surface "created without browser workspace" instead of silently implying full capability.
+
+3. **Create-result and persistence contract** (`ruh-backend/src/app.ts`, `ruh-backend/src/sandboxManager.ts`):
+   - Do not yield a normal `result` payload for sandboxes that missed required bootstrap mutations.
+   - If the spec allows a degraded create outcome, make that state explicit in the emitted payload and stored sandbox metadata instead of relying on logs alone.
+   - Keep failure diagnostics bounded and client-safe rather than echoing full CLI output into SSE or REST responses.
+
+4. **Verification path for required capabilities** (`ruh-backend/src/sandboxManager.ts`, tests selected by the spec):
+   - Add one deterministic verification pass before result emission that proves the required bootstrap contract actually landed.
+   - Reuse direct config reads or focused runtime probes instead of assuming a successful `docker exec` implies the setting took effect.
+   - Ensure later gateway-access and browser-surface tasks can extend this same verification layer rather than adding unrelated one-off checks.
+
+5. **Docs and regression coverage** (`ruh-backend/tests/unit/sandboxManager.test.ts`, `ruh-backend/tests/e2e/sandboxCreate.test.ts`, KB/API notes):
+   - Add unit coverage for required-step failure handling, optional-step warning behavior, and successful verified create paths.
+   - Add at least one end-to-end or route-level test proving sandbox creation no longer persists a misleading success record when a required bootstrap mutation fails.
+   - Update KB/API docs so operators know which create-time capabilities are guaranteed, which are optional, and how degraded/failure states appear.
+
+#### Test suite
+
+**Backend unit tests** (`ruh-backend/tests/unit/`):
+- A required bootstrap config step failure causes `createOpenclawSandbox()` to emit the documented failure or degraded outcome instead of a normal `result`.
+- Optional browser/VNC setup failures remain non-fatal only when the spec explicitly allows that class to degrade.
+- Successful bootstrap runs record the documented verified-step sequence and preserve existing happy-path payload fields.
+
+**Backend E2E / route tests** (`ruh-backend/tests/e2e/` or the narrowest stable layer available):
+- Sandbox create does not persist a normal sandbox record when a required post-onboarding config mutation fails.
+- Sandbox create still succeeds when an optional enhancement fails and the emitted state matches the documented degraded contract.
+- The create stream/error payloads remain bounded and client-safe while still telling the operator what class of bootstrap step failed.
+
+**Operator verification**:
+- Create a sandbox and confirm the runtime exposes the documented required capabilities instead of only a listening port.
+- Force one required bootstrap step to fail and verify the product does not surface a misleading healthy sandbox.
+- If optional browser workspace setup is allowed to degrade, the create flow explains that degraded state clearly without blocking ordinary chat use.
+
+#### Evaluation — task is done when
+- [ ] Sandbox create no longer treats required bootstrap config mutations as unchecked best-effort commands
+- [ ] A listening gateway port alone is insufficient for a normal "created" result when required runtime capabilities were not applied
+- [ ] Required-vs-optional bootstrap steps are explicit in code, tests, and KB/docs
+- [ ] Sandbox creation surfaces bounded, truthful failure or degraded-state signals for bootstrap-apply problems
+- [ ] Regression coverage proves required-step failures cannot silently persist misleading sandbox records
+
+### TASK-2026-03-26-92: Manus-style task management mode, code editor view, and auto-switching ComputerView
+- Status: `completed`
+- Owner: `Prasanjit`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `agent-builder-ui/lib/openclaw/task-plan-parser.ts`, `agent-builder-ui/lib/openclaw/task-plan-parser.test.ts`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TaskPlanPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TaskProgressHeader.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/CodeEditorPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/e2e/tab-chat-task-plan.spec.ts`, `agent-builder-ui/package.json`
+- Summary: `Added Manus-style task management mode to deployed-agent chat. The agent can now output structured task plans via <plan> blocks or markdown checklists that render as interactive numbered task lists with progress tracking. Added a Code Editor tab to the "Agent's Computer" workspace panel with syntax-highlighted read-only viewing, file tabs, mini file tree, line numbers, and auto-discovery of workspace code files. Enhanced the ComputerView auto-switch logic to intelligently switch between Terminal/Code/Files/Browser tabs based on the active tool type, with debounce and manual-override protection. Renamed workspace header to "Agent's Computer" with task progress dots.`
+- Next step: `The task plan format uses <plan>/<task_update> XML tags in the agent's streamed response. For agents whose gateway streams tool calls as structured SSE events (not just text), the code editor auto-populates via file_write detection. For gateways that stream everything as text content, the Code tab uses workspace API auto-discovery to load code files on demand.`
+- Blockers: `None`
+
+### TASK-2026-03-26-91: Persist structured workspace history and replay for deployed-agent chat
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/browser-workspace.ts`, `agent-builder-ui/lib/openclaw/browser-workspace.test.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/conversationStore.ts`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/conversationStore.test.ts`, `ruh-backend/tests/unit/schemaMigrations.test.ts`, `ruh-backend/tests/unit/validation.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-browser-workspace.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-workspace-history.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-deployed-chat-workspace-history-contract.md`
+- Summary: `Shipped the first persisted deployed-chat workspace-history slice. Backend message rows can now carry a bounded versioned \`workspace_state\` JSON envelope, the append route validates that contract fail-closed, and historical message reads return it unchanged. On the frontend, \`TabChat.tsx\` now persists the final assistant turn's browser snapshot and rehydrates Browser workspace history from stored conversation data, so preview URL, timeline entries, and takeover state survive refreshes and reopening older chats.`
+- Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, perform a browser-heavy or workspace-producing task, refresh the page or reopen the same historical conversation from All Chats, and still see the conversation's structured workspace history instead of only raw assistant prose. At minimum, the Browser tab replays its saved timeline, preview URL, and takeover/local-handoff state from persisted conversation data; the same stored workspace envelope is available for files/artifact metadata and later terminal/research/productization slices so operators can hand off or resume a run without reconstructing what happened from the transcript alone.`
+- Next step: `Operator QA can open \`/agents/<id>/chat\`, trigger browser activity, refresh or reopen the same conversation from All Chats, and confirm the Browser tab replays the saved history. Future workspace surfaces should extend the same \`workspace_state\` envelope instead of adding a separate persistence store.`
+- Blockers: `None for the shipped browser-first slice. Route-level supertest verification remains blocked by the existing Bun/supertest listener issue (\`app.address().port\` null), so this run verified the shared validation/store contract, backend typecheck, and frontend browser-workspace helpers instead of full route E2E coverage.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly calls for browser history/action visibility and durable outputs that survive page refreshes and handoffs, but the current deployed-agent workspace only satisfies that while the live chat stream is still mounted.
+- `ruh-backend/src/conversationStore.ts` documents and implements a `messages` table that stores only `role` and `content`, so there is no persisted place for browser timeline items, takeover state, future process cards, or output metadata.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx` reloads historical conversations by mapping API rows back into `{ role, content }` messages only, which discards any previously captured `browserState` and guarantees that structured workspace history vanishes after refresh.
+- `docs/knowledge-base/specs/SPEC-deployed-chat-browser-workspace.md` explicitly lists backend persistence of browser workspace snapshots as out of scope for the shipped first slice, so this is a known product gap rather than an implementation bug.
+- TASK-2026-03-26-89 (local-browser handoff) and TASK-2026-03-26-90 (artifact-aware previews) both become materially more valuable when their state survives chat-page reloads and operator handoffs instead of disappearing with client memory.
+- The session folder keeps raw files under `~/.openclaw/workspace/sessions/<conversation_id>`, but it does not preserve the structured operator narrative of what happened in the Browser tab or other workspace panels; without a persistence layer, historical runs still degrade into plain transcript text.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-workspace-history.md`):
+   - Define the bounded persisted workspace-history contract for deployed-agent conversations.
+   - Specify the first stored envelope shape, expected size limits, supported keys, and how later browser/files/terminal/research/productization slices extend it without schema churn.
+   - Add backlinks in `[[004-api-reference]]`, `[[005-data-models]]`, `[[008-agent-builder-ui]]`, `[[011-key-flows]]`, and `[[SPEC-deployed-chat-browser-workspace]]`.
+
+2. **Backend conversation persistence contract** (`ruh-backend/src/conversationStore.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/schemaMigrations.ts`, related validation/helpers):
+   - Add a bounded persisted `workspace_state` field or equivalent normalized structure on conversation messages so assistant turns can carry structured workspace history alongside text content.
+   - Extend the append/read message contract so `POST /api/sandboxes/:sandbox_id/conversations/:conv_id/messages` can accept safe structured workspace payloads and `GET .../messages` can return them unchanged.
+   - Enforce deterministic size and shape limits so malformed or oversized workspace payloads fail closed instead of polluting the transcript store.
+   - Keep the first slice scoped to conversation-owned workspace state only; do not broaden into cross-conversation global run registries or unbounded artifact indexing yet.
+
+3. **Deployed-chat history replay wiring** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/browser-workspace.ts`, extracted helpers if needed):
+   - Persist the final assistant message's structured workspace snapshot whenever one exists instead of dropping it before `persistMessages(...)`.
+   - When historical conversations load, hydrate message state from both text content and stored workspace data so the Browser tab and future workspace panels can replay historical runs accurately.
+   - Preserve current live-stream behavior while making replay deterministic when the page refreshes, the operator navigates away and back, or the conversation is reopened later.
+
+4. **Browser-first replay consumer** (`BrowserPanel.tsx`, `TabChat.tsx`, related workspace UI state):
+   - Make browser timeline rows, preview URL, takeover state, and local-browser handoff metadata replay from persisted conversation history for completed runs.
+   - Render explicit empty states when older conversations predate the new persistence contract instead of implying that no browser activity happened.
+   - Keep browser history scoped to the active conversation so replay from one run does not leak into another.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/`, backend tests, KB/API/data-model notes):
+   - Add backend tests for workspace-state validation, schema migration behavior, append/read round-tripping, and rejection of malformed payloads.
+   - Add deployed-chat UI coverage proving a browser-heavy run still renders its Browser workspace after page reload or historical conversation reopen.
+   - Update KB/API/data-model notes so later structured terminal/research/artifact/productization work reuses this persistence contract instead of inventing separate one-off stores.
+
+#### Test suite
+
+**Backend workspace-history tests** (`ruh-backend/tests/unit/`, `ruh-backend/tests/integration/` as appropriate):
+- Message persistence accepts a bounded structured `workspace_state` payload alongside assistant text and returns it unchanged on subsequent reads.
+- Oversized, malformed, or unsupported workspace-state payloads fail with the documented validation error instead of being silently truncated or stored.
+- Existing conversation pagination behavior remains stable when messages include structured workspace-state metadata.
+
+**Frontend history-replay tests** (`agent-builder-ui/e2e/` and targeted helper/component tests where practical):
+- A mocked conversation history response containing browser workspace state rehydrates the Browser tab timeline, preview URL, and takeover/handoff banner after page load.
+- Refreshing or reopening a historical conversation preserves the same workspace replay state instead of falling back to transcript-only chat.
+- Conversations without stored workspace state render the documented empty/unavailable history state without leaking a previous run's browser data.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, perform a browser-oriented task, refresh the page, and confirm the Browser workspace still explains what happened in that conversation.
+- Open the same conversation later from All Chats and confirm structured workspace history replays without waiting for a new live stream.
+- Switch to a different conversation or sandbox and confirm the saved workspace history stays isolated to the original run.
+
+#### Evaluation — task is done when
+
+- [ ] Deployed-agent conversation persistence supports a bounded structured `workspace_state` contract alongside message text
+- [ ] Reloading a historical conversation rehydrates browser workspace history instead of discarding it to raw prose only
+- [ ] Validation rejects malformed or oversized workspace-state payloads with a documented fail-closed behavior
+- [ ] Workspace-history replay remains scoped per conversation and sandbox with no stale cross-run leakage
+- [ ] Backend and UI regression coverage prove persisted workspace history survives refresh/reopen flows
+- [ ] KB/spec notes document the workspace-history contract so later browser/files/terminal/research/productization slices extend one persisted model
+
+### TASK-2026-03-26-90: Add artifact-aware output classification and rich type-specific previews to deployed-agent chat
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, `agent-builder-ui/lib/openclaw/files-workspace.ts`, `agent-builder-ui/lib/openclaw/files-workspace.test.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `ruh-backend/src/workspaceFiles.ts`, `ruh-backend/tests/unit/workspaceFiles.test.ts`, `ruh-backend/tests/unit/auditApp.test.ts`, `ruh-backend/tests/e2e/chatProxy.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-artifact-preview.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-files-and-artifacts-workspace.md`
+- Summary: `Shipped the first artifact-aware deployed-chat Files workspace slice. Backend workspace payloads now return \`artifact_type\` plus optional session metadata, and the Files panel now supports artifact badges, gallery-mode browsing, sandboxed HTML preview, formatted markdown preview, and a multi-image gallery strip while preserving the existing handoff/export flow.`
+- Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, switch to the Files workspace, and see generated outputs classified by artifact type (webpage, report/document, image, code, data) with type-specific badges and a gallery-oriented view alongside the existing file tree. HTML files render in a sandboxed inline preview instead of showing raw markup, markdown files render as formatted text, and image outputs appear in a visual gallery strip instead of requiring one-at-a-time selection. The operator can tell what the agent produced as a deliverable without manually opening each file, and artifact metadata shows which conversation turn generated or last modified each output.`
+- Next step: `If deeper provenance is needed, teach sandbox/tooling flows to write per-file entries into \`.openclaw-artifacts.json\` so the Files workspace can show turn-specific labels and descriptions for every generated deliverable.`
+- Blockers: `None. This composes with TASK-2026-03-25-78 (file listing foundation), TASK-2026-03-25-88 (file editing), TASK-2026-03-25-86 (code export), and TASK-2026-03-25-83 (productization preview URLs), but the first slice can ship with classification, rendered previews, and gallery view without waiting for editing, export, or publish infrastructure.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly lists "Artifact parity" as a desired outcome: "first-class workspace support for generated reports, slides, dashboards, webpages, images, and downloadable code/assets, with preview and export surfaces instead of hiding outputs in chat prose."
+- The focus's "In-Scope Requirement Signals" section specifically calls for "artifact registry/gallery, preview panels for slides/reports/dashboards/webpages, export/share actions, and durable metadata so outputs survive page refreshes and handoffs."
+- `ruh-backend/src/workspaceFiles.ts:classifyWorkspacePreview()` currently maps all text-like files to a single `"text"` preview kind, so HTML pages, markdown reports, JSON data, and TypeScript source code all receive identical treatment. The UI cannot distinguish a generated webpage from a source file.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx` renders text files as raw monospace content via a `<pre>` tag and images as single inline previews. There is no rendered HTML preview, no formatted markdown view, no image gallery, and no artifact-type badge or classification header.
+- `agent-builder-ui/lib/openclaw/files-workspace.ts:WorkspaceFileItem` carries `preview_kind`, `mime_type`, and `modified_at`, but has no `artifact_type`, `source_conversation_turn`, or `output_label` fields, so the UI cannot present outputs as deliverables or link them to the chat activity that created them.
+- The Manus reference baseline in the focus document includes "Data Analysis & Visualization" outputs (slide decks, dashboards, reports, standalone webpages) as first-class products, not just downloadable files. Without artifact classification and rich previews, the deployed-agent workspace cannot present agent output at that level.
+- Existing tasks TASK-2026-03-25-88 (editing) and TASK-2026-03-25-86 (code export) deepen file ownership but do not change how outputs are classified or previewed. TASK-2026-03-25-83 (productization) adds publish/preview URLs for generated apps but does not add type-specific preview panels for non-app artifacts like reports, documents, or data visualizations.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-artifact-preview.md`):
+   - Define the first shipped artifact-classification and rich-preview slice for deployed-agent chat.
+   - Document the extended preview taxonomy beyond `text|image|pdf|binary`: at minimum `webpage`, `document` (markdown/text reports), `data` (JSON/CSV/YAML), `code` (source files), and `image` (visual outputs).
+   - Specify which artifact types get rendered previews in the first slice (HTML in sandboxed iframe, markdown as formatted text) versus enhanced metadata only.
+   - Define the output metadata extension: artifact type, optional source-turn identifier, and output label/description when available from the agent's tool output.
+   - Add backlinks in `[[004-api-reference]]`, `[[008-agent-builder-ui]]`, `[[011-key-flows]]`, and `[[SPEC-deployed-chat-files-and-artifacts-workspace]]`.
+
+2. **Backend artifact classification contract** (`ruh-backend/src/workspaceFiles.ts`, `ruh-backend/src/app.ts`):
+   - Extend `classifyWorkspacePreview()` into a richer classification that distinguishes artifact types beyond the four-kind preview model.
+   - Add an `artifact_type` field to the workspace file response shape so the UI can badge and group files by output category.
+   - Support optional output metadata (label, source description) when the workspace file lives in a session folder or has adjacent metadata, failing gracefully to type-only classification when metadata is absent.
+   - Keep the first slice backward-compatible with the existing `preview_kind` field so current file listing and preview flows do not break.
+
+3. **Rich type-specific preview panels** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, extracted preview components):
+   - Replace the raw `<pre>` text preview for HTML files with a sandboxed `<iframe srcdoc>` rendered preview, with a toggle to view raw source when needed.
+   - Replace the raw text preview for markdown files with a formatted markdown renderer (using an existing or lightweight library).
+   - Add an image gallery strip or grid view when multiple image outputs exist, instead of requiring one-at-a-time file selection.
+   - Add artifact-type badges (webpage, document, code, data, image) to the file list so operators can scan output types at a glance.
+   - Preserve existing text/binary/pdf preview behavior for files that do not qualify for rich previews.
+
+4. **Output-oriented gallery view** (`FilesPanel.tsx` or adjacent component):
+   - Add an optional gallery/output view alongside the existing file-tree view that groups outputs by artifact type rather than file path.
+   - Show artifact cards with type badge, name, size, modified time, and a thumbnail or preview snippet so operators can browse deliverables quickly.
+   - Keep the file-tree view as the default and make the gallery view an explicit toggle so the existing workflow is not disrupted.
+   - Surface conversation-turn metadata when available, so the operator can trace which chat interaction produced each output.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/`, `ruh-backend/tests/unit/`, KB notes):
+   - Extend workspace helper tests so the richer artifact-type classification is deterministic for all first-slice file extensions and does not break the existing four-kind preview contract.
+   - Add UI tests proving HTML files render in a sandboxed preview, markdown files render formatted, and the gallery view groups outputs by type correctly.
+   - Update `[[SPEC-deployed-chat-files-and-artifacts-workspace]]`, `[[008-agent-builder-ui]]`, and `[[004-api-reference]]` with the extended artifact model and new preview capabilities.
+
+#### Test suite
+
+**Frontend artifact-preview tests** (`agent-builder-ui/e2e/` and targeted component/helper tests):
+- An HTML file in the workspace file list renders a sandboxed iframe preview instead of raw markup when selected.
+- A markdown file renders as formatted text with headings, lists, and links instead of raw markdown syntax.
+- Multiple image outputs in the same session render a gallery strip/grid view with thumbnails.
+- Artifact-type badges appear on file list items and match the documented classification for each supported extension.
+- The gallery/output view groups files by artifact type and shows the expected card layout with metadata.
+- Toggling between file-tree and gallery views preserves the selected file and does not lose preview state.
+
+**Backend classification tests** (`ruh-backend/tests/unit/workspaceFiles.test.ts`):
+- `classifyWorkspacePreview()` and the new artifact-type classifier agree: HTML files get `preview_kind: "text"` plus `artifact_type: "webpage"`, markdown gets `"text"` plus `"document"`, images get `"image"` plus `"image"`, etc.
+- The extended file response shape includes `artifact_type` alongside existing fields without breaking the list/read/download contract.
+- Missing or unrecognizable extensions fall back to `"binary"` preview kind and a generic artifact type rather than erroring.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, a file-producing prompt that generates HTML, markdown, and images shows distinguishable artifact types in the Files workspace instead of treating everything as raw text.
+- The operator can preview a generated webpage inline and toggle to raw source when needed.
+- The operator can browse a gallery of generated outputs grouped by type without opening each file individually.
+
+#### Evaluation — task is done when
+
+- [ ] Workspace file responses include an artifact-type field that distinguishes webpages, documents, code, data, and images beyond the four-kind preview model
+- [ ] HTML files render in a sandboxed inline preview instead of raw markup on the Files panel
+- [ ] Markdown files render as formatted text instead of raw syntax
+- [ ] Multiple image outputs are browsable in a gallery view instead of requiring one-at-a-time selection
+- [ ] Artifact-type badges appear in the file list so operators can scan output categories at a glance
+- [ ] An output-oriented gallery view exists alongside the file-tree view for browsing deliverables by type
+- [ ] Existing file listing, text preview, download, and code-control flows remain compatible with the extended artifact model
+- [ ] KB/spec notes describe the artifact-preview contract so later artifact persistence, revision history, and richer output management build on the same classification
+
+### TASK-2026-03-26-89: Add local-browser operator mode and auth-session handoff to deployed-agent chat
+- Status: `deferred`
+- Owner: `Analyst-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/LiveBrowserView.tsx`, `agent-builder-ui/lib/openclaw/browser-workspace.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/vncProxy.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
+- Summary: `The active Manus-style deployed-chat focus still has one major browser-parity gap that is not captured anywhere in \`TODOS.md\`: the product can show a sandbox-hosted browser feed and takeover banner, but it cannot hand work into the operator's real logged-in browser/session when cloud browsing hits login, CAPTCHA, MFA, or same-origin constraints. \`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx\` only offers \`live\`, \`activity\`, and \`preview\` modes backed by sandbox VNC or passive preview URLs, while \`LiveBrowserView.tsx\` is screenshot polling only and exposes no local-browser bridge or operator-session state. \`agent-builder-ui/lib/openclaw/browser-workspace.ts\` only models navigation/action/screenshot/preview/takeover events, so there is no contract for auth-needed prompts, local-browser handoff metadata, or persisted browser-session mode. Existing tasks cover browser visibility/takeover (TASK-2026-03-25-77), terminal/process state (TASK-2026-03-25-80), connector-aware research (TASK-2026-03-25-82), productization (TASK-2026-03-25-83), code-control/export (TASK-2026-03-25-86), and in-product editing (TASK-2026-03-25-88), but none define the operator-visible local-browser path that makes logged-in web tasks actually finishable from \`/agents/[id]/chat\`.`
+- Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, see when a browser run needs real operator auth or a local logged-in session, launch or attach a documented local-browser mode from the Browser panel, view the current handoff state and reason, and resume the agent from the same workspace once the login/auth step is complete. When only cloud browser mode is available, the UI must say so explicitly instead of implying that takeover alone solves logged-in flows.`
+- Next step: `Start by writing \`docs/knowledge-base/specs/SPEC-deployed-chat-local-browser-handoff.md\`, then implement the minimal browser-event and UI contract for auth-needed prompts, local-browser launch metadata, and resume state on \`/agents/[id]/chat\`.`
+- Blockers: `None for the first slice, but keep scope bounded to operator handoff and visible local-browser state. Full browser-control orchestration, persistent browser profiles, and generalized desktop/computer-use actions remain out of scope for this package.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly calls out `local-browser/operator mode for real logged-in sessions`, `auth/session prompts`, and `cloud-vs-local browser mode` as part of the active deployed-chat parity target, but no current TODO entry scopes that gap.
+- The shipped browser slice in `TASK-2026-03-25-77` intentionally stopped at timeline, preview, screenshots, and takeover banners; `docs/knowledge-base/specs/SPEC-deployed-chat-browser-workspace.md` lists live operator control and richer browser persistence as out of scope.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx` shows takeover state, but its only actionable modes are sandbox VNC, preview iframe, and passive activity history. That is not enough when the operator needs their actual browser cookies, tabs, extensions, or local-network access.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/LiveBrowserView.tsx` polls sandbox screenshots and does not accept user input, establish a browser-operator bridge, or show whether a local-browser handoff is available.
+- `agent-builder-ui/lib/openclaw/browser-workspace.ts` has no event types for auth-required checkpoints, local-browser launch URLs, browser-mode transitions, or explicit handoff completion metadata, so the runtime cannot currently represent this workflow truthfully.
+- Without a local-browser/operator path, the existing takeover banner can leave operators blocked on the hardest browser tasks even though the product appears to have browser support on the page.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-local-browser-handoff.md`):
+   - Define the first shipped local-browser handoff slice for deployed-agent chat.
+   - Document the event/model contract for browser mode (`cloud` vs `local`), auth-needed prompts, launch/attach metadata, and resume/completed states.
+   - Clarify the first-slice boundary: this package adds operator-visible local-browser handoff and auth checkpoint state, not a full generic browser-control framework.
+   - Add backlinks in `[[004-api-reference]]`, `[[008-agent-builder-ui]]`, `[[011-key-flows]]`, and `[[SPEC-deployed-chat-browser-workspace]]`.
+
+2. **Runtime/browser-event contract** (`agent-builder-ui/lib/openclaw/browser-workspace.ts`, `ruh-backend/src/app.ts`, helper files chosen by the spec):
+   - Extend the browser-workspace model so the chat stream can carry explicit auth-needed and local-browser handoff frames instead of overloading generic takeover text.
+   - Support bounded metadata such as handoff reason, operator action label, launch URL or attach instructions, active mode, and whether the run can safely resume.
+   - Keep the payload browser-safe: no raw host secrets, no arbitrary local paths, and deterministic unavailable states when local-browser mode is not configured.
+
+3. **Browser panel and workspace UX** (`BrowserPanel.tsx`, `TabChat.tsx`, `page.tsx`, and extracted components if needed):
+   - Add a visible browser-mode surface that distinguishes cloud-browser activity from local-browser/operator mode.
+   - Surface auth-needed state, local-browser launch/attach affordances, resume status, and explicit unavailable messaging when only cloud browsing is possible.
+   - Preserve the existing activity timeline and preview/live views while making the local-browser path a first-class part of the same Browser workspace rather than a hidden side channel.
+
+4. **Backend/browser bridge hooks** (`ruh-backend/src/app.ts`, `ruh-backend/src/vncProxy.ts`, or adjacent browser helpers selected by the spec):
+   - Expose the minimum read-only metadata the UI needs to know whether local-browser handoff is supported for the active sandbox/session.
+   - Normalize fallback/error states so the UI can tell the operator whether the browser run is blocked on auth, whether a local attach target exists, and whether resume is allowed.
+   - Keep the first slice bounded to status/metadata and safe launch instructions rather than remote-driving the operator's browser from the backend.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/`, frontend helpers, backend tests, KB/API notes):
+   - Extend Browser workspace coverage so mocked auth-needed and local-browser frames prove the UI renders the correct mode badge, handoff instructions, and resume state.
+   - Add backend/helper tests for browser-event parsing, unavailable-state normalization, and any new local-browser capability metadata routes.
+   - Update KB/API notes so later browser-session persistence, richer replay, and deeper operator-browser control build on this contract instead of inventing a separate local-browser surface.
+
+#### Test suite
+
+**Frontend local-browser handoff tests** (`agent-builder-ui/e2e/` and targeted helper/component tests where practical):
+- A browser run that emits an auth-needed/local-browser frame shows the documented handoff card and browser-mode state on `/agents/<id>/chat`.
+- When local-browser mode is available, the Browser tab exposes the documented launch/attach affordance and resume status without breaking the existing activity timeline.
+- When local-browser mode is unavailable, the Browser tab renders an explicit unavailable state instead of showing a dead button or a misleading takeover banner.
+- Switching conversations or sandboxes clears stale local-browser handoff state so browser mode does not leak across runs.
+
+**Backend/runtime contract tests** (`ruh-backend/tests/unit/`, `tests/integration/`, or the narrowest stable layer available):
+- Structured browser frames for auth-needed/local-browser handoff parse into the documented browser-workspace state shape.
+- Any new metadata route returns only the bounded capability and handoff fields defined by the spec.
+- Misconfigured or unsupported local-browser targets fail with the documented unavailable/error shape instead of exposing unsafe host details.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, the operator can tell whether the current browser task can continue in cloud mode or needs a real local logged-in session.
+- When the runtime requests local-browser/auth help, the page provides a clear launch or attach path plus a visible way to resume once the auth step is complete.
+- If the environment does not support local-browser mode, the page explains that constraint clearly while keeping the existing browser workspace usable.
+
+#### Evaluation — task is done when
+
+- [ ] Deployed-agent Browser workspace distinguishes cloud-browser activity from local-browser/operator handoff state
+- [ ] Auth-needed checkpoints surface explicit handoff instructions instead of only a generic takeover banner
+- [ ] The Browser tab exposes a bounded launch or attach path for local-browser mode when supported
+- [ ] Unavailable or unsupported local-browser environments render explicit blocked states without leaking unsafe host details
+- [ ] Browser handoff state is scoped to the active sandbox and conversation and does not leak across runs
+- [ ] KB/spec notes describe the local-browser handoff contract so later browser-session persistence and deeper operator control extend the same surface
+
+### TASK-2026-03-25-88: Add in-product file editing and preview-coupled iteration to deployed-agent chat
+- Status: `deferred`
+- Owner: `Analyst-1`
+- Started: `2026-03-25`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx`, `agent-builder-ui/lib/openclaw/files-workspace.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/workspaceFiles.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
+- Summary: `The active Manus-style deployed-chat focus is already represented in \`TODOS.md\` across browser visibility, files/artifact preview, terminal/process state, connector-aware research, productization, persistent workspace memory, and code-control handoff, so the next highest-value gap needs to deepen the operator loop inside that existing workspace rather than add another top-level surface. The current deployed-agent page still stops at inspect/export: \`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx\` lists recent session files, previews one file, and downloads it, but it offers no editable text surface, dirty-state model, save action, diff summary, or preview-coupled iteration path. \`ruh-backend/src/app.ts\` and \`ruh-backend/src/workspaceFiles.ts\` expose bounded list/read/download routes only; there is no safe write-back route for workspace-root files and no documented contract for rejecting oversized, binary, or unsafe edits. Existing tasks cover code export handoff (TASK-2026-03-25-86) and productization preview state (TASK-2026-03-25-83), but no active or deferred TODO currently scopes the in-product edit loop that lets an operator revise generated code/content and immediately continue from the same deployed-agent workspace instead of bouncing back to chat prose or leaving the product.`
+- User-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, select an editable workspace file, modify it in a bounded inline editor, see unsaved/dirty state plus a clear before-vs-current diff summary, save the change back into the sandbox session workspace, and refresh or reopen any available preview from the same page to validate the edit without exporting the codebase or asking the agent to restate the patch in chat. Non-editable, oversized, or unsafe targets render explicit unavailable states instead of a broken editor.`
+- Next step: `Start by writing \`docs/knowledge-base/specs/SPEC-deployed-chat-editor-iteration.md\`, then implement the minimal backend write contract plus the deployed-agent inline editor/diff/preview-coupling surface on \`/agents/[id]/chat\`.`
+- Blockers: `None. This should compose with TASK-2026-03-25-78 for file listing/preview, TASK-2026-03-25-80 for terminal-to-file navigation, TASK-2026-03-25-83 for preview/productization state, TASK-2026-03-25-85 for persistent workspace guidance, and TASK-2026-03-25-86 for export/handoff, but the first slice can ship without full Git sync, multi-file refactors, or persistent revision-history infrastructure.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` explicitly calls for code and editor parity on the deployed-agent page, including file viewer/editor, diffs, side-by-side preview, and an explicit path from agent output to operator ownership.
+- The shipped Files workspace in `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx` is still read-only: it loads a selected file and exposes only preview plus download.
+- `agent-builder-ui/lib/openclaw/files-workspace.ts` and `ruh-backend/src/app.ts` confirm the current contract is read-only list/read/download; there is no write-back route, mutation helper, or editable-state model today.
+- `docs/knowledge-base/specs/SPEC-deployed-chat-files-and-artifacts-workspace.md` explicitly leaves persistent editor write-back and diff/revision history out of scope for the shipped first slice, which means this is still a known product gap rather than an implementation oversight.
+- TASK-2026-03-25-86 covers export and ownership handoff once the agent is done, but it still leaves a major workflow hole when the operator wants to make one bounded code/content edit and validate it inside the product before taking ownership outside the product.
+- TASK-2026-03-25-83 scopes preview/productization visibility, but no task turns that preview into an edit-feedback loop from the Files workspace itself.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-editor-iteration.md`):
+   - Define the first shipped in-product editor iteration slice for deployed-agent chat.
+   - Document which workspace files are editable in the first slice, the size/type limits, dirty-state rules, save semantics, and the unavailable-state contract for unsupported targets.
+   - Clarify what counts as a diff in this first slice: bounded inline before/current comparison is required; durable revision history and Git-aware commits remain out of scope.
+   - Add backlinks in `[[004-api-reference]]`, `[[008-agent-builder-ui]]`, and `[[011-key-flows]]`.
+
+2. **Backend workspace write contract** (`ruh-backend/src/app.ts`, `ruh-backend/src/workspaceFiles.ts`, helper files chosen by the spec):
+   - Add one bounded write route for workspace-root text files only, scoped to `~/.openclaw/workspace` and reusing the existing relative-path safety rules.
+   - Enforce explicit size, file-type, and path restrictions so binary files, oversized payloads, traversal attempts, and unsupported targets fail closed with a deterministic unavailable/error shape.
+   - Return stable metadata after save so the client can refresh modified timestamps, preview classification, and any preview-coupling state without guessing.
+   - Keep the write surface safe for browser use: no arbitrary shell fragments, no host-path disclosure, and no mutation outside the sandbox workspace root.
+
+3. **Inline editor and diff surface** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, plus extracted components if needed):
+   - Upgrade the Files panel from read-only preview into a bounded edit surface for supported text/code files.
+   - Show original content, current draft state, save/cancel controls, dirty-state indicators, and a compact diff summary or before/current comparison that makes operator edits obvious before save.
+   - Preserve existing artifact and image preview behavior while clearly marking which targets are editable versus preview-only.
+   - Render explicit unavailable messaging for binary, PDF, oversized, or read-only targets instead of showing a dead editor.
+
+4. **Preview-coupled operator loop** (`TabChat.tsx`, `BrowserPanel.tsx`, `TabMissionControl.tsx`, related client state):
+   - When the active sandbox already exposes a preview URL or live browser surface, provide a clear refresh/reopen path after save so operators can validate edits from the same page.
+   - Keep editor state scoped to the active sandbox and conversation/session workspace so drafts or dirty indicators do not leak across deployments.
+   - Reuse terminal/file context where possible so file paths surfaced by process output can open directly into the editable file view instead of forcing manual path hunting.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/`, backend tests, KB/API notes):
+   - Extend deployed-agent UI coverage so mocked workspace-write responses prove the edit surface, dirty state, save flow, diff summary, and unsupported-state messaging behave predictably.
+   - Add backend tests for path-root enforcement, editable-type gating, oversize rejection, and metadata refresh after save.
+   - Update KB/API notes so later multi-file editing, revision history, Git sync, and richer preview coupling extend this same contract instead of inventing a separate editor surface.
+
+#### Test suite
+
+**Frontend editor-iteration tests** (`agent-builder-ui/e2e/` and targeted helper/component tests where practical):
+- A supported text/code file opens in an inline editor with its current contents and starts clean.
+- Editing the file marks it dirty, shows the expected save/cancel affordances, and resets to clean after a successful save.
+- Unsupported targets such as binary files, PDFs, or oversized files render the documented unavailable state instead of a broken editor.
+- Switching active conversation or sandbox clears stale drafts, selected diff state, and save results.
+- When preview metadata exists, the page exposes the documented refresh/reopen path after save without breaking the rest of the workspace.
+
+**Backend editor-write tests** (`ruh-backend/tests/unit/`, `tests/integration/`, or the narrowest stable layer available):
+- The write route accepts only workspace-root relative paths that pass the documented editable-text constraints.
+- Traversal, absolute paths, unsupported file kinds, and oversized writes fail with the documented error shape.
+- Successful writes return refreshed file metadata that remains consistent with the list/read contract.
+- Existing workspace list/read/download routes remain compatible with the new write contract.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, the operator can make one bounded code/content edit without leaving the deployed-agent workspace.
+- The page clearly distinguishes editable files from preview-only files and explains why unsupported targets cannot be edited.
+- After save, the operator has a visible way to validate the change from the same page when preview/browser state is available.
+
+#### Evaluation — task is done when
+
+- [ ] Deployed-agent chat exposes a bounded inline editor for supported text/code files instead of only read-only preview
+- [ ] The first slice shows dirty state plus a clear before/current diff summary prior to save
+- [ ] Saving a supported file writes back through a documented workspace-root-safe backend contract
+- [ ] Unsupported targets render explicit unavailable states instead of a broken or fake editor
+- [ ] Preview/browser validation can be reopened or refreshed from the same operator journey after save
+- [ ] KB/spec notes describe the editor-iteration contract so later revision-history, multi-file edit, and Git-sync work build on the same surface
+
+### TASK-2026-03-25-87: Add ruh-frontend security-header helper regression tests
+- Status: `completed`
+- Owner: `Tester-1`
 - Started: `2026-03-25`
 - Updated: `2026-03-25`
-- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/validation.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
-- Summary: `The active project focus still has one remaining ordered Manus-style parity slice that is not represented in \`TODOS.md\`: persistent project/workspace memory on the deployed-agent chat journey. TASK-2026-03-25-83 now captures the productization/operator surface, but the repo still has no worker-ready package for durable instructions, pinned knowledge/files, or continuity state that survives refreshes, new conversations, or redeploys on \`/agents/[id]/chat\`. In \`agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx\`, the deployed-agent page only loads agent metadata, sandbox selection, and tab state. In \`TabChat.tsx\` and \`TabMissionControl.tsx\`, there is no project brief, no reusable operator instructions, no pinned workspace assets, and no continuity summary carried into the next run. In \`ruh-backend/src/agentStore.ts\`, persisted agent state stops at metadata, \`skill_graph\`, \`workflow\`, \`agent_rules\`, and \`sandbox_ids\`, while \`ruh-backend/src/app.ts\` exposes no deployed-agent route for reading or updating durable workspace memory. Existing tasks cover browser workspace (TASK-2026-03-25-77), files/artifacts (TASK-2026-03-25-78), terminal/process state (TASK-2026-03-25-80), research outputs (TASK-2026-03-25-82), and productization (TASK-2026-03-25-83), but no active or deferred entry currently scopes the persistent project/workspace-memory layer that the focus document lists next.`
+- Areas: `TODOS.md`, `ruh-frontend/__tests__/lib/security-headers.test.ts`
+- Summary: `Added one bounded ruh-frontend unit regression around the browser security-header helper so env-sensitive CSP branches are covered directly. The expanded suite now proves malformed \`NEXT_PUBLIC_API_URL\` input falls back to the documented default backend origin instead of leaking an invalid source into CSP, and that development mode adds only the documented websocket plus \`unsafe-eval\` allowances needed for local tooling.`
+- Next step: `Pick a different narrow coverage gap next run; avoid reusing \`ruh-frontend/lib/security-headers.ts\` unless the CSP contract, approved browser-visible origins, or development allowances change.`
+- Blockers: `None`
+
+### TASK-2026-03-26-91: Add browser workspace alternate-frame regression test
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/browser-workspace.test.ts`
+- Summary: `Added one bounded agent-builder unit regression for the deployed-chat Browser workspace parser so the spec-backed alternate SSE frame shape stays covered. The suite now proves \`extractBrowserWorkspaceEvent()\` accepts top-level \`browser_event\` payloads and normalizes snake_case \`action_label\` fields into the camelCase takeover action used by the Browser tab state helper.`
+- Next step: `Pick a different narrow gap next run; avoid reusing \`agent-builder-ui/lib/openclaw/browser-workspace.ts\` unless the structured browser-event contract adds new event types or field aliases.`
+- Blockers: `None`
+
+### TASK-2026-03-26-93: Add session-scoped Files workspace URL regression
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/files-workspace.test.ts`
+- Summary: `Added one bounded agent-builder unit regression around \`createWorkspaceApiUrl()\` so the deployed-chat Files workspace keeps using the documented session-scoped folder contract. The expanded suite now proves list, handoff, and archive routes prefer \`sessions/<conversation_id>\` when a session id is present, while direct file reads still keep the requested relative path instead of being silently rewritten.`
+- Next step: `Pick a different narrow gap next run; avoid revisiting \`agent-builder-ui/lib/openclaw/files-workspace.ts\` unless the session-scoped Files routing contract or workspace route shapes change.`
+- Blockers: `None`
+
+### TASK-2026-03-26-94: Add workspace_state validation guardrail regressions
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `ruh-backend/tests/unit/validation.test.ts`
+- Summary: `Added one bounded backend unit regression around \`validateConversationMessagesAppendBody()\` so persisted deployed-chat \`workspace_state\` payloads keep failing closed on malformed browser data. The expanded suite now proves the validator rejects missing workspace surfaces, empty browser state, over-100 browser timeline items, and oversized serialized workspace payloads before conversation writes can persist invalid replay state.`
+- Next step: `Pick a different narrow gap next run; avoid revisiting \`ruh-backend/tests/unit/validation.test.ts\` unless the \`workspace_state\` schema, browser replay contract, or size limits change.`
+- Blockers: `None`
+
+### TASK-2026-03-26-114: Add deploy cron fallback regression for unsupported saved triggers
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-26`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/agent-config.test.ts`
+- Summary: `Added one bounded agent-builder unit regression around deploy-time cron generation for the active Google Ads create/deploy lane. The expanded \`pushAgentConfig()\` suite now proves saved trigger metadata only drives cron serialization when the trigger is a runtime-supported schedule; if the saved trigger set is present but unsupported, the deploy payload falls back to the legacy rule-derived cron instead of silently dropping scheduled execution.`
+- Next step: `Pick a different focus-lane gap next run; avoid revisiting \`agent-builder-ui/lib/openclaw/agent-config.ts\` unless the saved trigger readiness contract or deploy-time cron selection rules change again.`
+- Blockers: `None`
+
+### TASK-2026-03-25-86: Add code-control export and ownership handoff to deployed-agent chat
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-25`
+- Updated: `2026-03-25`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, `agent-builder-ui/lib/openclaw/files-workspace.ts`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/workspaceFiles.ts`, `ruh-backend/tests/unit/auditApp.test.ts`, `ruh-backend/tests/e2e/chatProxy.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/learnings/`, `docs/knowledge-base/specs/`
+- Summary: `Completed the first deployed-chat code-control slice without broadening into editing or Git sync. The backend now exposes bounded workspace handoff and archive routes, and the Files tab now shows a session-scoped handoff summary, suggested starting files, copy-for-text actions, selected-file download, and workspace bundle export when the active session folder is archive-safe.`
+- User-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, inspect the generated code workspace, see a bounded handoff summary for the active sandbox, copy or download selected code files, and export a safe workspace bundle from the same page instead of reconstructing ownership from chat prose or one-file-at-a-time downloads. The UI also shows explicit unavailable states when the workspace is empty, too large, or not suitable for archive export, so operators can tell whether there is code worth taking over immediately.`
+- Next step: `If the project still needs deeper code ownership, the next package should add explicit whole-workspace or Git-aware handoff as a separate surface instead of changing the current session-scoped export contract.`
+- Blockers: `None for the shipped slice. Browser E2E could not be executed in this sandbox because Playwright Chromium failed to launch with macOS permission errors, so browser-level verification remains for a less restricted environment.`
+
+#### Why this is important now
+
+- `docs/project-focus.md` says the deployed-agent chat should support code use and editor parity, including file ownership, code export/download, and an explicit path from agent output to operator control rather than opaque chat-only generation.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx` currently exposes only recent-file selection, inline preview, and single-file download; it does not provide a "take this codebase" workflow.
+- `docs/knowledge-base/specs/SPEC-deployed-chat-files-and-artifacts-workspace.md` explicitly leaves write-back editing, diff history, and Git-aware ownership out of scope, which means the shipped Files slice is not the final code-control story.
+- `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx` remains a sandbox-ops panel, not a handoff or export surface for generated code.
+- `ruh-backend/src/app.ts` and `ruh-backend/src/workspaceFiles.ts` expose bounded list/read/download routes only; there is no archive export or operator-facing handoff summary for the workspace.
+- The Manus baseline in `docs/project-focus.md` includes direct code copy and full codebase download/export, and no current TODO package captures that capability on `/agents/[id]/chat`.
+
+#### What to build
+
+1. **Feature spec first** (`docs/knowledge-base/specs/SPEC-deployed-chat-code-control-handoff.md`):
+   - Define the first shipped code-control handoff slice for deployed-agent chat.
+   - Document the bounded read/export model the UI expects: handoff summary, selected-file copy/download actions, workspace-bundle export, and explicit unsupported/unavailable states.
+   - Clarify what remains out of scope for this slice: full write-back editing, Git push/sync, and persistent revision history.
+   - Add backlinks in `[[004-api-reference]]`, `[[008-agent-builder-ui]]`, and `[[011-key-flows]]`.
+
+2. **Backend handoff/export contract** (`ruh-backend/src/app.ts`, `ruh-backend/src/workspaceFiles.ts`, helper files chosen by the spec):
+   - Add one bounded route that summarizes the current workspace for operator handoff: file count, top-level paths or touched-code subset, archive eligibility, and explicit unavailable reasons.
+   - Add a safe workspace archive export route that packages only the allowed workspace root instead of arbitrary sandbox paths.
+   - Reuse the existing workspace-root normalization and fail closed on oversized, unsupported, or unsafe archive requests.
+   - Keep the payload/operator surface safe for browsers: no host paths, secrets, or arbitrary filesystem traversal.
+
+3. **Deployed-agent code-control UI** (`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/FilesPanel.tsx`, `TabChat.tsx`, `TabMissionControl.tsx`, and extracted components if needed):
+   - Add a visible code-control section to the existing workspace journey rather than inventing a separate page.
+   - Surface a handoff summary that explains what code or generated project assets are available, which files are likely operator-owned next, and whether a workspace archive can be exported.
+   - Add copy/download affordances for selected text/code files and a workspace-bundle export action with explicit progress/error states.
+   - Preserve the current file preview flow while making operator takeover of generated code an obvious next step.
+
+4. **Cross-surface ownership cues** (`TabChat.tsx`, terminal/file helpers, related client state):
+   - Reuse terminal/file context where available so operators can move from "the agent edited these files" to "export or copy this code" without manual path hunting.
+   - Compose cleanly with the productization surface from TASK-2026-03-25-83 when a generated app also has a preview URL, so code handoff and product preview can coexist on the same page.
+   - Keep all code-control state scoped to the active sandbox and conversation/workspace context so stale export metadata does not leak across deployments.
+
+5. **Regression coverage and docs** (`agent-builder-ui/e2e/`, backend tests, KB/API notes):
+   - Extend deployed-agent UI coverage so mocked workspace-handoff responses prove the handoff summary, per-file copy/download actions, and workspace export affordance render correctly.
+   - Add backend tests for workspace-archive root enforcement, unavailable-state normalization, and export metadata bounds.
+   - Update KB/API notes so later write-back editing, diff/revision history, and Git/export integrations extend the same code-control contract instead of fragmenting into unrelated panels.
+
+#### Test suite
+
+**Frontend code-control tests** (`agent-builder-ui/e2e/` and targeted helper/component tests where practical):
+- A deployed-agent chat page with exportable workspace content renders the handoff summary and workspace-bundle export action.
+- Selecting a text/code file exposes the documented copy/download affordances without breaking the existing preview flow.
+- Empty or ineligible workspaces render explicit unavailable states instead of showing a dead export button.
+- Switching active sandboxes clears stale code-control metadata and does not leak export readiness between deployments.
+
+**Backend handoff/export tests** (`ruh-backend/tests/unit/`, `tests/integration/`, or the narrowest stable layer available):
+- The handoff summary route returns only the bounded metadata defined by the spec.
+- Archive export stays pinned to the sandbox workspace root and rejects traversal, absolute paths, or unsupported targets.
+- Oversized or unsupported export requests fail with the documented unavailable/error shape instead of timing out or streaming arbitrary data.
+- Existing list/read/download workspace routes remain compatible with the new export contract.
+
+**Operator verification**:
+- On `/agents/<id>/chat`, the operator can tell whether the current workspace contains code worth taking over without rereading the whole transcript.
+- The operator can export the bounded workspace bundle or copy/download the selected code file from the same page.
+- When no safe export is possible, the page explains why and leaves the rest of the workspace usable.
+
+#### Evaluation — task is done when
+
+- [ ] Deployed-agent chat exposes an operator-visible code-control handoff surface rather than only file preview plus one-file downloads
+- [ ] A bounded workspace export flow exists with explicit unsupported/unavailable states
+- [ ] Selected text/code files expose copy/download ownership affordances in the deployed-agent workspace
+- [ ] Export and handoff metadata stay scoped to the active sandbox/workspace and do not leak across deployments
+- [ ] Backend archive/export routes enforce the same workspace-root safety guarantees as existing file reads
+- [ ] KB/spec notes describe the code-control handoff contract so later edit/diff/Git work builds on the same surface
+
+### TASK-2026-03-25-85: Add persistent workspace memory to deployed-agent chat
+- Status: `completed`
+- Owner: `Worker-1`
+- Started: `2026-03-25`
+- Updated: `2026-03-25`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/openclaw/workspace-memory.ts`, `agent-builder-ui/lib/openclaw/workspace-memory.test.ts`, `agent-builder-ui/hooks/use-agents-store.test.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/validation.test.ts`, `ruh-backend/tests/unit/agentStore.test.ts`, `ruh-backend/tests/unit/agentWorkspaceMemoryApp.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-deployed-chat-workspace-memory.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-25-deployed-chat-workspace-memory-contract.md`
+- Summary: `Completed the first deployed-agent Workspace Memory slice end-to-end. Agents now persist bounded reusable instructions, continuity notes, and safe pinned workspace-relative paths on the backend; Mission Control exposes an editor for that memory; and TabChat explicitly shows when saved memory will be applied to the next new conversation and prepends one bounded system-context message only for brand-new chats.`
 - Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, review and edit a bounded Workspace Memory surface for that agent, save reusable project instructions plus a short continuity summary, optionally attach or pin safe workspace file references, refresh or switch away and back without losing that state, and start a new deployed-agent chat that clearly applies the saved memory context instead of behaving like a blank one-off session.`
-- Next step: `Start by writing \`docs/knowledge-base/specs/SPEC-deployed-chat-workspace-memory.md\`, then add the minimal persisted backend memory contract plus the deployed-agent Workspace Memory surface and new-chat context injection/readout so the page can behave like a durable project workspace instead of chat-only history.`
+- Next step: `Operator QA can save workspace memory on \`/agents/<id>/chat?tab=mission\`, start a new chat, and confirm the banner + bounded carry-forward behavior before the next feature package begins.`
 - Blockers: `None. This should compose with TASK-2026-03-25-78 for richer file/artifact pinning and TASK-2026-03-25-83 for the adjacent operator surface, but the first slice can ship with bounded instructions, continuity text, and optional safe file-path references without waiting for full file-browser or publish automation coverage.`
 
 #### Why this is important now
@@ -99,10 +4143,10 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/spec docs describe the workspace-memory contract so later project/workspace persistence work extends the same model
 
 ### TASK-2026-03-25-83: Add productization mission-control surface to deployed-agent chat
-- Status: `active`
+- Status: `deferred`
 - Owner: `Analyst-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-26`
 - Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `ruh-backend/src/app.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
 - Summary: `The active project focus says the next missing Manus-style parity slice after connector-aware research is publish/auth/analytics/data operator surfaces on the deployed-agent chat journey, but the current repo still has no worker-ready package for that gap. In \`agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx\`, the operator journey stops at Chat, All Chats, Mission Control, and Settings. In \`TabMissionControl.tsx\`, the shipped surface only shows gateway health, conversation count, loaded skills, env-var hints, and quick actions like redeploy or improve; it does not show whether a generated app is previewable or published, whether end-user auth/access control is configured, whether the sandbox has any analytics/operator telemetry worth inspecting, or whether the run produced app/data resources that can be managed as a product. In \`ruh-backend/src/app.ts\` and \`docs/knowledge-base/004-api-reference.md\`, there is no deployed-agent productization contract for preview URLs, publish status, access-control readiness, analytics snapshots, or data-resource visibility. Existing tasks cover browser workspace (TASK-2026-03-25-77), files/artifact preview (TASK-2026-03-25-78), terminal/process state (TASK-2026-03-25-80), and connector-aware research outputs (TASK-2026-03-25-82), but none currently define the first operator-facing productization surface that lets a human turn agent output into something reviewable and operable from \`/agents/[id]/chat\`.`
 - Operator-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, switch to a new productization surface in Mission Control or an equivalent bounded tab, and see a truthful readiness view for the active sandbox: preview URL or explicit unavailable state, publish/deploy state, access-control/auth readiness, bounded analytics counters, and a summary of app/data resources the operator can inspect next. The same surface exposes the first clear operator actions for previewing, redeploying/publishing, and opening the relevant app/data endpoint without reverse-engineering those details from chat prose or container logs.`
@@ -175,10 +4219,10 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/spec notes describe the productization surface so later publish/auth/analytics/data work builds on the same contract
 
 ### TASK-2026-03-25-82: Add connector-aware research workspace and sourced deliverables to deployed-agent chat
-- Status: `active`
+- Status: `deferred`
 - Owner: `Analyst-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-26`
 - Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx`, `ruh-backend/src/app.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
 - Summary: `The active project focus says the next missing Manus-style parity slice after browser, files/artifacts, and richer terminal work is connector-aware workflows plus research outputs on the deployed-agent chat page, but the current repo still has no worker-ready package for that gap. In \`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx\` and \`page.tsx\`, the deployed-agent surface can stream chat, browser heuristics, and workspace toggles, but it has no research workspace, no source/citation model, no connector-status view, and no operator-visible bundle for sourced deliverables. In \`agent-builder-ui/app/(platform)/agents/create/_components/configure/StepConnectTools.tsx\`, tool connections are still builder-side setup affordances only, while \`agent-builder-ui/hooks/use-agents-store.ts\` and \`ruh-backend/src/app.ts\` expose no deployed-chat contract for showing which connectors were available, which sources were used, or which research/report artifact came out of a run. Existing tasks cover browser workspace (TASK-2026-03-25-77), files/artifact preview (TASK-2026-03-25-78), terminal/process state (TASK-2026-03-25-80), tool-connection persistence (TASK-2026-03-25-02), and secret storage (TASK-2026-03-25-20), but none currently define the operator-facing connector-aware research workspace that the active focus lists next.`
 - User-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, ask the deployed agent to perform a research task that uses web browsing and any configured tools, switch to a new Research workspace surface, inspect a run-scoped list of sources with URLs and connector/tool badges, see whether referenced connectors were available or unavailable for that run, open the final research brief/result bundle from the same page, and copy or download the generated deliverable without reconstructing provenance from chat prose.`
@@ -251,10 +4295,10 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/spec notes describe the research-workspace contract so later connector-management and wide-research work can build on the same surface
 
 ### TASK-2026-03-25-80: Add structured terminal process state and file navigation to deployed-agent chat
-- Status: `active`
+- Status: `deferred`
 - Owner: `Analyst-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-26`
 - Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `ruh-backend/src/app.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
 - Summary: `The active project focus says the deployed-agent chat surface should next ship richer terminal/process state plus file navigation after the browser and files/artifact slices, and the current repo still has no worker-ready package for that gap. In \`agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx\`, the terminal workspace only renders command-like strings inferred from markdown code blocks, XML-ish tool markup, or OpenAI tool-call arguments; it does not expose a structured run model with cwd, stdout/stderr, exit status, touched paths, or durable command history. The same file's Browser tab already exists, but it is also heuristic text parsing rather than a backend-defined runtime contract, which means the next highest-value parity win is not another tab but a truthful process/workspace surface on \`/agents/[id]/chat\`. Existing tasks cover browser workspace (TASK-2026-03-25-77), files/artifact preview (TASK-2026-03-25-78), cancellation primitives (TASK-2026-03-25-61), history pagination (TASK-2026-03-25-72), and deployment integrity (TASK-2026-03-25-74), but none currently define the richer terminal/process + file-navigation package that the active focus explicitly lists next.`
 - User-testable outcome: `After one worker run, a human can open \`/agents/<id>/chat\`, ask the deployed agent to perform command-heavy work, and use the workspace to inspect each command/process with live or completed status, cwd, duration, exit outcome, and bounded stdout/stderr output. The operator can also jump from touched file paths in that terminal/process surface into the file workspace when available, or otherwise copy/open the documented path from the same page without reverse-engineering it from chat prose.`
@@ -408,6 +4452,16 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - Areas: `TODOS.md`, `ruh-backend/tests/unit/parseJsonOutputRecovery.test.ts`, `/Users/prasanjitdey/.codex/automations/tester-1/memory.md`
 - Summary: `Added one bounded backend unit regression for \`parseJsonOutput()\` so malformed earlier JSON-like log fragments do not mask a later valid payload in the same CLI output stream. This extends the existing parser coverage without changing production code or overlapping the active feature-package work.`
 - Next step: `Look for the next cheap pure-helper branch in backend or builder parsing code that can be locked with a single-file unit test.`
+- Blockers: `None`
+
+### TASK-2026-03-25-86: Add workspace download route header-and-bytes regression
+- Status: `completed`
+- Owner: `Tester-1`
+- Started: `2026-03-25`
+- Updated: `2026-03-25`
+- Areas: `TODOS.md`, `ruh-backend/tests/unit/auditApp.test.ts`, `/Users/prasanjitdey/.codex/automations/tester-1/memory.md`
+- Summary: `Added one bounded backend route-unit regression for \`GET /api/sandboxes/:sandbox_id/workspace/file/download\`. The new coverage locks the Files workspace download contract by asserting the handler returns decoded bytes plus the expected inline \`Content-Type\` and sanitized \`Content-Disposition\` headers, and it extends the local route harness with minimal header/send support needed to test that branch.`
+- Next step: `Avoid revisiting workspace download coverage unless the response contract changes; look next for another narrow backend or builder helper/route branch that still lacks direct regression coverage.`
 - Blockers: `None`
 
 ### TASK-2026-03-25-77: Add browser workspace timeline and takeover surface to deployed-agent chat
@@ -745,14 +4799,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/deployment notes describe the pinned runtime contract and intentional upgrade path instead of documenting floating `latest`
 
 ### TASK-2026-03-25-69: Add centralized startup environment validation with typed config schema
-- Status: `active`
+- Status: `completed`
 - Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `ruh-backend/src/config.ts` (new), `ruh-backend/src/app.ts`, `ruh-backend/src/db.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/src/startup.ts`, `ruh-backend/tests/unit/`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/010-deployment.md`
-- Summary: `The backend reads 15+ environment variables scattered across \`app.ts\`, \`db.ts\`, \`sandboxManager.ts\`, and \`startup.ts\` with silent empty-string or hardcoded-default fallbacks (\`process.env.X ?? ''\` or \`?? 'default'\`). There is no centralized schema, no typed config object, and no startup-time validation. Critical variables like \`DATABASE_URL\` crash at runtime rather than at startup. Security-sensitive variables like \`OPENCLAW_ADMIN_TOKEN\`, \`ANTHROPIC_API_KEY\`, and \`OPENAI_API_KEY\` silently default to empty strings, and operator-facing variables like \`ALLOWED_ORIGINS\` and \`OLLAMA_BASE_URL\` accept anything without format validation. Existing TASK-11 (readiness) validates DB connectivity after pool creation but does not check whether the full env contract is satisfied before the process starts. This task introduces a single \`config.ts\` module that parses, validates, and types all env vars at import time, so misconfiguration is caught deterministically at startup rather than scattered across first-use runtime failures.`
-- Next step: `Create \`ruh-backend/src/config.ts\` with a typed config schema that classifies each env var as required, optional-with-default, or optional-nullable, validates format where applicable (URLs, positive integers, non-empty strings), and exports a frozen typed config object. Then replace all \`process.env.*\` reads in backend source files with imports from this module.`
-- Blockers: `None. Composes naturally with TASK-11 (readiness/startup), TASK-64 (pool resilience), and TASK-66 (sandbox resource caps), all of which introduce new env-configurable values that should be validated through the same schema.`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `ruh-backend/src/config.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/db.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/src/startup.ts`, `ruh-backend/src/credentials.ts`, `ruh-backend/.env.example`, `ruh-backend/tests/unit/config.test.ts`, `ruh-backend/tests/unit/startup.test.ts`, `ruh-backend/tests/unit/db.test.ts`, `ruh-backend/tests/unit/sandboxManager.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/010-deployment.md`, `docs/knowledge-base/specs/SPEC-backend-config-schema.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-backend-config-runtime-split.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the centralized backend config package. Added `ruh-backend/src/config.ts` as the canonical env parser with typed defaults, aggregated validation errors, and strict startup parsing for required fields while keeping optional runtime lookups tolerant enough for isolated module use. Refactored `app.ts`, `db.ts`, `startup.ts`, `sandboxManager.ts`, and `credentials.ts` off direct `process.env` reads, extended `.env.example`, and documented the shipped env contract in the KB/deployment notes.`
+- Next step: `Reuse `src/config.ts` for any future backend env variables instead of adding new direct `process.env` reads, especially in startup/readiness, pool-resilience, and resource-cap tasks.`
+- Blockers: `None`
 
 #### Why this is important now
 
@@ -2330,14 +6384,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/docs describe the Improve Agent persistence contract accurately
 
 ### TASK-2026-03-25-38: Make chat exchange persistence backend-owned and atomic
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/conversationStore.ts`, `ruh-backend/tests/integration/`, `ruh-backend/tests/e2e/`, `ruh-frontend/components/ChatPanel.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `docs/knowledge-base/007-conversation-store.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
-- Summary: Chat delivery and chat history persistence are currently two unrelated HTTP calls. `POST /api/sandboxes/:sandbox_id/chat` forwards the request to the gateway and returns the response, then both frontends make a second best-effort `POST .../messages` call to persist the user and assistant turns. In `ruh-frontend/components/ChatPanel.tsx`, `saveMessages()` swallows failures; in `agent-builder-ui/.../TabChat.tsx`, `persistMessages()` does the same. That means a user can see a successful agent reply, refresh the page, and discover the exchange never reached history because the follow-up write failed, the tab closed, or the network dropped after the gateway response. This is a core product reliability gap that is not covered by the existing auth, ownership, validation, or conversation-boundary tasks.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-atomic-chat-persistence.md`, then decide whether `POST /api/sandboxes/:sandbox_id/chat` should persist the exchange itself or whether a new backend-owned send-and-persist endpoint should replace the current split contract.
-- Blockers: `None`
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/chatPersistence.ts`, `ruh-backend/tests/unit/chatPersistence.test.ts`, `ruh-frontend/components/ChatPanel.tsx`, `ruh-frontend/__tests__/components/ChatPanel.test.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/sandbox-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/sandbox-agent.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/007-conversation-store.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-atomic-chat-persistence.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-chat-persistence-finalization-contract.md`, `docs/journal/2026-03-26.md`
+- Summary: `Completed the backend-owned chat durability contract. `POST /api/sandboxes/:sandbox_id/chat` now persists the delivered user/assistant exchange itself when `conversation_id` is present, using a new `chatPersistence.ts` helper to extract the last user turn, collect streamed assistant/browser replay state until the upstream terminal marker, and fail closed on non-stream persistence errors. `ruh-frontend` and AG-UI sandbox chat no longer issue the old best-effort `/messages` follow-up write; streamed commit failures now surface through an explicit `event: persistence_error` contract that the UIs can treat as a visible delivery failure instead of silently losing history.`
+- Next step: `If the repo's Bun + supertest chat harness is repaired later, add route-level regression coverage for the new persisted exchange and streamed `persistence_error` contract so helper-level evidence is backed by full app-route verification.`
+- Blockers: `Route-level `ruh-backend` chat verification still hits the pre-existing Bun + supertest `app.address().port` harness failure before requests execute, so this run verified the shipped contract with focused backend helper tests, the AG-UI sandbox-agent test, and a targeted `ruh-frontend` ChatPanel Jest case run through a temporary JS Jest config plus `--watchman=false`.``
 
 #### Why this is important now
 
@@ -2398,13 +6452,13 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/API docs describe the backend-owned chat persistence contract accurately
 
 ### TASK-2026-03-25-02: Wire Configure Steps — Tool Connections + Triggers
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `agent-builder-ui/app/(platform)/agents/create/_components/configure/`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`
-- Summary: The configure wizard steps (StepConnectTools, StepSetTriggers) are currently UI-only — no data from them reaches the backend or sandbox. Tool credentials entered by the user are silently dropped. Cron jobs are parsed from `agentRules` strings via fragile regex. This task makes the configure phase functional end-to-end.
-- Next step: Start by defining a `ToolConnection` and `TriggerDefinition` data model in `lib/openclaw/types.ts`, persist them through the agent record, and inject them at deploy time via `configure-agent`.
+- Updated: `2026-03-26`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/`, `agent-builder-ui/app/(platform)/agents/create/create-session-config.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/tests/integration/agentCrud.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-google-ads-agent-creation-loop.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-configure-step-contract-evolution.md`, `docs/journal/2026-03-26.md`
+- Summary: The configure-step package is now closed under the evolved Google Ads create-loop contract rather than the earlier raw-credential sketch. Tool and trigger choices persist end-to-end as structured `toolConnections[]` and `triggers[]`, review/configure/deploy all consume the same saved contract, deploy-time cron generation prefers structured trigger metadata, and direct connector secrets live only behind the dedicated encrypted credential endpoints instead of normal agent reads.
+- Next step: Extend the same structured `triggers[]` contract when [[SPEC-agent-webhook-trigger-runtime]] lands, and keep future connector work on the metadata-plus-secure-credential split instead of reintroducing raw secret fields into `tool_connections`.
 - Blockers: `None`
 
 #### What to build
@@ -2555,13 +6609,13 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-05: Real Skill Registry
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-26`
 - Areas: `ruh-backend/src/`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepChooseSkills.tsx`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `docs/knowledge-base/`
-- Summary: The `configure-agent` endpoint currently writes SKILL.md stubs with placeholder content ("Auto-generated skill."). These give OpenClaw a skill name but no implementation — tool calls, prompts, or instructions. This task builds a skill registry: a catalog of pre-built skill SKILL.md files that the system maps to architect-generated skill IDs at deploy time.
-- Next step: Define the registry data model, seed 5–10 initial skills (Slack reader, web scraper, GitHub PR, email sender, HTTP fetch), wire StepChooseSkills to browse the registry, and update `configure-agent` to write real content instead of stubs.
+- Summary: Completed the real skill-registry package end to end. The backend now exposes seeded registry entries through `/api/skills`, the builder resolves generated skills against that registry, and `POST /api/sandboxes/:sandbox_id/configure-agent` now writes the registry entry’s real `skill_md` into the sandbox when a match exists; unmatched skills still fall back to a clearly marked stub with `# TODO: Implement this skill` so deploy remains truthful instead of silently pretending every skill is implemented.
+- Next step: If the Google Ads lane needs deeper skill realism later, add agent-local custom-skill markdown persistence so `custom_built` skills can deploy richer content than the current stub fallback.
 - Blockers: `None`
 
 #### What to build
@@ -2750,14 +6804,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-08: Re-enable Agent Builder Authentication Gate
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-26`
 - Areas: `agent-builder-ui/middleware.ts`, `agent-builder-ui/components/auth/SessionInitializationWrapper.tsx`, `agent-builder-ui/services/authCookies.ts`, `agent-builder-ui/services/axios.ts`, `agent-builder-ui/app/(auth)/`, `agent-builder-ui/app/(platform)/`, `docs/knowledge-base/`
 - Summary: `agent-builder-ui` currently bypasses auth for every route because `middleware.ts` returns `NextResponse.next()` immediately. The app already has login, token refresh, and user bootstrap plumbing, but none of it prevents anonymous access to `/agents`, `/agents/create`, or deployed-agent controls. This task turns the existing auth pieces back into an actual access gate and hardens the session bootstrap so the UI fails closed instead of rendering protected pages before redirecting.
-- Next step: Start in `agent-builder-ui/middleware.ts` by removing the unconditional early return, preserving `/authenticate` as public, and verifying unauthenticated requests to `/agents` redirect to `/authenticate?redirect_url=...`.
-- Blockers: `None`
+- Next step: `Use this restored page gate as the baseline for TASK-2026-03-25-24 and TASK-2026-03-25-28: `/api/openclaw` still needs its own server-side auth boundary, and the browser-readable token model still needs the HttpOnly/BFF hardening from [[SPEC-agent-builder-session-token-hardening]].`
+- Blockers: `None for the page-route gate. Full `cd agent-builder-ui && bunx tsc --noEmit` remains noisy because of pre-existing Bun test typing and `next.config.ts` issues outside this slice.`
 
 #### Why this is important now
 
@@ -2823,13 +6877,13 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-24: Authenticate Agent Builder Bridge API
-- Status: `active`
+- Status: `completed`
 - Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-27`
 - Areas: `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/services/authCookies.ts`, `agent-builder-ui/services/axios.ts`, `agent-builder-ui/e2e/`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/`
-- Summary: `agent-builder-ui` exposes `/api/openclaw` as a server-side proxy to the shared architect gateway with the server-held `OPENCLAW_GATEWAY_TOKEN`, but the route performs no caller authentication of its own. Because `middleware.ts` explicitly excludes `/api/*`, even TASK-2026-03-25-08 would still leave this bridge callable by anonymous clients who can spend the shared architect capacity, trigger gateway-side tool execution, and exercise the `operator.write` session without ever loading a protected page.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-agent-builder-bridge-auth.md`, then add route-level auth enforcement in `agent-builder-ui/app/api/openclaw/route.ts` before any WebSocket connection is opened.
+- Summary: `Completed the server-side auth boundary for `/api/openclaw`. The bridge now validates the current builder session against the backend `GET /users/me` contract using the access-token cookie, rejects mismatched browser `Origin` headers before any gateway handshake, returns structured JSON auth failures (`unauthorized`, `forbidden_origin`, `auth_unavailable`), and the client now throws typed bridge auth errors instead of collapsing these cases into generic gateway outages.`
+- Next step: `Keep follow-on auth work scoped to the remaining session-token hardening and session-expiry UX layers. Do not reopen this bridge route unless the cookie/session contract itself changes or the builder moves to the future HttpOnly session model from [[SPEC-agent-builder-session-token-hardening]].`
 - Blockers: `None. This complements TASK-2026-03-25-08 and TASK-2026-03-25-14, but it is a separate server-side boundary and should not wait for page auth.`
 
 #### Why this is important now
@@ -2837,7 +6891,7 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - `agent-builder-ui/app/api/openclaw/route.ts` accepts any JSON POST with `session_id` and `message`, then immediately connects to the architect gateway using the server-only `OPENCLAW_GATEWAY_TOKEN`.
 - `agent-builder-ui/lib/openclaw/api.ts` calls `/api/openclaw` with a bare `fetch` and no auth header, so the bridge currently relies entirely on route reachability rather than caller identity.
 - `agent-builder-ui/middleware.ts` excludes `/api/*` from its matcher, so re-enabling page redirects alone will not protect the bridge route.
-- The bridge also auto-approves execution requests today (covered separately by TASK-2026-03-25-14), which makes anonymous access to this route materially worse than a simple read-only leak.
+- The bridge now denies non-allowlisted execution requests by default, but anonymous access to this route would still let unauthenticated callers spend shared architect capacity and exercise the remaining read-capable operator session.
 - None of the existing backlog items explicitly harden the BFF route itself against direct unauthenticated POSTs, invalid sessions, or cross-site invocation.
 
 #### What to build
@@ -3325,18 +7379,18 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-14: Architect Tool Approval Guardrails
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/hooks/use-openclaw-chat.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/`, `agent-builder-ui/e2e/`, `docs/knowledge-base/`
-- Summary: The architect bridge currently authenticates to the gateway with `operator.write` scope and automatically resolves every `exec.approval.requested` event with `decision: "allow"`. That means any architect prompt or compromised gateway response can execute arbitrary approved tools without an allowlist, user confirmation, or audit trail. This task adds an explicit approval policy so agent-building sessions are not effectively "run anything the architect asks" by default.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-architect-exec-approval-policy.md`, then change `agent-builder-ui/app/api/openclaw/route.ts` so non-allowlisted execution requests stop auto-resolving and are surfaced to the client as structured approval events.
-- Blockers: `None. This can start immediately and complements TASK-2026-03-25-06 (architect isolation), TASK-2026-03-25-08 (frontend auth), and TASK-2026-03-25-09 (backend auth), but it should not wait for them.`
+- Updated: `2026-03-26`
+- Areas: `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/app/api/openclaw/route.test.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/lib/openclaw/api.test.ts`, `agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/hooks/use-openclaw-chat.ts`, `agent-builder-ui/hooks/use-openclaw-chat.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-architect-exec-approval-policy.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-26-architect-approval-policy.md`
+- Summary: Shipped a fail-closed execution-approval policy for the architect bridge. `exec.approval.requested` frames are now classified server-side: a narrow read-only inspection allowlist emits `approval_auto_allowed` and continues, while all other requests emit structured `approval_required` and `approval_denied` SSE events, resolve the gateway request with `decision: "deny"`, and return a typed `approval_denied` result instead of silently running the tool. The client SSE parser and chat store now preserve those approval events so future UI work can build on a stable contract instead of generic status text.
+- Next step: If product wants real human Approve / Deny controls later, add an explicit decision channel and audit persistence on top of the shipped deny-by-default event contract instead of widening the server allowlist.
+- Blockers: `None for the shipped fail-closed bridge slice. Interactive/manual approvals and durable audit logging remain follow-up work, not blockers for removing blanket auto-allow.`
 
 #### Why this is important now
 
-- `agent-builder-ui/app/api/openclaw/route.ts` sends `connect` with `scopes: ["operator.read", "operator.write"]`, then auto-approves every `exec.approval.requested` frame by sending `exec.approval.resolve { decision: "allow" }`.
+- Before TASK-2026-03-25-14 shipped, `agent-builder-ui/app/api/openclaw/route.ts` sent `connect` with `scopes: ["operator.read", "operator.write"]` and auto-approved every `exec.approval.requested` frame by sending `exec.approval.resolve { decision: "allow" }`.
 - `docs/knowledge-base/008-agent-builder-ui.md` documents this auto-approval behavior as the current contract, so the risk is codified rather than accidental.
 - The current create-agent flow only emits a generic "Executing: <tool>" status; users cannot inspect the requested command, deny it, or understand what was approved after the fact.
 - None of the existing backlog items cover execution-approval policy, least-privilege gating, or approval observability for the architect path.
@@ -3465,14 +7519,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-20: Secure Secret Storage for Agent Tool Credentials
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/`, `docs/knowledge-base/`, `docs/knowledge-base/specs/`
-- Summary: The repo has no secure persistence model for agent tool credentials. Current code keeps provider API keys ephemeral in the Settings tab and masks channel tokens on reads, but `TASK-2026-03-25-02` currently plans to persist `tool_connections.credentials` as raw JSONB on the agent record and return them intact from `GET /api/agents/:id`. Before tool connections ship end-to-end, the product needs a first-class secret-handling layer so API tokens are not stored or echoed back in plaintext.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-agent-tool-secret-storage.md`, then revise the planned `tool_connections` contract so agent records store only non-sensitive metadata plus masked/configured state or secret references, not raw credentials.
-- Blockers: `None, but this should be treated as a prerequisite or tightly-coupled companion to TASK-2026-03-25-02 so plaintext credential persistence does not ship first.`
+- Updated: `2026-03-26`
+- Areas: `ruh-backend/src/credentials.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `ruh-backend/src/schemaMigrations.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/configure/`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/lib/tools/tool-integration.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-tool-integration-workspace.md`, `ruh-backend/tests/unit/agentCredentialsApp.test.ts`, `ruh-backend/tests/unit/agentPublicReadRedaction.test.ts`
+- Summary: `Completed the secure tool-credential package by confirming the repo now uses a split contract: ordinary agent reads keep connector state in metadata-only \`tool_connections\`, saved secrets live in encrypted \`agent_credentials\` envelopes, and the builder commits or reconciles those secrets only through the dedicated summary/save/delete credential routes. This run added focused backend regression coverage for the summary-only credential API and the public-agent read model so the package is verified and the stale TODO no longer points future agents toward plaintext JSONB persistence.`
+- Next step: `Treat \`tool_connections\` as the only public readiness surface in follow-on Google Ads deploy-readiness work; future connector changes should extend the dedicated credential routes instead of widening ordinary agent payloads.`
+- Blockers: `None`
 
 #### Why this is important now
 
@@ -3680,14 +7734,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-23: Add real backend schema migrations
-- Status: `active`
+- Status: `completed`
 - Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `ruh-backend/src/index.ts`, `ruh-backend/src/db.ts`, `ruh-backend/src/store.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/conversationStore.ts`, `ruh-backend/tests/integration/`, `docker-compose.yml`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/010-deployment.md`, `docs/knowledge-base/specs/`
-- Summary: The backend still relies on `initDb()` functions that only run `CREATE TABLE IF NOT EXISTS` statements at startup. There is no migration ledger, no ordered schema evolution, and no safe path for adding columns/indexes/constraints to an already-populated database. That is now a repo-wide reliability risk because several active tasks already depend on schema changes (`agent_releases`, ownership fields, secret storage, tool connections), and shipping them without a real migration system will make existing environments drift silently or fail inconsistently. This task introduces a first-class migration workflow before more schema-changing work lands on top of ad hoc startup DDL.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-backend-schema-migrations.md`, then choose and implement the minimal migration mechanism for `ruh-backend` so startup runs ordered migrations from a tracked ledger instead of relying on per-table `CREATE TABLE IF NOT EXISTS` helpers.
-- Blockers: `None`
+- Updated: `2026-03-26`
+- Areas: `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/startup.ts`, `ruh-backend/src/store.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/conversationStore.ts`, `ruh-backend/src/auditStore.ts`, `ruh-backend/tests/helpers/db.ts`, `ruh-backend/tests/unit/`, `ruh-backend/tests/integration/schemaMigrations.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/010-deployment.md`, `docs/knowledge-base/specs/SPEC-backend-schema-migrations.md`
+- Summary: Completed the first real backend migration slice. `ruh-backend` now has an ordered `schemaMigrations.ts` runner plus `schema_migrations` ledger, startup applies pending migrations before listening, the existing latest schema is represented as explicit migration steps, and store modules no longer own hidden schema-creation side effects. Focused backend tests cover migration ordering, ledger idempotence, startup gating, and the refactored CRUD modules.
+- Next step: The next schema-changing backend task should add a new migration entry rather than editing store startup code, and an operator with a reachable Postgres test database can run `bun test tests/integration/schemaMigrations.test.ts` with `TEST_DATABASE_URL` set for real-DB confirmation.
+- Blockers: `Feature implementation is complete. Real-DB integration verification remains environment-gated because this run did not have a reachable PostgreSQL test database configured through TEST_DATABASE_URL.`
 
 #### Why this is important now
 
@@ -3963,14 +8017,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 ---
 
 ### TASK-2026-03-25-25: Ship v1 Signed Webhook Triggers for Deployed Agents
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
+- Updated: `2026-03-27`
 - Areas: `agent-builder-ui/app/(platform)/agents/create/_components/configure/StepSetTriggers.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/review/ReviewAgent.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/openclaw/agent-config.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabMissionControl.tsx`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/app.ts`, `ruh-backend/tests/integration/`, `ruh-backend/tests/e2e/`, `docs/knowledge-base/`
-- Summary: The builder UI already advertises event/webhook triggers, but the runtime only supports cron extracted from free-form agent rules. `StepSetTriggers` exposes selectable webhook cards, `ReviewAgent` reduces triggers to display text, `SavedAgent` and `AgentRecord` do not yet carry a first-class deployable trigger contract, and `configure-agent` only writes files plus `cron_jobs[]`. This task adds a real v1 webhook trigger runtime so deployed agents can receive external POST events through a signed URL instead of treating non-cron triggers as decorative copy.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-agent-webhook-trigger-runtime.md`, then lock a narrow v1 contract (`cron` plus `webhook.post`) before wiring persisted trigger definitions, signed inbound delivery, and deploy-time webhook provisioning.
-- Blockers: `Depends on TASK-2026-03-25-02 for first-class trigger persistence in the agent model. Signing secrets should use a one-way hashed verifier so the v1 webhook path does not have to wait on TASK-2026-03-25-20. The spec and supported-trigger UX work can start immediately.`
+- Summary: `Completed the v1 signed webhook trigger package end to end. `webhook-post` is now deployable in the shared trigger catalog, `configure-agent` provisions stable public webhook ids plus one-time secrets, normal agent reads redact the stored verifier hash while preserving safe webhook metadata, and `POST /api/triggers/webhooks/:public_id` validates `x-openclaw-webhook-secret` before forwarding the delivery into the active sandbox under an isolated trigger session key. The deploy page now surfaces one-time webhook details during the same config-apply run, and KB/spec docs describe the shipped contract instead of the old manual-plan placeholder.`
+- Next step: `If a browser-capable backend host is available, add one end-to-end create → deploy → signed webhook delivery check on top of the focused frontend/backend unit coverage shipped here.`
+- Blockers: `None for the shipped v1 path. Full DB-backed integration or browser verification still depends on local Postgres / browser-capable runtime availability.`
 
 #### Why this is important now
 
@@ -4028,14 +8082,14 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB and API docs describe the new webhook-trigger contract and how it relates to existing cron triggers
 
 ### TASK-2026-03-25-31: Detect and Repair Sandbox Runtime Drift
-- Status: `active`
-- Owner: `unassigned`
+- Status: `completed`
+- Owner: `Worker-1`
 - Started: `2026-03-25`
-- Updated: `2026-03-25`
-- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/docker.ts`, `ruh-backend/src/store.ts`, `ruh-backend/tests/unit/`, `ruh-backend/tests/integration/`, `ruh-backend/tests/e2e/`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/specs/`
-- Summary: Sandbox runtime identity currently splits across PostgreSQL and Docker with no reconciliation layer. After creation, list/detail APIs trust only the `sandboxes` table, `DELETE /api/sandboxes/:sandbox_id` deletes the DB row before best-effort container removal, and `GET /api/sandboxes/:sandbox_id/status` falls back to record data when the gateway is unreachable. Manual Docker changes, failed cleanup, or crashed containers can therefore leave DB-only or container-only sandboxes that the product still presents as healthy-enough records. This task adds an explicit runtime-drift contract plus a repair path so operators and future health UI can trust sandbox inventory again.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-sandbox-runtime-reconciliation.md`, then add backend helpers that compare Postgres sandbox rows against Docker container state and surface explicit drift categories before wiring admin repair actions.
-- Blockers: `None. This complements TASK-2026-03-25-04 (health dashboard), TASK-2026-03-25-12 (undeploy cleanup), and TASK-2026-03-25-21 (creation health), but none of those tasks add a repo-wide repair path once DB and Docker have already drifted.`
+- Updated: `2026-03-28`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/docker.ts`, `ruh-backend/src/sandboxRuntime.ts`, `ruh-backend/tests/unit/docker.test.ts`, `ruh-backend/tests/unit/sandboxRuntime.test.ts`, `ruh-backend/tests/unit/sandboxReconciliationApp.test.ts`, `ruh-backend/tests/helpers/fixtures.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-sandbox-runtime-reconciliation.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-25-sandbox-runtime-drift.md`, `docs/journal/2026-03-28.md`
+- Summary: `Completed the backend sandbox runtime reconciliation slice. `GET /api/sandboxes/:sandbox_id/status` now reports explicit drift metadata instead of a plain DB fallback, `ruh-backend/src/docker.ts` can inventory managed `openclaw-*` containers, `ruh-backend/src/sandboxRuntime.ts` classifies `healthy | gateway_unreachable | db_only | container_only | missing`, and admins can inspect current drift through `GET /api/admin/sandboxes/reconcile` plus repair `db_only` rows or `container_only` orphans through `POST /api/admin/sandboxes/:sandbox_id/reconcile/repair`. The KB and API docs now describe the new contract through `[[SPEC-sandbox-runtime-reconciliation]]`, and focused Bun unit coverage verifies Docker parsing, drift classification, status output, admin auth, reconcile reporting, and stale-row repair.`
+- Next step: `Use the new drift contract as the baseline for follow-on health/dashboard and undeploy cleanup work. A future slice can add integration coverage against a real Docker + Postgres environment and broaden repair actions if operators need more than stale-row deletion or orphan-container removal.`
+- Blockers: `None for the shipped backend slice. I intentionally avoided the existing `tests/e2e/chatProxy.test.ts` supertest harness because that file still fails before requests execute with `app.address().port`; focused unit app-route coverage replaced it for this feature.`
 
 #### Why this is important now
 
@@ -4090,12 +8144,12 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - Existing healthy sandboxes continue to report `healthy` without changing their public metadata shape unexpectedly.
 
 #### Evaluation — task is done when
-- [ ] Sandbox runtime drift is detectable via an explicit backend contract rather than being inferred from stale DB rows
-- [ ] `GET /api/sandboxes/:sandbox_id/status` no longer masks missing containers or dead gateways as ordinary sandbox records
-- [ ] Operators can list current DB-vs-Docker drift and run the safe repair actions defined by the spec
-- [ ] Healthy sandboxes remain unaffected while drifted ones become obvious and actionable
-- [ ] Backend tests cover drift classification, report output, and admin repair behavior
-- [ ] KB/API docs describe the runtime-reconciliation contract and how downstream health UI should consume it
+- [x] Sandbox runtime drift is detectable via an explicit backend contract rather than being inferred from stale DB rows
+- [x] `GET /api/sandboxes/:sandbox_id/status` no longer masks missing containers or dead gateways as ordinary sandbox records
+- [x] Operators can list current DB-vs-Docker drift and run the safe repair actions defined by the spec
+- [x] Healthy sandboxes remain unaffected while drifted ones become obvious and actionable
+- [x] Backend tests cover drift classification, report output, and admin repair behavior
+- [x] KB/API docs describe the runtime-reconciliation contract and how downstream health UI should consume it
 
 ### TASK-2026-03-25-32: Persist Sandbox Provisioning Jobs Across Backend Restarts
 - Status: `active`
@@ -4169,20 +8223,20 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 - [ ] KB/API docs describe the persisted provisioning-job contract and its restart semantics
 
 ### TASK-2026-03-25-33: Make Architect Bridge Retries Idempotent and Cancelable
-- Status: `active`
+- Status: `completed`
 - Owner: `unassigned`
 - Started: `2026-03-25`
 - Updated: `2026-03-25`
 - Areas: `TODOS.md`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/lib/openclaw/api.ts`, `agent-builder-ui/hooks/use-openclaw-chat.ts`, `agent-builder-ui/e2e/`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/`
-- Summary: The architect bridge currently retries the whole gateway run whenever the transport drops, but each retry generates a fresh `chat.send` `idempotencyKey` and the client has no abort path for an in-flight request. In `agent-builder-ui/app/api/openclaw/route.ts`, `connectWithRetry()` wraps the entire `chat.send` flow, `forwardToGateway()` sends `randomUUID()` as the idempotency key on every attempt, and the same route still auto-approves tool executions. In `agent-builder-ui/lib/openclaw/api.ts` and `hooks/use-openclaw-chat.ts`, architect requests cannot be canceled when the user navigates away or starts over. A disconnect after `chat.send` is accepted can therefore duplicate the same logical architect run, repeat tool side effects, and confuse the create flow with multiple responses for one user message.
-- Next step: Start by writing `docs/knowledge-base/specs/SPEC-architect-bridge-retry-safety.md`, then add a stable per-message request ID from client to bridge and stop blind post-send retries until the route can prove it is resuming the same logical run instead of resubmitting it.
+- Summary: Shipped the bounded architect retry-safety slice. `/api/openclaw` now accepts one stable logical `request_id` per user message, reuses it as the gateway `chat.send.idempotencyKey`, retries only before `chat.send` acknowledgement, and fails closed with an explicit typed error if the connection drops after the run has already started. The builder client now passes `AbortSignal` through `sendToArchitectStreaming()`, and `useOpenClawChat()` aborts/reset-cleans in-flight requests so stale completions do not append broken errors back into the create flow.
+- Next step: If the create-flow reliability lane continues, add an operator-visible “run may still be finishing” state in the Co-Pilot UI and a true resume/reattach contract before any future post-ack automatic retry work.
 - Blockers: `None. This complements TASK-2026-03-25-06 (architect isolation), TASK-2026-03-25-14 (approval guardrails), and [[SPEC-agent-builder-gateway-error-reporting]], but none of those currently make transport retries safe after a run has already been accepted.`
 
 #### Why this is important now
 
 - `agent-builder-ui/app/api/openclaw/route.ts` retries on any non-auth transport failure, even after the request may already have crossed the `chat.send` boundary.
 - The bridge sends `idempotencyKey: randomUUID()` inside `chat.send`, so every retry is treated as a new logical run instead of a retry of the same run.
-- The same bridge still auto-approves `exec.approval.requested` events, which means duplicate runs can also duplicate tool execution side effects.
+- At the time this retry-safety task was filed, the same bridge still auto-approved `exec.approval.requested` events, which increased the side-effect risk of duplicate runs. That separate risk is now addressed by TASK-2026-03-25-14.
 - `agent-builder-ui/lib/openclaw/api.ts` exposes no `AbortSignal`, and `hooks/use-openclaw-chat.ts` has no way to cancel an architect request during navigation, reset, or user retry.
 
 #### What to build

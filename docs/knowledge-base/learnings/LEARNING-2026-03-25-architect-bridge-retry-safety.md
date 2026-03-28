@@ -1,6 +1,6 @@
 # LEARNING: Architect Bridge Retries Can Duplicate Runs
 
-[[000-INDEX|← Index]] | [[013-agent-learning-system]] | [[008-agent-builder-ui]] | [[SPEC-agent-builder-gateway-error-reporting]]
+[[000-INDEX|← Index]] | [[013-agent-learning-system]] | [[008-agent-builder-ui]] | [[SPEC-agent-builder-gateway-error-reporting]] | [[SPEC-architect-bridge-retry-safety]]
 
 ## Context
 
@@ -29,9 +29,17 @@ While reviewing the current repo state for the next highest-leverage missing bac
 - Do not change bridge retry behavior without reasoning about the `chat.send` acceptance boundary and whether a follow-up attempt is a true resume or a second run.
 - Prefer stable logical request IDs plus explicit cancellation semantics before adding more automatic retry behavior around architect runs.
 
+## Follow-Up Implementation
+
+- `agent-builder-ui/lib/openclaw/api.ts` now accepts `requestId` and `AbortSignal`, and `useOpenClawChat()` aborts/reset-cleans in-flight architect requests so stale completions do not append follow-up errors.
+- `agent-builder-ui/app/api/openclaw/route.ts` now reuses the client `request_id` as the gateway `chat.send.idempotencyKey`, retries only before `chat.send` acknowledgement, and surfaces a typed post-accept disconnect error instead of resending.
+- Focused regressions now cover request identity forwarding, store abort behavior, and the pre-accept vs. post-accept retry boundary.
+- The separate blanket auto-approval risk called out in this learning was later addressed by [[SPEC-architect-exec-approval-policy]] and [[LEARNING-2026-03-26-architect-approval-policy]].
+
 ## Links
 
 - [[008-agent-builder-ui]]
 - [[001-architecture]]
 - [[SPEC-agent-builder-gateway-error-reporting]]
+- [[SPEC-architect-bridge-retry-safety]]
 - [Journal entry](../../journal/2026-03-25.md)

@@ -83,25 +83,27 @@ This key is sent as the `x-openclaw-session-key` header when proxying chat compl
 
 ```
 1. Client: POST /api/sandboxes/:id/conversations  → create conversation, get conv_id
-2. Client: POST /api/sandboxes/:id/chat
-   Body: { conversation_id: conv_id, messages: [...], model: "..." }
+2. Client: POST /api/sandboxes/:id/chat/ws
+   Body: { conversation_id: conv_id, messages: [...] }
 
 3. Backend:
    a. getConversation(conv_id) → gets openclaw_session_key
    b. Verifies conv.sandbox_id matches the `:sandbox_id` route param
-   c. Removes conversation_id from body (not sent to gateway)
-   d. Adds x-openclaw-session-key header
-   e. Forwards to gateway POST /v1/chat/completions
+   c. Opens the sandbox gateway operator WebSocket
+   d. Sends chat.send using the session key plus workspace rule
+   e. Streams SSE deltas/tool events back to the client
 
 4. If the conversation belongs to a different sandbox:
    - backend returns `404 Conversation not found`
    - no gateway request is sent
 
-5. Backend (after response):
-   Client separately calls POST .../messages to persist the exchange
+5. Backend (after successful delivery):
+   Persists the latest user message plus the final assistant reply itself when `conversation_id` is present
+6. If persistence fails after content was already emitted:
+   Sends `event: persistence_error` before the final `data: [DONE]`
 ```
 
-Note: The backend does NOT auto-persist messages — the frontend is responsible for calling the append endpoint after each exchange.
+The manual `POST .../messages` route still exists for explicit transcript writes, but ordinary live chat durability now belongs to the backend-owned `POST .../chat` and `POST .../chat/ws` contracts rather than a second frontend follow-up call.
 
 ---
 
@@ -118,14 +120,16 @@ Standard OpenAI roles: `"user"`, `"assistant"`, `"system"`. The store accepts an
 
 ## Related Learnings
 
-- [[LEARNING-2026-03-25-chat-persistence-split-contract]] — chat delivery currently succeeds independently from message-history persistence, so successful replies can vanish on refresh when the frontend-owned follow-up `/messages` write fails
-- [[LEARNING-2026-03-25-conversation-history-pagination-gap]] — conversation lists and message reads are still full-history fetches with no bounded windowing contract, which turns growing persisted history into a read-path scaling risk
+- [[LEARNING-2026-03-25-chat-persistence-split-contract]] — captured the earlier split-delivery gap before backend-owned chat persistence landed
+- [[LEARNING-2026-03-26-chat-persistence-finalization-contract]] — backend-owned streamed durability needs an explicit terminal `persistence_error` SSE event because HTTP status can no longer change after content has already streamed
+- [[LEARNING-2026-03-25-conversation-history-pagination-gap]] — captured the earlier full-history read gap that led to the current bounded pagination contract
 - [[LEARNING-2026-03-25-deployed-chat-cancellation-gap]] — deployed sandbox chat currently lacks end-to-end cancelation, so a browser disconnect can still leave gateway/model work running after the user is gone
-- [[LEARNING-2026-03-25-sandbox-delete-conversation-orphans]] — sandbox deletion currently leaves conversation history behind because the conversation store has no enforced cleanup path tied to sandbox lifecycle
-- [[LEARNING-2026-03-25-session-backed-chat-history-replay]] — the two deployed chat clients currently disagree about whether a `conversation_id` request should replay full transcript history or rely on the gateway session key alone
+- [[LEARNING-2026-03-25-sandbox-delete-conversation-orphans]] — captured the earlier sandbox-delete cleanup gap before conversation purge-on-delete shipped
+- [[LEARNING-2026-03-25-session-backed-chat-history-replay]] — captures the ongoing design tension between replaying persisted transcript windows and relying on gateway session-key continuity alone
 
 ## Related Specs
 
 - [[SPEC-chat-conversation-boundaries]] — defines the same-sandbox ownership rule for chat-session reuse
+- [[SPEC-atomic-chat-persistence]] — defines the backend-owned delivery-plus-persistence contract for successful sandbox chat exchanges
 - [[SPEC-sandbox-conversation-cleanup]] — defines the backend-owned cleanup path and fail-closed direct conversation-route contract
 - [[SPEC-conversation-history-pagination]] — defines the bounded cursor-based contract for conversation lists and transcript windows

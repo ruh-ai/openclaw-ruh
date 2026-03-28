@@ -64,14 +64,14 @@ For every non-trivial agent run:
 1. If the run is executing the repo-local `Analyst-1`, `Worker-1`, or `Tester-1` role, read the matching role contract from `agents/` or `.agents/agents/` before choosing work.
 2. Read `docs/knowledge-base/000-INDEX.md` and the most relevant linked notes.
 3. Read `TODOS.md` and create or update the task entry when the run is substantial.
-4. If the run is `Analyst-1`, read `docs/project-focus.md` when it exists before choosing a new backlog feature package so operator-defined priorities are honored.
+4. If the run is `Analyst-1` or `Tester-1`, read `docs/project-focus.md` when it exists before choosing work so operator-defined priorities are honored. `Analyst-1` uses it to pick missing feature packages; `Tester-1` uses it to bias coverage and manual verification toward the active lane.
 5. Perform the task work.
 6. Decide whether the run produced a durable learning.
 7. If yes, create or update a `LEARNING-*` note and link it to the affected KB notes/specs.
 8. Append an entry to `docs/journal/YYYY-MM-DD.md`.
 9. If the work changed repo behavior, contracts, or expectations, update the affected KB notes/specs.
 
-Recurring automations follow the same repo-visible workflow. Their private `memory.md` files do not replace `docs/journal/` or KB learning notes. Role-backed automations must keep their live prompts aligned with the matching repo role file so the written contract and runtime behavior do not drift. For the feature-at-a-time maintainer path, that means the live prompts, role files, and `TODOS.md` expectations must all agree on one feature package per run.
+Recurring automations follow the same repo-visible workflow. Their private `memory.md` files do not replace `docs/journal/` or KB learning notes. Role-backed automations must keep their live prompts aligned with the matching repo role file so the written contract and runtime behavior do not drift. For the feature-at-a-time maintainer path, that means the live prompts, role files, and `TODOS.md` expectations must all agree on one feature package per run. For `Tester-1`, the live prompt, role files, and focus-steering rules must all agree on one bounded test or bounded Playwright verification target per run.
 
 ---
 
@@ -144,7 +144,7 @@ Do not create a learning note for routine edits, formatting-only changes, or sta
 
 - [[SPEC-agent-learning-and-journal]] — canonical contract for journals and durable learnings
 - [[SPEC-automation-agent-roles]] — requires repo-local agent roles to produce journals and learnings when applicable
-- [[SPEC-analyst-project-focus]] — adds the repo-visible steering artifact that `Analyst-1` reads before choosing focus-aligned work
+- [[SPEC-analyst-project-focus]] — adds the repo-visible steering artifact that `Analyst-1` and `Tester-1` read before choosing focus-aligned work
 - [[SPEC-feature-at-a-time-automation-contract]] — defines the feature-package unit of work for `Analyst-1` and `Worker-1`
 
 ## Related Notes

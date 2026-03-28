@@ -58,6 +58,7 @@ Unknown browser event types are ignored.
   - the latest preview URL in the existing preview iframe mode when available
   - a takeover banner when the runtime reports `takeover_requested`
   - a local operator resume action that marks the takeover state as resumed for the current run
+- Persisted replay through the backend conversation store is now defined separately in [[SPEC-deployed-chat-workspace-history]]. Browser remains the first shipped consumer of that shared replay envelope.
 
 ### Fallback Behavior
 
@@ -68,7 +69,7 @@ Unknown browser event types are ignored.
 
 - Full browser replay/video archives
 - Live remote browser control from the operator UI
-- Persisting browser workspace snapshots through the backend conversation store
+- Persisting richer browser artifacts beyond the shared `workspace_state` replay envelope (for example video/replay archives or full DOM capture)
 - Backend-side normalization or validation of browser frames beyond preserving the raw SSE stream
 
 ## Implementation Notes
@@ -77,6 +78,7 @@ Unknown browser event types are ignored.
 - Updated `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx` to consume structured browser frames and store per-message browser workspace snapshots.
 - Updated `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/BrowserPanel.tsx` to render action/navigation rows, preview mode, and takeover banners/actions.
 - The backend chat proxy in `ruh-backend/src/app.ts` already satisfied the transport requirement by piping upstream SSE directly; no route-shape change was required for this first slice.
+- Historical persistence/replay now layers on top of this runtime contract via [[SPEC-deployed-chat-workspace-history]] rather than changing the Browser SSE transport itself.
 
 ## Test Plan
 
