@@ -11,15 +11,23 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { MOCK_TRIGGER_CATEGORIES } from "./mockData";
-import type { TriggerCategory, TriggerCategoryId } from "./types";
+import type { TriggerCategoryId, TriggerSelection } from "./types";
+import {
+  buildTriggerSelections,
+  createTriggerCatalog,
+  detectSuggestedTriggerIds,
+  summarizeTriggerSelections,
+} from "./trigger-catalog";
 
 interface StepSetTriggersProps {
-  onContinue: () => void;
+  onContinue: (selectedTriggerIds: TriggerSelection[]) => void;
   onCancel: () => void;
   onSkip?: () => void;
   stepLabel: string;
   agentRules?: string[];
+  initialSelected?: TriggerSelection[];
+  hideFooter?: boolean;
+  onSelectionChange?: (selectedTriggerIds: TriggerSelection[]) => void;
 }
 
 const FILTER_PILLS: { id: "all" | TriggerCategoryId; label: string }[] = [
@@ -34,36 +42,32 @@ const FILTER_PILLS: { id: "all" | TriggerCategoryId; label: string }[] = [
   { id: "system-infra", label: "System/Infra" },
 ];
 
-// Detect which trigger to pre-select from agent rules (schedule/cron info)
-function detectPreselectedTrigger(agentRules?: string[]): string | null {
-  if (!agentRules || agentRules.length === 0) return null;
-  const combined = agentRules.join(" ").toLowerCase();
-  if (combined.includes("cron") || combined.includes("schedule") || combined.includes("daily") || combined.includes("weekly") || combined.includes("hourly")) {
-    return "cron-schedule";
-  }
-  if (combined.includes("webhook")) return "webhook-post";
-  if (combined.includes("message") || combined.includes("slack")) return "message-received";
-  return null;
-}
-
 export function StepSetTriggers({
   onContinue,
   onCancel,
   onSkip,
   stepLabel,
   agentRules,
+  initialSelected,
+  hideFooter,
+  onSelectionChange,
 }: StepSetTriggersProps) {
-  const preselected = detectPreselectedTrigger(agentRules);
+  const triggerCategories = createTriggerCatalog();
+  const initialSelectionIds =
+    initialSelected && initialSelected.length > 0
+      ? initialSelected.map((trigger) => trigger.id)
+      : detectSuggestedTriggerIds(agentRules);
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | TriggerCategoryId>("all");
   const [expanded, setExpanded] = useState<Set<TriggerCategoryId>>(
     new Set(["user-initiated", "time-based", "data-change", "event-webhook"])
   );
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(preselected ? [preselected] : [])
+    new Set(initialSelectionIds)
   );
-
-  const totalCount = MOCK_TRIGGER_CATEGORIES.reduce((sum, c) => sum + c.triggers.length, 0);
+  const selections = buildTriggerSelections(selected, initialSelected);
+  const selectionSummary = summarizeTriggerSelections(selections);
+  const totalCount = triggerCategories.reduce((sum, c) => sum + c.triggers.length, 0);
 
   const toggleExpand = (id: TriggerCategoryId) => {
     setExpanded((prev) => {
@@ -75,15 +79,29 @@ export function StepSetTriggers({
   };
 
   const toggleSelect = (triggerId: string) => {
+    const trigger = triggerCategories
+      .flatMap((category) => category.triggers)
+      .find((candidate) => candidate.id === triggerId);
+
+    if (!trigger) {
+      return;
+    }
+
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(triggerId)) next.delete(triggerId);
-      else next.add(triggerId);
+      if (next.has(triggerId)) {
+        next.delete(triggerId);
+      } else if (trigger.selectable) {
+        next.add(triggerId);
+      } else {
+        return prev;
+      }
+      onSelectionChange?.(buildTriggerSelections(next, initialSelected));
       return next;
     });
   };
 
-  const filteredCategories = MOCK_TRIGGER_CATEGORIES.filter(
+  const filteredCategories = triggerCategories.filter(
     (c) => activeFilter === "all" || c.id === activeFilter
   ).filter((c) => {
     if (!search.trim()) return true;
@@ -129,12 +147,22 @@ export function StepSetTriggers({
                   </span>
                 </div>
                 <p className="text-sm font-satoshi-regular text-[var(--text-secondary)] mt-0.5">
-                  {totalCount} triggers across {MOCK_TRIGGER_CATEGORIES.length} categories
-                  {selected.size > 0 && ` · ${selected.size} selected`}
+                  {totalCount} triggers across {triggerCategories.length} categories
+                  {selected.size > 0 &&
+                    ` · ${selectionSummary.supported} deployable${selectionSummary.unsupported > 0 ? ` · ${selectionSummary.unsupported} manual-plan` : ""}`}
                 </p>
               </div>
             </div>
-            <Button variant="tertiary" size="sm" className="gap-1.5 shrink-0">
+            <Button
+              variant="tertiary"
+              size="sm"
+              className="gap-1.5 shrink-0"
+              onClick={() => {
+                const suggestions = new Set(detectSuggestedTriggerIds(agentRules));
+                setSelected(suggestions);
+                onSelectionChange?.(buildTriggerSelections(suggestions, initialSelected));
+              }}
+            >
               <Sparkles className="h-3.5 w-3.5 text-[var(--primary)]" />
               Suggest with AI
             </Button>
@@ -159,7 +187,7 @@ export function StepSetTriggers({
               const count =
                 pill.id === "all"
                   ? totalCount
-                  : (MOCK_TRIGGER_CATEGORIES.find((c) => c.id === pill.id)?.triggers.length ?? 0);
+                  : (triggerCategories.find((c) => c.id === pill.id)?.triggers.length ?? 0);
               return (
                 <button
                   key={pill.id}
@@ -223,14 +251,19 @@ export function StepSetTriggers({
                     <div className="grid grid-cols-2 gap-3 mt-2 mb-2">
                       {category.triggers.map((trigger) => {
                         const isSelected = selected.has(trigger.id);
+                        const isSupported = trigger.status === "supported";
+                        const canToggle = isSupported || isSelected;
                         return (
                           <button
                             key={trigger.id}
                             onClick={() => toggleSelect(trigger.id)}
-                            className={`text-left rounded-xl border-2 px-4 py-3.5 transition-all cursor-pointer ${
+                            disabled={!canToggle}
+                            className={`text-left rounded-xl border-2 px-4 py-3.5 transition-all ${
                               isSelected
                                 ? "border-[var(--primary)] shadow-[0_0_0_3px_rgba(174,0,208,0.08)] bg-[var(--card-color)]"
-                                : "border-[var(--border-stroke)] bg-[var(--card-color)] hover:border-[var(--border-default)]"
+                                : isSupported
+                                ? "border-[var(--border-stroke)] bg-[var(--card-color)] hover:border-[var(--border-default)] cursor-pointer"
+                                : "border-[var(--border-stroke)] bg-[var(--background)] opacity-70 cursor-not-allowed"
                             }`}
                             style={{
                               borderLeftWidth: "3px",
@@ -251,6 +284,9 @@ export function StepSetTriggers({
                             <p className="text-xs font-satoshi-regular text-[var(--text-secondary)] mb-2 line-clamp-1">
                               {trigger.description}
                             </p>
+                            <p className="text-[11px] font-satoshi-medium text-[var(--text-tertiary)] mb-2">
+                              {trigger.availabilityLabel}
+                            </p>
                             <span className="inline-block px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border-default)] text-[11px] font-mono text-[var(--text-tertiary)]">
                               {trigger.code}
                             </span>
@@ -270,7 +306,7 @@ export function StepSetTriggers({
           {/* Bottom hint */}
           <p className="text-center text-xs font-satoshi-regular text-[var(--text-tertiary)] mt-5 flex items-center justify-center gap-1.5">
             <Sparkles className="h-3 w-3" />
-            Click any card to select trigger
+            Deployable cards can run today; the rest stay visible as manual-plan ideas until runtime support lands
           </p>
 
           {/* Selection summary */}
@@ -278,9 +314,9 @@ export function StepSetTriggers({
             <div className="mt-4 flex items-center gap-2.5 bg-[var(--background)] border border-[var(--border-default)] rounded-xl px-5 py-3.5">
               <Zap className="h-4 w-4 text-[var(--primary)] shrink-0" />
               <p className="text-sm font-satoshi-medium text-[var(--text-primary)]">
-                <span className="font-satoshi-bold">
-                  {selected.size} trigger{selected.size > 1 ? "s" : ""} selected
-                </span>
+                <span className="font-satoshi-bold">{selectionSummary.supported} deployable</span>
+                {selectionSummary.unsupported > 0 &&
+                  ` · ${selectionSummary.unsupported} manual-plan`}
               </p>
             </div>
           )}
@@ -288,27 +324,31 @@ export function StepSetTriggers({
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 border-t border-[var(--border-default)] bg-[var(--card-color)] px-6 md:px-8 py-4">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <Button variant="tertiary" className="h-10 px-6" onClick={onCancel}>
-            Cancel
-          </Button>
-          <div className="flex items-center gap-3">
-            {onSkip && (
-              <Button variant="tertiary" className="h-10 px-5" onClick={onSkip}>
-                Skip this step
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              className="h-10 px-6 gap-1.5"
-              onClick={onContinue}
-            >
-              Continue <ArrowRight className="h-4 w-4" />
+      {!hideFooter && (
+        <div className="shrink-0 border-t border-[var(--border-default)] bg-[var(--card-color)] px-6 md:px-8 py-4">
+          <div className="max-w-2xl mx-auto flex items-center justify-between">
+            <Button variant="tertiary" className="h-10 px-6" onClick={onCancel}>
+              Cancel
             </Button>
+            <div className="flex items-center gap-3">
+              {onSkip && (
+                <Button variant="tertiary" className="h-10 px-5" onClick={onSkip}>
+                  Skip this step
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                className="h-10 px-6 gap-1.5"
+                onClick={() => {
+                  onContinue(buildTriggerSelections(selected, initialSelected));
+                }}
+              >
+                Continue <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </>
   );
 }

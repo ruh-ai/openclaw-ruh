@@ -1,64 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { Link2, Unlink, ArrowRight } from "lucide-react";
+import { Link2, Loader2, Unlink, ArrowRight } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
-import { MOCK_TOOLS } from "./mockData";
-import { ConnectToolsSidebar, ToolIcon } from "./ConnectToolsSidebar";
-import type { ToolItem } from "./types";
 import type { SkillGraphNode } from "@/lib/openclaw/types";
+import {
+  reconcileToolConnections,
+  type CredentialSummary,
+  type ToolResearchResult,
+} from "@/lib/tools/tool-integration";
+import {
+  deleteToolCredentials,
+  fetchCredentialSummary,
+  toolSupportsDirectConnection,
+} from "../../_config/mcp-tool-registry";
+import {
+  buildConnectToolCatalog,
+  getCredentialBackedToolIds,
+} from "./connect-tool-catalog";
+import { ConnectToolsSidebar, ToolIcon } from "./ConnectToolsSidebar";
+import type { ToolConnectionDraft, ToolCredentialDrafts, ToolItem } from "./types";
 
-// Detect which tools are required based on skill graph content
-const TOOL_PATTERNS: { keywords: string[]; tool: ToolItem }[] = [
-  {
-    keywords: ["slack"],
-    tool: { id: "slack", name: "Slack", description: "Send messages, read channels, and manage your Slack workspace.", icon: "slack", connected: false },
-  },
-  {
-    keywords: ["github", "pull_request", "gh_api", "github_api"],
-    tool: { id: "github", name: "Github", description: "Code hosting with Git version control, pull requests, and CI/CD integrations.", icon: "github", connected: false },
-  },
-  {
-    keywords: ["jira", "ticket", "sprint", "atlassian"],
-    tool: { id: "jira", name: "Jira", description: "Atlassian's project tracker with customizable workflows and agile boards.", icon: "jira", connected: false },
-  },
-  {
-    keywords: ["notion"],
-    tool: { id: "notion", name: "Notion", description: "All-in-one workspace for notes, documents, and project management.", icon: "notion", connected: false },
-  },
-  {
-    keywords: ["linear"],
-    tool: { id: "linear", name: "Linear", description: "Issue tracking and project management built for modern software teams.", icon: "linear", connected: false },
-  },
-  {
-    keywords: ["google", "gmail", "sheets", "drive", "calendar"],
-    tool: { id: "google", name: "Google Workspace", description: "Gmail, Sheets, Drive, Calendar and other Google services.", icon: "google", connected: false },
-  },
-  {
-    keywords: ["zoho"],
-    tool: { id: "zoho-crm", name: "Zoho CRM", description: "Zoho OAuth integration for accessing CRM user data.", icon: "zoho", connected: false },
-  },
-];
-
-function deriveTools(nodes?: SkillGraphNode[] | null): ToolItem[] {
-  if (!nodes || nodes.length === 0) return MOCK_TOOLS;
-  const allText = nodes
-    .map((n) => `${n.skill_id} ${n.name} ${n.description || ""}`)
-    .join(" ")
-    .toLowerCase();
-  const detected = TOOL_PATTERNS.filter(({ keywords }) =>
-    keywords.some((kw) => allText.includes(kw))
-  ).map(({ tool }) => ({ ...tool }));
-  return detected.length > 0 ? detected : MOCK_TOOLS;
+function statusLabel(tool: ToolItem): string {
+  switch (tool.status) {
+    case "configured":
+      return "Configured";
+    case "missing_secret":
+      return "Missing credentials";
+    case "unsupported":
+      return "Manual integration";
+    default:
+      return "Available";
+  }
 }
 
 interface StepConnectToolsProps {
-  onContinue: () => void;
+  onContinue: (connectedTools: ToolConnectionDraft[]) => void;
   onCancel: () => void;
   onSkip: () => void;
   stepLabel: string;
   skillGraph?: SkillGraphNode[] | null;
+  hideFooter?: boolean;
+  initialConnected?: ToolConnectionDraft[];
+  initialCredentialDrafts?: ToolCredentialDrafts;
+  onConnectionChange?: (connections: ToolConnectionDraft[]) => void;
+  onCredentialDraftChange?: (drafts: ToolCredentialDrafts) => void;
+  agentId?: string | null;
+  agentUseCase?: string;
 }
 
 export function StepConnectTools({
@@ -67,37 +57,149 @@ export function StepConnectTools({
   onSkip,
   stepLabel,
   skillGraph,
+  hideFooter,
+  initialConnected,
+  initialCredentialDrafts,
+  onConnectionChange,
+  onCredentialDraftChange,
+  agentId,
+  agentUseCase,
 }: StepConnectToolsProps) {
-  const [tools, setTools] = useState<ToolItem[]>(() => deriveTools(skillGraph));
+  const [toolConnections, setToolConnections] = useState<ToolConnectionDraft[]>(initialConnected ?? []);
+  const [credentialDrafts, setCredentialDrafts] = useState<ToolCredentialDrafts>(initialCredentialDrafts ?? {});
+  const [credentialSummary, setCredentialSummary] = useState<CredentialSummary[]>([]);
   const [sidebarTool, setSidebarTool] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [disconnectingToolId, setDisconnectingToolId] = useState<string | null>(null);
+  const [latestRecommendation, setLatestRecommendation] = useState<ToolResearchResult | null>(null);
 
-  const hasConnected = tools.some((t) => t.connected);
+  const credentialBackedToolIds = useMemo(() => getCredentialBackedToolIds(), []);
 
-  const handleConnect = (toolId: string) => {
-    setTools((prev) =>
-      prev.map((t) => (t.id === toolId ? { ...t, connected: true } : t))
+  useEffect(() => {
+    setToolConnections(initialConnected ?? []);
+  }, [initialConnected]);
+
+  useEffect(() => {
+    setCredentialDrafts(initialCredentialDrafts ?? {});
+  }, [initialCredentialDrafts]);
+
+  useEffect(() => {
+    if (!agentId) {
+      setCredentialSummary([]);
+      return;
+    }
+
+    let cancelled = false;
+    void fetchCredentialSummary(agentId).then((summary) => {
+      if (!cancelled) {
+        setCredentialSummary(summary);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  const effectiveConnections = useMemo(
+    () =>
+      reconcileToolConnections(toolConnections, credentialSummary, {
+        credentialBackedToolIds,
+      }),
+    [credentialBackedToolIds, credentialSummary, toolConnections],
+  );
+
+  const tools = useMemo(
+    () =>
+      buildConnectToolCatalog({
+        skillGraph,
+        agentUseCase,
+        connections: effectiveConnections,
+        latestRecommendation,
+      }),
+    [agentUseCase, effectiveConnections, latestRecommendation, skillGraph],
+  );
+
+  const hasConnected = effectiveConnections.length > 0;
+
+  const publishConnections = (nextConnections: ToolConnectionDraft[]) => {
+    setToolConnections(nextConnections);
+    onConnectionChange?.(
+      reconcileToolConnections(nextConnections, credentialSummary, {
+        credentialBackedToolIds,
+      }),
     );
+  };
+
+  const publishCredentialDrafts = (nextDrafts: ToolCredentialDrafts) => {
+    setCredentialDrafts(nextDrafts);
+    onCredentialDraftChange?.(nextDrafts);
+  };
+
+  const handleConnectionSaved = (
+    connection: ToolConnectionDraft,
+    nextDraft?: Record<string, string> | null,
+    sourceToolId?: string,
+  ) => {
+    setActionError(null);
+
+    const nextConnections = [
+      ...effectiveConnections.filter(
+        (item) =>
+          item.toolId !== connection.toolId &&
+          item.toolId !== sourceToolId,
+      ),
+      connection,
+    ];
+    publishConnections(nextConnections);
+
+    if (nextDraft) {
+      publishCredentialDrafts({
+        ...Object.fromEntries(
+          Object.entries(credentialDrafts).filter(([toolId]) => toolId !== sourceToolId),
+        ),
+        [connection.toolId]: nextDraft,
+      });
+    } else {
+      const { [connection.toolId]: _removed, [sourceToolId ?? ""]: _replaced, ...rest } = credentialDrafts;
+      void _removed;
+      void _replaced;
+      publishCredentialDrafts(rest);
+    }
+
     setSidebarTool(null);
   };
 
-  const handleDisconnect = (toolId: string) => {
-    setTools((prev) =>
-      prev.map((t) => (t.id === toolId ? { ...t, connected: false } : t))
-    );
+  const handleDisconnect = async (toolId: string) => {
+    setActionError(null);
+
+    if (agentId && toolSupportsDirectConnection(toolId)) {
+      setDisconnectingToolId(toolId);
+      const result = await deleteToolCredentials(agentId, toolId);
+      setDisconnectingToolId(null);
+      if (!result.ok) {
+        setActionError("Failed to remove the saved credentials for this tool.");
+        return;
+      }
+      const summary = await fetchCredentialSummary(agentId);
+      setCredentialSummary(summary);
+    }
+
+    publishConnections(effectiveConnections.filter((item) => item.toolId !== toolId));
+    const { [toolId]: _removed, ...rest } = credentialDrafts;
+    publishCredentialDrafts(rest);
   };
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-6 md:px-8 py-6">
-        <div className="max-w-2xl mx-auto">
-          {/* Step label */}
-          <p className="text-xs font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-4">
+      <div className="flex-1 overflow-y-auto px-6 py-6 md:px-8">
+        <div className="mx-auto max-w-2xl">
+          <p className="mb-4 text-xs font-satoshi-bold uppercase tracking-wider text-[var(--text-tertiary)]">
             {stepLabel}
           </p>
 
-          {/* Title area */}
-          <div className="flex items-start gap-3 mb-6">
-            <div className="w-9 h-9 shrink-0 mt-0.5">
+          <div className="mb-6 flex items-start gap-3">
+            <div className="mt-0.5 h-9 w-9 shrink-0">
               <Image
                 src="/assets/logos/favicon.svg"
                 alt="Configure"
@@ -109,27 +211,36 @@ export function StepConnectTools({
               <h2 className="text-xl font-satoshi-bold text-[var(--text-primary)]">
                 Connect Tools
               </h2>
-              <p className="text-sm font-satoshi-regular text-[var(--text-secondary)] mt-0.5">
-                Give your agent access to the tools it needs to work.
+              <p className="mt-0.5 text-sm font-satoshi-regular text-[var(--text-secondary)]">
+                Research the best integration path first, then connect only the tools the product can support truthfully.
               </p>
             </div>
           </div>
 
-          {/* Tool cards */}
+          {actionError && (
+            <div className="mb-4 rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/10 px-3 py-2.5 text-sm font-satoshi-regular text-[var(--error)]">
+              {actionError}
+            </div>
+          )}
+
           <div className="space-y-3">
             {tools.map((tool) => (
               <div
                 key={tool.id}
-                className="flex items-center gap-4 bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-xl px-5 py-4 transition-all hover:border-[var(--border-default)]"
+                className="flex items-center gap-4 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] px-5 py-4 transition-all hover:border-[var(--border-default)]"
               >
                 <ToolIcon name={tool.name} size={36} />
 
-                <div className="flex-1 min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">
                     {tool.name}
                   </p>
-                  <p className="text-xs font-satoshi-regular text-[var(--text-secondary)] mt-0.5 line-clamp-1">
+                  <p className="mt-0.5 line-clamp-1 text-xs font-satoshi-regular text-[var(--text-secondary)]">
                     {tool.description}
+                  </p>
+                  <p className="mt-1 text-[11px] font-satoshi-medium text-[var(--text-tertiary)]">
+                    {statusLabel(tool)}
+                    {tool.connectorType ? ` · ${tool.connectorType.toUpperCase()}` : ""}
                   </p>
                 </div>
 
@@ -137,21 +248,26 @@ export function StepConnectTools({
                   <Button
                     variant="tertiary"
                     size="sm"
-                    className="gap-1.5 shrink-0"
-                    onClick={() => handleDisconnect(tool.id)}
+                    className="shrink-0 gap-1.5"
+                    disabled={disconnectingToolId === tool.id}
+                    onClick={() => void handleDisconnect(tool.id)}
                   >
-                    <Unlink className="h-3.5 w-3.5" />
+                    {disconnectingToolId === tool.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Unlink className="h-3.5 w-3.5" />
+                    )}
                     Disconnect
                   </Button>
                 ) : (
                   <Button
                     variant="tertiary"
                     size="sm"
-                    className="gap-1.5 shrink-0"
+                    className="shrink-0 gap-1.5"
                     onClick={() => setSidebarTool(tool.id)}
                   >
                     <Link2 className="h-3.5 w-3.5" />
-                    Connect
+                    Research & Connect
                   </Button>
                 )}
               </div>
@@ -160,37 +276,45 @@ export function StepConnectTools({
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="shrink-0 border-t border-[var(--border-default)] bg-[var(--card-color)] px-6 md:px-8 py-4">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <Button variant="tertiary" className="h-10 px-6" onClick={onCancel}>
-            Cancel
-          </Button>
-          <div className="flex items-center gap-3">
-            <Button variant="tertiary" className="h-10 px-5" onClick={onSkip}>
-              Skip this step
+      {!hideFooter && (
+        <div className="shrink-0 border-t border-[var(--border-default)] bg-[var(--card-color)] px-6 py-4 md:px-8">
+          <div className="mx-auto flex max-w-2xl items-center justify-between">
+            <Button variant="tertiary" className="h-10 px-6" onClick={onCancel}>
+              Cancel
             </Button>
-            <Button
-              variant="primary"
-              className="h-10 px-6 gap-1.5"
-              disabled={!hasConnected}
-              onClick={onContinue}
-            >
-              Continue <ArrowRight className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button variant="tertiary" className="h-10 px-5" onClick={onSkip}>
+                Skip this step
+              </Button>
+              <Button
+                variant="primary"
+                className="h-10 gap-1.5 px-6"
+                disabled={!hasConnected}
+                onClick={() => onContinue(effectiveConnections)}
+              >
+                Continue <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Sidebar */}
       {sidebarTool && (() => {
-        const tool = tools.find((t) => t.id === sidebarTool);
+        const tool = tools.find((item) => item.id === sidebarTool);
         if (!tool) return null;
+
         return (
           <ConnectToolsSidebar
+            toolId={tool.id}
             toolName={tool.name}
+            toolDescription={tool.description}
+            toolConnection={effectiveConnections.find((item) => item.toolId === tool.id) ?? null}
+            credentialDraft={credentialDrafts[tool.id]}
+            agentId={agentId ?? null}
+            agentUseCase={agentUseCase}
+            onRecommendation={setLatestRecommendation}
             onClose={() => setSidebarTool(null)}
-            onConnect={() => handleConnect(tool.id)}
+            onSave={(connection, nextDraft) => handleConnectionSaved(connection, nextDraft, tool.id)}
           />
         );
       })()}

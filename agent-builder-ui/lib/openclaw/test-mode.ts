@@ -1,4 +1,4 @@
-export type OpenClawRequestMode = "build" | "test";
+export type OpenClawRequestMode = "build" | "test" | "copilot" | "agent";
 
 export interface OpenClawTestOptions {
   mode?: OpenClawRequestMode;
@@ -12,6 +12,14 @@ export function buildGatewaySessionKey(
 ): string {
   if (mode === "test") {
     return `agent:test:${sessionId}`;
+  }
+
+  if (mode === "copilot") {
+    return `agent:copilot:${sessionId}`;
+  }
+
+  if (mode === "agent") {
+    return `agent:main:${sessionId}`;
   }
 
   return `agent:${agentId}:${sessionId}`;

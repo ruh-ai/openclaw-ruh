@@ -6,7 +6,9 @@ import { ChevronLeft, Rocket, Loader2, ChevronDown, MessageSquare, LayoutDashboa
 import { Button } from "@/components/ui/button";
 import { useAgentsStore } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
+import { useBackendHealth } from "@/hooks/use-backend-health";
 import { sanitizeAgentModelForSandbox } from "@/lib/openclaw/shared-codex";
+import { hasMissingRequiredInputs } from "@/lib/agents/runtime-inputs";
 import { TabChat } from "./_components/TabChat";
 import { TabChats } from "./_components/TabChats";
 import { TabMissionControl } from "./_components/TabMissionControl";
@@ -21,6 +23,7 @@ interface SandboxRecord {
   sandbox_name: string;
   sandbox_state?: string;
   gateway_port?: number;
+  vnc_port?: number | null;
   approved?: boolean;
   container_running?: boolean;
   created_at?: string;
@@ -69,14 +72,26 @@ export default function AgentChatPage() {
   const agent = agents.find((a) => a.id === id);
   const [fetchAttempted, setFetchAttempted] = useState(false);
   const sandboxHealth = useSandboxHealth(agent?.sandboxIds ?? []);
+  const backendHealth = useBackendHealth();
+  const [backendBannerDismissed, setBackendBannerDismissed] = useState(false);
 
-  // If agent is not in local store, try fetching from backend
+  // Fetch fresh agent data from backend on mount (always, to get latest config)
   useEffect(() => {
-    if (!agent && !fetchAttempted) {
+    if (!fetchAttempted) {
       setFetchAttempted(true);
       fetchAgent(id);
     }
-  }, [agent, fetchAttempted, id, fetchAgent]);
+  }, [fetchAttempted, id, fetchAgent]);
+
+  // Gate: redirect to setup page if required runtime inputs are missing
+  // Only check after fetch has been attempted so we have fresh agentRules/runtimeInputs
+  useEffect(() => {
+    if (fetchAttempted && agent && hasMissingRequiredInputs(agent)) {
+      const sbIds = agent.sandboxIds ?? [];
+      const sandboxParam = sbIds.length > 0 ? `&sandbox=${sbIds[sbIds.length - 1]}` : "";
+      router.replace(`/agents/${id}/setup?next=chat${sandboxParam}`);
+    }
+  }, [fetchAttempted, agent, id, router]);
 
   // Active tab — driven by ?tab= search param
   const tabParam = searchParams.get("tab") as Tab | null;
@@ -267,6 +282,22 @@ export default function AgentChatPage() {
           })}
         </div>
       </div>
+
+      {/* ── Backend health banner ── */}
+      {!backendHealth.checking && !backendHealth.ready && !backendBannerDismissed && (
+        <div className="shrink-0 flex items-center justify-between gap-3 px-6 md:px-8 py-2.5 bg-[#F59E0B]/10 border-b border-[#F59E0B]/20">
+          <p className="text-xs font-satoshi-medium text-[#92400E]">
+            Backend is not available. Ensure ruh-backend is running on port 8000.
+            {backendHealth.error ? ` (${backendHealth.error})` : ""}
+          </p>
+          <button
+            onClick={() => setBackendBannerDismissed(true)}
+            className="text-xs font-satoshi-bold text-[#92400E]/70 hover:text-[#92400E] transition-colors shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* ── Body ── */}
       {loadingSandboxes ? (

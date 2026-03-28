@@ -1,6 +1,10 @@
 "use server";
 
 import { cookies } from "next/headers";
+import {
+  buildAuthCookieOptions,
+  buildClearedAuthCookieOptions,
+} from "./authCookies.shared";
 
 export const getAccessToken = async () => {
   const cookieStore = await cookies();
@@ -27,24 +31,18 @@ export const setAuthCookies = async (
   refreshTokenAge: number | null
 ) => {
   const cookieStore = await cookies();
-  cookieStore.set("accessToken", accessToken, {
-    path: "/",
-    domain: process.env.NEXT_PUBLIC_COOKIES_DOMAIN,
-    httpOnly: false,
-    sameSite: "none",
-    secure: true,
-    maxAge: accessTokenAge,
-  });
+  cookieStore.set(
+    "accessToken",
+    accessToken,
+    buildAuthCookieOptions({ maxAge: accessTokenAge })
+  );
 
   if (refreshToken && refreshTokenAge) {
-    cookieStore.set("refreshToken", refreshToken, {
-      path: "/",
-      domain: process.env.NEXT_PUBLIC_COOKIES_DOMAIN,
-      httpOnly: false,
-      sameSite: "none",
-      secure: true,
-      maxAge: refreshTokenAge,
-    });
+    cookieStore.set(
+      "refreshToken",
+      refreshToken,
+      buildAuthCookieOptions({ maxAge: refreshTokenAge })
+    );
   }
 };
 
@@ -52,23 +50,7 @@ export const clearAuthCookies = async () => {
   "use server";
 
   const cookieStore = await cookies();
-  cookieStore.set("accessToken", "", {
-    path: "/",
-    domain: process.env.NEXT_PUBLIC_COOKIES_DOMAIN,
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    maxAge: 0,
-    expires: new Date(0),
-  });
-
-  cookieStore.set("refreshToken", "", {
-    path: "/",
-    domain: process.env.NEXT_PUBLIC_COOKIES_DOMAIN,
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    maxAge: 0,
-    expires: new Date(0),
-  });
+  const clearedOptions = buildClearedAuthCookieOptions();
+  cookieStore.set("accessToken", "", clearedOptions);
+  cookieStore.set("refreshToken", "", clearedOptions);
 };

@@ -21,6 +21,10 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useAgentsStore, type SavedAgent } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
+import { DeploymentsPanel } from "./_components/DeploymentsPanel";
+import { ReproduceDialog } from "./create/_components/ReproduceDialog";
+import { Copy } from "lucide-react";
+import { Server } from "lucide-react";
 
 function summarizeSandboxHealth(
   sandboxIds: string[],
@@ -64,19 +68,27 @@ function deploymentDotClasses(summary: ReturnType<typeof summarizeSandboxHealth>
 function AgentCard({
   agent,
   sandboxHealth,
+  selected,
+  selectionMode,
+  onSelect,
   onDelete,
   onToggleStatus,
   onChat,
   onBuild,
   onDeploy,
+  onManageDeployments,
 }: {
   agent: SavedAgent;
   sandboxHealth: Record<string, SandboxHealth>;
+  selected: boolean;
+  selectionMode: boolean;
+  onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onToggleStatus: (id: string, status: SavedAgent["status"]) => void;
   onChat: (id: string) => void;
   onBuild: (id: string) => void;
   onDeploy: (id: string) => void;
+  onManageDeployments: (agent: SavedAgent) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isActive = agent.status === "active";
@@ -93,10 +105,34 @@ function AgentCard({
   };
 
   return (
-    <div className="relative group bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-2xl px-5 py-4 hover:border-[var(--border-default)] hover:shadow-sm transition-all">
+    <div
+      className={`relative group bg-[var(--card-color)] border rounded-2xl px-5 py-4 hover:shadow-sm transition-all ${
+        selected
+          ? "border-[var(--primary)] ring-1 ring-[var(--primary)]/30"
+          : "border-[var(--border-stroke)] hover:border-[var(--border-default)]"
+      }`}
+      onClick={selectionMode ? () => onSelect(agent.id) : undefined}
+    >
       {/* Top row */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3 min-w-0">
+          {/* Selection checkbox */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onSelect(agent.id); }}
+            className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all cursor-pointer ${
+              selected
+                ? "bg-[var(--primary)] border-[var(--primary)]"
+                : selectionMode
+                ? "border-[var(--border-default)] hover:border-[var(--primary)]"
+                : "border-[var(--border-default)] opacity-0 group-hover:opacity-100"
+            }`}
+          >
+            {selected && (
+              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            )}
+          </button>
           <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/10 border border-[var(--primary)]/20 flex items-center justify-center text-xl shrink-0">
             {agent.avatar}
           </div>
@@ -150,6 +186,18 @@ function AgentCard({
                   <Rocket className="h-3.5 w-3.5" />
                   Deploy
                 </button>
+                {(agent.sandboxIds?.length ?? 0) > 0 && (
+                  <button
+                    onClick={() => {
+                      onManageDeployments(agent);
+                      setMenuOpen(false);
+                    }}
+                    className="flex items-center gap-2.5 w-full px-3.5 py-2 text-sm font-satoshi-regular text-[var(--text-secondary)] hover:bg-[var(--color-light)] transition-colors"
+                  >
+                    <Server className="h-3.5 w-3.5" />
+                    Manage Deployments
+                  </button>
+                )}
                 <div className="mx-3 my-1 border-t border-[var(--border-default)]" />
                 <button
                   onClick={() => {
@@ -199,13 +247,16 @@ function AgentCard({
           {agent.triggerLabel}
         </span>
 
-        {/* Deployments chip */}
+        {/* Deployments chip — clickable to open management panel */}
         {(agent.sandboxIds?.length ?? 0) > 0 && (
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-satoshi-medium ${deploymentBadgeClasses(deploymentSummary)}`}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onManageDeployments(agent); }}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-satoshi-medium cursor-pointer hover:opacity-80 transition-opacity ${deploymentBadgeClasses(deploymentSummary)}`}
+          >
             <span className={`w-1.5 h-1.5 rounded-full ${deploymentDotClasses(deploymentSummary)}`} />
             <Rocket className="h-3 w-3" />
             {agent.sandboxIds.length} deployed
-          </span>
+          </button>
         )}
       </div>
 
@@ -233,7 +284,11 @@ function AgentCard({
 export default function AgentsPage() {
   const router = useRouter();
   const [search, setSearch] = useState("");
-  const { agents, deleteAgent, updateAgentStatus, fetchAgents } = useAgentsStore();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [deploymentsAgent, setDeploymentsAgent] = useState<SavedAgent | null>(null);
+  const { agents, deleteAgent, bulkDeleteAgents, updateAgentStatus, fetchAgents } = useAgentsStore();
   const sandboxHealth = useSandboxHealth(
     agents.flatMap((agent) => agent.sandboxIds ?? []),
   );
@@ -242,6 +297,38 @@ export default function AgentsPage() {
   useEffect(() => {
     fetchAgents();
   }, [fetchAgents]);
+
+  const selectionMode = selectedIds.size > 0;
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((a) => a.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    setIsDeleting(true);
+    try {
+      await bulkDeleteAgents([...selectedIds]);
+      setSelectedIds(new Set());
+      setShowConfirm(false);
+    } catch (err) {
+      console.error("Bulk delete failed:", err);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleChat = (id: string) => router.push(`/agents/${id}/chat`);
   const handleBuild = (id: string) => router.push(`/agents/create?agentId=${id}`);
@@ -253,6 +340,7 @@ export default function AgentsPage() {
   );
 
   const handleCreateAgent = () => router.push("/agents/create");
+  const [showReproduce, setShowReproduce] = useState(false);
 
   if (agents.length === 0) {
     return (
@@ -316,6 +404,13 @@ export default function AgentsPage() {
               className="pl-9 h-10 w-[200px] md:w-[260px] border border-border-default rounded-lg bg-white text-sm font-satoshi-regular"
             />
           </div>
+          <button
+            onClick={() => setShowReproduce(true)}
+            className="h-10 px-3 gap-1.5 rounded-lg border border-[var(--border-stroke)] text-[var(--text-secondary)] hover:bg-[var(--color-light)] transition-colors text-sm font-satoshi-medium hidden sm:flex items-center"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            From Template
+          </button>
           <Button variant="primary" className="h-10 px-4 gap-2 rounded-lg" onClick={handleCreateAgent}>
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Create New Agent</span>
@@ -324,6 +419,76 @@ export default function AgentsPage() {
         </div>
       </div>
 
+      {showReproduce && (
+        <ReproduceDialog onClose={() => setShowReproduce(false)} />
+      )}
+
+      {/* Bulk action bar */}
+      {selectionMode && (
+        <div className="flex items-center justify-between px-6 md:px-8 py-2.5 shrink-0 border-b border-[var(--primary)]/20 bg-[var(--primary)]/5">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={selectAll}
+              className="text-xs font-satoshi-bold text-[var(--primary)] hover:underline cursor-pointer"
+            >
+              {selectedIds.size === filtered.length ? "Deselect all" : "Select all"}
+            </button>
+            <span className="text-xs font-satoshi-medium text-[var(--text-secondary)]">
+              {selectedIds.size} selected
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="px-3 py-1.5 text-xs font-satoshi-medium text-[var(--text-secondary)] border border-[var(--border-stroke)] rounded-lg hover:bg-[var(--color-light)] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => setShowConfirm(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-satoshi-bold text-white bg-[var(--error)] rounded-lg hover:opacity-90 transition-colors"
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete {selectedIds.size}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation dialog */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-[var(--card-color)] rounded-2xl border border-[var(--border-default)] shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-satoshi-bold text-[var(--text-primary)] mb-2">
+              Delete {selectedIds.size} agent{selectedIds.size !== 1 ? "s" : ""}?
+            </h3>
+            <p className="text-sm font-satoshi-regular text-[var(--text-secondary)] mb-1">
+              This will permanently delete the selected agents, their associated sandboxes, and stop any running Docker containers.
+            </p>
+            <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)] mb-6">
+              This action cannot be undone.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowConfirm(false)}
+                disabled={isDeleting}
+                className="px-4 py-2 text-sm font-satoshi-medium text-[var(--text-secondary)] border border-[var(--border-stroke)] rounded-lg hover:bg-[var(--color-light)] transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={isDeleting}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-satoshi-bold text-white bg-[var(--error)] rounded-lg hover:opacity-90 transition-colors disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Agent grid */}
       <div className="flex-1 overflow-y-auto px-6 md:px-8 py-6">
         {filtered.length === 0 ? (
@@ -331,22 +496,87 @@ export default function AgentsPage() {
             No agents match &ldquo;{search}&rdquo;
           </p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map((agent) => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            sandboxHealth={sandboxHealth}
-            onDelete={deleteAgent}
-            onToggleStatus={updateAgentStatus}
-            onChat={handleChat}
-                onBuild={handleBuild}
-                onDeploy={handleDeploy}
-              />
-            ))}
-          </div>
+          <>
+            {/* In the Forge section — agents being built */}
+            {(() => {
+              const forgingAgents = filtered.filter((a) => a.status === "forging");
+              if (forgingAgents.length === 0) return null;
+              return (
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-5 h-5 rounded-md bg-[var(--primary)]/10 flex items-center justify-center">
+                      <Wrench className="h-3 w-3 text-[var(--primary)]" />
+                    </div>
+                    <h2 className="text-sm font-satoshi-bold text-[var(--text-primary)]">In the Forge</h2>
+                    <span className="text-[10px] font-satoshi-medium text-[var(--text-tertiary)] bg-[var(--primary)]/8 px-1.5 py-0.5 rounded-full">
+                      {forgingAgents.length}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {forgingAgents.map((agent) => (
+                      <div
+                        key={agent.id}
+                        className="relative rounded-2xl border-2 border-dashed border-[var(--primary)]/30 bg-[var(--primary)]/3 p-5 transition-all hover:border-[var(--primary)]/50 hover:shadow-sm"
+                      >
+                        <div className="flex items-start gap-3 mb-3">
+                          <span className="text-2xl">{agent.avatar || "🔨"}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-satoshi-bold text-[var(--text-primary)] truncate">{agent.name || "Untitled Agent"}</p>
+                            <p className="text-[10px] font-satoshi-medium text-[var(--primary)] mt-0.5">Building...</p>
+                          </div>
+                        </div>
+                        {agent.description && (
+                          <p className="text-xs font-satoshi-regular text-[var(--text-secondary)] line-clamp-2 mb-4">{agent.description}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleBuild(agent.id)}
+                            className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-lg border border-[var(--primary)] text-[var(--primary)] text-xs font-satoshi-bold hover:bg-[var(--primary)]/5 transition-colors"
+                          >
+                            <Wrench className="h-3 w-3" />
+                            Continue Building
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Regular agents */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filtered.filter((a) => a.status !== "forging").map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  sandboxHealth={sandboxHealth}
+                  selected={selectedIds.has(agent.id)}
+                  selectionMode={selectionMode}
+                  onSelect={toggleSelect}
+                  onDelete={deleteAgent}
+                  onToggleStatus={updateAgentStatus}
+                  onChat={handleChat}
+                  onBuild={handleBuild}
+                  onDeploy={handleDeploy}
+                  onManageDeployments={setDeploymentsAgent}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
+
+      {/* Deployments management panel */}
+      {deploymentsAgent && (
+        <DeploymentsPanel
+          agent={deploymentsAgent}
+          sandboxHealth={sandboxHealth}
+          onClose={() => setDeploymentsAgent(null)}
+          onChat={handleChat}
+          onRefreshHealth={() => fetchAgents()}
+        />
+      )}
     </div>
   );
 }

@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { loginRoute, dashboardRoute } from "@/shared/routes";
+import { loginRoute } from "@/shared/routes";
+import { getAuthRedirectPath } from "@/lib/auth/session-guard";
 
 // Auth routes that should be accessible without tokens
 const publicRoutes = [loginRoute];
 
 export function middleware(request: NextRequest) {
-  // TODO: Re-enable auth check after testing
-  return NextResponse.next();
+  // Bypass auth entirely in local development
+  if (process.env.NODE_ENV === "development") {
+    return NextResponse.next();
+  }
 
   const pathname = request.nextUrl.pathname;
 
@@ -23,12 +26,11 @@ export function middleware(request: NextRequest) {
     request.cookies.has("accessToken") || request.cookies.has("refreshToken");
 
   if (!hasAuthTokens) {
-    const loginUrl = new URL(loginRoute, request.url);
-    if (pathname !== dashboardRoute) {
-      const originalUrl = request.nextUrl.pathname + request.nextUrl.search;
-      loginUrl.searchParams.set("redirect_url", originalUrl);
-    }
-    return NextResponse.redirect(loginUrl);
+    const redirectPath = getAuthRedirectPath({
+      pathname: request.nextUrl.pathname,
+      search: request.nextUrl.search,
+    });
+    return NextResponse.redirect(new URL(redirectPath, request.url));
   }
 
   return NextResponse.next();

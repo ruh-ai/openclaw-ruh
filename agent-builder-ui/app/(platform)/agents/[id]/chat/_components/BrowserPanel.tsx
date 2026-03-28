@@ -17,6 +17,7 @@ import type {
   BrowserWorkspaceItem,
   BrowserWorkspaceItemKind,
 } from "@/lib/openclaw/browser-workspace";
+import LiveBrowserView, { type BrowserAction } from "./LiveBrowserView";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,10 @@ interface BrowserPanelProps {
   previewUrl?: string | null;
   takeover?: BrowserTakeoverState | null;
   onResumeTakeover?: () => void;
+  /** Sandbox ID for live browser view */
+  sandboxId?: string;
+  /** Whether VNC is available for this sandbox */
+  vncAvailable?: boolean;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -248,11 +253,16 @@ export default function BrowserPanel({
   previewUrl,
   takeover,
   onResumeTakeover,
+  sandboxId,
+  vncAvailable,
 }: BrowserPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [mode, setMode] = useState<"activity" | "preview">("activity");
+  const [mode, setMode] = useState<"live" | "activity" | "preview">(
+    vncAvailable ? "live" : "activity"
+  );
 
   const hasPreview = Boolean(previewUrl);
+  const hasVnc = Boolean(vncAvailable && sandboxId);
 
   // Deduplicate items by normalized URL
   const seen = new Set<string>();
@@ -276,17 +286,24 @@ export default function BrowserPanel({
     }
   }, [allItems.length, mode]);
 
-  // Switch to preview mode when preview becomes available
+  // Auto-switch to live mode when VNC becomes available
   useEffect(() => {
-    if (hasPreview && allItems.length === 0) setMode("preview");
-  }, [hasPreview, allItems.length]);
+    if (hasVnc) setMode("live");
+  }, [hasVnc]);
+
+  // Switch to preview mode when preview becomes available (only if no VNC)
+  useEffect(() => {
+    if (hasPreview && !hasVnc) setMode("preview");
+  }, [hasPreview, hasVnc]);
 
   return (
     <div className="flex flex-col h-full">
-      {/* Mode toggle — only show when preview is available */}
-      {hasPreview && (
+      {/* Mode toggle — show when VNC or preview is available */}
+      {(hasVnc || hasPreview) && (
         <div className="shrink-0 flex items-center gap-0.5 px-4 py-2 border-b border-white/5">
-          {(["activity", "preview"] as const).map(m => (
+          {(["live", "activity", "preview"] as const)
+            .filter(m => m === "activity" || (m === "live" && hasVnc) || (m === "preview" && hasPreview))
+            .map(m => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -296,10 +313,31 @@ export default function BrowserPanel({
                   : "text-white/25 hover:text-white/50"
               }`}
             >
-              {m === "activity" ? "Screenshots" : "Live Preview"}
+              {m === "live" ? "Live" : m === "activity" ? "Activity" : "Preview"}
             </button>
           ))}
         </div>
+      )}
+
+      {/* Live VNC mode */}
+      {mode === "live" && sandboxId && (
+        <LiveBrowserView
+          sandboxId={sandboxId}
+          isAgentActive={isLoading}
+          currentAction={(() => {
+            // Derive current action from latest browser activity items
+            const latest = allItems[allItems.length - 1];
+            if (!latest || Date.now() - latest.timestamp > 3000) return null;
+            const actionMap: Record<string, BrowserAction["type"]> = {
+              action: "click", screenshot: "click", url: "navigate", activity: "scroll",
+            };
+            return {
+              type: actionMap[latest.kind] ?? "click",
+              label: latest.label ?? latest.detail ?? undefined,
+              timestamp: latest.timestamp,
+            } satisfies BrowserAction;
+          })()}
+        />
       )}
 
       {/* Preview mode */}

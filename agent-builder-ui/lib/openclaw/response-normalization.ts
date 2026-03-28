@@ -1,6 +1,20 @@
+import type {
+  AgentToolConnection,
+  AgentToolConnectionAuthKind,
+  AgentToolConnectionType,
+  AgentTriggerDefinition,
+  AgentTriggerKind,
+  AgentTriggerStatus,
+} from "@/lib/agents/types";
+import { getToolDefinition } from "@/app/(platform)/agents/create/_config/mcp-tool-registry";
 import type { ArchitectResponse, ClarificationQuestion, SkillGraphNode, WorkflowDefinition } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
+
+const TOOL_CONNECTION_AUTH_KINDS: AgentToolConnectionAuthKind[] = ["oauth", "api_key", "service_account", "none"];
+const TOOL_CONNECTION_TYPES: AgentToolConnectionType[] = ["mcp", "api", "cli"];
+const TRIGGER_KINDS: AgentTriggerKind[] = ["manual", "schedule", "webhook"];
+const TRIGGER_STATUSES: AgentTriggerStatus[] = ["supported", "unsupported"];
 
 const SUPPORTED_QUESTION_TYPES = new Set<ClarificationQuestion["type"]>([
   "text",
@@ -86,7 +100,171 @@ function normalizeWorkflowDependencies(
   return dependencies;
 }
 
+function normalizeToolConnectionAuthKind(
+  rawAuthKind: unknown,
+  fallback: AgentToolConnectionAuthKind,
+): AgentToolConnectionAuthKind {
+  return TOOL_CONNECTION_AUTH_KINDS.includes(rawAuthKind as AgentToolConnectionAuthKind)
+    ? rawAuthKind as AgentToolConnectionAuthKind
+    : fallback;
+}
+
+function normalizeToolConnectionType(
+  rawConnectorType: unknown,
+  fallback: AgentToolConnectionType,
+): AgentToolConnectionType {
+  return TOOL_CONNECTION_TYPES.includes(rawConnectorType as AgentToolConnectionType)
+    ? rawConnectorType as AgentToolConnectionType
+    : fallback;
+}
+
+function normalizeTriggerKind(rawKind: unknown, fallback: AgentTriggerKind): AgentTriggerKind {
+  return TRIGGER_KINDS.includes(rawKind as AgentTriggerKind)
+    ? rawKind as AgentTriggerKind
+    : fallback;
+}
+
+function normalizeTriggerStatus(rawStatus: unknown, fallback: AgentTriggerStatus): AgentTriggerStatus {
+  return TRIGGER_STATUSES.includes(rawStatus as AgentTriggerStatus)
+    ? rawStatus as AgentTriggerStatus
+    : fallback;
+}
+
+function defaultTriggerStatus(
+  triggerId: string,
+  kind: AgentTriggerKind,
+): AgentTriggerStatus {
+  if (triggerId === "webhook-post") {
+    return "supported";
+  }
+
+  return kind === "manual" || kind === "schedule"
+    ? "supported"
+    : "unsupported";
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeToolConnections(rawConnections: unknown): AgentToolConnection[] | undefined {
+  if (!Array.isArray(rawConnections)) return undefined;
+
+  const normalized = rawConnections
+    .map((entry, index) => {
+      const record = (entry ?? {}) as UnknownRecord;
+      const rawToolId =
+        typeof record.tool_id === "string" ? record.tool_id
+          : typeof record.toolId === "string" ? record.toolId
+            : typeof record.recommended_tool_id === "string" ? record.recommended_tool_id
+              : typeof record.name === "string" ? slugify(record.name)
+                : `tool-${index + 1}`;
+      const toolId = rawToolId.trim().replace(/_/g, "-");
+      if (!toolId) return null;
+
+      const registryDefinition = getToolDefinition(toolId);
+      const requiredEnv = Array.isArray(record.required_env)
+        ? record.required_env.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : [];
+      const configSummary = Array.isArray(record.config_summary)
+        ? record.config_summary
+            .map((value) => String(value).trim())
+            .filter(Boolean)
+        : [];
+
+      if (configSummary.length === 0 && requiredEnv.length > 0) {
+        configSummary.push(`Required env: ${requiredEnv.join(", ")}`);
+      }
+      if (configSummary.length === 0 && registryDefinition?.credentials.length) {
+        configSummary.push("Credentials required");
+      }
+
+      const fallbackStatus: AgentToolConnection["status"] =
+        requiredEnv.length > 0 || (registryDefinition?.credentials.length ?? 0) > 0
+          ? "missing_secret"
+          : "available";
+
+      return {
+        toolId,
+        name:
+          (typeof record.name === "string" && record.name.trim())
+          || registryDefinition?.name
+          || toolId.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+        description:
+          (typeof record.description === "string" && record.description.trim())
+          || registryDefinition?.description
+          || "Architect-recommended tool connection.",
+        status:
+          record.status === "available"
+          || record.status === "configured"
+          || record.status === "missing_secret"
+          || record.status === "unsupported"
+            ? record.status
+            : fallbackStatus,
+        authKind: normalizeToolConnectionAuthKind(
+          record.auth_kind ?? record.authKind,
+          registryDefinition?.authKind ?? (requiredEnv.length > 0 ? "api_key" : "none"),
+        ),
+        connectorType: normalizeToolConnectionType(
+          record.connector_type ?? record.connectorType,
+          registryDefinition ? "mcp" : "api",
+        ),
+        configSummary,
+      } satisfies AgentToolConnection;
+    })
+    .filter((entry): entry is AgentToolConnection => Boolean(entry));
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeTriggers(rawTriggers: unknown): AgentTriggerDefinition[] | undefined {
+  if (!Array.isArray(rawTriggers)) return undefined;
+
+  const normalized: AgentTriggerDefinition[] = rawTriggers.map((entry, index) => {
+      const record = (entry ?? {}) as UnknownRecord;
+      const title =
+        typeof record.title === "string" && record.title.trim()
+          ? record.title.trim()
+          : typeof record.name === "string" && record.name.trim()
+            ? record.name.trim()
+            : `Trigger ${index + 1}`;
+      const triggerId =
+        (typeof record.id === "string" && record.id.trim())
+        || (typeof record.trigger_id === "string" && record.trigger_id.trim())
+        || slugify(title);
+      const kind = normalizeTriggerKind(record.kind, "manual");
+      const schedule =
+        typeof record.schedule === "string" && record.schedule.trim()
+          ? record.schedule.trim()
+          : typeof record.cron_expression === "string" && record.cron_expression.trim()
+            ? record.cron_expression.trim()
+            : undefined;
+
+      return {
+        id: triggerId,
+        title,
+        kind,
+        status: normalizeTriggerStatus(
+          record.status,
+          defaultTriggerStatus(triggerId, kind),
+        ),
+        description:
+          (typeof record.description === "string" && record.description.trim())
+          || title,
+        ...(schedule ? { schedule } : {}),
+      } satisfies AgentTriggerDefinition;
+    });
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeReadyForReview(parsed: UnknownRecord): UnknownRecord {
+  const normalizedToolConnections = normalizeToolConnections(parsed.tool_connections);
+  const normalizedTriggers = normalizeTriggers(parsed.triggers);
   if (!Array.isArray(parsed.skill_graph)) return parsed;
 
   const rawSkills = parsed.skill_graph as UnknownRecord[];
@@ -130,11 +308,28 @@ function normalizeReadyForReview(parsed: UnknownRecord): UnknownRecord {
   return {
     ...parsed,
     system_name: systemName,
+    ...(normalizedToolConnections ? { tool_connections: normalizedToolConnections } : {}),
     skill_graph: {
       system_name: systemName,
       nodes,
       workflow,
     },
+    ...(normalizedTriggers ? { triggers: normalizedTriggers } : {}),
+  };
+}
+
+function normalizeStructuredConfig(parsed: UnknownRecord): UnknownRecord {
+  const normalizedToolConnections = normalizeToolConnections(parsed.tool_connections);
+  const normalizedTriggers = normalizeTriggers(parsed.triggers);
+
+  if (!normalizedToolConnections && !normalizedTriggers) {
+    return parsed;
+  }
+
+  return {
+    ...parsed,
+    ...(normalizedToolConnections ? { tool_connections: normalizedToolConnections } : {}),
+    ...(normalizedTriggers ? { triggers: normalizedTriggers } : {}),
   };
 }
 
@@ -176,7 +371,8 @@ function normalizeClarification(parsed: UnknownRecord): UnknownRecord {
 export function normalizeArchitectResponse(parsed: UnknownRecord): UnknownRecord {
   const withSchemaProposal = normalizeDataSchemaProposal(parsed);
   const withClarifications = normalizeClarification(withSchemaProposal);
-  return normalizeReadyForReview(withClarifications);
+  const withStructuredConfig = normalizeStructuredConfig(withClarifications);
+  return normalizeReadyForReview(withStructuredConfig);
 }
 
 export function toArchitectResponse(parsed: UnknownRecord): ArchitectResponse {

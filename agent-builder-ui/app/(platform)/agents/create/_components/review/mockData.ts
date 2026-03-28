@@ -1,22 +1,34 @@
 import type { AgentData } from "./types";
 
 export const INITIAL_AGENT_DATA: AgentData = {
-  name: "Finance Assistant",
+  name: "Google Ads Optimizer",
   rules: [
-    "Always format numbers as currency",
-    "Ensure consistent font sizes across all headings",
-    "Use high-contrast colors for better readability",
-    "Incorporate icons to enhance user experience",
+    "Summarize campaign performance with explicit budget and conversion deltas",
+    "Flag pacing risk before spend exceeds plan",
+    "Keep recommendations focused on paid media operators",
   ],
-  skills: ["email-triage", "Crm-updater", "slack-digest"],
+  skills: ["Google Ads Audit", "Budget Pacing Report", "Bid Change Planner"],
+  toolConnections: [
+    {
+      id: "google-ads",
+      name: "Google Ads",
+      description: "Inspect campaigns, budgets, and search-term performance.",
+      status: "configured",
+      statusLabel: "Configured",
+      detail: "Connected account: Acme Ads",
+    },
+  ],
   triggers: [
-    { icon: "calendar", text: "Every Monday at 09:00 AM" },
-    { icon: "heart", text: "Heartbeat every 30 min — Emails, Slack" },
+    {
+      icon: "calendar",
+      text: "Weekday pacing check",
+      statusLabel: "Supported schedule",
+      detail: "0 9 * * 1-5",
+    },
   ],
+  improvements: [],
   accessTeams: [
-    "Finance Team",
-    "Marketing Team",
-    "Product Development Team",
-    "Customer Support Team",
+    "Paid Media Team",
+    "Growth Marketing",
   ],
 };

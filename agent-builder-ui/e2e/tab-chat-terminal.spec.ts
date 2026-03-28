@@ -181,6 +181,8 @@ async function mockApis(page: Page, chatSseBody: string) {
             modified_at: "2026-03-25T15:30:00.000Z",
             preview_kind: "text",
             mime_type: "text/markdown",
+            artifact_type: "document",
+            source_conversation_id: CONV_ID,
           },
           {
             path: "artifacts/chart.png",
@@ -190,8 +192,32 @@ async function mockApis(page: Page, chatSseBody: string) {
             modified_at: "2026-03-25T15:31:00.000Z",
             preview_kind: "image",
             mime_type: "image/png",
+            artifact_type: "image",
+            source_conversation_id: CONV_ID,
           },
         ],
+      }),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/sandboxes/${SANDBOX_ID}/workspace/handoff`, async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        summary: "2 code files ready for handoff",
+        file_count: 2,
+        code_file_count: 1,
+        total_bytes: 2089,
+        top_level_paths: ["reports", "artifacts"],
+        suggested_paths: ["reports/daily.md"],
+        archive: {
+          eligible: true,
+          reason: null,
+          file_count: 2,
+          total_bytes: 2089,
+          download_name: "workspace-bundle.tar.gz",
+        },
       }),
     });
   });
@@ -203,9 +229,13 @@ async function mockApis(page: Page, chatSseBody: string) {
       body: JSON.stringify({
         path: "reports/daily.md",
         name: "daily.md",
+        type: "file",
         size: 41,
+        modified_at: "2026-03-25T15:30:00.000Z",
         mime_type: "text/markdown",
         preview_kind: "text",
+        artifact_type: "document",
+        source_conversation_id: CONV_ID,
         content: "# Daily report\nGenerated from the sandbox.",
         truncated: false,
         download_name: "daily.md",
@@ -220,11 +250,23 @@ async function mockApis(page: Page, chatSseBody: string) {
       body: JSON.stringify({
         path: "artifacts/chart.png",
         name: "chart.png",
+        type: "file",
         size: 2048,
+        modified_at: "2026-03-25T15:31:00.000Z",
         mime_type: "image/png",
         preview_kind: "image",
+        artifact_type: "image",
+        source_conversation_id: CONV_ID,
         download_name: "chart.png",
       }),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/sandboxes/${SANDBOX_ID}/workspace/archive`, async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/gzip",
+      body: "zip-bytes",
     });
   });
 }
@@ -553,5 +595,23 @@ test.describe("TabChat parser + ComputerView terminal", () => {
     await page.getByRole("button", { name: "daily.md" }).click();
     await expect(page.getByText("Generated from the sandbox.")).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole("link", { name: "Download" })).toBeVisible({ timeout: 5_000 });
+  });
+
+  test("shows code-control handoff actions in the files workspace", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+
+    const sseBody = sseStream(["Generated files are ready in the workspace."]);
+
+    await seedAgent(page);
+    await mockApis(page, sseBody);
+    await goToChat(page);
+    await sendMessage(page, "List workspace files");
+
+    await page.getByRole("button", { name: "files" }).click();
+    await expect(page.getByText("Code handoff", { exact: false })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("2 code files ready for handoff")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("link", { name: /Export workspace bundle/i })).toBeVisible({ timeout: 5_000 });
+    await page.getByRole("button", { name: /Copy file contents/i }).click();
+    await expect(page.getByRole("button", { name: /Copied/i })).toBeVisible({ timeout: 5_000 });
   });
 });

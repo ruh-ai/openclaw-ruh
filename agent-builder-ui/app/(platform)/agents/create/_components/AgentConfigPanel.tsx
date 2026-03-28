@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, KeyboardEvent } from "react";
+import { useState, useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import {
   FileJson,
   Clock3,
@@ -17,18 +17,27 @@ import {
   Cpu,
   CalendarClock,
   MessageCircle,
+  Hash,
+  Headphones,
 } from "lucide-react";
 import type { SkillGraphNode, WorkflowDefinition } from "@/lib/openclaw/types";
 import type { SavedAgent } from "@/hooks/use-agents-store";
+import type { BuilderDraftSaveStatus } from "@/lib/openclaw/ag-ui/types";
+import type { AgentChannelSelection } from "@/lib/agents/types";
 
 interface AgentConfigPanelProps {
   skillGraph: SkillGraphNode[] | null;
   workflow: WorkflowDefinition | null;
   systemName: string | null;
+  description?: string | null;
   agentRules: string[];
   triggerLabel: string;
+  channels?: AgentChannelSelection[];
   existingAgent?: SavedAgent | null;
   isLoading?: boolean;
+  draftSaveStatus?: BuilderDraftSaveStatus;
+  variant?: "panel" | "embedded";
+  builderWorkspace?: ReactNode;
   onNameChange: (name: string) => void;
   onRulesChange: (rules: string[]) => void;
 }
@@ -64,16 +73,36 @@ export function AgentConfigPanel({
   skillGraph,
   workflow,
   systemName,
+  description,
   agentRules,
   triggerLabel,
+  channels = [],
   existingAgent,
   isLoading,
+  draftSaveStatus = "idle",
+  variant = "panel",
+  builderWorkspace,
   onNameChange,
   onRulesChange,
 }: AgentConfigPanelProps) {
   const displayName = systemName || existingAgent?.name || "";
   const displayAvatar = existingAgent?.avatar || "🤖";
-  const displayDescription = existingAgent?.description || "";
+  const displayDescription = description || existingAgent?.description || "";
+  const hasPersistedDraftIdentity = Boolean(
+    existingAgent && existingAgent.id !== "new-agent" && !existingAgent.id.startsWith("new-"),
+  );
+  const effectiveDraftSaveStatus =
+    draftSaveStatus === "idle" && hasPersistedDraftIdentity
+      ? "saved"
+      : draftSaveStatus;
+  const draftStatusLabel =
+    effectiveDraftSaveStatus === "saving"
+      ? "Saving draft…"
+      : effectiveDraftSaveStatus === "saved"
+      ? "Draft saved"
+      : effectiveDraftSaveStatus === "error"
+      ? "Draft save failed"
+      : null;
 
   // Skills: prefer rich SkillGraphNode[], fall back to skills string[]
   const displaySkillNodes = skillGraph ?? existingAgent?.skillGraph ?? null;
@@ -148,22 +177,87 @@ export function AgentConfigPanel({
     if (e.key === "Escape") setEditingRules(false);
   };
 
+  // ── Progressive highlight tracking ──
+  // Tracks which sections just received data, adds a brief pulse animation.
+  const [recentlyUpdated, setRecentlyUpdated] = useState<Set<string>>(new Set());
+  const prevSkillCountRef = useRef(0);
+  const prevRulesCountRef = useRef(0);
+  const prevChannelCountRef = useRef(0);
+  const prevTriggerRef = useRef("");
+
+  useEffect(() => {
+    const updated = new Set<string>();
+    const skillCount = (displaySkillNodes?.length ?? 0) + displaySkillNames.length;
+    if (skillCount > 0 && prevSkillCountRef.current === 0) updated.add("skills");
+    if (displayRules.length > 0 && prevRulesCountRef.current === 0) updated.add("behaviour");
+    if (channels.length > 0 && prevChannelCountRef.current === 0) updated.add("channels");
+    if (triggerLabel && triggerLabel !== "No trigger selected yet" && prevTriggerRef.current === "") updated.add("trigger");
+
+    prevSkillCountRef.current = skillCount;
+    prevRulesCountRef.current = displayRules.length;
+    prevChannelCountRef.current = channels.length;
+    prevTriggerRef.current = triggerLabel && triggerLabel !== "No trigger selected yet" ? triggerLabel : "";
+
+    if (updated.size > 0) {
+      setRecentlyUpdated(updated);
+      const timer = setTimeout(() => setRecentlyUpdated(new Set()), 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [displaySkillNodes, displaySkillNames, displayRules, channels, triggerLabel]);
+
+  const CHANNEL_ICON_MAP: Record<string, typeof MessageCircle> = {
+    telegram: MessageCircle,
+    slack: Hash,
+    discord: Headphones,
+  };
+
+  const sectionHighlight = (section: string) =>
+    recentlyUpdated.has(section)
+      ? "animate-pulse ring-2 ring-[var(--primary)]/30 transition-all duration-500"
+      : "transition-all duration-300";
+
   return (
-    <div className="flex flex-col h-full border-l border-[var(--border-default)] bg-[var(--card-color)]">
+    <div
+      className={`flex flex-col h-full bg-[var(--card-color)] ${
+        variant === "panel" ? "border-l border-[var(--border-default)]" : ""
+      }`}
+    >
       {/* Panel header */}
       <div className="shrink-0 px-4 py-3 border-b border-[var(--border-default)] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           <span className="text-xs font-satoshi-bold text-[var(--text-secondary)] uppercase tracking-wide">
-            Configuration
+            {variant === "embedded" ? "Builder Snapshot" : "Configuration"}
           </span>
         </div>
-        {isLoading && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-satoshi-bold bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)] animate-pulse" />
-            Live
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {draftStatusLabel && (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-satoshi-bold border ${
+                effectiveDraftSaveStatus === "error"
+                  ? "bg-[var(--error)]/10 text-[var(--error)] border-[var(--error)]/20"
+                  : "bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/20"
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  effectiveDraftSaveStatus === "saving"
+                    ? "bg-[var(--primary)] animate-pulse"
+                    : effectiveDraftSaveStatus === "error"
+                    ? "bg-[var(--error)]"
+                    : "bg-[var(--primary)]"
+                }`}
+              />
+              {draftStatusLabel}
+            </span>
+          )}
+          {isLoading && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-satoshi-bold bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)] animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Panel body */}
@@ -176,7 +270,7 @@ export function AgentConfigPanel({
             </div>
             <p className="text-xs font-satoshi-medium text-[var(--text-secondary)] mb-1">No config yet</p>
             <p className="text-[11px] font-satoshi-regular text-[var(--text-tertiary)] leading-relaxed max-w-[160px]">
-              Describe your agent — the config will appear here as it builds.
+              Describe your agent. The live snapshot and builder controls will appear here as it builds.
             </p>
           </div>
         ) : (
@@ -240,7 +334,7 @@ export function AgentConfigPanel({
             </div>
 
             {/* ── Skills ── */}
-            <div>
+            <div className={sectionHighlight("skills")}>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[10px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider">Skills</p>
                 {(displaySkillNodes ?? displaySkillNames).length > 0 && (
@@ -449,13 +543,40 @@ export function AgentConfigPanel({
             )}
 
             {/* ── Trigger ── */}
-            <div>
+            <div className={sectionHighlight("trigger")}>
               <p className="text-[10px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Trigger</p>
               <div className="flex items-center gap-2 bg-[var(--background)] border border-[var(--border-stroke)] rounded-xl px-3 py-2.5">
                 <Clock3 className="h-3.5 w-3.5 text-[var(--text-tertiary)] shrink-0" />
                 <span className="text-xs font-satoshi-medium text-[var(--text-secondary)]">{triggerLabel}</span>
               </div>
             </div>
+
+            {/* ── Channels ── */}
+            {channels.length > 0 && (
+              <div className={sectionHighlight("channels")}>
+                <p className="text-[10px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Channels</p>
+                <div className="space-y-1.5">
+                  {channels.map((ch) => {
+                    const ChannelIcon = CHANNEL_ICON_MAP[ch.kind] ?? MessageCircle;
+                    return (
+                      <div key={ch.kind} className="flex items-center gap-2 bg-[var(--background)] border border-[var(--border-stroke)] rounded-lg px-3 py-2">
+                        <ChannelIcon className="h-3.5 w-3.5 text-[var(--text-tertiary)] shrink-0" />
+                        <span className="text-xs font-satoshi-medium text-[var(--text-secondary)] flex-1">{ch.label}</span>
+                        <span className={`text-[9px] font-satoshi-bold px-1.5 py-0.5 rounded-full border ${
+                          ch.status === "planned"
+                            ? "bg-[var(--primary)]/8 text-[var(--primary)] border-[var(--primary)]/15"
+                            : ch.status === "configured"
+                            ? "bg-[var(--success)]/8 text-[var(--success)] border-[var(--success)]/15"
+                            : "bg-[var(--text-tertiary)]/8 text-[var(--text-tertiary)] border-[var(--border-default)]"
+                        }`}>
+                          {ch.status === "planned" ? "After deploy" : ch.status === "configured" ? "Connected" : "Planned"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* ── Deployments (edit mode) ── */}
             {existingAgent && (existingAgent.sandboxIds?.length ?? 0) > 0 && (
@@ -471,6 +592,22 @@ export function AgentConfigPanel({
               </div>
             )}
           </>
+        )}
+
+        {builderWorkspace && (
+          <section className="space-y-3 pt-1">
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-[var(--border-default)]" />
+              <span className="text-[10px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-[0.18em]">
+                Builder Flow
+              </span>
+              <div className="h-px flex-1 bg-[var(--border-default)]" />
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-[var(--border-stroke)] bg-[var(--card-color)] shadow-sm">
+              {builderWorkspace}
+            </div>
+          </section>
         )}
       </div>
     </div>

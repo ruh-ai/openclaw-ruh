@@ -68,8 +68,9 @@ const nextConfig: NextConfig = {
   },
 
   images: {
-    remotePatterns,
+    remotePatterns: [...remotePatterns],
   },
+
 };
 
 export default nextConfig;

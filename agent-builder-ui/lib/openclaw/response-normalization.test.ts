@@ -219,4 +219,181 @@ describe("normalizeArchitectResponse", () => {
       },
     });
   });
+
+  test("normalizes explicit tool_connections and triggers into saved-agent-compatible config", () => {
+    const result = normalizeArchitectResponse({
+      type: "ready_for_review",
+      tool_connections: [
+        {
+          tool_id: "google-ads",
+          name: "Google Ads",
+          description: "Direct Google Ads connector",
+          required_env: ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_REFRESH_TOKEN"],
+        },
+      ],
+      triggers: [
+        {
+          id: "weekday-pacing",
+          kind: "schedule",
+          title: "Weekday pacing check",
+          schedule: "0 9 * * 1-5",
+          description: "Run every weekday morning.",
+        },
+      ],
+      skill_graph: {
+        nodes: [
+          {
+            skill_id: "google-ads-audit",
+            name: "Google Ads Audit",
+            source: "custom",
+            status: "generated",
+            depends_on: [],
+          },
+        ],
+        workflow: {
+          name: "main-workflow",
+          description: "Audit workflow",
+          steps: [
+            { id: "step-0", action: "execute", skill: "google-ads-audit", wait_for: [] },
+          ],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      tool_connections: [
+        {
+          toolId: "google-ads",
+          name: "Google Ads",
+          status: "missing_secret",
+          authKind: "oauth",
+          connectorType: "mcp",
+        },
+      ],
+      triggers: [
+        {
+          id: "weekday-pacing",
+          kind: "schedule",
+          title: "Weekday pacing check",
+          status: "supported",
+          schedule: "0 9 * * 1-5",
+        },
+      ],
+    });
+  });
+
+  test("normalizes alternate structured-config field aliases into saved-agent-compatible config", () => {
+    const result = normalizeArchitectResponse({
+      type: "ready_for_review",
+      tool_connections: [
+        {
+          recommended_tool_id: "google_ads",
+          config_summary: ["OAuth workspace already approved."],
+          connector_type: "mcp",
+          auth_kind: "oauth",
+        },
+      ],
+      triggers: [
+        {
+          trigger_id: "weekday-sync",
+          kind: "schedule",
+          name: "Weekday sync",
+          cron_expression: "15 8 * * 1-5",
+        },
+        {
+          trigger_id: "lead-webhook",
+          kind: "webhook",
+          name: "Lead webhook",
+        },
+      ],
+      skill_graph: {
+        nodes: [
+          {
+            skill_id: "google-ads-audit",
+            name: "Google Ads Audit",
+            source: "custom",
+            status: "generated",
+            depends_on: [],
+          },
+        ],
+        workflow: {
+          name: "main-workflow",
+          description: "Audit workflow",
+          steps: [
+            { id: "step-0", action: "execute", skill: "google-ads-audit", wait_for: [] },
+          ],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      tool_connections: [
+        {
+          toolId: "google-ads",
+          name: "Google Ads",
+          status: "missing_secret",
+          authKind: "oauth",
+          connectorType: "mcp",
+          configSummary: ["OAuth workspace already approved."],
+        },
+      ],
+      triggers: [
+        {
+          id: "weekday-sync",
+          kind: "schedule",
+          title: "Weekday sync",
+          status: "supported",
+          schedule: "15 8 * * 1-5",
+        },
+        {
+          id: "lead-webhook",
+          kind: "webhook",
+          title: "Lead webhook",
+          status: "unsupported",
+        },
+      ],
+    });
+  });
+
+  test("keeps the runtime-backed webhook-post trigger supported during normalization", () => {
+    const result = normalizeArchitectResponse({
+      type: "ready_for_review",
+      triggers: [
+        {
+          trigger_id: "webhook-post",
+          kind: "webhook",
+          name: "Webhook POST",
+        },
+      ],
+      skill_graph: {
+        nodes: [
+          {
+            skill_id: "google-ads-audit",
+            name: "Google Ads Audit",
+            source: "custom",
+            status: "generated",
+            depends_on: [],
+          },
+        ],
+        workflow: {
+          name: "main-workflow",
+          description: "Audit workflow",
+          steps: [
+            { id: "step-0", action: "execute", skill: "google-ads-audit", wait_for: [] },
+          ],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      triggers: [
+        {
+          id: "webhook-post",
+          kind: "webhook",
+          title: "Webhook POST",
+          status: "supported",
+        },
+      ],
+    });
+  });
 });

@@ -23,11 +23,24 @@ import { Button } from "@/components/ui/button";
 import { SectionCard } from "./SectionCard";
 import { InlineInput } from "./InlineInput";
 import { DataFlowDiagram } from "./DataFlowDiagram";
-import type { AgentData, TriggerItem } from "./types";
-import type { SkillGraphNode, WorkflowDefinition } from "@/lib/openclaw/types";
+import type { AgentData, ToolConnectionItem, TriggerItem } from "./types";
+import type { DiscoveryDocuments, SkillGraphNode, WorkflowDefinition } from "@/lib/openclaw/types";
 import type { SavedAgent } from "@/hooks/use-agents-store";
+import type {
+  AgentImprovement,
+  AgentRuntimeInput,
+  AgentToolConnection,
+  AgentTriggerDefinition,
+} from "@/lib/agents/types";
 import { buildSoulContent } from "@/lib/openclaw/agent-config";
 import { sendToArchitectStreaming } from "@/lib/openclaw/api";
+import {
+  buildReviewRuntimeInputItems,
+  buildReviewToolItems,
+  buildReviewTriggerItems,
+} from "@/lib/agents/operator-config-summary";
+import { buildCoPilotReviewAgentSnapshot } from "@/lib/openclaw/copilot-flow";
+import { applyAcceptedImprovementsToConfig } from "../../create-session-config";
 
 interface TestChatMessage {
   id: string;
@@ -35,26 +48,148 @@ interface TestChatMessage {
   content: string;
 }
 
+export interface ReviewAgentOutput {
+  name: string;
+  rules: string[];
+  skills: string[];
+  toolConnections: ToolConnectionItem[];
+  triggers: TriggerItem[];
+  improvements: AgentImprovement[];
+  accessTeams: string[];
+}
+
+interface BuildReviewAgentSnapshotInput {
+  name: string;
+  rules: string[];
+  skills: string[];
+  runtimeInputs: AgentRuntimeInput[];
+  triggers: TriggerItem[];
+  improvements: AgentImprovement[];
+  skillGraph?: SkillGraphNode[] | null;
+  workflow?: WorkflowDefinition | null;
+  persistedToolConnections?: AgentToolConnection[];
+  persistedTriggers?: AgentTriggerDefinition[];
+}
+
+function buildDraftTriggerDefinitions(
+  draftTriggers: TriggerItem[],
+  persistedTriggers: AgentTriggerDefinition[] | undefined
+): AgentTriggerDefinition[] {
+  const definitions: AgentTriggerDefinition[] = [];
+
+  for (const trigger of draftTriggers) {
+    const title = trigger.text.trim();
+    if (!title) continue;
+
+    const persisted = persistedTriggers?.find(
+      (candidate) =>
+        (trigger.id && candidate.id === trigger.id) ||
+        candidate.title === title,
+    );
+
+    definitions.push({
+      id: trigger.id || persisted?.id || title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      title,
+      kind: trigger.kind || persisted?.kind || "manual",
+      status: trigger.status || persisted?.status || "unsupported",
+      description: persisted?.description || title,
+      schedule: persisted?.schedule,
+    });
+  }
+
+  return definitions;
+}
+
+export function buildReviewAgentSnapshot({
+  name,
+  rules,
+  skills,
+  runtimeInputs,
+  triggers,
+  improvements,
+  skillGraph,
+  workflow,
+  persistedToolConnections,
+  persistedTriggers,
+}: BuildReviewAgentSnapshotInput): SavedAgent {
+  const snapshotTriggers = buildDraftTriggerDefinitions(triggers, persistedTriggers);
+  const selectedSkillIds =
+    skillGraph?.map((node) =>
+      skills.find((skill) =>
+        skill.trim().toLowerCase() === (node.name || node.skill_id).trim().toLowerCase() ||
+        skill.trim().toLowerCase() === node.skill_id.trim().toLowerCase(),
+      )
+        ? node.skill_id
+        : null,
+    ).filter((skillId): skillId is string => Boolean(skillId)) ?? [];
+
+  return buildCoPilotReviewAgentSnapshot({
+    name,
+    description: rules[0] || `run the following skills: ${skills.join(", ")}`,
+    systemName: name,
+    selectedSkillIds: selectedSkillIds.length > 0 ? selectedSkillIds : skills,
+    skillGraph,
+    workflow,
+    agentRules: rules,
+    runtimeInputs,
+    connectedTools: persistedToolConnections ?? [],
+    triggers: snapshotTriggers,
+    improvements,
+  });
+}
+
 interface ReviewAgentProps {
   onBack: () => void;
-  onConfirm: () => void;
+  onConfirm: (output: ReviewAgentOutput) => void;
   skillGraph?: SkillGraphNode[] | null;
   workflow?: WorkflowDefinition | null;
   systemName?: string | null;
   agentRules?: string[];
+  runtimeInputs?: AgentRuntimeInput[];
+  toolConnections?: AgentToolConnection[];
+  triggers?: AgentTriggerDefinition[];
+  improvements?: AgentImprovement[];
+  discoveryDocuments?: DiscoveryDocuments | null;
 }
 
-export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemName, agentRules }: ReviewAgentProps) {
+export function ReviewAgent({
+  onBack,
+  onConfirm,
+  skillGraph,
+  workflow,
+  systemName,
+  agentRules,
+  runtimeInputs,
+  toolConnections,
+  triggers,
+  improvements,
+  discoveryDocuments,
+}: ReviewAgentProps) {
+  const reviewToolConnections = buildReviewToolItems(toolConnections);
+  const reviewRuntimeInputs = buildReviewRuntimeInputItems(runtimeInputs);
+  const reviewTriggers = buildReviewTriggerItems(triggers);
   const initialData: AgentData = {
     name: systemName || "New Agent",
     rules: agentRules && agentRules.length > 0 ? agentRules : [],
     skills: skillGraph ? skillGraph.map((n) => n.name || n.skill_id) : [],
-    triggers: workflow
+    toolConnections: reviewToolConnections,
+    triggers: reviewTriggers.length > 0
+      ? reviewTriggers.map((trigger) => ({
+          id: trigger.id,
+          icon: trigger.kind === "schedule" ? "calendar" : "heart",
+          text: trigger.text,
+          kind: trigger.kind,
+          status: trigger.status,
+          statusLabel: trigger.statusLabel,
+          detail: trigger.detail,
+        }))
+      : workflow
       ? workflow.steps.slice(0, 3).map((s) => ({
           icon: "calendar" as const,
           text: typeof s === "string" ? s : s.skill,
         }))
       : [],
+    improvements: improvements ?? [],
     accessTeams: [],
   };
   const [data, setData] = useState<AgentData>(initialData);
@@ -63,6 +198,7 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
   const [draftRules, setDraftRules] = useState<string[]>(data.rules);
   const [draftSkills, setDraftSkills] = useState<string[]>(data.skills);
   const [draftTriggers, setDraftTriggers] = useState<TriggerItem[]>(data.triggers);
+  const [draftImprovements, setDraftImprovements] = useState<AgentImprovement[]>(data.improvements);
   const [draftTeams, setDraftTeams] = useState<string[]>(data.accessTeams);
   const [newTeam, setNewTeam] = useState("");
   const [testPanelOpen, setTestPanelOpen] = useState(false);
@@ -78,6 +214,7 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
     if (s === "rules") setDraftRules([...data.rules]);
     if (s === "skills") setDraftSkills([...data.skills]);
     if (s === "triggers") setDraftTriggers(data.triggers.map((t) => ({ ...t })));
+    if (s === "improvements") setDraftImprovements(data.improvements.map((item) => ({ ...item })));
     if (s === "access") {
       setDraftTeams([...data.accessTeams]);
       setNewTeam("");
@@ -93,6 +230,21 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
     if (s === "skills") setData((d) => ({ ...d, skills: draftSkills.filter(Boolean) }));
     if (s === "triggers")
       setData((d) => ({ ...d, triggers: draftTriggers.filter((t) => t.text.trim()) }));
+    if (s === "improvements") {
+      setData((d) => {
+        const projected = applyAcceptedImprovementsToConfig({
+          toolConnections: (toolConnections ?? []).map((tool) => ({ ...tool })),
+          improvements: draftImprovements,
+        });
+        const reviewTools = buildReviewToolItems(projected.toolConnections);
+
+        return {
+          ...d,
+          improvements: draftImprovements,
+          toolConnections: reviewTools,
+        };
+      });
+    }
     if (s === "access") setData((d) => ({ ...d, accessTeams: draftTeams.filter(Boolean) }));
     cancelEdit(s);
   };
@@ -104,22 +256,18 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
     }
   };
 
-  const reviewAgentSnapshot: SavedAgent = {
-    id: "review-preview",
+  const reviewAgentSnapshot = buildReviewAgentSnapshot({
     name: data.name,
-    avatar: "",
-    description: data.rules[0] || `run the following skills: ${data.skills.join(", ")}`,
+    rules: data.rules,
     skills: data.skills,
-    triggerLabel:
-      data.triggers.map((trigger) => trigger.text).filter(Boolean).join(", ") ||
-      "Manual review",
-    status: "draft",
-    createdAt: new Date().toISOString(),
-    sandboxIds: [],
-    agentRules: data.rules,
-    skillGraph: skillGraph ?? undefined,
-    workflow: workflow ?? null,
-  };
+    runtimeInputs: runtimeInputs ?? [],
+    triggers: data.triggers,
+    improvements: data.improvements,
+    skillGraph,
+    workflow,
+    persistedToolConnections: toolConnections,
+    persistedTriggers: triggers,
+  });
   const testAgentLabel = reviewAgentSnapshot.name || "New Agent";
 
   const closeTestPanel = () => {
@@ -324,6 +472,107 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
             )}
           </SectionCard>
 
+          <SectionCard title="Approved requirements">
+            {!discoveryDocuments ? (
+              <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                No approved discovery documents were saved yet.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {(["prd", "trd"] as const).map((docType) => {
+                  const document = discoveryDocuments[docType];
+                  return (
+                    <div
+                      key={docType}
+                      className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">
+                          {document.title}
+                        </p>
+                        <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                          {docType.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {document.sections.map((section) => (
+                          <div key={`${docType}-${section.heading}`}>
+                            <p className="text-xs font-satoshi-bold uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
+                              {section.heading}
+                            </p>
+                            <p className="mt-1 text-sm font-satoshi-regular text-[var(--text-secondary)] whitespace-pre-wrap">
+                              {section.content}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Improvements"
+            isEditing={!!editing.improvements}
+            onEdit={() => startEdit("improvements")}
+            onSave={() => saveEdit("improvements")}
+            onCancel={() => cancelEdit("improvements")}
+          >
+            {editing.improvements ? (
+              <div className="space-y-3">
+                {draftImprovements.length === 0 ? (
+                  <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                    No builder improvements yet.
+                  </p>
+                ) : draftImprovements.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3">
+                    <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">{item.title}</p>
+                    <p className="mt-1 text-sm font-satoshi-regular text-[var(--text-secondary)]">{item.summary}</p>
+                    <p className="mt-1 text-xs font-satoshi-regular text-[var(--text-tertiary)]">{item.rationale}</p>
+                    <div className="mt-3 flex items-center gap-2">
+                      {(["pending", "accepted", "dismissed"] as const).map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => setDraftImprovements((current) => current.map((entry) => (
+                            entry.id === item.id ? { ...entry, status } : entry
+                          )))}
+                          className={`rounded-full px-3 py-1 text-xs font-satoshi-medium transition-colors ${
+                            item.status === status
+                              ? "bg-[var(--primary)] text-white"
+                              : "border border-[var(--border-stroke)] text-[var(--text-secondary)]"
+                          }`}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {data.improvements.length === 0 ? (
+                  <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                    No builder improvements recorded yet.
+                  </p>
+                ) : data.improvements.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">{item.title}</p>
+                      <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                        {item.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm font-satoshi-regular text-[var(--text-secondary)]">{item.summary}</p>
+                    <p className="mt-1 text-xs font-satoshi-regular text-[var(--text-tertiary)]">{item.rationale}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+
           {/* Data Flow (view-only) */}
           <div className="bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-2xl px-6 py-4">
             <div className="flex items-center justify-between mb-4">
@@ -397,6 +646,119 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
             )}
           </SectionCard>
 
+          <div className="bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-2xl px-6 py-4">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-base font-satoshi-bold text-[var(--text-primary)]">
+                Runtime inputs
+              </span>
+              <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                Saved config
+              </span>
+            </div>
+            <div className="border-t border-[var(--border-default)] mb-4" />
+            {reviewRuntimeInputs.length === 0 ? (
+              <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                No runtime inputs required yet.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {reviewRuntimeInputs.map((input) => (
+                  <div
+                    key={input.key}
+                    className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">
+                          {input.label}
+                        </p>
+                        <p className="mt-1 text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                          {input.key}
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                        {input.statusLabel}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                      {input.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[var(--card-color)] border border-[var(--border-stroke)] rounded-2xl px-6 py-4">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-base font-satoshi-bold text-[var(--text-primary)]">
+                Tool connections
+              </span>
+              <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                Saved config
+              </span>
+            </div>
+            <div className="border-t border-[var(--border-default)] mb-4" />
+            {data.toolConnections.length === 0 ? (
+              <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] italic">
+                No persisted tool connections yet.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {data.toolConnections.map((tool) => (
+                  <div
+                    key={tool.id}
+                    className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">
+                          {tool.name}
+                        </p>
+                        <p className="mt-1 text-sm font-satoshi-regular text-[var(--text-secondary)]">
+                          {tool.description}
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                        {tool.statusLabel}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                      {tool.detail}
+                    </p>
+                    {tool.planNotes && tool.planNotes.length > 0 && (
+                      <ul className="mt-3 space-y-1">
+                        {tool.planNotes.map((note) => (
+                          <li
+                            key={`${tool.id}-${note}`}
+                            className="text-xs font-satoshi-regular text-[var(--text-secondary)]"
+                          >
+                            {note}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {tool.sources && tool.sources.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {tool.sources.slice(0, 2).map((source) => (
+                          <a
+                            key={`${tool.id}-${source.url}`}
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-satoshi-medium text-[var(--primary)] hover:underline"
+                          >
+                            {source.title}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Triggers */}
           <SectionCard
             title="Triggers"
@@ -466,15 +828,29 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
             ) : (
               <ul className="space-y-3">
                 {data.triggers.map((trigger, i) => (
-                  <li key={i} className="flex items-center gap-2 py-0.5">
-                    {trigger.icon === "calendar" ? (
-                      <Calendar className="h-[18px] w-[18px] text-[var(--text-tertiary)] shrink-0" />
-                    ) : (
-                      <Heart className="h-4 w-4 text-[var(--text-tertiary)] shrink-0" />
+                  <li key={i} className="rounded-xl border border-[var(--border-default)] bg-[var(--background-muted)] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 py-0.5">
+                        {trigger.icon === "calendar" ? (
+                          <Calendar className="h-[18px] w-[18px] text-[var(--text-tertiary)] shrink-0" />
+                        ) : (
+                          <Heart className="h-4 w-4 text-[var(--text-tertiary)] shrink-0" />
+                        )}
+                        <span className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                          {trigger.text}
+                        </span>
+                      </div>
+                      {trigger.statusLabel && (
+                        <span className="rounded-full border border-[var(--border-stroke)] px-2.5 py-1 text-[10px] font-satoshi-bold uppercase tracking-[0.12em] text-[var(--text-secondary)]">
+                          {trigger.statusLabel}
+                        </span>
+                      )}
+                    </div>
+                    {trigger.detail && (
+                      <p className="mt-2 text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                        {trigger.detail}
+                      </p>
                     )}
-                    <span className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
-                      {trigger.text}
-                    </span>
                   </li>
                 ))}
               </ul>
@@ -669,7 +1045,8 @@ export function ReviewAgent({ onBack, onConfirm, skillGraph, workflow, systemNam
           <Button
             variant="primary"
             className="h-10 px-6 gap-1.5"
-            onClick={onConfirm}
+            disabled={!data.name.trim()}
+            onClick={() => onConfirm(data)}
           >
             Confirm <ChevronRight className="h-4 w-4" />
           </Button>

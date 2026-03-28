@@ -1,10 +1,27 @@
+import type {
+  AgentToolConnection,
+  AgentToolConnectionType,
+  AgentToolResearchPlan,
+  AgentTriggerDefinition,
+} from "@/lib/agents/types";
+import type { SkillAvailabilityStatus } from "@/lib/skills/skill-registry";
+
 export interface ToolItem {
   id: string;
   name: string;
   description: string;
   icon: string;
   connected: boolean;
+  status?: AgentToolConnection["status"];
+  authKind?: AgentToolConnection["authKind"];
+  connectorType?: AgentToolConnectionType;
+  configSummary?: string[];
+  researchPlan?: AgentToolResearchPlan;
 }
+
+export type ToolConnectionDraft = AgentToolConnection;
+export type ToolCredentialDrafts = Record<string, Record<string, string>>;
+export type TriggerSelection = AgentTriggerDefinition;
 
 export interface SkillItem {
   id: string;
@@ -13,6 +30,9 @@ export interface SkillItem {
   isNew?: boolean;
   markdownUrl?: string;
   markdownContent?: string;
+  availabilityStatus?: SkillAvailabilityStatus;
+  availabilityReason?: string;
+  matchedSkillId?: string;
 }
 
 export type TriggerCategoryId =

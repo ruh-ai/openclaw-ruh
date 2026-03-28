@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import {
+  ApprovalEvent,
   ChatMessage,
   ClarificationQuestion,
   ArchitectResponse,
@@ -20,6 +21,7 @@ interface InitializeAgentData {
 interface OpenClawChatState {
   sessionId: string;
   messages: ChatMessage[];
+  approvalEvents: ApprovalEvent[];
   isLoading: boolean;
   statusMessage: string;
   skillGraph: SkillGraphNode[] | null;
@@ -97,6 +99,7 @@ function normalizeWorkflow(
 export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
   sessionId: uuidv4(),
   messages: createInitialMessages(),
+  approvalEvents: [],
   isLoading: false,
   statusMessage: "",
   skillGraph: null,
@@ -106,13 +109,20 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
   error: null,
 
   sendMessage: async (text: string) => {
-    const { sessionId, isLoading } = get();
-    if (isLoading || !text.trim()) return;
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
+
+    inFlightRequest.abortController?.abort();
+
+    const { sessionId } = get();
+    const requestId = uuidv4();
+    const abortController = new AbortController();
+    inFlightRequest = { requestId, abortController };
 
     const userMessage: ChatMessage = {
       id: uuidv4(),
       role: "user",
-      content: text.trim(),
+      content: trimmedText,
       timestamp: new Date().toISOString(),
     };
 
@@ -126,13 +136,37 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
     try {
       const response: ArchitectResponse = await sendToArchitectStreaming(
         sessionId,
-        text.trim(),
+        trimmedText,
         {
           onStatus: (_phase: string, message: string) => {
+            if (inFlightRequest.requestId !== requestId) {
+              return;
+            }
+
             set({ statusMessage: message });
           },
+          onApprovalEvent: (approvalEvent) => {
+            if (inFlightRequest.requestId !== requestId) {
+              return;
+            }
+
+            set((state) => ({
+              approvalEvents: [...state.approvalEvents, approvalEvent],
+            }));
+          },
+        },
+        {
+          requestId,
+          signal: abortController.signal,
         }
       );
+
+      if (
+        abortController.signal.aborted ||
+        inFlightRequest.requestId !== requestId
+      ) {
+        return;
+      }
 
       const architectMessage: ChatMessage = {
         id: uuidv4(),
@@ -234,6 +268,14 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
         statusMessage: "",
       }));
     } catch (err) {
+      if (
+        abortController.signal.aborted ||
+        inFlightRequest.requestId !== requestId ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
+        return;
+      }
+
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
 
       const errorMessage: ChatMessage = {
@@ -253,6 +295,13 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
         error: errorMsg,
         sessionId: uuidv4(),
       }));
+    } finally {
+      if (inFlightRequest.requestId === requestId) {
+        inFlightRequest = {
+          requestId: null,
+          abortController: null,
+        };
+      }
     }
   },
 
@@ -268,6 +317,7 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
     set({
       sessionId: uuidv4(),
       messages: [contextMsg],
+      approvalEvents: [],
       skillGraph: agent.skillGraph ?? null,
       workflow: agent.workflow ?? null,
       systemName: agent.name,
@@ -279,9 +329,16 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
   },
 
   reset: () => {
+    inFlightRequest.abortController?.abort();
+    inFlightRequest = {
+      requestId: null,
+      abortController: null,
+    };
+
     set({
       sessionId: uuidv4(),
       messages: createInitialMessages(),
+      approvalEvents: [],
       isLoading: false,
       statusMessage: "",
       skillGraph: null,
@@ -292,3 +349,11 @@ export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
     });
   },
 }));
+
+let inFlightRequest: {
+  requestId: string | null;
+  abortController: AbortController | null;
+} = {
+  requestId: null,
+  abortController: null,
+};

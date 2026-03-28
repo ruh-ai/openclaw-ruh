@@ -18,7 +18,9 @@ import {
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { pushAgentConfig } from "@/lib/openclaw/agent-config";
+import { hasWorkspaceMemory } from "@/lib/openclaw/workspace-memory";
 import type { SavedAgent } from "@/hooks/use-agents-store";
+import { useAgentsStore } from "@/hooks/use-agents-store";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -84,11 +86,18 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 export function TabMissionControl({ agent, activeSandbox, sandboxes }: TabMissionControlProps) {
   const router = useRouter();
+  const updateAgentWorkspaceMemory = useAgentsStore((state) => state.updateAgentWorkspaceMemory);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [convCount, setConvCount] = useState<number | null>(null);
   const [pushingConfig, setPushingConfig] = useState(false);
   const [pushResult, setPushResult] = useState<"idle" | "ok" | "error">("idle");
+  const [memoryInstructions, setMemoryInstructions] = useState(agent.workspaceMemory?.instructions ?? "");
+  const [continuitySummary, setContinuitySummary] = useState(agent.workspaceMemory?.continuitySummary ?? "");
+  const [pinnedPaths, setPinnedPaths] = useState<string[]>(agent.workspaceMemory?.pinnedPaths ?? []);
+  const [newPinnedPath, setNewPinnedPath] = useState("");
+  const [savingMemory, setSavingMemory] = useState(false);
+  const [memorySaveState, setMemorySaveState] = useState<"idle" | "ok" | "error">("idle");
 
   const fetchStatus = useCallback(async () => {
     if (!activeSandbox) return;
@@ -121,6 +130,12 @@ export function TabMissionControl({ agent, activeSandbox, sandboxes }: TabMissio
     fetchConvCount();
   }, [fetchStatus, fetchConvCount]);
 
+  useEffect(() => {
+    setMemoryInstructions(agent.workspaceMemory?.instructions ?? "");
+    setContinuitySummary(agent.workspaceMemory?.continuitySummary ?? "");
+    setPinnedPaths(agent.workspaceMemory?.pinnedPaths ?? []);
+  }, [agent.id, agent.workspaceMemory?.instructions, agent.workspaceMemory?.continuitySummary, agent.workspaceMemory?.pinnedPaths]);
+
   const handlePushConfig = async () => {
     if (!activeSandbox) return;
     setPushingConfig(true);
@@ -133,6 +148,35 @@ export function TabMissionControl({ agent, activeSandbox, sandboxes }: TabMissio
     } finally {
       setPushingConfig(false);
       setTimeout(() => setPushResult("idle"), 3000);
+    }
+  };
+
+  const handleAddPinnedPath = () => {
+    const next = newPinnedPath.trim();
+    if (!next) return;
+    if (pinnedPaths.includes(next)) {
+      setNewPinnedPath("");
+      return;
+    }
+    setPinnedPaths((prev) => [...prev, next].slice(0, 8));
+    setNewPinnedPath("");
+  };
+
+  const handleSaveWorkspaceMemory = async () => {
+    setSavingMemory(true);
+    setMemorySaveState("idle");
+    try {
+      await updateAgentWorkspaceMemory(agent.id, {
+        instructions: memoryInstructions,
+        continuitySummary,
+        pinnedPaths,
+      });
+      setMemorySaveState("ok");
+    } catch {
+      setMemorySaveState("error");
+    } finally {
+      setSavingMemory(false);
+      setTimeout(() => setMemorySaveState("idle"), 3000);
     }
   };
 
@@ -303,6 +347,108 @@ export function TabMissionControl({ agent, activeSandbox, sandboxes }: TabMissio
             </div>
           </div>
         )}
+
+        <div>
+          <SectionTitle>Workspace Memory</SectionTitle>
+          <div className="space-y-3 rounded-2xl border border-[var(--border-stroke)] bg-[var(--card-color)] p-4">
+            <div className="space-y-1.5">
+              <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Reusable instructions</p>
+              <textarea
+                value={memoryInstructions}
+                onChange={(event) => setMemoryInstructions(event.target.value)}
+                rows={5}
+                placeholder="Add stable operating instructions for future deployed-agent chats."
+                className="w-full rounded-xl border border-[var(--border-stroke)] bg-white px-3 py-2 text-sm font-satoshi-regular text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--primary)]/40"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Continuity summary</p>
+              <textarea
+                value={continuitySummary}
+                onChange={(event) => setContinuitySummary(event.target.value)}
+                rows={3}
+                placeholder="Capture the short handoff note the next new chat should inherit."
+                className="w-full rounded-xl border border-[var(--border-stroke)] bg-white px-3 py-2 text-sm font-satoshi-regular text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--primary)]/40"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Pinned workspace paths</p>
+                <p className="text-[11px] font-satoshi-regular text-[var(--text-tertiary)]">Relative sandbox workspace paths only</p>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  value={newPinnedPath}
+                  onChange={(event) => setNewPinnedPath(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleAddPinnedPath();
+                    }
+                  }}
+                  placeholder="plans/launch.md"
+                  className="flex-1 rounded-xl border border-[var(--border-stroke)] bg-white px-3 py-2 text-sm font-mono text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--primary)]/40"
+                />
+                <Button
+                  variant="tertiary"
+                  className="h-10 rounded-xl px-3 text-xs"
+                  onClick={handleAddPinnedPath}
+                  disabled={!newPinnedPath.trim() || pinnedPaths.length >= 8}
+                >
+                  Add path
+                </Button>
+              </div>
+
+              {pinnedPaths.length === 0 ? (
+                <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)] italic">
+                  No pinned paths yet. Save a few stable workspace references so future chats can reuse them.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {pinnedPaths.map((path) => (
+                    <div
+                      key={path}
+                      className="inline-flex items-center gap-2 rounded-full border border-[var(--border-stroke)] bg-[var(--color-light)] px-3 py-1 text-[11px] font-mono text-[var(--text-secondary)]"
+                    >
+                      <span>{path}</span>
+                      <button
+                        onClick={() => setPinnedPaths((prev) => prev.filter((item) => item !== path))}
+                        className="text-[var(--text-tertiary)] transition-colors hover:text-[var(--error)]"
+                        aria-label={`Remove ${path}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="tertiary"
+                className="h-9 rounded-lg px-4 text-xs"
+                onClick={handleSaveWorkspaceMemory}
+                disabled={savingMemory}
+              >
+                {savingMemory ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {savingMemory ? "Saving…" : "Save workspace memory"}
+              </Button>
+              <p className="text-[11px] font-satoshi-regular text-[var(--text-tertiary)]">
+                {memorySaveState === "ok"
+                  ? "Saved. New chats can apply this memory."
+                  : memorySaveState === "error"
+                  ? "Save failed. Check path safety and try again."
+                  : hasWorkspaceMemory(agent.workspaceMemory)
+                  ? "Saved memory is available for the next new chat."
+                  : "Empty state is valid; save only when you need durable context."}
+              </p>
+            </div>
+          </div>
+        </div>
 
         {/* ── Env Variables ── */}
         {allEnvVars.length > 0 && (
