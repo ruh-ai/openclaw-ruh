@@ -7,8 +7,37 @@
 
 ## What Is This Project?
 
-**openclaw-ruh-enterprise** is the core infrastructure product for [Ruh.ai](https://ruh.ai).
-It deploys, manages, and interacts with AI agent sandboxes — where each sandbox is a Docker container running the `openclaw` CLI gateway.
+**openclaw-ruh-enterprise** is the core platform for [Ruh.ai](https://ruh.ai) — the place where enterprises create **digital employees with a soul**.
+
+Not bots. Not automations. AI assistants you love to work with — who understand you, remember you, and feel like real teammates. They have personality, context, and judgment. They grow with you.
+
+### Product Shape
+
+- **Agent Builder** (`agent-builder-ui`) — where you create and shape your assistant's soul: personality, skills, tools, triggers, memory.
+- **Client Application** (`ruh-frontend`) — where end users work with their assistants daily. Direction: may become a desktop application.
+- **Backend Infrastructure** (`ruh-backend`) — sandbox orchestration, agent lifecycle, persistence, deployment. Each sandbox is a Docker container running the `openclaw` CLI gateway.
+
+### Proving Case: Google Ads Agent
+
+The **Google Ads agent** is the first assistant being built on the platform. Every creation-flow feature, configuration step, deployment path, and improvement loop is validated against this single agent. When we say "create an agent," we mean the Google Ads agent. See `docs/project-focus.md` for current priorities.
+
+### Agent Creation Architecture (v2 — approved)
+
+**The container IS the agent from day one.** When a user creates a new agent:
+
+1. Name + description submitted → new Docker container spins up immediately
+2. The **Architect** (our own purpose-built OpenClaw agent) runs inside that container and guides creation through conversation
+3. Architect writes the workspace directly: `SOUL.md`, `skills/`, `tools/`, `triggers/`, `.openclaw/`
+4. **Test** → container switches mode from Architect → Agent (no new container, no deploy step)
+5. **Ship** → workspace pushed to GitHub via OAuth
+
+This replaces the old shared architect sandbox. Do not implement any feature that routes builder chat to a shared container — every agent gets its own.
+
+**Full spec:** `docs/plans/agent-creation-architecture-v2.md` — read it before touching any agent creation code.
+
+### Brand & Design Guidelines
+
+**Always reference `DESIGN.md` before making any UI changes.** It defines the complete brand system: color palette, typography, spacing, components, and the "Alive Additions" — subtle animations that make the agent creation experience feel like bringing a colleague to life, not filling out a form. Key alive elements: soul pulse, gradient drift, spark moments, warmth hover, breathing focus, stage transitions, and the "soul born" celebration.
 
 ---
 
@@ -86,9 +115,9 @@ New specs should follow this structure:
 
 | Service | Path | Port | Stack |
 |---|---|---|---|
-| `ruh-backend` | `ruh-backend/` | 8000 | TypeScript + Bun + Express + PostgreSQL |
-| `ruh-frontend` | `ruh-frontend/` | 3001 | Next.js 16 — developer sandbox management UI |
-| `agent-builder-ui` | `agent-builder-ui/` | 3000 | Next.js 15 — conversational agent builder |
+| `ruh-backend` | `ruh-backend/` | 8000 | TypeScript + Bun + Express + PostgreSQL — sandbox orchestration, agent lifecycle |
+| `ruh-frontend` | `ruh-frontend/` | 3001 | Next.js 16 — client application (end-user assistant access, future desktop app candidate) |
+| `agent-builder-ui` | `agent-builder-ui/` | 3000 | Next.js 15 — agent builder (create, configure, deploy assistants) |
 | `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
 | `nginx` | `nginx/` | 80 | Reverse proxy |
 
@@ -131,7 +160,7 @@ This repo may be maintained by recurring Codex automations in addition to intera
 - Reuse the canonical feature-add/backlog-curation prompt stored in `docs/knowledge-base/012-automation-architecture.md` instead of inventing a new automation prompt from scratch.
 - Reuse the canonical test-coverage automation prompt from `docs/knowledge-base/012-automation-architecture.md` when creating or modifying the repo's test-improvement automation.
 - When a scheduled automation shares a repo-local role name (`Analyst-1`, `Worker-1`, `Tester-1`), make the live prompt read the matching file under `agents/` or `.agents/agents/` before choosing work so runtime behavior stays aligned with the repo contract.
-- `docs/project-focus.md` is the human-owned steering document for `Analyst-1`. When it is active and has focus areas, analyst-style automations must prioritize missing feature packages that advance that focus; when it is missing, inactive, or empty, they fall back to autonomous repo-wide gap analysis.
+- `docs/project-focus.md` is the human-owned steering document for focus-aware maintainer automations. When it is active and has focus areas, `Analyst-1` must prioritize missing feature packages that advance that focus, and `Tester-1` must prioritize bounded coverage or bounded Playwright verification that stabilizes that focus; when it is missing, inactive, or empty, they fall back to their normal repo-wide selection behavior.
 - For `Analyst-1` and `Worker-1`, the unit of work is one complete feature package per run rather than one isolated task. Analyst runs should add feature-oriented TODO entries with testable outcomes, and worker runs should finish one feature end-to-end unless blocked.
 - Treat automations as an operator layer over the repo, not as product runtime services.
 - Automation config lives in `$CODEX_HOME/automations/<automation_id>/automation.toml`.
@@ -148,7 +177,7 @@ This repo may be maintained by recurring Codex automations in addition to intera
 
 2. **SSE for sandbox creation.** `POST /api/sandboxes/create` returns a `stream_id` immediately. Progress flows via `GET /api/sandboxes/stream/:stream_id` (Server-Sent Events). Creation takes ~2–5 min.
 
-3. **Two separate frontends.** `ruh-frontend` is a low-level dev tool (direct REST). `agent-builder-ui` is a higher-level conversational builder (WebSocket bridge to OpenClaw architect agent).
+3. **Two separate frontends.** `agent-builder-ui` is where enterprises create and configure their digital employees (WebSocket bridge to OpenClaw architect agent). `ruh-frontend` is the client application where end users work alongside their deployed assistants (direct REST). `ruh-frontend` is a candidate for desktop app conversion.
 
 4. **OpenClaw architect agent.** `agent-builder-ui` has no LLM logic of its own. It routes messages to an OpenClaw agent running in a sandbox via the bridge at `agent-builder-ui/app/api/openclaw/route.ts`.
 
