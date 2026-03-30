@@ -5,6 +5,7 @@ const createJestConfig = nextJest({ dir: './' });
 
 const config: Config = {
   coverageProvider: 'v8',
+  coverageDirectory: '<rootDir>/coverage',
   testEnvironment: 'jsdom',
   setupFiles: ['<rootDir>/jest.polyfills.js'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
