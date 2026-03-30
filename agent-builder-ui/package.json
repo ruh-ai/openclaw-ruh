@@ -15,7 +15,8 @@
     "test:unit:ag-ui": "bun test lib/openclaw/ag-ui/__tests__/builder-agent.test.ts lib/openclaw/ag-ui/__tests__/progressive-wizard-flow.test.ts",
     "test:unit:core": "bun test --path-ignore-patterns 'e2e/**' --path-ignore-patterns 'test-results/**' --path-ignore-patterns 'lib/openclaw/api.test.ts' --path-ignore-patterns 'hooks/use-openclaw-chat.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/builder-agent.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/progressive-wizard-flow.test.ts'",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:coverage": "bun test --coverage --coverage-reporter=lcov --path-ignore-patterns 'e2e/**' --path-ignore-patterns 'test-results/**' && bun run scripts/check-coverage.ts"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.48",
