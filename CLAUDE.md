@@ -1,7 +1,17 @@
-# openclaw-ruh-enterprise — CLAUDE.md
+# openclaw-ruh — CLAUDE.md
 
-> Project-specific instructions for Claude agents working on this codebase.
+> Project-specific instructions for Claude Code and AI agents working on this codebase.
 > Always read this before starting any task.
+>
+> **Repo:** https://github.com/ruh-ai/openclaw-ruh
+> **Prerequisites:** Docker, Bun >= 1.3, Node.js >= 20, at least one LLM API key
+>
+> **Quick start:**
+> ```bash
+> docker run -d --name pg -e POSTGRES_USER=openclaw -e POSTGRES_PASSWORD=changeme -e POSTGRES_DB=openclaw -p 5432:5432 postgres:16-alpine
+> cp ruh-backend/.env.example ruh-backend/.env  # add your LLM key
+> ./start.sh                                     # starts backend:8000, builder:3000, client:3001
+> ```
 
 ---
 
@@ -415,3 +425,36 @@ gstack is the development process used on this project. Use `/browse` from gstac
 | `/gstack-upgrade` | Upgrade gstack to latest |
 
 If gstack skills aren't working, run: `cd ~/.claude/skills/gstack && ./setup`
+
+---
+
+## Ecosystem Integrations
+
+### Paperclip (AI company orchestration)
+
+[Paperclip](https://github.com/paperclipai/paperclip) manages teams of AI agents as a "zero-human company." It provides org charts, goals, budgets, heartbeats, and governance.
+
+- Install: `npx paperclipai onboard --yes && npx paperclipai run`
+- Server: `http://localhost:3100` (or next available port)
+- CLI: `npx paperclipai company|agent|issue|dashboard|activity`
+- Adapter: `claude_local` — spawns Claude Code CLI for each agent heartbeat
+- Agent skills are injected via `--add-dir` in adapter `extraArgs`
+- MCP servers injected via `--mcp-config` in adapter `extraArgs`
+
+### OpenSpace (self-evolving skill engine)
+
+[OpenSpace](https://github.com/HKUDS/OpenSpace) gives agents self-improving skills. Skills evolve through use — when a task succeeds, the winning workflow gets captured as a reusable skill.
+
+- Install: `cd ~/OpenSpace && pip install -e .`
+- MCP server: configure in `~/.claude/.mcp.json` or via `--mcp-config`
+- Tools: `execute_task`, `search_skills`, `fix_skill`, `upload_skill`
+- Backends: shell, MCP, system (configurable via `OPENSPACE_BACKEND_SCOPE`)
+
+### OpenClaw (agent runtime)
+
+Each Ruh agent sandbox is a Docker container running [OpenClaw](https://github.com/openclaw). The OpenClaw gateway provides the chat API, cron scheduling, and channel integrations (Telegram, Slack, Discord).
+
+- Sandbox image: `ruh-sandbox:latest` (or `node:22-bookworm` fallback)
+- Gateway port: 18789 (inside container)
+- Workspace: `~/.openclaw/workspace/` (SOUL.md, skills/, tools/, triggers/)
+- CLI: `openclaw gateway status`, `openclaw cron list --json`, `openclaw channels status`
