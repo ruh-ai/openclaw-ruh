@@ -103,14 +103,16 @@ describe('agentStore.promoteForgeSandbox', () => {
     expect(result!.status).toBe('active');
     expect(result!.forge_sandbox_id).toBeNull();
 
-    // Verify the UPDATE was called
+    // Verify an UPDATE was issued (not just SELECTs)
     const updateCall = mockQuery.mock.calls.find(
-      (c) => (c[0] as string).includes("status = 'active'") && (c[0] as string).includes('forge_sandbox_id = NULL'),
+      (c) => typeof c[0] === 'string' && c[0].includes('UPDATE'),
     );
     expect(updateCall).toBeDefined();
+    expect((updateCall![0] as string)).toContain('active');
+    expect((updateCall![0] as string)).toContain('forge_sandbox_id');
   });
 
-  test('only updates agents that have a forge_sandbox_id', async () => {
+  test('returns early without UPDATE when agent has no forge_sandbox_id', async () => {
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('SELECT')) {
         return { rows: [makeAgentRow({ status: 'draft', forge_sandbox_id: null })], rowCount: 1 };
@@ -119,11 +121,14 @@ describe('agentStore.promoteForgeSandbox', () => {
     });
 
     const result = await agentStore.promoteForgeSandbox(AGENT_ID);
-    // Still returns the agent (via getAgent), but the UPDATE had a WHERE guard
+    // Returns the agent as-is (no forge_sandbox_id → early return before UPDATE)
+    expect(result).not.toBeNull();
+    expect(result!.forge_sandbox_id).toBeNull();
+    // No UPDATE should have been issued — only the initial SELECT
     const updateCall = mockQuery.mock.calls.find(
-      (c) => (c[0] as string).includes('forge_sandbox_id IS NOT NULL'),
+      (c) => (c[0] as string).includes('UPDATE'),
     );
-    expect(updateCall).toBeDefined();
+    expect(updateCall).toBeUndefined();
   });
 });
 

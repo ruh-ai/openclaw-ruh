@@ -16,11 +16,13 @@ export interface SendToArchitectOptions {
   signal?: AbortSignal;
   /** When set, routes chat through the forge sandbox's own gateway instead of the shared one. */
   forgeSandboxId?: string;
+  /** Agent instance ID for per-agent Langfuse trace grouping. */
+  agentId?: string;
   /** Timeout in ms for individual SSE reads. Defaults to 90 000 ms. */
   readTimeoutMs?: number;
 }
 
-const DEFAULT_SSE_READ_TIMEOUT_MS = 90_000;
+const DEFAULT_SSE_READ_TIMEOUT_MS = 180_000;
 
 export class BridgeApiError extends Error {
   readonly status: number;
@@ -67,6 +69,7 @@ export async function sendToArchitectStreaming(
       mode: options?.mode,
       soul_override: options?.soulOverride,
       ...(options?.forgeSandboxId ? { forge_sandbox_id: options.forgeSandboxId } : {}),
+      ...(options?.agentId ? { agent_id: options.agentId } : {}),
     }),
   });
 

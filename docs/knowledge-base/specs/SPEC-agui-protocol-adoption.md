@@ -70,6 +70,9 @@ The AG-UI protocol defines 16 core event types. Here's how they map to our curre
 | `{ type: "clarification", ... }` | `Custom` event with structured payload, or model as `TextMessageContent` + `StateDelta` |
 | `{ type: "browser_event", event }` | `Custom` event preserving `BrowserWorkspaceEvent` shape |
 
+Reasoning lifecycle rule:
+- whichever combination of `Custom("reasoning")` and AG-UI `REASONING_*` events the transport emits, the frontend must treat them as one logical thinking step with one persistent step id so the live reasoning list and footer status can finish the same row cleanly.
+
 ### 2. Shared State (Replacing BuilderState)
 
 Current `BuilderState`:

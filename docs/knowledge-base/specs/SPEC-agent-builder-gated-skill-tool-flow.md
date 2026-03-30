@@ -8,7 +8,7 @@ implemented
 
 ## Summary
 
-`/agents/create` should not let operators walk through meaningless builder tabs before the agent has enough purpose metadata to infer real capabilities. This feature locks the builder on `name + description`, auto-generates required skills after that gate is satisfied, resolves those skills against a real registry, gives missing skills an explicit `Build Custom Skill` path, and updates tool research so the architect prefers `cli` first, then `mcp`, then `api` when recommending integrations.
+`/agents/create` should not let operators walk through meaningless builder tabs before the agent has enough purpose metadata to infer real capabilities. This feature locks the builder on `name + description`, auto-generates required skills after that gate is satisfied, resolves those skills against a real registry, gives missing skills an explicit `Build Custom Skill` path, fails closed when required runtime inputs are still blank at deploy time, and updates tool research so the architect prefers `cli` first, then `mcp`, then `api` when recommending integrations.
 
 ## Related Notes
 
@@ -88,6 +88,9 @@ Operators may still inspect `Tools`, `Triggers`, and `Review` while some skills 
 Rules:
 - if any selected required skill is still `needs_build`, `Deploy Agent` must be disabled
 - the disable reason must explicitly list the unresolved skills
+- if any required `runtimeInputs[]` entry is blank, both `Deploy Agent` and Ship-stage `Save & Activate` must be disabled
+- the disable reason must explicitly list the missing required runtime-input keys
+- if Ship activation still reaches `pushAgentConfig()`, the UI must treat `ok: false` as a failed activation instead of falling through to a success state
 - if a required credential-backed tool is missing saved credentials, deploy should continue to use the existing `missing_secret` fail-closed path from [[SPEC-tool-integration-workspace]]
 
 ### Tool Recommendation Order
@@ -107,10 +110,13 @@ Rules:
 
 - Extend the existing `TASK-2026-03-25-05` real skill registry direction instead of creating a second skill-availability system.
 - Keep the first skill-registry slice read-only and static/file-backed.
+- The lifecycle Build stage must consume the approved architecture-plan artifact when it asks the architect to generate the final `ready_for_review` payload; it should not silently re-infer a different skill set from name/description alone.
+- Build-stage generation must require `skill_graph.nodes[].skill_md` in the returned payload so draft autosave, reopen, and deploy all share the same durable custom-skill artifact.
 - When a selected skill has a registry match, sandbox config apply should write that seeded `skill_md` content instead of a generic placeholder skill stub.
 - Reuse the existing `buildSkillMarkdown()` path for the first custom-skill draft flow instead of introducing a full standalone skill-builder product.
 - Keep custom skill drafts in builder/co-pilot state until save/deploy decides what becomes persisted.
 - Update the tool-research prompt in the existing architect bridge contract rather than introducing a new backend tool-research endpoint.
+- Keep frontend deploy readiness aligned with backend `POST /api/sandboxes/:sandbox_id/configure-agent` required-runtime-input enforcement; runtime inputs cannot be advisory in the UI if config apply rejects them.
 
 ## Test Plan
 
@@ -120,6 +126,7 @@ Rules:
 - Frontend tests for Co-Pilot purpose locking and tab/phase unlock behavior
 - Frontend tests for registry-aware `StepChooseSkills` rendering and `Build Custom Skill`
 - Frontend tests for review/deploy blocking while unresolved skills remain
+- Frontend tests for runtime-input deploy blocking on both the page-level CTA and the embedded Ship-stage CTA
 - Frontend tests for the updated `cli > mcp > api` tool-research prompt and route handling
 
 Manual/operator verification:
@@ -128,8 +135,10 @@ Manual/operator verification:
 - enter both fields and confirm skills generate automatically
 - confirm each skill shows as registry-backed, native, or build-required
 - build one missing custom skill and confirm deploy unblocks only after all selected required skills are resolved
+- leave one required runtime input blank and confirm both deploy CTAs stay disabled until the operator fills it
 - research a tool and confirm the recommendation now prefers CLI before MCP before API when appropriate
 
 ## Related Learnings
 
 - [[LEARNING-2026-03-26-google-ads-deploy-readiness-gap]] — the current implementation still does not enforce the documented `missing_secret` fail-closed deploy path for selected credential-backed tools
+- [[LEARNING-2026-03-30-copilot-ship-runtime-input-readiness-gap]] — Ship-stage activation drifted from backend runtime-input enforcement until the frontend started honoring the same fail-closed contract

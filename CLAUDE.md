@@ -67,6 +67,10 @@ This replaces the old shared architect sandbox. Do not implement any feature tha
 | Change deployment config | `010-deployment.md` |
 | Understand a user journey end-to-end | `011-key-flows.md` |
 | Understand agent learnings and journaling workflow | `013-agent-learning-system.md` |
+| Work on authentication | `014-auth-system.md` |
+| Work on admin panel | `015-admin-panel.md` |
+| Work on marketplace | `016-marketplace.md` |
+| Work on desktop app | `017-desktop-app.md` |
 | Read a feature spec | `docs/knowledge-base/specs/` |
 
 ### Mandatory Documentation Rules
@@ -118,6 +122,9 @@ New specs should follow this structure:
 | `ruh-backend` | `ruh-backend/` | 8000 | TypeScript + Bun + Express + PostgreSQL — sandbox orchestration, agent lifecycle |
 | `ruh-frontend` | `ruh-frontend/` | 3001 | Next.js 16 — client application (end-user assistant access, future desktop app candidate) |
 | `agent-builder-ui` | `agent-builder-ui/` | 3000 | Next.js 15 — agent builder (create, configure, deploy assistants) |
+| `admin-ui` | `admin-ui/` | 3002 | Next.js 15 — admin panel (platform management, user/agent oversight, moderation) |
+| `desktop-app` | `desktop-app/` | N/A | Tauri v2 — desktop wrapper for ruh-frontend with native credential storage |
+| `@ruh/marketplace-ui` | `packages/marketplace-ui/` | N/A | Shared React component library for marketplace UI |
 | `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
 | `nginx` | `nginx/` | 80 | Reverse proxy |
 
@@ -189,6 +196,14 @@ This repo may be maintained by recurring Codex automations in addition to intera
 
 8. **Auth is disabled.** `agent-builder-ui/middleware.ts` returns `NextResponse.next()` unconditionally. Auth redirect logic is dead code.
 
+9. **Auth uses custom JWT.** Passwords hashed with bcrypt (12 rounds). Access tokens are 15-min JWTs, refresh tokens are raw UUIDs rotated on each use. Both stored in httpOnly cookies. Three roles: admin, developer, end_user.
+
+10. **Employee Marketplace is a shared package.** `@ruh/marketplace-ui` contains React components consumed by agent-builder-ui (publish), ruh-frontend (browse/install), and admin-ui (moderate). Backend at `/api/marketplace/*`.
+
+11. **Desktop app uses Tauri v2.** Wraps ruh-frontend's dev server in development. Credentials stored via tauri-plugin-store. Settings at `~/.ruh/config.json`.
+
+12. **Three user tiers.** Admin (platform management via admin-ui), Developer (build+publish agents via agent-builder-ui), End User (browse+use agents via ruh-frontend/desktop).
+
 ---
 
 ## Backend: Adding a New Endpoint
@@ -199,6 +214,8 @@ This repo may be maintained by recurring Codex automations in addition to intera
 4. Use `parseJsonOutput(output)` for JSON output from CLI commands
 5. Throw `httpError(status, message)` for expected errors
 6. Add unit + integration tests in `ruh-backend/tests/`
+
+> Routes that modify data should use `requireAuth` middleware. Admin-only routes use `requireRole('admin')`. Public read routes can use `optionalAuth`.
 
 ---
 
@@ -220,6 +237,8 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - `DATABASE_URL` — required
 - `PORT` — default 8000
 - `ALLOWED_ORIGINS` — default `http://localhost:3000`
+- `JWT_ACCESS_SECRET` — JWT signing secret for access tokens (dev default provided)
+- `JWT_REFRESH_SECRET` — JWT signing secret for refresh tokens (dev default provided)
 - LLM keys (at least one): `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
 - Optional: `OLLAMA_BASE_URL`, `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`
 
@@ -230,6 +249,9 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - `OPENCLAW_TIMEOUT_MS` — default 180000ms
 
 ### Ruh Frontend (`ruh-frontend/.env`)
+- `NEXT_PUBLIC_API_URL` — default `http://localhost:8000`
+
+### Admin UI (`admin-ui/.env`)
 - `NEXT_PUBLIC_API_URL` — default `http://localhost:8000`
 
 ---
@@ -260,26 +282,62 @@ cd ruh-backend && bun run dev
 
 ## Testing
 
-### Backend
+> Full testing strategy documented in `TESTING.md` at repo root.
+
+### Quick Commands (from repo root)
+
 ```bash
-cd ruh-backend
-bun test
+npm run test:all          # Unit + contract tests across all 5 services
+npm run test:integration  # Integration tests against real Postgres (needs Docker)
+npm run test:contract     # API shape validation only
+npm run typecheck:all     # TypeScript check all services
+npm run coverage:all      # Coverage with threshold enforcement
 ```
 
-Test structure: `tests/unit/`, `tests/integration/`, `tests/contract/`, `tests/e2e/`, `tests/security/`, `tests/smoke/`
+### Per-Service Commands
 
-### ruh-frontend
-```bash
-cd ruh-frontend
-npm test             # Jest + React Testing Library
-npx playwright test  # E2E
-```
+| Service | Unit Tests | E2E | Coverage |
+|---------|-----------|-----|----------|
+| `ruh-backend` | `bun test tests/unit/` | `bun test tests/e2e/` | `bun run test:coverage` (75% threshold) |
+| `agent-builder-ui` | `bun test lib/ hooks/ app/` | `npx playwright test` | `bun test --coverage` (60% threshold) |
+| `ruh-frontend` | `npx jest` | `npx playwright test` | `npx jest --coverage` (60% threshold) |
+| `admin-ui` | `bun test` | `npx playwright test` | `bun test --coverage` (50% threshold) |
+| `marketplace-ui` | `cd packages/marketplace-ui && bun test` | — | `bun test --coverage` (80% threshold) |
 
-### agent-builder-ui
-```bash
-cd agent-builder-ui
-npx playwright test  # E2E (playwright.config.ts)
-```
+### Test Structure
+
+| Type | Location | When to Run | What It Catches |
+|------|----------|-------------|-----------------|
+| **Unit** | `tests/unit/` or inline `__tests__/` | Every push (pre-push hook) | Logic bugs, regressions |
+| **Contract** | `ruh-backend/tests/contract/` | Every PR (CI) | API shape drift between frontend/backend |
+| **Integration** | `ruh-backend/tests/integration/` | CI only (needs Postgres) | Schema bugs, FK violations, data flow |
+| **E2E** | `*/e2e/*.spec.ts` (Playwright) | main/dev merges (CI) | Full user flow regressions |
+| **Security** | `ruh-backend/tests/security/` | Every PR (CI) | Injection, auth bypass |
+| **Smoke** | `ruh-backend/tests/smoke/` | main only (CI) | Real server boot |
+
+### Test Runners
+
+- **ruh-backend, agent-builder-ui, admin-ui, marketplace-ui**: bun:test
+- **ruh-frontend**: Jest (jsdom) + MSW for mocking
+- **E2E (all frontends)**: Playwright (Chromium)
+
+### Pre-commit Hooks (Husky)
+
+- **Pre-commit**: TypeScript typecheck for changed services (fast, <10s)
+- **Pre-push**: Unit tests for changed services
+- **Bypass**: `git commit --no-verify` / `git push --no-verify` (use sparingly)
+
+### Coverage Enforcement
+
+Each service has `scripts/check-coverage.ts` that reads LCOV output and fails if below threshold. Backend currently at **82% lines, 85% functions**.
+
+### Writing New Tests
+
+Every new feature, endpoint, or behavioral change must include tests:
+- **Backend route**: Unit test (mock store) + contract test (response shape)
+- **React component**: Unit test (bun:test + happy-dom)
+- **Critical flow**: E2E spec (Playwright)
+- **Database change**: Integration test (real Postgres)
 
 ---
 

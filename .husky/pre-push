@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# Run unit tests for services with changed files
+CHANGED=$(git diff HEAD @{push} --name-only 2>/dev/null || git diff HEAD~1 --name-only)
+
+if echo "$CHANGED" | grep -q "^ruh-backend/"; then
+  echo "🧪 Running ruh-backend tests..."
+  cd ruh-backend && bun test tests/unit/ || exit 1
+  cd ..
+fi
+
+if echo "$CHANGED" | grep -q "^agent-builder-ui/"; then
+  echo "🧪 Running agent-builder-ui tests..."
+  cd agent-builder-ui && bun test lib/ hooks/ app/ services/ middleware.test.ts || exit 1
+  cd ..
+fi
+
+if echo "$CHANGED" | grep -q "^ruh-frontend/"; then
+  echo "🧪 Running ruh-frontend tests..."
+  cd ruh-frontend && npx jest --ci --passWithNoTests || exit 1
+  cd ..
+fi
+
+if echo "$CHANGED" | grep -q "^admin-ui/"; then
+  echo "🧪 Running admin-ui tests..."
+  cd admin-ui && bun test || exit 1
+  cd ..
+fi
+
+if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
+  echo "🧪 Running marketplace-ui tests..."
+  cd packages/marketplace-ui && bun test || exit 1
+  cd ..
+fi
+
+echo "✓ Pre-push checks passed"

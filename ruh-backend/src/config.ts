@@ -25,6 +25,9 @@ export interface BackendConfig {
   otelExporterOtlpEndpoint: string | null;
   otelExporterOtlpHeaders: string | null;
   otelSampleRate: number;
+  logLevel: string;
+  paperclipApiUrl: string | null;
+  openspaceMcpEnabled: boolean;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -145,8 +148,17 @@ export function parseBackendConfig(
   const discordBotToken = normalizeOptionalString(readRaw(env, 'DISCORD_BOT_TOKEN'));
   const agentCredentialsKey = normalizeOptionalString(readRaw(env, 'AGENT_CREDENTIALS_KEY'));
 
-  const jwtAccessSecret = readRaw(env, 'JWT_ACCESS_SECRET') ?? 'dev-access-secret-change-in-production';
-  const jwtRefreshSecret = readRaw(env, 'JWT_REFRESH_SECRET') ?? 'dev-refresh-secret-change-in-production';
+  // JWT secrets: required in production, auto-generated in development.
+  // Never use hardcoded defaults — generate random secrets for dev mode.
+  const isDev = readRaw(env, 'NODE_ENV') === 'development' || !readRaw(env, 'NODE_ENV');
+  const jwtAccessSecret = readRaw(env, 'JWT_ACCESS_SECRET')
+    ?? (isDev ? `dev-access-${Date.now()}-${Math.random().toString(36).slice(2)}` : '');
+  const jwtRefreshSecret = readRaw(env, 'JWT_REFRESH_SECRET')
+    ?? (isDev ? `dev-refresh-${Date.now()}-${Math.random().toString(36).slice(2)}` : '');
+
+  if (!isDev && (!jwtAccessSecret || !jwtRefreshSecret)) {
+    errors.push('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are required in production');
+  }
 
   const otelEnabled = readRaw(env, 'OTEL_ENABLED') === 'true';
   const otelServiceName = readRaw(env, 'OTEL_SERVICE_NAME') ?? 'ruh-backend';
@@ -164,6 +176,11 @@ export function parseBackendConfig(
       otelSampleRate = parsed;
     }
   }
+
+  const logLevel = readRaw(env, 'LOG_LEVEL') ?? 'info';
+
+  const paperclipApiUrl = parseUrlField(readRaw(env, 'PAPERCLIP_API_URL'), 'PAPERCLIP_API_URL', errors);
+  const openspaceMcpEnabled = readRaw(env, 'OPENSPACE_MCP_ENABLED') === 'true';
 
   if (agentCredentialsKey && !/^[0-9a-fA-F]{64}$/.test(agentCredentialsKey)) {
     errors.push('AGENT_CREDENTIALS_KEY must be exactly 64 hexadecimal characters');
@@ -201,6 +218,9 @@ export function parseBackendConfig(
     otelExporterOtlpEndpoint,
     otelExporterOtlpHeaders,
     otelSampleRate,
+    logLevel,
+    paperclipApiUrl,
+    openspaceMcpEnabled,
   });
 }
 

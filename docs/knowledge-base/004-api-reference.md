@@ -1311,6 +1311,57 @@ Successful approvals emit `channel.telegram.pairing_approve` or `channel.slack.p
 
 ---
 
+## Auth Endpoints
+
+See [[014-auth-system]] for the full auth contract.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/auth/register` | Public | Create account |
+| POST | `/api/auth/login` | Public | Login → tokens |
+| POST | `/api/auth/refresh` | Public (cookie) | Rotate tokens |
+| POST | `/api/auth/logout` | Required | Invalidate sessions |
+| GET | `/api/auth/me` | Required | Current user |
+| PATCH | `/api/auth/me` | Required | Update profile |
+
+---
+
+## Admin Endpoints
+
+See [[015-admin-panel]] for the full admin panel contract.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/admin/stats` | Admin | Platform stats |
+| GET | `/api/admin/users` | Admin | User list |
+| PATCH | `/api/admin/users/:id` | Admin | Update user |
+| DELETE | `/api/admin/users/:id` | Admin | Delete user |
+| GET | `/api/admin/agents` | Admin | All agents |
+
+---
+
+## Marketplace Endpoints
+
+See [[016-marketplace]] for the full marketplace contract.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/marketplace/listings` | Public | Browse |
+| GET | `/api/marketplace/listings/:slug` | Public | Detail |
+| POST | `/api/marketplace/listings` | Developer | Create |
+| PATCH | `/api/marketplace/listings/:id` | Owner | Update |
+| POST | `/api/marketplace/listings/:id/submit` | Owner | Submit for review |
+| POST | `/api/marketplace/listings/:id/review` | Admin | Approve/reject |
+| GET | `/api/marketplace/listings/:id/reviews` | Public | List reviews |
+| POST | `/api/marketplace/listings/:id/reviews` | Auth | Add review |
+| POST | `/api/marketplace/listings/:id/install` | Auth | Install |
+| DELETE | `/api/marketplace/listings/:id/install` | Auth | Uninstall |
+| GET | `/api/marketplace/my/installs` | Auth | My installs |
+| GET | `/api/marketplace/my/listings` | Developer | My listings |
+| GET | `/api/marketplace/categories` | Public | Categories |
+
+---
+
 ## Related Learnings
 
 - [[LEARNING-2026-03-25-backend-error-diagnostic-exposure]] — the current API still echoes raw gateway and CLI diagnostics on some failure paths, so client-visible error payloads need an explicit redaction contract

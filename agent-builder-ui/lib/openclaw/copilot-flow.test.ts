@@ -543,6 +543,7 @@ describe("evaluateCoPilotDeployReadiness", () => {
         skillGraphCount: 2,
         selectedSkillIds: ["google-ads-audit"],
         unresolvedSelectedSkills: [],
+        missingRequiredRuntimeInputKeys: [],
         deploySummary: {
           toolSummary: "1 configured",
           runtimeInputSummary: "1 missing runtime input",
@@ -564,6 +565,7 @@ describe("evaluateCoPilotDeployReadiness", () => {
         skillGraphCount: 2,
         selectedSkillIds: ["google-ads-audit"],
         unresolvedSelectedSkills: ["google-ads-audit"],
+        missingRequiredRuntimeInputKeys: [],
         deploySummary: {
           toolSummary: "1 configured",
           runtimeInputSummary: "1 runtime input ready",
@@ -585,6 +587,7 @@ describe("evaluateCoPilotDeployReadiness", () => {
         skillGraphCount: 2,
         selectedSkillIds: ["google-ads-audit"],
         unresolvedSelectedSkills: [],
+        missingRequiredRuntimeInputKeys: [],
         deploySummary: {
           toolSummary: "1 configured",
           runtimeInputSummary: "1 runtime input ready",
@@ -595,6 +598,28 @@ describe("evaluateCoPilotDeployReadiness", () => {
     ).toEqual({
       canDeploy: true,
       blockerMessage: null,
+    });
+  });
+
+  test("blocks deploy when required runtime inputs are still empty", () => {
+    expect(
+      evaluateCoPilotDeployReadiness({
+        purposeReady: true,
+        skillGenerationStatus: "ready",
+        skillGraphCount: 2,
+        selectedSkillIds: ["google-ads-audit"],
+        unresolvedSelectedSkills: [],
+        missingRequiredRuntimeInputKeys: ["GOOGLE_ADS_CUSTOMER_ID", "GOOGLE_ADS_REFRESH_TOKEN"],
+        deploySummary: {
+          toolSummary: "1 configured",
+          runtimeInputSummary: "2 missing runtime input",
+          triggerSummary: "1 supported",
+          readinessLabel: "Action needed before deploy",
+        },
+      }),
+    ).toEqual({
+      canDeploy: false,
+      blockerMessage: "Add values for required runtime inputs: GOOGLE_ADS_CUSTOMER_ID, GOOGLE_ADS_REFRESH_TOKEN.",
     });
   });
 });

@@ -26,6 +26,16 @@ describe('schema migrations', () => {
     expect(ids).toEqual([...ids].sort());
   });
 
+  test('worker cost tracking uses TEXT agent references consistent with agents.id', () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === '0022_worker_cost_tracking');
+    expect(migration).toBeDefined();
+
+    const sql = migration!.statements.join('\n');
+
+    expect(sql).toContain('agent_id        TEXT');
+    expect(sql).not.toContain('agent_id        UUID');
+  });
+
   test('creates the ledger and applies each pending migration once in order', async () => {
     await runSchemaMigrations();
 

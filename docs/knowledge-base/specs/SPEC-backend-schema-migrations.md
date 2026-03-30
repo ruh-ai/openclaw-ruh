@@ -70,9 +70,14 @@ This keeps the migration history explicit while preserving the current latest sc
 - Keep the first version lightweight: TypeScript-defined migrations plus SQL statement arrays are sufficient for Bun + `pg`.
 - Do not broaden this slice into reversible down-migrations, out-of-band migration CLIs, or cross-service schema tooling.
 - Preserve the current schema semantics, including the existing lack of a DB foreign key from `conversations.sandbox_id` to `sandboxes.sandbox_id`.
+- Foreign-key column types must match the canonical source-table type exactly. In this repo, `agents.id` is `TEXT`, so migrations such as `0022_worker_cost_tracking` must keep dependent `agent_id` columns as `TEXT` even when the stored values are UUID-shaped strings.
 
 ## Test Plan
 
 - Unit tests for deterministic migration ordering, applied-ledger no-op behavior, and rollback/no-ledger-write on failure
 - Startup orchestration test proving the backend waits for migration completion before listening
 - Real-DB integration tests for fresh bootstrap, partial-ledger catch-up, and idempotent rerun behavior
+
+## Related Learnings
+
+- [[LEARNING-2026-03-30-worker-cost-tracking-agent-id-type-mismatch]] — agent foreign-key columns must copy the canonical `TEXT` type from `agents.id` or startup migrations will fail before the backend can listen

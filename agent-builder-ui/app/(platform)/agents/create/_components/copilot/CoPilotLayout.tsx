@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Rocket, Loader2, Check, AlertCircle } from "lucide-react";
 import { TabChat } from "@/app/(platform)/agents/[id]/chat/_components/TabChat";
 import { buildDeployConfigSummary } from "@/lib/agents/operator-config-summary";
-import { mergeRuntimeInputDefinitions } from "@/lib/agents/runtime-inputs";
+import { isRuntimeInputFilled, mergeRuntimeInputDefinitions } from "@/lib/agents/runtime-inputs";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
   evaluateCoPilotDeployReadiness,
@@ -35,7 +35,7 @@ interface CoPilotLayoutProps {
   disableBuilderAutosave?: boolean;
   isCompleting?: boolean;
   onBuilderStateChange: (partial: Partial<BuilderState>) => void;
-  onComplete: () => void;
+  onComplete: () => void | Promise<boolean>;
   onCancel: () => void;
   architectSandbox?: ArchitectSandboxInfo | null;
 }
@@ -68,6 +68,7 @@ export function CoPilotLayout({
     discoveryStatus,
     discoveryAnswers,
     discoveryDocuments,
+    architecturePlan,
     setPhase,
     setRuntimeInputs,
     updateFields,
@@ -110,11 +111,15 @@ export function CoPilotLayout({
       skillGraphCount: skillGraph?.length ?? 0,
       selectedSkillIds,
       unresolvedSelectedSkills,
+      missingRequiredRuntimeInputKeys: runtimeInputs
+        .filter((input) => input.required && !isRuntimeInputFilled(input))
+        .map((input) => input.key),
       deploySummary,
     }),
     [
       deploySummary,
       purposeReady,
+      runtimeInputs,
       selectedSkillIds,
       skillGenerationStatus,
       skillGraph,
@@ -239,15 +244,62 @@ export function CoPilotLayout({
   }, [name, description]);
 
   // ── Step 2: When discovery is complete/skipped, trigger skill generation ──
+  const buildRetryCountRef = useRef(0);
+  const MAX_BUILD_RETRIES = 2;
+
   const triggerSkillGeneration = useCallback(
-    (trimmedName: string, trimmedDescription: string, context?: Record<string, string | string[]>, docs?: import("@/lib/openclaw/types").DiscoveryDocuments) => {
+    (
+      trimmedName: string,
+      trimmedDescription: string,
+      context?: Record<string, string | string[]>,
+      docs?: import("@/lib/openclaw/types").DiscoveryDocuments,
+      plan?: import("@/lib/openclaw/types").ArchitecturePlan | null,
+    ) => {
       const signature = `${trimmedName}\n${trimmedDescription}`;
       setSkillGeneration("loading");
 
-      void generateSkillsFromArchitect(trimmedName, trimmedDescription, undefined, context, docs, architectSandbox?.sandbox_id)
-        .then((generated) => {
+      void generateSkillsFromArchitect(
+        trimmedName,
+        trimmedDescription,
+        undefined,
+        context,
+        docs,
+        plan ?? undefined,
+        architectSandbox?.sandbox_id,
+      )
+        .then(async (generated) => {
           if (latestPurposeSignatureRef.current !== signature) return;
 
+          // Write skill files into the forge sandbox workspace.
+          // The HTTP chat proxy can only return text — it can't exec commands.
+          // So we call the backend to write SKILL.md files via docker exec.
+          const agentId = existingAgent?.id;
+          if (agentId && generated.nodes.length > 0) {
+            try {
+              const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+              const scaffoldRes = await fetch(
+                `${API}/api/agents/${agentId}/forge/scaffold-skills`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    skill_graph: { nodes: generated.nodes },
+                    workflow: generated.workflow,
+                  }),
+                },
+              );
+              if (scaffoldRes.ok) {
+                const result = await scaffoldRes.json();
+                console.log(`[Build] Scaffolded ${result.scaffolded}/${result.total} skills into forge sandbox`);
+              } else {
+                console.warn("[Build] Scaffold-skills failed:", scaffoldRes.status);
+              }
+            } catch (err) {
+              console.warn("[Build] Failed to scaffold skills:", err);
+            }
+          }
+
+          buildRetryCountRef.current = 0;
           lastGeneratedSignatureRef.current = signature;
           setSkillGraph(generated.nodes, generated.workflow, generated.agentRules);
           updateFields({ systemName: generated.systemName ?? trimmedName });
@@ -265,6 +317,24 @@ export function CoPilotLayout({
         })
         .catch((error) => {
           if (latestPurposeSignatureRef.current !== signature) return;
+
+          // Auto-retry up to MAX_BUILD_RETRIES times before showing failure
+          if (buildRetryCountRef.current < MAX_BUILD_RETRIES) {
+            buildRetryCountRef.current += 1;
+            console.warn(
+              `[Build] Attempt ${buildRetryCountRef.current} failed, retrying... (${error instanceof Error ? error.message : "unknown error"})`,
+            );
+            // Small delay before retry to avoid hammering the sandbox
+            setTimeout(() => {
+              setSkillGeneration("loading");
+              setBuildStatus("building");
+              triggerSkillGeneration(trimmedName, trimmedDescription, context, docs, plan);
+            }, 2000);
+            return;
+          }
+
+          // Exhausted retries — show failure to user
+          buildRetryCountRef.current = 0;
           setSkillGeneration(
             "error",
             error instanceof Error ? error.message : "Skill generation failed.",
@@ -294,19 +364,20 @@ export function CoPilotLayout({
     const trimmedDescription = description.trim();
     const context = discoveryStatus === "skipped" ? undefined : discoveryAnswers;
     const docs = discoveryDocuments ?? undefined;
-    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs);
-  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, triggerSkillGeneration, setPlanStatus, setDevStage, setBuildStatus]);
+    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs, architecturePlan);
+  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, architecturePlan, triggerSkillGeneration, setPlanStatus, setDevStage, setBuildStatus]);
 
   // Called when user retries a failed build
   const handleRetryBuild = useCallback(() => {
+    buildRetryCountRef.current = 0; // Reset auto-retry counter for manual retry
     setBuildStatus("building");
     setSkillGeneration("loading");
     const trimmedName = name.trim();
     const trimmedDescription = description.trim();
     const context = discoveryStatus === "skipped" ? undefined : discoveryAnswers;
     const docs = discoveryDocuments ?? undefined;
-    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs);
-  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, triggerSkillGeneration, setBuildStatus, setSkillGeneration]);
+    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs, architecturePlan);
+  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, architecturePlan, triggerSkillGeneration, setBuildStatus, setSkillGeneration]);
 
   // Called when user clicks Done on reflect stage
   const handleDone = useCallback(() => {

@@ -219,6 +219,66 @@ CREATE TABLE agents (
 `channels` was added by migration `0013_agent_channels`. Older rows read as an empty array and are normalized through the store layer.
 `discovery_documents` was added by migration `0014_agent_discovery_documents`. Older rows read as `null` until new discovery docs are approved and saved.
 
+`agents.id` is a text UUID generated in the application layer, so new tables that reference agents must also use `TEXT` foreign-key columns instead of PostgreSQL `UUID`. Migration `0022_worker_cost_tracking` now follows that rule for the cost-tracking tables below; see [[LEARNING-2026-03-30-worker-cost-tracking-agent-id-type-mismatch]].
+
+### `cost_events`
+
+```sql
+CREATE TABLE cost_events (
+  id            UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id      TEXT          NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  worker_id     UUID,
+  task_id       TEXT,
+  run_id        TEXT,
+  model         TEXT          NOT NULL,
+  input_tokens  INTEGER       NOT NULL DEFAULT 0,
+  output_tokens INTEGER       NOT NULL DEFAULT 0,
+  cost_cents    NUMERIC(10,4) NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+```
+
+One row per tracked model invocation. `agent_id` uses the same `TEXT` identifier contract as `agents.id` so migration bootstrap and cascading deletes remain valid.
+
+### `budget_policies`
+
+```sql
+CREATE TABLE budget_policies (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id          TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  worker_id         UUID,
+  monthly_cap_cents INTEGER     NOT NULL,
+  soft_warning_pct  INTEGER     NOT NULL DEFAULT 80,
+  hard_stop         BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (agent_id, worker_id)
+);
+```
+
+Per-agent or per-worker monthly spending caps. The agent foreign key stays `TEXT` for the same reason as `cost_events`.
+
+### `execution_recordings`
+
+```sql
+CREATE TABLE execution_recordings (
+  id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id         TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  worker_id        UUID,
+  task_id          TEXT,
+  run_id           TEXT        NOT NULL,
+  success          BOOLEAN,
+  tool_calls       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  tokens_used      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  skills_applied   TEXT[]      NOT NULL DEFAULT '{}',
+  skills_effective TEXT[]      NOT NULL DEFAULT '{}',
+  started_at       TIMESTAMPTZ,
+  completed_at     TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Run-trace storage for future worker-skill capture and analysis. Like the other cost-tracking tables, it references agents through a `TEXT` foreign key.
+
 ### `webhook_delivery_dedupes`
 
 ```sql
@@ -238,6 +298,148 @@ CREATE INDEX webhook_delivery_dedupes_public_id_updated_idx
 ```
 
 This bounded ledger records replay-sensitive public webhook deliveries without putting caller delivery ids into `agents.triggers` or normal agent read responses. The backend reserves each `{ public_id, delivery_id }` pair before sandbox invocation, updates `status` to `delivered` or `failed` after the attempt finishes, and prunes old rows after the retention window so duplicate suppression stays durable but bounded.
+
+---
+
+### Ownership Columns (Migration 0019)
+
+`agents` and `sandboxes` tables both gained:
+- `created_by TEXT` — references `users.id`, nullable for legacy rows
+- `org_id TEXT` — references `organizations.id`, nullable for legacy rows
+
+These columns support multi-tenant ownership filtering across the platform.
+
+---
+
+### `users`
+
+```sql
+CREATE TABLE users (
+  id           TEXT        PRIMARY KEY,
+  email        TEXT        NOT NULL UNIQUE,
+  display_name TEXT        NOT NULL DEFAULT '',
+  password_hash TEXT       NOT NULL,
+  role         TEXT        NOT NULL DEFAULT 'end_user',  -- admin | developer | end_user
+  org_id       TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+See [[014-auth-system]] for the full auth contract.
+
+---
+
+### `organizations`
+
+```sql
+CREATE TABLE organizations (
+  id         TEXT        PRIMARY KEY,
+  name       TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+---
+
+### `sessions`
+
+```sql
+CREATE TABLE sessions (
+  id            TEXT        PRIMARY KEY,
+  user_id       TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  refresh_token TEXT        NOT NULL UNIQUE,
+  expires_at    TIMESTAMPTZ NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Refresh tokens are raw UUIDs, rotated on each use. See [[014-auth-system]].
+
+---
+
+### `api_keys`
+
+```sql
+CREATE TABLE api_keys (
+  id         TEXT        PRIMARY KEY,
+  user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key_hash   TEXT        NOT NULL,
+  name       TEXT        NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used  TIMESTAMPTZ
+);
+```
+
+---
+
+### `marketplace_listings`
+
+```sql
+CREATE TABLE marketplace_listings (
+  id          TEXT        PRIMARY KEY,
+  agent_id    TEXT        NOT NULL,
+  slug        TEXT        NOT NULL UNIQUE,
+  title       TEXT        NOT NULL,
+  tagline     TEXT        NOT NULL DEFAULT '',
+  description TEXT        NOT NULL DEFAULT '',
+  category    TEXT        NOT NULL DEFAULT 'other',
+  icon_url    TEXT,
+  status      TEXT        NOT NULL DEFAULT 'draft',  -- draft | pending_review | published | rejected
+  author_id   TEXT        NOT NULL,
+  org_id      TEXT,
+  version     TEXT        NOT NULL DEFAULT '1.0.0',
+  install_count INTEGER  NOT NULL DEFAULT 0,
+  avg_rating  NUMERIC(3,2) NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+See [[016-marketplace]] for the full marketplace contract.
+
+---
+
+### `marketplace_reviews`
+
+```sql
+CREATE TABLE marketplace_reviews (
+  id         TEXT        PRIMARY KEY,
+  listing_id TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
+  user_id    TEXT        NOT NULL,
+  rating     INTEGER     NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  comment    TEXT        NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+---
+
+### `marketplace_installs`
+
+```sql
+CREATE TABLE marketplace_installs (
+  id         TEXT        PRIMARY KEY,
+  listing_id TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
+  user_id    TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(listing_id, user_id)
+);
+```
+
+---
+
+### `agent_versions`
+
+```sql
+CREATE TABLE agent_versions (
+  id         TEXT        PRIMARY KEY,
+  agent_id   TEXT        NOT NULL,
+  version    TEXT        NOT NULL,
+  snapshot   JSONB       NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
 
 ---
 
@@ -499,9 +701,12 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - [[SPEC-sandbox-runtime-reconciliation]] — clarifies that `sandboxes` rows are persisted metadata and must be reconciled with Docker runtime state for truthful health
 - [[SPEC-sandbox-conversation-cleanup]] — documents the backend-owned delete-by-sandbox cleanup path while the schema still lacks a sandbox foreign key
 - [[SPEC-deployed-chat-workspace-memory]] — defines the persisted agent-level workspace-memory JSON shape used by deployed chat
+- [[014-auth-system]] — defines the `users`, `organizations`, `sessions`, and `api_keys` tables
+- [[016-marketplace]] — defines the `marketplace_listings`, `marketplace_reviews`, `marketplace_installs`, and `agent_versions` tables
 
 ## Related Learnings
 
 - [[LEARNING-2026-03-26-backend-schema-migrations]] — future schema work should extend `schemaMigrations.ts` instead of reintroducing startup DDL in store modules
+- [[LEARNING-2026-03-30-worker-cost-tracking-agent-id-type-mismatch]] — cost-tracking tables must keep `agent_id` as `TEXT` to match the canonical `agents.id` contract
 - [[LEARNING-2026-03-25-sandbox-delete-conversation-orphans]] — the current schema lets sandbox delete leave orphaned conversation history because `conversations.sandbox_id` is not enforced as a real foreign key
 - [[LEARNING-2026-03-25-agent-sandbox-deployment-integrity-gap]] — agent deployment state currently lives in a JSONB sandbox-id array with no referential integrity or lifecycle metadata, so deploy/undeploy work needs a normalized relation

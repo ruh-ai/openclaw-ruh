@@ -266,28 +266,112 @@ export function parseWizardDirectives(response: ArchitectResponse): WizardDirect
 // ─── Build wizard state context for architect ────────────────────────────────
 
 export function buildWizardStateContext(state: {
+  devStage?: string;
   phase: string;
   name: string;
   description: string;
+  systemName?: string | null;
   selectedSkillIds: string[];
-  connectedTools: Array<{ toolId?: string; name?: string }>;
-  triggers: Array<{ id?: string; title?: string }>;
+  builtSkillIds?: string[];
+  skillGraph?: Array<{ skill_id?: string; name?: string }>;
+  connectedTools: Array<{ toolId?: string; name?: string; status?: string }>;
+  runtimeInputs?: Array<{ key?: string; required?: boolean; value?: string | null }>;
+  triggers: Array<{ id?: string; title?: string; schedule?: string }>;
+  channels?: Array<{ kind?: string; label?: string; status?: string }>;
+  improvements?: Array<{ title?: string; status?: string }>;
+  architecturePlan?: {
+    skills?: Array<{ id?: string; name?: string }>;
+    integrations?: Array<{ toolId?: string; name?: string }>;
+    triggers?: Array<{ id?: string; description?: string }>;
+    channels?: string[];
+    envVars?: Array<{ key?: string }>;
+  } | null;
   agentRules: string[];
 }): string {
-  const parts = [`Phase: ${state.phase}`];
+  const parts = [
+    `[WIZARD_STATE]`,
+    ...(state.devStage ? [`Dev Stage: ${state.devStage}`] : []),
+    `Phase: ${state.phase}`,
+  ];
 
   if (state.name) parts.push(`Name: "${state.name}"`);
+  if (state.systemName) parts.push(`System Name: ${state.systemName}`);
   if (state.description) parts.push(`Description: "${state.description}"`);
-  if (state.selectedSkillIds.length > 0) parts.push(`Skills: ${state.selectedSkillIds.join(", ")}`);
+  if (state.selectedSkillIds.length > 0) parts.push(`Selected Skills: ${state.selectedSkillIds.join(", ")}`);
+  if (state.builtSkillIds && state.builtSkillIds.length > 0) {
+    parts.push(`Built Skills: ${state.builtSkillIds.join(", ")}`);
+  }
+  if (state.skillGraph && state.skillGraph.length > 0) {
+    parts.push(
+      `Skill Graph: ${state.skillGraph.map((skill) => skill.name || skill.skill_id || "unknown").join(", ")}`,
+    );
+  }
   if (state.connectedTools.length > 0) {
-    parts.push(`Connected Tools: ${state.connectedTools.map(t => t.toolId || t.name || "unknown").join(", ")}`);
+    parts.push(
+      `Connected Tools: ${state.connectedTools
+        .map((tool) => {
+          const label = tool.toolId || tool.name || "unknown";
+          return tool.status ? `${label} (${tool.status})` : label;
+        })
+        .join(", ")}`,
+    );
+  }
+  if (state.runtimeInputs && state.runtimeInputs.length > 0) {
+    const requiredInputs = state.runtimeInputs.filter((input) => input.required);
+    const filledRequired = requiredInputs.filter((input) => String(input.value ?? "").trim().length > 0).length;
+    const runtimeSummary = state.runtimeInputs
+      .map((input) => `${input.key || "unknown"} (${String(input.value ?? "").trim().length > 0 ? "filled" : "missing"})`)
+      .join(", ");
+    parts.push(`Runtime Inputs: required ${filledRequired}/${requiredInputs.length} filled | ${runtimeSummary}`);
   }
   if (state.triggers.length > 0) {
-    parts.push(`Triggers: ${state.triggers.map(t => t.id || t.title || "unknown").join(", ")}`);
+    parts.push(`Triggers: ${state.triggers.map((trigger) => trigger.id || trigger.title || "unknown").join(", ")}`);
+    const heartbeat = state.triggers.find((trigger) => trigger.schedule)?.title || state.triggers.find((trigger) => trigger.schedule)?.schedule;
+    if (heartbeat) {
+      parts.push(`Heartbeat: ${heartbeat}`);
+    }
+  }
+  if (state.channels && state.channels.length > 0) {
+    parts.push(
+      `Channels: ${state.channels
+        .map((channel) => {
+          const label = channel.kind || channel.label || "unknown";
+          return channel.status ? `${label} (${channel.status})` : label;
+        })
+        .join(", ")}`,
+    );
+  }
+  if (state.improvements && state.improvements.length > 0) {
+    const accepted = state.improvements.filter((item) => item.status === "accepted").map((item) => item.title).filter(Boolean);
+    if (accepted.length > 0) {
+      parts.push(`Accepted Improvements: ${accepted.join(", ")}`);
+    }
+  }
+  if (state.architecturePlan) {
+    const planParts: string[] = [];
+    if (state.architecturePlan.skills?.length) planParts.push(`skills=${state.architecturePlan.skills.length}`);
+    if (state.architecturePlan.integrations?.length) planParts.push(`integrations=${state.architecturePlan.integrations.length}`);
+    if (state.architecturePlan.triggers?.length) planParts.push(`triggers=${state.architecturePlan.triggers.length}`);
+    if (state.architecturePlan.channels?.length) planParts.push(`channels=${state.architecturePlan.channels.join(", ")}`);
+    if (state.architecturePlan.envVars?.length) {
+      planParts.push(`env=${state.architecturePlan.envVars.map((env) => env.key).filter(Boolean).join(", ")}`);
+    }
+    if (planParts.length > 0) {
+      parts.push(`Architecture Plan: ${planParts.join(" | ")}`);
+    }
   }
   if (state.agentRules.length > 0) {
     parts.push(`Rules: ${state.agentRules.join("; ")}`);
   }
+  if (state.name || state.description || state.agentRules.length > 0) {
+    const soulBits = [
+      state.name ? `${state.name}` : null,
+      state.description ? state.description : null,
+      state.agentRules.length > 0 ? `Rules: ${state.agentRules.join("; ")}` : null,
+    ].filter(Boolean);
+    parts.push(`SOUL Summary: ${soulBits.join(" | ")}`);
+  }
 
-  return `[WIZARD_STATE]\n${parts.join(" | ")}\n[/WIZARD_STATE]`;
+  parts.push(`[/WIZARD_STATE]`);
+  return parts.join("\n");
 }

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, CheckCircle2, AlertCircle, MessageSquare, FolderOpen, Rocket } from "lucide-react";
+import { ChevronLeft, Loader2, CheckCircle2, AlertCircle, MessageSquare, FolderOpen, Rocket, Trash2 } from "lucide-react";
 import { ReviewAgent } from "./_components/review/ReviewAgent";
 import type { ReviewAgentOutput } from "./_components/review/ReviewAgent";
 import { ConfigureAgent } from "./_components/configure/ConfigureAgent";
@@ -20,6 +20,9 @@ import { finalizeCredentialBackedToolConnections } from "@/lib/tools/tool-integr
 import { CoPilotLayout } from "./_components/copilot/CoPilotLayout";
 import { WorkspacePanel } from "./_components/WorkspacePanel";
 import { ShipDialog } from "./_components/ShipDialog";
+import { CreationProgressCard, deriveCreationPhase } from "./_components/CreationProgressCard";
+import { AnimatedRuhLogo } from "./_components/AnimatedRuhLogo";
+import { OnboardingSequence } from "./_components/OnboardingSequence";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { AgentTriggerDefinition } from "@/lib/agents/types";
 import {
@@ -32,17 +35,24 @@ import {
   type CreateSessionConfigState,
 } from "./create-session-config";
 import {
-  createCoPilotSeedFromAgent,
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
 import { useForgeSandbox } from "@/hooks/use-forge-sandbox";
 import { CREATE_AGENT_MODE_OPTIONS, normalizeCreateMode, type CreateAgentMode } from "./create-mode";
+import { DEV_MOCK_BAR_QUERY_PARAM, shouldShowDevMockBar } from "./dev-mock-bar";
 import {
   saveCoPilotLifecycleToCache,
   loadCoPilotLifecycleFromCache,
   clearCoPilotLifecycleCache,
 } from "@/lib/openclaw/copilot-lifecycle-cache";
+import {
+  buildResumedBuilderState,
+  buildResumedCoPilotSeed,
+  clearCreateSessionCache,
+  loadCreateSessionFromCache,
+  saveCreateSessionToCache,
+} from "@/lib/openclaw/create-session-cache";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -75,6 +85,10 @@ function CreateAgentPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editingAgentId = searchParams.get("agentId");
+  const showDevMockBar = shouldShowDevMockBar(
+    process.env.NODE_ENV,
+    searchParams.get(DEV_MOCK_BAR_QUERY_PARAM),
+  );
 
   const [mode, setMode] = useState<CreateAgentMode>(() => normalizeCreateMode("copilot"));
 
@@ -90,7 +104,7 @@ function CreateAgentPageContent() {
   const [rulesOverride, setRulesOverride] = useState<string[] | null>(null);
   const [reviewOutput, setReviewOutput] = useState<ReviewAgentOutput | null>(null);
 
-  const { agents, saveAgent, persistAgentEdits, updateAgentConfig } = useAgentsStore();
+  const { agents, saveAgent, persistAgentEdits, updateAgentConfig, deleteForge, fetchAgent } = useAgentsStore();
   const existingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
 
   const { builderState, updateBuilderState, resetBuilderState, initializeFromAgent } = useBuilderState();
@@ -108,6 +122,11 @@ function CreateAgentPageContent() {
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showShipDialog, setShowShipDialog] = useState(false);
+  const [modeTransitionKey, setModeTransitionKey] = useState(0);
+  const [workspaceFileCount, setWorkspaceFileCount] = useState(0);
+  const [workspaceBadge, setWorkspaceBadge] = useState(false);
+  const [isRouteAgentHydrated, setIsRouteAgentHydrated] = useState(() => !editingAgentId);
+  const [hasRestoredSession, setHasRestoredSession] = useState(() => !editingAgentId);
 
   const handleInitSubmit = useCallback(async (name: string, description: string) => {
     setForgePhase("provisioning");
@@ -123,6 +142,8 @@ function CreateAgentPageContent() {
       if (!createRes.ok) throw new Error("Failed to create agent");
       const { agent_id, stream_id } = (await createRes.json()) as { agent_id: string; stream_id: string };
 
+      // Update URL immediately so the agent ID is visible and the page is refreshable
+      window.history.replaceState(null, "", `/agents/create?agentId=${agent_id}`);
       setForgeLog((prev) => [...prev, "Starting container..."]);
 
       const sseRes = await fetch(`${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`);
@@ -131,9 +152,10 @@ function CreateAgentPageContent() {
       const reader = sseRes.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sandboxReady = false;
 
       try {
-        while (true) {
+        while (!sandboxReady) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -155,6 +177,9 @@ function CreateAgentPageContent() {
                 setForgeLog((prev) => [...prev, String(parsed.message ?? "")]);
               } else if (eventName === "error") {
                 throw new Error(String(parsed.message ?? "Provisioning failed"));
+              } else if (eventName === "result" || eventName === "done" || eventName === "approved") {
+                sandboxReady = true;
+                break;
               }
             } catch (e) {
               if (e instanceof Error && (e.message.includes("failed") || e.message.includes("Failed"))) throw e;
@@ -162,12 +187,14 @@ function CreateAgentPageContent() {
           }
         }
       } finally {
-        reader.releaseLock();
+        try { await reader.cancel(); } catch { /* ignore cancel errors */ }
+        try { reader.releaseLock(); } catch { /* may already be released */ }
       }
 
       setForgeLog((prev) => [...prev, "Agent workspace ready — opening chat..."]);
-      // Navigate to the same page with agentId to load the created agent + its forge sandbox
-      router.push(`/agents/create?agentId=${agent_id}`);
+      // Use window.location for hard navigation — router.push can be blocked
+      // by the still-pending fetch response cleanup
+      window.location.href = `/agents/create?agentId=${agent_id}`;
     } catch (err) {
       setForgeError(err instanceof Error ? err.message : "Failed to provision agent workspace");
       setForgePhase("init");
@@ -175,6 +202,31 @@ function CreateAgentPageContent() {
   }, [router]);
 
   const coPilotStore = useCoPilotStore();
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!editingAgentId) {
+      setIsRouteAgentHydrated(true);
+      setHasRestoredSession(true);
+      return;
+    }
+
+    setIsRouteAgentHydrated(false);
+    setHasRestoredSession(false);
+
+    void fetchAgent(editingAgentId)
+      .catch(() => null)
+      .finally(() => {
+        if (!cancelled) {
+          setIsRouteAgentHydrated(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editingAgentId, fetchAgent]);
+
   const persistedDraftAgent = useMemo(
     () => (
       builderState.draftAgentId
@@ -193,6 +245,47 @@ function CreateAgentPageContent() {
   );
   const effectiveSandbox = forgeSandbox ?? architectSandbox;
 
+  // v2: Poll workspace file count to detect new file writes from the Architect.
+  // Shows a badge on the Files button and auto-opens the panel on first write.
+  useEffect(() => {
+    const sandboxId = workingAgent?.forgeSandboxId;
+    if (!sandboxId || forgePhase) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const url = new URL(`${API_BASE}/api/sandboxes/${sandboxId}/workspace/files`);
+        url.searchParams.set("depth", "1");
+        url.searchParams.set("limit", "1");
+        const res = await fetch(url.toString());
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const count = (data.items as unknown[])?.length ?? 0;
+        if (!cancelled) {
+          setWorkspaceFileCount((prev) => {
+            if (count > prev && prev > 0) {
+              setWorkspaceBadge(true);
+            }
+            if (count > 0 && prev === 0 && !showWorkspace) {
+              // Auto-open on first file write
+              setShowWorkspace(true);
+            }
+            return count;
+          });
+        }
+      } catch { /* non-critical */ }
+    };
+
+    poll();
+    const interval = setInterval(poll, 8000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [workingAgent?.forgeSandboxId, forgePhase, showWorkspace]);
+
+  // Clear badge when panel is opened
+  useEffect(() => {
+    if (showWorkspace) setWorkspaceBadge(false);
+  }, [showWorkspace]);
+
   // v2: Test / Build mode toggle — switches the container between Architect and Agent SOUL
   const handleTestModeToggle = useCallback(async () => {
     if (!workingAgent?.id || isSwitchingMode) return;
@@ -204,13 +297,33 @@ function CreateAgentPageContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: targetMode }),
       });
-      if (res.ok) setAgentMode(targetMode);
+      if (res.ok) {
+        setAgentMode(targetMode);
+        setModeTransitionKey((k) => k + 1);
+      }
     } catch {
       // silently ignore — user can retry
     } finally {
       setIsSwitchingMode(false);
     }
   }, [agentMode, isSwitchingMode, workingAgent?.id]);
+
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteForge = useCallback(async () => {
+    const agentId = workingAgent?.id;
+    if (!agentId || isDeleting) return;
+    if (!window.confirm("Discard this agent? The container and all work will be permanently deleted.")) return;
+    setIsDeleting(true);
+    try {
+      await deleteForge(agentId);
+      clearCreateSessionCache(agentId);
+      clearCoPilotLifecycleCache(agentId);
+      router.push("/agents");
+    } catch {
+      setIsDeleting(false);
+    }
+  }, [workingAgent?.id, isDeleting, router, deleteForge]);
 
   const [createSessionConfig, setCreateSessionConfig] = useState<CreateSessionConfigState>(() =>
     createInitialCreateSessionConfig(workingAgent),
@@ -221,11 +334,44 @@ function CreateAgentPageContent() {
 
   useEffect(() => {
     setMode("copilot");
+    const restoreId = editingAgentId ?? existingAgent?.id ?? null;
+    const cachedSession = restoreId ? loadCreateSessionFromCache(restoreId) : null;
+    const cachedLifecycle = restoreId ? loadCoPilotLifecycleFromCache(restoreId) : null;
+    const cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
+    const cachedBuilder = cachedSession?.builder ?? null;
+
+    const applyRecoveredSession = (agentForResume: SavedAgent | null) => {
+      if (agentForResume) {
+        initializeFromAgent(agentForResume);
+      } else {
+        resetBuilderState();
+      }
+
+      updateBuilderState(
+        buildResumedBuilderState(
+          restoreId ?? agentForResume?.id ?? "draft",
+          agentForResume,
+          cachedBuilder,
+          cachedCoPilot,
+        ),
+      );
+      coPilotStore.hydrateFromSeed(buildResumedCoPilotSeed(agentForResume, cachedCoPilot));
+      setHasRestoredSession(true);
+    };
+
     // When returning from deploy page to reflect stage, wait for agent data
     if (reflectStage === "reflect" && editingAgentId) {
-      if (!existingAgent) return; // agent not loaded yet — skip until next render
+      if (!existingAgent && !isRouteAgentHydrated && !cachedCoPilot) return;
+      if (!existingAgent) {
+        applyRecoveredSession(null);
+        return;
+      }
+
       initializeFromAgent(existingAgent);
-      const seed = createCoPilotSeedFromAgent(existingAgent);
+      updateBuilderState(
+        buildResumedBuilderState(existingAgent.id, existingAgent, cachedBuilder, cachedCoPilot),
+      );
+      const seed = buildResumedCoPilotSeed(existingAgent, cachedCoPilot);
       coPilotStore.hydrateFromSeed({
         ...seed,
         devStage: "reflect",
@@ -253,25 +399,29 @@ function CreateAgentPageContent() {
           notes: "",
         },
       });
+      setHasRestoredSession(true);
       return;
     }
+
     if (existingAgent) {
-      initializeFromAgent(existingAgent);
-      coPilotStore.hydrateFromSeed(createCoPilotSeedFromAgent(existingAgent));
-    } else {
-      resetBuilderState();
-      coPilotStore.reset();
+      applyRecoveredSession(existingAgent);
+      return;
     }
-    // Restore cached lifecycle state (survives page reloads / HMR crashes)
-    const restoreId = editingAgentId ?? builderState.draftAgentId;
-    if (restoreId) {
-      const cached = loadCoPilotLifecycleFromCache(restoreId);
-      if (cached && cached.devStage && cached.devStage !== "think") {
-        coPilotStore.hydrateFromSeed({ ...coPilotStore.snapshot(), ...cached });
-      }
+
+    if (cachedCoPilot || cachedBuilder) {
+      applyRecoveredSession(null);
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingAgentId, reflectStage, existingAgent]);
+
+    if (editingAgentId && !isRouteAgentHydrated) {
+      return;
+    }
+
+    resetBuilderState();
+    coPilotStore.reset();
+    setHasRestoredSession(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingAgentId, reflectStage, existingAgent, isRouteAgentHydrated]);
 
   useEffect(() => {
     setCreateSessionConfig(createInitialCreateSessionConfig(workingAgent));
@@ -382,24 +532,25 @@ function CreateAgentPageContent() {
     workingAgent?.discoveryDocuments,
   ]);
 
-  // Persist lifecycle state to localStorage so page reloads can resume
+  // Persist the full create-session snapshot so refreshes can recover builder work,
+  // then keep the lighter lifecycle cache for older resume paths.
   useEffect(() => {
-    const agentId = effectiveAgentId ?? builderState.draftAgentId;
-    if (!agentId || coPilotStore.devStage === "think") return;
+    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
+    if (!agentId || !hasRestoredSession) return;
+
     const timeout = window.setTimeout(() => {
-      saveCoPilotLifecycleToCache(agentId, coPilotStore.snapshot());
+      const snapshot = coPilotStore.snapshot();
+      saveCreateSessionToCache(agentId, {
+        coPilot: snapshot,
+        builder: builderState,
+      });
+      if (snapshot.devStage !== "think") {
+        saveCoPilotLifecycleToCache(agentId, snapshot);
+      }
     }, 300);
+
     return () => window.clearTimeout(timeout);
-  }, [
-    effectiveAgentId,
-    builderState.draftAgentId,
-    coPilotStore.devStage,
-    coPilotStore.thinkStatus,
-    coPilotStore.planStatus,
-    coPilotStore.buildStatus,
-    coPilotStore.evalStatus,
-    coPilotStore.deployStatus,
-  ]);
+  });
 
   const syntheticAgent: SavedAgent = useMemo(() => {
     const effectiveImprovements = builderState.improvements.length > 0 ? builderState.improvements : (workingAgent?.improvements ?? []);
@@ -590,6 +741,8 @@ function CreateAgentPageContent() {
           triggers: effectiveTriggers,
         });
         resetBuilderState();
+        clearCreateSessionCache(savedAgent.id);
+        clearCoPilotLifecycleCache(savedAgent.id);
         router.push(resolveImproveAgentCompletionHref(
           savedAgent.id,
           sandboxIds,
@@ -605,6 +758,8 @@ function CreateAgentPageContent() {
           triggers: effectiveTriggers,
         });
         resetBuilderState();
+        clearCreateSessionCache(savedAgent.id);
+        clearCoPilotLifecycleCache(savedAgent.id);
         router.push(
           buildCreateDeployHref(savedAgent.id, deploySummary.readinessLabel === "Ready to deploy"),
         );
@@ -630,6 +785,8 @@ function CreateAgentPageContent() {
         triggers: effectiveTriggers,
       });
       resetBuilderState();
+      clearCreateSessionCache(agentId);
+      clearCoPilotLifecycleCache(agentId);
       router.push(
         buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
       );
@@ -637,6 +794,10 @@ function CreateAgentPageContent() {
     }
 
     resetBuilderState();
+    if (effectiveAgentId) {
+      clearCreateSessionCache(effectiveAgentId);
+      clearCoPilotLifecycleCache(effectiveAgentId);
+    }
     router.push("/agents");
   }, [builderState, createSessionConfig.runtimeInputs, createSessionConfig.selectedSkills, createSessionConfig.toolConnections, createSessionConfig.triggers, effectiveAgentId, finalizePendingCredentialDrafts, isImprovingExistingAgent, nameOverride, persistAgentEdits, resetBuilderState, reviewOutput, router, rulesOverride, saveAgent, workingAgent]);
 
@@ -705,6 +866,10 @@ function CreateAgentPageContent() {
         setHotPushSummary(`${results.length} instance${results.length !== 1 ? "s" : ""} updated`);
         await new Promise((r) => setTimeout(r, 1200));
         resetBuilderState();
+        if (hotPushRetryTarget.agentId) {
+          clearCreateSessionCache(hotPushRetryTarget.agentId);
+          clearCoPilotLifecycleCache(hotPushRetryTarget.agentId);
+        }
         coPilotStore.reset();
         router.push("/agents");
       } else {
@@ -723,13 +888,17 @@ function CreateAgentPageContent() {
     setHotPushStatus("idle");
     setHotPushRetryTarget(null);
     resetBuilderState();
+    if (effectiveAgentId) {
+      clearCreateSessionCache(effectiveAgentId);
+      clearCoPilotLifecycleCache(effectiveAgentId);
+    }
     coPilotStore.reset();
     router.push("/agents");
-  }, [coPilotStore, resetBuilderState, router]);
+  }, [coPilotStore, effectiveAgentId, resetBuilderState, router]);
 
   // ─── Render: CoPilot mode ───────────────────────────────────────────────────
 
-  const handleCoPilotComplete = useCallback(async () => {
+  const handleCoPilotComplete = useCallback(async (): Promise<boolean> => {
     setIsCompleting(true);
     const state = coPilotStore.snapshot();
     setCompletionError(null);
@@ -802,22 +971,23 @@ function CreateAgentPageContent() {
             );
             setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds: failedSandboxIds });
             setIsCompleting(false);
-            return;
+            return false;
           }
         } catch {
           setHotPushStatus("error");
           setHotPushSummary("Config push failed before all running instances could be updated");
           setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds });
           setIsCompleting(false);
-          return;
+          return false;
         }
         await new Promise((r) => setTimeout(r, 1200));
 
         resetBuilderState();
         if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
+        if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
         coPilotStore.reset();
         router.push("/agents");
-        return;
+        return true;
       }
 
       const deploySummary = buildDeployConfigSummary({
@@ -828,17 +998,19 @@ function CreateAgentPageContent() {
 
       resetBuilderState();
       if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
+      if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
       coPilotStore.reset();
       router.push(resolveImproveAgentCompletionHref(
         existingAgent.id,
         sandboxIds,
         deploySummary.readinessLabel === "Ready to deploy",
       ));
-      return;
+      return true;
     }
 
-    // Include the forge sandbox ID so deploy page can use fast-path promotion
-    // instead of spinning up a brand new sandbox (which takes 2-5 minutes)
+    // Include the forge sandbox ID so we can skip re-deployment.
+    // The forge step already provisioned a Docker sandbox — Ship just saves config
+    // and pushes it to the existing sandbox instead of creating a new one.
     const forgeSandboxId = workingAgent?.forgeSandboxId ?? architectSandbox?.sandbox_id ?? undefined;
 
     const agentId = completionKind === "deploy-draft" && builderState.draftAgentId
@@ -863,9 +1035,42 @@ function CreateAgentPageContent() {
     if (credentialResult.error) {
       setCompletionError(credentialResult.error);
       setIsCompleting(false);
-      return;
+      return false;
     }
 
+    // If a forge sandbox already exists, push config to it instead of redirecting
+    // to the deploy page (which would spin up a NEW sandbox — wasteful).
+    if (forgeSandboxId) {
+      try {
+        const savedAgent = agents.find((a) => a.id === agentId) ?? { id: agentId, ...finalFields, toolConnections: credentialResult.toolConnections };
+        const pushResult = await pushAgentConfig(
+          forgeSandboxId,
+          savedAgent as Parameters<typeof pushAgentConfig>[1],
+        );
+        if (!pushResult.ok) {
+          setCompletionError(pushResult.detail ?? "Failed to activate agent");
+          setIsCompleting(false);
+          return false;
+        }
+      } catch (error) {
+        setCompletionError(
+          error instanceof Error ? error.message : "Failed to activate agent",
+        );
+        setIsCompleting(false);
+        return false;
+      }
+      resetBuilderState();
+      if (agentId) clearCoPilotLifecycleCache(agentId);
+      if (agentId) clearCreateSessionCache(agentId);
+      coPilotStore.reset();
+      setIsCompleting(false);
+      // Stay on the page — advance the wizard to Reflect stage
+      coPilotStore.setDeployStatus("done");
+      coPilotStore.advanceDevStage(); // ship → reflect
+      return true;
+    }
+
+    // No forge sandbox — redirect to deploy page (legacy path)
     const deploySummary = buildDeployConfigSummary({
       runtimeInputs: finalFields.runtimeInputs,
       toolConnections: credentialResult.toolConnections,
@@ -874,10 +1079,12 @@ function CreateAgentPageContent() {
 
     resetBuilderState();
     if (agentId) clearCoPilotLifecycleCache(agentId);
+    if (agentId) clearCreateSessionCache(agentId);
     coPilotStore.reset();
     router.push(
       buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
     );
+    return true;
   }, [architectSandbox, builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.skills]);
 
   // ── v2 init form: shown when creating a brand-new agent ──────────────────
@@ -934,7 +1141,7 @@ function CreateAgentPageContent() {
               </div>
             </div>
           )}
-          {process.env.NODE_ENV === "development" && (
+          {showDevMockBar && (
             <DevMockBar coPilotStore={coPilotStore} />
           )}
           <CoPilotLayout
@@ -945,7 +1152,7 @@ function CreateAgentPageContent() {
             onBuilderStateChange={handleBuilderStateChange}
             onComplete={handleCoPilotComplete}
             onCancel={() => router.push("/agents")}
-            architectSandbox={architectSandbox}
+            architectSandbox={effectiveSandbox}
           />
         </div>
       </div>
@@ -1078,7 +1285,14 @@ function CreateAgentPageContent() {
   // ─── Chat view (builder mode) ─────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between px-6 md:px-8 py-3 shrink-0 border-b border-[var(--border-default)] bg-[var(--card-color)]">
+      <div
+        className={[
+          "flex items-center justify-between px-6 md:px-8 py-3 shrink-0 border-b transition-all duration-500",
+          agentMode === "live"
+            ? "border-[var(--primary)]/20 bg-gradient-to-r from-[var(--card-color)] via-[rgba(174,0,208,0.03)] to-[var(--card-color)]"
+            : "border-[var(--border-default)] bg-[var(--card-color)]",
+        ].join(" ")}
+      >
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/agents")}
@@ -1087,23 +1301,31 @@ function CreateAgentPageContent() {
           >
             <ChevronLeft className="h-5 w-5 text-[var(--text-secondary)]" />
           </button>
-          <div>
-            <h1 className="text-lg font-satoshi-bold text-[var(--text-primary)]">
-              {existingAgent ? "Improve Agent" : "Create New Agent"}
-            </h1>
-            {existingAgent && (
-              <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)]">
-                {existingAgent.name}
-              </p>
-            )}
-          </div>
+          {workingAgent?.forgeSandboxId ? (
+            <CreationProgressCard
+              agentName={workingAgent.name ?? "Agent"}
+              currentPhase={deriveCreationPhase(builderState)}
+              isReady={agentMode === "live"}
+            />
+          ) : (
+            <div>
+              <h1 className="text-lg font-satoshi-bold text-[var(--text-primary)]">
+                {existingAgent ? "Improve Agent" : "Create New Agent"}
+              </h1>
+              {existingAgent && (
+                <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                  {existingAgent.name}
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {workingAgent?.forgeSandboxId && (
             <button
               onClick={() => setShowWorkspace((v) => !v)}
               className={[
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-satoshi-medium transition-colors",
+                "relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-satoshi-medium transition-colors",
                 showWorkspace
                   ? "bg-[var(--primary)]/10 text-[var(--primary)]"
                   : "text-[var(--text-secondary)] hover:bg-[var(--color-light,#f5f5f5)]",
@@ -1112,10 +1334,22 @@ function CreateAgentPageContent() {
             >
               <FolderOpen className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Files</span>
+              {workspaceBadge && !showWorkspace && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[var(--primary)] spark" />
+              )}
             </button>
           )}
           {workingAgent?.forgeSandboxId ? (
             <>
+              <button
+                onClick={handleDeleteForge}
+                disabled={isDeleting}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--error)] hover:bg-[var(--error)]/5 transition-colors"
+                title="Discard agent and container"
+              >
+                {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                <span className="hidden sm:inline">Discard</span>
+              </button>
               <button
                 onClick={handleTestModeToggle}
                 disabled={isSwitchingMode}
@@ -1142,7 +1376,7 @@ function CreateAgentPageContent() {
               {agentMode === "live" && (
                 <button
                   onClick={() => setShowShipDialog(true)}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-satoshi-bold bg-gradient-to-r from-[var(--primary)] to-[var(--secondary)] text-white hover:opacity-90 transition-all"
+                  className="spark flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-satoshi-bold gradient-drift text-white hover:opacity-90 transition-all"
                 >
                   <Rocket className="h-3.5 w-3.5" />
                   Ship
@@ -1156,7 +1390,7 @@ function CreateAgentPageContent() {
       </div>
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+        <div key={modeTransitionKey} className="flex-1 flex flex-col overflow-hidden min-h-0 stage-enter">
           <TabChat
             mode="builder"
             disableBuilderAutosave={isCompleting}
@@ -1191,6 +1425,24 @@ function CreateAgentPageContent() {
 // ── Forge Init Screen ─────────────────────────────────────────────────────────
 // Shown before the chat opens — collects name + description, then provisions
 // the agent's own container with the Architect SOUL.md pre-loaded.
+// Uses Alive Additions from DESIGN.md for warmth and presence.
+
+/** Map raw provisioning log lines to friendly, human-readable steps */
+function friendlyProvisioningStep(line: string): string | null {
+  const lower = line.toLowerCase();
+  if (lower.includes("creating your agent")) return "Starting your agent's journey...";
+  if (lower.includes("starting container")) return "Preparing a private workspace...";
+  if (lower.includes("pulling")) return "Setting up the environment...";
+  if (lower.includes("container started") || lower.includes("container '")) return "Workspace is ready...";
+  if (lower.includes("installing openclaw")) return "Teaching your agent the basics...";
+  if (lower.includes("openclaw installed")) return "Core skills installed...";
+  if (lower.includes("browser") || lower.includes("vnc")) return "Adding visual abilities...";
+  if (lower.includes("gateway")) return "Opening communication channels...";
+  if (lower.includes("architect") || lower.includes("soul")) return "Awakening the Architect...";
+  if (lower.includes("ready") || lower.includes("opening chat")) return "Your agent is coming to life...";
+  if (lower.includes("forwarding")) return null; // skip noisy env var lines
+  return null; // hide raw technical lines
+}
 
 function ForgeInitScreen({
   phase,
@@ -1208,30 +1460,85 @@ function ForgeInitScreen({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
+  // Derive friendly provisioning steps (deduplicated, filtered)
+  const friendlySteps = useMemo(() => {
+    const steps: string[] = [];
+    const seen = new Set<string>();
+    for (const line of log) {
+      const friendly = friendlyProvisioningStep(line);
+      if (friendly && !seen.has(friendly)) {
+        seen.add(friendly);
+        steps.push(friendly);
+      }
+    }
+    return steps;
+  }, [log]);
+
+  // Orb intensity grows with progress
+  const orbIntensity = Math.min(friendlySteps.length / 6, 1);
+
   if (phase === "provisioning") {
     return (
       <div className="flex flex-col h-full items-center justify-center bg-[var(--background)] px-6">
-        <div className="w-full max-w-md space-y-6">
-          <div className="text-center space-y-2">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-[var(--primary)]/10 mb-2">
-              <Loader2 className="h-6 w-6 text-[var(--primary)] animate-spin" />
+        <div className="w-full max-w-lg space-y-8 stage-enter">
+          {/* Animated explainer: how Ruh works — cycles through scenes */}
+          <OnboardingSequence />
+
+          {/* Dark terminal card with live shell output */}
+          {log.length > 0 && (
+            <div
+              className="rounded-2xl overflow-hidden"
+              style={{ background: "#0c0a14" }}
+            >
+              <div className="flex items-center gap-1.5 px-4 py-2 border-b border-white/5">
+                <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
+                <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
+                <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
+                <span className="ml-2 text-[9px] font-mono text-white/20">agent workspace</span>
+              </div>
+              <div className="px-4 py-3 space-y-1 max-h-[160px] overflow-y-auto">
+                {log.map((line, i) => {
+                  const age = log.length - i;
+                  const isNew = age <= 2;
+                  const isRecent = age <= 5;
+                  return (
+                    <p
+                      key={i}
+                      className="font-mono whitespace-nowrap overflow-hidden transition-opacity duration-500"
+                      style={{
+                        fontSize: "12px",
+                        lineHeight: "20px",
+                        color: "#fff",
+                        opacity: 1,
+                      }}
+                    >
+                      <span style={{ color: "#22c55e" }}>$</span> {line}
+                    </p>
+                  );
+                })}
+              </div>
             </div>
-            <h1 className="text-xl font-satoshi-bold text-[var(--text-primary)]">
-              Setting up your agent&apos;s workspace
-            </h1>
-            <p className="text-sm font-satoshi-regular text-[var(--text-secondary)]">
-              Your agent is getting its own container. This takes about a minute.
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] p-4 space-y-1.5 max-h-48 overflow-y-auto">
-            {log.map((line, i) => (
-              <p key={i} className="text-xs font-mono text-[var(--text-secondary)] leading-relaxed">
-                {line}
-              </p>
+          )}
+
+          {/* Progress dots */}
+          <div className="flex justify-center gap-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="rounded-full transition-all duration-500"
+                style={{
+                  width: "8px",
+                  height: "8px",
+                  backgroundColor: i < friendlySteps.length
+                    ? `rgba(174, 0, 208, ${0.4 + (i / 6) * 0.6})`
+                    : "rgba(0, 0, 0, 0.06)",
+                }}
+              />
             ))}
           </div>
+
           {error && (
-            <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/10 px-4 py-3 text-sm font-satoshi-regular text-[var(--error)]">
+            <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/10 px-4 py-3 text-sm font-satoshi-regular text-[var(--error)] text-center spark">
               {error}
             </div>
           )}
@@ -1242,34 +1549,42 @@ function ForgeInitScreen({
 
   return (
     <div className="flex flex-col h-full items-center justify-center bg-[var(--background)] px-6">
-      <div className="w-full max-w-md space-y-6">
-        <div className="space-y-1">
+      <div className="w-full max-w-md space-y-8 stage-enter">
+        {/* Ruh logo mark — idle mode, starts breathing when name is typed */}
+        <div className="flex justify-center">
+          <AnimatedRuhLogo
+            mode={name.trim() ? "alive" : "idle"}
+            size={72}
+          />
+        </div>
+
+        <div className="text-center space-y-2">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 text-sm font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors mb-4 cursor-pointer"
+            className="flex items-center gap-1.5 text-sm font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors mx-auto mb-2 cursor-pointer"
           >
             <ChevronLeft className="h-4 w-4" />
             Back to agents
           </button>
           <h1 className="text-2xl font-satoshi-bold text-[var(--text-primary)]">
-            Create a new agent
+            Who are you bringing to life?
           </h1>
           <p className="text-sm font-satoshi-regular text-[var(--text-secondary)]">
-            Give your agent a name and describe what they should do. You&apos;ll shape the rest through conversation.
+            Give them a name and a purpose. You&apos;ll shape the rest together.
           </p>
         </div>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-satoshi-medium text-[var(--text-primary)]">
-              Name
+              Their name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Google Ads Manager"
-              className="w-full px-4 py-3 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] text-sm font-satoshi-regular text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)] transition-all"
+              className="focus-breathe w-full px-4 py-3 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] text-sm font-satoshi-regular text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none transition-all"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && name.trim()) onSubmit(name.trim(), description.trim());
               }}
@@ -1278,14 +1593,14 @@ function ForgeInitScreen({
 
           <div className="space-y-1.5">
             <label className="text-sm font-satoshi-medium text-[var(--text-primary)]">
-              What should this agent do?
+              What&apos;s their job?
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe their job like you'd explain it to a teammate — what they do, who they help, what success looks like."
+              placeholder="Describe their role like you'd explain it to a teammate — what they handle, who they help, what good looks like."
               rows={4}
-              className="w-full px-4 py-3 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] text-sm font-satoshi-regular text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)] transition-all resize-none"
+              className="focus-breathe w-full px-4 py-3 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] text-sm font-satoshi-regular text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none transition-all resize-none"
             />
           </div>
 
@@ -1298,9 +1613,9 @@ function ForgeInitScreen({
           <button
             onClick={() => { if (name.trim()) onSubmit(name.trim(), description.trim()); }}
             disabled={!name.trim()}
-            className="w-full py-3 px-6 rounded-xl bg-[var(--primary)] text-white text-sm font-satoshi-bold hover:bg-[var(--primary-hover,#9400b4)] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            className="gradient-drift w-full py-3 px-6 rounded-xl text-white text-sm font-satoshi-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none transition-all"
           >
-            Create Agent
+            Bring to life
           </button>
         </div>
       </div>

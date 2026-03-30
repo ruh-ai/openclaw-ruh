@@ -1,6 +1,9 @@
 import type { EvalTask, SkillGraphNode } from "./types";
 import { sendToArchitectStreaming } from "./api";
 import { scoreEvalResponse } from "./eval-scorer";
+import type { MockContext } from "./eval-mock-generator";
+
+export type EvalMode = "mock" | "live";
 
 export interface EvalRunnerStore {
   updateEvalTask: (taskId: string, partial: Partial<EvalTask>) => void;
@@ -12,17 +15,24 @@ export interface EvalRunnerConfig {
   store: EvalRunnerStore;
   skillGraph: SkillGraphNode[];
   agentRules: string[];
+  mode: EvalMode;
+  mockContext?: MockContext | null;
   signal?: AbortSignal;
   onProgress?: (current: number, total: number, taskTitle: string) => void;
 }
 
-function buildSoulOverride(agentRules: string[], skillGraph: SkillGraphNode[]): string {
+function buildSoulOverride(
+  agentRules: string[],
+  skillGraph: SkillGraphNode[],
+  mode: EvalMode,
+  mockContext?: MockContext | null,
+): string {
   const skillNames = skillGraph.map((s) => s.name).join(", ");
   const rules = agentRules.length > 0
     ? agentRules.map((r) => `- ${r}`).join("\n")
     : "No specific rules defined.";
 
-  return `You are an AI agent being evaluated. Respond as the agent would in production.
+  let base = `You are an AI agent being evaluated. Respond as the agent would in production.
 
 Your available skills: ${skillNames}
 
@@ -30,6 +40,14 @@ Your rules:
 ${rules}
 
 Respond naturally to the user's message. Use your skills when appropriate. If the request is outside your capabilities, say so politely.`;
+
+  // In mock mode, append mock data instructions
+  if (mode === "mock" && mockContext && mockContext.services.length > 0) {
+    const { buildMockModeInstruction } = require("./eval-mock-generator") as typeof import("./eval-mock-generator");
+    base += "\n\n" + buildMockModeInstruction(mockContext);
+  }
+
+  return base;
 }
 
 async function runSingleTask(
@@ -50,7 +68,7 @@ async function runSingleTask(
       },
       {
         mode: "test",
-        soulOverride: buildSoulOverride(config.agentRules, config.skillGraph),
+        soulOverride: buildSoulOverride(config.agentRules, config.skillGraph, config.mode, config.mockContext),
         signal: config.signal,
       },
     );

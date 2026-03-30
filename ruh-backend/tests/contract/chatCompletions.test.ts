@@ -170,7 +170,8 @@ describe('POST /api/sandboxes/:id/chat — OpenAI chat completions contract', ()
       .send(CHAT_REQUEST);
 
     expect(res.status).toBe(503);
-    expect(res.body.detail).toContain('Gateway unreachable');
+    // 5xx errors are sanitized by the error handler — raw message is not exposed to clients
+    expect(res.body.detail).toBe('Internal server error');
   });
 
   test('conversation_id is stripped from proxied request body', async () => {

@@ -288,7 +288,7 @@ export default function AgentsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [deploymentsAgent, setDeploymentsAgent] = useState<SavedAgent | null>(null);
-  const { agents, deleteAgent, bulkDeleteAgents, updateAgentStatus, fetchAgents } = useAgentsStore();
+  const { agents, deleteAgent, deleteForge, bulkDeleteAgents, updateAgentStatus, fetchAgents } = useAgentsStore();
   const sandboxHealth = useSandboxHealth(
     agents.flatMap((agent) => agent.sandboxIds ?? []),
   );
@@ -535,6 +535,16 @@ export default function AgentsPage() {
                           >
                             <Wrench className="h-3 w-3" />
                             Continue Building
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`Discard "${agent.name}"? The container and all work will be deleted.`)) return;
+                              try { await deleteForge(agent.id); } catch { /* ignore */ }
+                            }}
+                            className="flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--border-stroke)] text-[var(--text-tertiary)] hover:text-[var(--error)] hover:border-[var(--error)]/30 hover:bg-[var(--error)]/5 transition-colors"
+                            title="Discard agent"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>

@@ -7,6 +7,7 @@ const mockSendToForgeSandboxChat = mock();
 mock.module("@/lib/openclaw/api", () => ({
   sendToArchitectStreaming: mockSendToArchitectStreaming,
   sendToForgeSandboxChat: mockSendToForgeSandboxChat,
+  BridgeApiError: class BridgeApiError extends Error { status; constructor(m: string, s = 0) { super(m); this.status = s; } },
 }));
 
 const { BuilderAgent } = await import("../builder-agent");
@@ -550,6 +551,133 @@ describe("BuilderAgent", () => {
     expect(prompt).toContain("Triggers: cron-schedule, Chat Command");
     expect(prompt).toContain("Rules: Prioritize wasted spend; Explain recommendations briefly");
     expect(prompt).toContain("Add anomaly detection");
+  });
+
+  test("does not emit think_status for review-stage copilot runs", async () => {
+    mockSendToArchitectStreaming.mockResolvedValueOnce({
+      type: "agent_response",
+      content: "I'll refine the current agent configuration.",
+    });
+
+    const agent = new BuilderAgent({
+      sessionId: "session-1",
+      mode: "copilot",
+    });
+
+    const events = await new Promise<unknown[]>((resolve, reject) => {
+      const collected: unknown[] = [];
+      const subscription = agent.run({
+        threadId: "thread-1",
+        runId: "run-1",
+        messages: [{ id: "msg-1", role: "user", content: "Tighten the deployment rules." }],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {
+          wizardState: {
+            devStage: "review",
+            phase: "review",
+            name: "Inventory Alert Bot",
+            description: "Monitors Shopify inventory and posts ranked Slack alerts.",
+            selectedSkillIds: ["inventory-monitor", "slack-alert-send"],
+            connectedTools: [{ toolId: "shopify" }, { toolId: "slack" }],
+            triggers: [{ id: "cron-schedule" }],
+            agentRules: ["Send hourly summaries"],
+          },
+        },
+      }).subscribe({
+        next: (event) => collected.push(event),
+        error: reject,
+        complete: () => {
+          subscription.unsubscribe();
+          resolve(collected);
+        },
+      });
+    });
+
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        type: EventType.CUSTOM,
+        name: "think_status",
+      }),
+    );
+  });
+
+  test("reconfigures review-stage architect runs with current tools, channels, runtime inputs, and soul context", async () => {
+    mockSendToArchitectStreaming.mockResolvedValueOnce({
+      type: "agent_response",
+      content: "I updated the current configuration in place.",
+    });
+
+    const agent = new BuilderAgent({
+      sessionId: "session-1",
+      mode: "copilot",
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const subscription = agent.run({
+        threadId: "thread-1",
+        runId: "run-1",
+        messages: [{ id: "msg-1", role: "user", content: "Make the alerts more actionable before deploy." }],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {
+          wizardState: {
+            devStage: "review",
+            phase: "review",
+            name: "Inventory Alert Bot",
+            systemName: "inventory-alert-bot",
+            description: "Monitors Shopify inventory every hour and posts ranked Slack restock alerts.",
+            selectedSkillIds: ["inventory-monitor", "restock-priority-ranker", "slack-alert-send"],
+            builtSkillIds: ["inventory-monitor"],
+            skillGraph: [
+              { skill_id: "inventory-monitor", name: "Inventory Monitor", description: "Fetches inventory from Shopify.", source: "custom", depends_on: [] },
+              { skill_id: "slack-alert-send", name: "Slack Alert Send", description: "Posts inventory alerts to Slack.", source: "custom", depends_on: ["inventory-monitor"] },
+            ],
+            connectedTools: [
+              { toolId: "shopify", name: "Shopify", status: "configured" },
+              { toolId: "slack", name: "Slack", status: "missing_secret" },
+            ],
+            runtimeInputs: [
+              { key: "SHOPIFY_STORE_DOMAIN", label: "Shopify Store Domain", required: true, source: "architect_requirement", value: "acme-shop.myshopify.com" },
+              { key: "SLACK_CHANNEL_ID", label: "Slack Channel", required: true, source: "architect_requirement", value: "" },
+            ],
+            triggers: [{ id: "cron-schedule", title: "Hourly Inventory Sweep", kind: "schedule", status: "supported", schedule: "0 * * * *" }],
+            channels: [{ kind: "slack", label: "Slack", status: "planned", availabilityLabel: "Supported — configure after deploy" }],
+            agentRules: ["Prioritize items below restock threshold", "Escalate critical stockouts first"],
+            improvements: [{ id: "imp-1", title: "Add per-SKU urgency scoring", description: "Rank alerts by urgency", status: "accepted" }],
+            architecturePlan: {
+              skills: [{ id: "inventory-monitor", name: "Inventory Monitor", description: "Fetch inventory", dependencies: [], envVars: ["SHOPIFY_STORE_DOMAIN"] }],
+              workflow: { steps: [{ skillId: "inventory-monitor", parallel: false }] },
+              integrations: [{ toolId: "shopify", name: "Shopify", method: "api", envVars: ["SHOPIFY_STORE_DOMAIN"] }],
+              triggers: [{ id: "cron-schedule", type: "cron", config: "0 * * * *", description: "Hourly" }],
+              channels: ["slack"],
+              envVars: [{ key: "SHOPIFY_STORE_DOMAIN", description: "Shopify store", required: true }],
+              subAgents: [],
+              missionControl: null,
+            },
+          } as never,
+        },
+      }).subscribe({
+        complete: () => {
+          subscription.unsubscribe();
+          resolve();
+        },
+        error: reject,
+      });
+    });
+
+    const prompt = mockSendToArchitectStreaming.mock.calls[0]?.[1];
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("You are the architect agent in REFINE mode.");
+    expect(prompt).toContain("Dev Stage: review");
+    expect(prompt).toContain("Connected Tools: shopify (configured), slack (missing_secret)");
+    expect(prompt).toContain("Runtime Inputs: required 1/2 filled");
+    expect(prompt).toContain("Channels: slack (planned)");
+    expect(prompt).toContain("SOUL Summary:");
+    expect(prompt).toContain("Hourly Inventory Sweep");
+    expect(prompt).toContain("Make the alerts more actionable before deploy.");
   });
 
   test("routes forge builder runs through forge chat and sends the system instruction separately", async () => {

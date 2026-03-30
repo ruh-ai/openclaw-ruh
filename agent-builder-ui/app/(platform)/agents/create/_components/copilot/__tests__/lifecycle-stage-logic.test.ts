@@ -9,7 +9,11 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
-import { getStageInputPlaceholder } from "../LifecycleStepRenderer";
+import {
+  getStageInputPlaceholder,
+  isLifecycleStageDone,
+  isLifecycleStageUnlocked,
+} from "../LifecycleStepRenderer";
 
 // ─── Pure logic extracted from LifecycleStepRenderer ──────────────────────
 
@@ -31,20 +35,6 @@ function isStageLoading(
     case "ship": return statuses.deployStatus === "running";
     default: return false;
   }
-}
-
-function isStageUnlocked(stage: AgentDevStage, currentStage: AgentDevStage): boolean {
-  const idx = AGENT_DEV_STAGES.indexOf(stage);
-  const currentIdx = AGENT_DEV_STAGES.indexOf(currentStage);
-  if (idx === 0) return true;
-  if (idx <= currentIdx) return true;
-  return false;
-}
-
-function isStageDone(stage: AgentDevStage, currentStage: AgentDevStage): boolean {
-  const idx = AGENT_DEV_STAGES.indexOf(stage);
-  const currentIdx = AGENT_DEV_STAGES.indexOf(currentStage);
-  return idx < currentIdx;
 }
 
 function isAnyStageLoading(statuses: {
@@ -101,36 +91,47 @@ describe("isStageLoading", () => {
 
 describe("isStageUnlocked", () => {
   test("think is always unlocked", () => {
-    expect(isStageUnlocked("think", "think")).toBe(true);
-    expect(isStageUnlocked("think", "reflect")).toBe(true);
+    expect(isLifecycleStageUnlocked("think", "think")).toBe(true);
+    expect(isLifecycleStageUnlocked("think", "reflect")).toBe(true);
   });
 
-  test("current and past stages are unlocked", () => {
-    expect(isStageUnlocked("think", "build")).toBe(true);
-    expect(isStageUnlocked("plan", "build")).toBe(true);
-    expect(isStageUnlocked("build", "build")).toBe(true);
+  test("current and past stages stay unlocked while viewing the furthest stage", () => {
+    expect(isLifecycleStageUnlocked("think", "build")).toBe(true);
+    expect(isLifecycleStageUnlocked("plan", "build")).toBe(true);
+    expect(isLifecycleStageUnlocked("build", "build")).toBe(true);
   });
 
   test("future stages are locked", () => {
-    expect(isStageUnlocked("review", "build")).toBe(false);
-    expect(isStageUnlocked("ship", "think")).toBe(false);
+    expect(isLifecycleStageUnlocked("review", "build")).toBe(false);
+    expect(isLifecycleStageUnlocked("ship", "think")).toBe(false);
+  });
+
+  test("viewing an earlier stage does not lock a later completed stage", () => {
+    expect(isLifecycleStageUnlocked("review", "review")).toBe(true);
+    expect(isLifecycleStageUnlocked("review", "build")).toBe(false);
   });
 });
 
 // ─── isStageDone ──────────────────────────────────────────────────────────
 
 describe("isStageDone", () => {
-  test("stages before current are done", () => {
-    expect(isStageDone("think", "build")).toBe(true);
-    expect(isStageDone("plan", "build")).toBe(true);
+  test("stages before the furthest unlocked stage are done", () => {
+    expect(isLifecycleStageDone("think", "build")).toBe(true);
+    expect(isLifecycleStageDone("plan", "build")).toBe(true);
   });
 
-  test("current stage is not done", () => {
-    expect(isStageDone("build", "build")).toBe(false);
+  test("furthest unlocked stage is not marked done", () => {
+    expect(isLifecycleStageDone("build", "build")).toBe(false);
   });
 
-  test("stages after current are not done", () => {
-    expect(isStageDone("ship", "build")).toBe(false);
+  test("stages after the furthest unlocked stage are not done", () => {
+    expect(isLifecycleStageDone("ship", "build")).toBe(false);
+  });
+
+  test("rewinding the current view keeps prior completed stages marked done up to the furthest unlocked stage", () => {
+    expect(isLifecycleStageDone("plan", "review")).toBe(true);
+    expect(isLifecycleStageDone("build", "review")).toBe(true);
+    expect(isLifecycleStageDone("review", "review")).toBe(false);
   });
 });
 

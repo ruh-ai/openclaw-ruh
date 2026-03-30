@@ -560,3 +560,128 @@ h1 {
     font-size: 12px;
   }
 }
+
+/* ─── Alive Additions (DESIGN.md) ─────────────────────────────────────────── */
+/* Subtle animations that make agent creation feel like bringing something to life */
+
+/* 1. Soul Pulse — breathing glow around agent avatar / creation card */
+@keyframes soul-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(174, 0, 208, 0.0); }
+  50% { box-shadow: 0 0 20px 4px rgba(174, 0, 208, 0.12); }
+}
+@keyframes soul-pulse-strong {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(174, 0, 208, 0.0); }
+  50% { box-shadow: 0 0 28px 6px rgba(174, 0, 208, 0.18); }
+}
+.soul-pulse { animation: soul-pulse 3s ease-in-out infinite; }
+.soul-pulse-strong { animation: soul-pulse-strong 2.4s ease-in-out infinite; }
+
+/* 2. Ambient Gradient Drift — living gradient background */
+@keyframes gradient-drift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.gradient-drift {
+  background: linear-gradient(135deg, #ae00d0, #7b5aff, #ae00d0);
+  background-size: 200% 200%;
+  animation: gradient-drift 8s ease-in-out infinite;
+}
+
+/* 3. Spark Moments — celebratory micro-animation at milestones */
+@keyframes spark {
+  0% { transform: scale(0.8); opacity: 0; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.spark { animation: spark 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+/* 4. Typewriter Presence — word-by-word content reveal */
+@keyframes typewriter-fade {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.typewriter-word {
+  animation: typewriter-fade 0.15s ease-out forwards;
+  opacity: 0;
+}
+
+/* 5. Warmth Gradient on Hover — radial purple wash following cursor */
+.warmth-hover {
+  position: relative;
+  overflow: hidden;
+}
+.warmth-hover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(174, 0, 208, 0.06) 0%,
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.warmth-hover:hover::before { opacity: 1; }
+
+/* 6. Breathing Input Focus — single breath on focus, then settle */
+@keyframes focus-breathe {
+  0% { border-color: #ae00d0; box-shadow: 0 0 0 0 rgba(174, 0, 208, 0.15); }
+  50% { border-color: #ae00d0; box-shadow: 0 0 0 4px rgba(174, 0, 208, 0.08); }
+  100% { border-color: #ae00d0; box-shadow: 0 0 0 2px rgba(174, 0, 208, 0.05); }
+}
+.focus-breathe:focus { animation: focus-breathe 0.6s ease-out forwards; }
+
+/* 7. Stage Transition Flow — purposeful step forward */
+@keyframes stage-enter {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes stage-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-24px); }
+}
+.stage-enter { animation: stage-enter 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+.stage-exit { animation: stage-exit 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+
+/* Reverse direction for going back */
+@keyframes stage-enter-reverse {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.stage-enter-reverse { animation: stage-enter-reverse 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+
+/* 8. Soul Born — the ONE dramatic moment when agent is complete */
+@keyframes soul-born {
+  0% { box-shadow: 0 0 0 0 rgba(174, 0, 208, 0); transform: scale(1); }
+  30% { box-shadow: 0 0 40px 12px rgba(174, 0, 208, 0.2); transform: scale(1.01); }
+  60% { box-shadow: 0 0 60px 20px rgba(123, 90, 255, 0.15); transform: scale(1.005); }
+  100% { box-shadow: 0 0 20px 4px rgba(174, 0, 208, 0.1); transform: scale(1); }
+}
+.soul-born { animation: soul-born 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+
+/* Soul orb — the growing orb used during provisioning */
+@keyframes soul-orb-breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 20px 8px rgba(174, 0, 208, 0.08), 0 0 40px 16px rgba(123, 90, 255, 0.04);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow: 0 0 30px 12px rgba(174, 0, 208, 0.14), 0 0 60px 24px rgba(123, 90, 255, 0.08);
+  }
+}
+.soul-orb {
+  animation: soul-orb-breathe 2.5s ease-in-out infinite;
+}
+
+/* Progress ring for creation phases */
+@keyframes progress-fill {
+  from { stroke-dashoffset: var(--progress-from, 100); }
+  to { stroke-dashoffset: var(--progress-to, 0); }
+}
+.progress-ring-animate {
+  animation: progress-fill 0.6s ease-out forwards;
+}

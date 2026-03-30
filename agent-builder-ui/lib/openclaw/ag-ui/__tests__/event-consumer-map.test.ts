@@ -105,6 +105,26 @@ describe("consumeThinkStatus", () => {
     expect(deps.coPilotStore!.setDevStage).toHaveBeenCalledWith("think");
   });
 
+  test("ignores generating updates once the lifecycle has advanced past think", () => {
+    const deps = createMockDeps({
+      coPilotStore: {
+        setDiscoveryDocuments: mock(() => {}),
+        setThinkStatus: mock(() => {}),
+        setDevStage: mock(() => {}),
+        setPhase: mock(() => {}),
+        setArchitecturePlan: mock(() => {}),
+        setPlanStatus: mock(() => {}),
+        setBuildStatus: mock(() => {}),
+        devStage: "plan",
+      },
+    });
+
+    consumeThinkStatus({ status: "generating" }, deps);
+
+    expect(deps.coPilotStore!.setThinkStatus).not.toHaveBeenCalled();
+    expect(deps.coPilotStore!.setDevStage).not.toHaveBeenCalled();
+  });
+
   test("drops when coPilotStore is null", () => {
     const deps = createMockDeps({ coPilotStore: null });
 

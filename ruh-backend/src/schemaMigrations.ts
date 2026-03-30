@@ -367,6 +367,150 @@ export const MIGRATIONS: SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_sandboxes_created_by ON sandboxes (created_by)`,
     ],
   },
+  {
+    id: '0020_marketplace',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS marketplace_listings (
+        id              TEXT        PRIMARY KEY,
+        agent_id        TEXT        NOT NULL REFERENCES agents(id),
+        publisher_id    TEXT        NOT NULL REFERENCES users(id),
+        title           TEXT        NOT NULL,
+        slug            TEXT        NOT NULL UNIQUE,
+        summary         TEXT        NOT NULL DEFAULT '',
+        description     TEXT        NOT NULL DEFAULT '',
+        category        TEXT        NOT NULL DEFAULT 'general',
+        tags            JSONB       NOT NULL DEFAULT '[]',
+        icon_url        TEXT,
+        screenshots     JSONB       NOT NULL DEFAULT '[]',
+        version         TEXT        NOT NULL DEFAULT '1.0.0',
+        status          TEXT        NOT NULL DEFAULT 'draft',
+        review_notes    TEXT,
+        reviewed_by     TEXT        REFERENCES users(id),
+        reviewed_at     TIMESTAMPTZ,
+        install_count   INTEGER     NOT NULL DEFAULT 0,
+        avg_rating      NUMERIC(3,2) DEFAULT 0,
+        published_at    TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_mpl_status ON marketplace_listings (status)`,
+      `CREATE INDEX IF NOT EXISTS idx_mpl_category ON marketplace_listings (category)`,
+      `CREATE INDEX IF NOT EXISTS idx_mpl_publisher ON marketplace_listings (publisher_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_mpl_slug ON marketplace_listings (slug)`,
+      `
+      CREATE TABLE IF NOT EXISTS marketplace_reviews (
+        id              TEXT        PRIMARY KEY,
+        listing_id      TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
+        user_id         TEXT        NOT NULL REFERENCES users(id),
+        rating          INTEGER     NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        title           TEXT,
+        body            TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(listing_id, user_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_mpr_listing ON marketplace_reviews (listing_id)`,
+      `
+      CREATE TABLE IF NOT EXISTS marketplace_installs (
+        id              TEXT        PRIMARY KEY,
+        listing_id      TEXT        NOT NULL REFERENCES marketplace_listings(id),
+        user_id         TEXT        NOT NULL REFERENCES users(id),
+        version         TEXT        NOT NULL,
+        installed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(listing_id, user_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_mpi_user ON marketplace_installs (user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_mpi_listing ON marketplace_installs (listing_id)`,
+      `
+      CREATE TABLE IF NOT EXISTS agent_versions (
+        id              TEXT        PRIMARY KEY,
+        agent_id        TEXT        NOT NULL REFERENCES agents(id),
+        version         TEXT        NOT NULL,
+        changelog       TEXT        NOT NULL DEFAULT '',
+        snapshot        JSONB       NOT NULL,
+        created_by      TEXT        NOT NULL REFERENCES users(id),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(agent_id, version)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_av_agent ON agent_versions (agent_id)`,
+    ],
+  },
+  {
+    id: '0021_paperclip_integration',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS paperclip_company_id TEXT`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS paperclip_workers JSONB NOT NULL DEFAULT '[]'::jsonb`,
+      `CREATE INDEX IF NOT EXISTS idx_agents_paperclip_company ON agents (paperclip_company_id)`,
+    ],
+  },
+  {
+    id: '0022_worker_cost_tracking',
+    statements: [
+      // Agent-level budget fields
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS worker_composition JSONB DEFAULT NULL`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS total_budget_monthly_cents INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS total_spent_monthly_cents INTEGER NOT NULL DEFAULT 0`,
+
+      // Cost events — one row per LLM invocation
+      `
+      CREATE TABLE IF NOT EXISTS cost_events (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id        TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        worker_id       UUID        NULL,
+        task_id         TEXT        NULL,
+        run_id          TEXT        NULL,
+        model           TEXT        NOT NULL,
+        input_tokens    INTEGER     NOT NULL DEFAULT 0,
+        output_tokens   INTEGER     NOT NULL DEFAULT 0,
+        cost_cents      NUMERIC(10,4) NOT NULL DEFAULT 0,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_cost_events_agent ON cost_events (agent_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_cost_events_run ON cost_events (run_id)`,
+
+      // Budget policies — agent-level or worker-level caps
+      `
+      CREATE TABLE IF NOT EXISTS budget_policies (
+        id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id            TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        worker_id           UUID        NULL,
+        monthly_cap_cents   INTEGER     NOT NULL,
+        soft_warning_pct    INTEGER     NOT NULL DEFAULT 80,
+        hard_stop           BOOLEAN     NOT NULL DEFAULT true,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (agent_id, worker_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_budget_policies_agent ON budget_policies (agent_id)`,
+
+      // Execution recordings — full run traces for skill capture
+      `
+      CREATE TABLE IF NOT EXISTS execution_recordings (
+        id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id        TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        worker_id       UUID        NULL,
+        task_id         TEXT        NULL,
+        run_id          TEXT        NOT NULL,
+        success         BOOLEAN     NULL,
+        tool_calls      JSONB       NOT NULL DEFAULT '[]'::jsonb,
+        tokens_used     JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        skills_applied  TEXT[]      NOT NULL DEFAULT '{}',
+        skills_effective TEXT[]     NOT NULL DEFAULT '{}',
+        started_at      TIMESTAMPTZ NULL,
+        completed_at    TIMESTAMPTZ NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_exec_recordings_agent ON execution_recordings (agent_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_exec_recordings_run ON execution_recordings (run_id)`,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {

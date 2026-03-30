@@ -65,6 +65,29 @@ const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb;
   reflect: { label: "Reflect", icon: BookOpen, description: "Build summary" },
 };
 
+function getStageIndex(stage: AgentDevStage): number {
+  return AGENT_DEV_STAGES.indexOf(stage);
+}
+
+export function isLifecycleStageUnlocked(
+  stage: AgentDevStage,
+  maxUnlockedDevStage: AgentDevStage,
+): boolean {
+  const idx = getStageIndex(stage);
+  const unlockedIdx = getStageIndex(maxUnlockedDevStage);
+  if (idx === 0) return true;
+  return idx <= unlockedIdx;
+}
+
+export function isLifecycleStageDone(
+  stage: AgentDevStage,
+  maxUnlockedDevStage: AgentDevStage,
+): boolean {
+  const idx = getStageIndex(stage);
+  const unlockedIdx = getStageIndex(maxUnlockedDevStage);
+  return idx < unlockedIdx;
+}
+
 // ─── Elapsed timer for async waits ──────────────────────────────────────────
 
 function useElapsedTime(active: boolean): number {
@@ -115,7 +138,7 @@ export function getStageInputPlaceholder(devStage: string | undefined, isBuilder
 
 interface LifecycleStepRendererProps {
   embedded?: boolean;
-  onComplete?: () => void;
+  onComplete?: () => void | Promise<boolean>;
   canComplete?: boolean;
   isCompleting?: boolean;
   onDiscoveryComplete?: () => void;
@@ -135,25 +158,18 @@ export function LifecycleStepRenderer({
   onDone,
 }: LifecycleStepRendererProps) {
   const store = useCoPilotStore();
-  const { devStage } = store;
+  const { devStage, maxUnlockedDevStage } = store;
 
   const stageIdx = AGENT_DEV_STAGES.indexOf(devStage);
 
   // Determine which stages are unlocked
-  const isStageUnlocked = (stage: AgentDevStage): boolean => {
-    const idx = AGENT_DEV_STAGES.indexOf(stage);
-    if (idx === 0) return true; // Think always unlocked
-    if (idx <= stageIdx) return true; // Current and past stages
-    // Future stages locked unless previous stage is approved
-    return false;
-  };
+  const isStageUnlocked = (stage: AgentDevStage): boolean =>
+    isLifecycleStageUnlocked(stage, maxUnlockedDevStage);
 
   const isStageActive = (stage: AgentDevStage) => stage === devStage;
 
-  const isStageDone = (stage: AgentDevStage): boolean => {
-    const idx = AGENT_DEV_STAGES.indexOf(stage);
-    return idx < stageIdx;
-  };
+  const isStageDone = (stage: AgentDevStage): boolean =>
+    isLifecycleStageDone(stage, maxUnlockedDevStage);
 
   const isStageLoading = (stage: AgentDevStage): boolean => {
     switch (stage) {
@@ -319,6 +335,7 @@ export function LifecycleStepRenderer({
           <StageShip
             store={store}
             onComplete={onComplete}
+            canComplete={canComplete}
             isCompleting={isCompleting}
           />
         )}
@@ -1172,10 +1189,13 @@ function StageTest({
   store: CoPilotState & CoPilotActions;
   onApprove: () => void;
 }) {
-  const { evalTasks, evalStatus, skillGraph, agentRules, sessionId, workflow, discoveryDocuments, architecturePlan } = store;
+  const { evalTasks, evalStatus, skillGraph, agentRules, sessionId, workflow, discoveryDocuments, architecturePlan, connectedTools, runtimeInputs } = store;
   const abortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number; title: string } | null>(null);
   const [generating, setGenerating] = useState<"quick" | "ai" | null>(null);
+  const [evalMode, setEvalMode] = useState<"mock" | "live">("mock");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockContextRef = useRef<any>(null);
 
   const passCount = evalTasks.filter((t) => t.status === "pass").length;
   const failCount = evalTasks.filter((t) => t.status === "fail").length;
@@ -1193,7 +1213,7 @@ function StageTest({
     setGenerating("quick");
     const { generateDeterministicScenarios } = await import("@/lib/openclaw/eval-scenario-generator");
     const scenarios = generateDeterministicScenarios({
-      skillGraph, workflow, agentRules, discoveryDocuments, architecturePlan,
+      skillGraph: skillGraph ?? [], workflow, agentRules, discoveryDocuments, architecturePlan,
     });
     store.setEvalTasks(scenarios);
     store.setEvalStatus("ready");
@@ -1204,13 +1224,13 @@ function StageTest({
     setGenerating("ai");
     try {
       const { generateLLMScenarios, generateDeterministicScenarios } = await import("@/lib/openclaw/eval-scenario-generator");
-      const scenarios = await generateLLMScenarios(sessionId, { skillGraph, agentRules, discoveryDocuments });
+      const scenarios = await generateLLMScenarios(sessionId, { skillGraph: skillGraph ?? [], agentRules, discoveryDocuments });
       if (scenarios.length > 0) {
         store.setEvalTasks(scenarios);
       } else {
         // Fallback to deterministic if LLM returns nothing
         store.setEvalTasks(generateDeterministicScenarios({
-          skillGraph, workflow, agentRules, discoveryDocuments, architecturePlan,
+          skillGraph: skillGraph ?? [], workflow, agentRules, discoveryDocuments, architecturePlan,
         }));
       }
       store.setEvalStatus("ready");
@@ -1218,7 +1238,7 @@ function StageTest({
       // Fallback to deterministic on error
       const { generateDeterministicScenarios } = await import("@/lib/openclaw/eval-scenario-generator");
       store.setEvalTasks(generateDeterministicScenarios({
-        skillGraph, workflow, agentRules, discoveryDocuments, architecturePlan,
+        skillGraph: skillGraph ?? [], workflow, agentRules, discoveryDocuments, architecturePlan,
       }));
       store.setEvalStatus("ready");
     }
@@ -1233,11 +1253,19 @@ function StageTest({
     const { runEvalSuite } = await import("@/lib/openclaw/eval-runner");
     const tasksToRun = evalTasks.filter((t) => t.status === filter);
 
+    // Generate mock context on first run if in mock mode
+    if (evalMode === "mock" && !mockContextRef.current) {
+      const { generateDeterministicMocks } = await import("@/lib/openclaw/eval-mock-generator");
+      mockContextRef.current = generateDeterministicMocks({ skillGraph: skillGraph ?? [], toolConnections: connectedTools, runtimeInputs, architecturePlan });
+    }
+
     await runEvalSuite(tasksToRun, {
       sessionId,
       store,
-      skillGraph,
+      skillGraph: skillGraph ?? [],
       agentRules,
+      mode: evalMode,
+      mockContext: evalMode === "mock" ? mockContextRef.current : null,
       signal: controller.signal,
       onProgress: (current, total, title) => setProgress({ current, total, title }),
     });
@@ -1342,6 +1370,37 @@ function StageTest({
           </div>
         </div>
       </div>
+
+      {/* Mode toggle */}
+      {evalStatus !== "running" && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-subtle)] border border-[var(--border-default)]">
+            <button
+              onClick={() => { setEvalMode("mock"); mockContextRef.current = null; }}
+              className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                evalMode === "mock"
+                  ? "bg-white text-[var(--primary)] shadow-sm border border-[var(--primary)]/20"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              }`}
+            >
+              Mock Mode
+            </button>
+            <button
+              onClick={() => setEvalMode("live")}
+              className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                evalMode === "live"
+                  ? "bg-white text-amber-600 shadow-sm border border-amber-500/20"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              }`}
+            >
+              Live Mode
+            </button>
+          </div>
+          <span className="text-[9px] font-satoshi-regular text-[var(--text-tertiary)]">
+            {evalMode === "mock" ? "Using generated mock API data" : "Using real API connections"}
+          </span>
+        </div>
+      )}
 
       {/* Action buttons */}
       {pendingCount > 0 && evalStatus !== "running" && (
@@ -1564,10 +1623,12 @@ const SHIP_STEPS: ShipStepConfig[] = [
 function StageShip({
   store,
   onComplete,
+  canComplete = false,
   isCompleting = false,
 }: {
   store: CoPilotState & CoPilotActions;
-  onComplete?: () => void;
+  onComplete?: () => void | Promise<boolean>;
+  canComplete?: boolean;
   isCompleting?: boolean;
 }) {
   const [stepStatuses, setStepStatuses] = useState<Record<ShipStep, ShipStepStatus>>({
@@ -1587,6 +1648,8 @@ function StageShip({
   );
 
   const handleDeploy = async () => {
+    if (!canComplete) return;
+
     setDeploying(true);
     setGithubError(null);
 
@@ -1594,11 +1657,15 @@ function StageShip({
     setStepStatuses((prev) => ({ ...prev, save: "running" }));
     try {
       store.setDeployStatus("running");
-      // Trigger the page-level onComplete which handles save + deploy
-      onComplete?.();
+      // Trigger the page-level onComplete which handles save + deploy.
+      const completed = await onComplete?.();
+      if (completed === false) {
+        throw new Error("Activation failed");
+      }
       setStepStatuses((prev) => ({ ...prev, save: "done" }));
     } catch {
       setStepStatuses((prev) => ({ ...prev, save: "failed" }));
+      store.setDeployStatus("failed");
       setDeploying(false);
       return;
     }
@@ -1853,11 +1920,11 @@ function StageShip({
         <div className="flex justify-end pt-2">
           <button
             onClick={handleDeploy}
-            disabled={isCompleting}
+            disabled={isCompleting || !canComplete}
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 disabled:opacity-30 transition-colors"
           >
             <Rocket className="h-3 w-3" />
-            {isCompleting ? "Deploying..." : "Deploy Agent"}
+            {isCompleting ? "Saving..." : "Save & Activate"}
           </button>
         </div>
       )}

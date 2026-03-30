@@ -18,6 +18,14 @@ export { dockerExec, getContainerName, PREVIEW_PORTS };
 const GATEWAY_PORT = 18789;
 const VNC_WS_PORT = 6080;
 
+/**
+ * Sandbox Docker image. Use the pre-built ruh-sandbox image for fast startup (~5s).
+ * Falls back to raw node:22-bookworm if the pre-built image isn't available (legacy path).
+ * Set SANDBOX_IMAGE env var to override.
+ */
+const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'ruh-sandbox:latest';
+const LEGACY_IMAGE = 'node:22-bookworm';
+
 /** Common dev server ports exposed for preview. Docker assigns random host ports. */
 const PREVIEW_PORTS = [3000, 3001, 3002, 4173, 5173, 5174, 8000, 8080];
 const DEFAULT_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
@@ -816,16 +824,25 @@ export async function* createOpenclawSandbox(
     }
   }
 
-  yield ['log', 'Pulling node:22-bookworm image (skipped if already cached)...'];
-  const [imageInspectCode] = await dockerSpawn(
-    ['image', 'inspect', 'node:22-bookworm'],
-    10_000,
-  );
-  if (imageInspectCode !== 0) {
-    const [pullCode, pullOut] = await dockerSpawn(['pull', 'node:22-bookworm'], 180_000);
-    if (pullCode !== 0) {
-      yield ['error', `Failed to pull node:22-bookworm image: ${pullOut}`];
-      return;
+  // Resolve sandbox image — prefer pre-built ruh-sandbox, fall back to legacy
+  let sandboxImage = SANDBOX_IMAGE;
+  let usingPrebuiltImage = false;
+  const [prebuiltInspectCode] = await dockerSpawn(['image', 'inspect', SANDBOX_IMAGE], 10_000);
+  if (prebuiltInspectCode === 0) {
+    usingPrebuiltImage = true;
+    yield ['log', `Using pre-built sandbox image: ${SANDBOX_IMAGE}`];
+  } else {
+    // Fall back to legacy image
+    sandboxImage = LEGACY_IMAGE;
+    yield ['log', `Pre-built image not found, falling back to ${LEGACY_IMAGE}...`];
+    const [legacyInspectCode] = await dockerSpawn(['image', 'inspect', LEGACY_IMAGE], 10_000);
+    if (legacyInspectCode !== 0) {
+      yield ['log', `Pulling ${LEGACY_IMAGE} image...`];
+      const [pullCode, pullOut] = await dockerSpawn(['pull', LEGACY_IMAGE], 180_000);
+      if (pullCode !== 0) {
+        yield ['error', `Failed to pull ${LEGACY_IMAGE} image: ${pullOut}`];
+        return;
+      }
     }
   }
 
@@ -834,12 +851,15 @@ export async function* createOpenclawSandbox(
     [
       'run', '-d',
       '--name', containerName,
-      '-p', `${GATEWAY_PORT}`, // Docker assigns a random host port
-      '-p', `${VNC_WS_PORT}`, // VNC websockify port
+      '--memory', '2g',            // Resource limit: prevent runaway containers
+      '--cpus', '2',               // CPU limit
+      '--restart', 'unless-stopped', // Auto-restart on crash
+      '-p', `${GATEWAY_PORT}`,     // Docker assigns a random host port
+      '-p', `${VNC_WS_PORT}`,      // VNC websockify port
       ...PREVIEW_PORTS.flatMap(p => ['-p', `${p}`]), // Dev server preview ports
       ...envArgs,
-      'node:22-bookworm',
-      'tail', '-f', '/dev/null', // Keep container alive
+      sandboxImage,
+      'tail', '-f', '/dev/null',   // Keep container alive
     ],
     30_000,
   );
@@ -887,6 +907,17 @@ export async function* createOpenclawSandbox(
     }
   }
 
+  // Resolve agent dashboard host port (8080 inside container)
+  const [dashPortCode, dashPortOut] = await dockerSpawn(
+    ['port', containerName, '8080/tcp'],
+    10_000,
+  );
+  let dashboardHostPort: number | null = null;
+  if (dashPortCode === 0 && dashPortOut) {
+    const parsed = parseInt(dashPortOut.trim().split(':').pop() ?? '', 10);
+    if (!isNaN(parsed)) dashboardHostPort = parsed;
+  }
+
   const run = (cmd: string, timeoutSec = 300) =>
     dockerExec(containerName, cmd, timeoutSec * 1000);
 
@@ -926,52 +957,80 @@ export async function* createOpenclawSandbox(
     return null;
   };
 
-  // Install OpenClaw
-  yield ['log', 'Installing OpenClaw (npm install -g openclaw@latest)...'];
-  let [ok, out] = await run('npm install -g openclaw@latest', 600);
-  if (!ok) {
-    yield ['log', 'Retrying with --unsafe-perm...'];
-    [ok, out] = await run('npm install -g --unsafe-perm openclaw@latest', 600);
-    if (!ok) {
-      yield await failCreate(`OpenClaw installation failed: ${out}`);
+  // ── OpenClaw + Browser install (skip if using pre-built image) ──────────
+  if (usingPrebuiltImage) {
+    // Pre-built image has everything installed — just verify and start VNC
+    const [verOk, ver] = await run('openclaw --version');
+    if (!verOk) {
+      yield await failCreate('openclaw binary not found in pre-built image — rebuild with: scripts/build-sandbox-image.sh');
       return;
     }
-  }
+    yield ['log', `OpenClaw ready: ${ver}`];
 
-  const [verOk, ver] = await run('openclaw --version');
-  if (!verOk) {
-    yield await failCreate('openclaw binary not found after install');
-    return;
-  }
-  yield ['log', `OpenClaw installed: ${ver}`];
+    // Start VNC stack using the baked-in script
+    yield ['log', 'Starting VNC services...'];
+    const [vncOk, vncOut] = await run('sandbox-vnc-start', 15);
+    if (!vncOk) {
+      yield ['log', `Warning: VNC startup failed (live browser view unavailable): ${truncateBootstrapDiagnostic(vncOut)}`];
+    } else {
+      yield ['log', 'VNC services started'];
+    }
 
-  // ── Install browser + VNC stack for live browser view ──────────────────
-  yield ['log', 'Installing browser & VNC stack (xvfb, x11vnc, websockify, chromium)...'];
-  const [browserOk, browserOut] = await run(
-    'apt-get update -qq && apt-get install -y --no-install-recommends ' +
-    'xvfb x11vnc websockify novnc chromium ' +
-    'fonts-liberation fonts-noto-color-emoji ' +
-    '&& rm -rf /var/lib/apt/lists/*',
-    600,
-  );
-  if (!browserOk) {
-    // Non-fatal — sandbox still works without live browser view
-    yield ['log', `Warning: browser stack install failed (live browser view unavailable): ${browserOut.slice(0, 200)}`];
+    // Start agent runtime (per-agent backend + dashboard on port 8080)
+    yield ['log', 'Starting agent dashboard...'];
+    const [runtimeOk, runtimeOut] = await run('sandbox-agent-runtime', 20);
+    if (!runtimeOk) {
+      yield ['log', `Warning: Agent dashboard startup failed (non-fatal): ${truncateBootstrapDiagnostic(runtimeOut)}`];
+    } else {
+      yield ['log', 'Agent dashboard ready on port 8080'];
+    }
   } else {
-    yield ['log', 'Browser & VNC stack installed'];
+    // Legacy path: install everything from scratch (slow ~3min)
+    yield ['log', 'Installing OpenClaw (npm install -g openclaw@2026.3.24)...'];
+    let [ok, out] = await run('npm install -g openclaw@2026.3.24', 600);
+    if (!ok) {
+      yield ['log', 'Retrying with --unsafe-perm...'];
+      [ok, out] = await run('npm install -g --unsafe-perm openclaw@latest', 600);
+      if (!ok) {
+        yield await failCreate(`OpenClaw installation failed: ${out}`);
+        return;
+      }
+    }
 
-    // Start the display server stack
-    yield ['log', 'Starting virtual display (Xvfb) and VNC services...'];
-    // Xvfb — virtual framebuffer
-    const xvfbWarning = await runOptionalBootstrapStep('browser.xvfb', 'Xvfb :99 -screen 0 1280x720x24 -ac &', 10);
-    if (xvfbWarning) yield ['log', xvfbWarning];
-    // Set DISPLAY for all subsequent processes
-    const bashrcWarning = await runOptionalBootstrapStep('browser.display-export', 'echo "export DISPLAY=:99" >> /root/.bashrc', 5);
-    if (bashrcWarning) yield ['log', bashrcWarning];
-    // x11vnc — VNC server on port 5900
-    const x11vncWarning = await runOptionalBootstrapStep(
-      'browser.x11vnc',
-      'DISPLAY=:99 x11vnc -display :99 -nopw -listen localhost -forever -shared -rfbport 5900 &',
+    const [verOk, ver] = await run('openclaw --version');
+    if (!verOk) {
+      yield await failCreate('openclaw binary not found after install');
+      return;
+    }
+    yield ['log', `OpenClaw installed: ${ver}`];
+
+    // ── Install browser + VNC stack for live browser view ──────────────────
+    yield ['log', 'Installing browser & VNC stack (xvfb, x11vnc, websockify, chromium)...'];
+    const [browserOk, browserOut] = await run(
+      'apt-get update -qq && apt-get install -y --no-install-recommends ' +
+      'xvfb x11vnc websockify novnc chromium ' +
+      'fonts-liberation fonts-noto-color-emoji ' +
+      '&& rm -rf /var/lib/apt/lists/*',
+      600,
+    );
+    if (!browserOk) {
+      // Non-fatal — sandbox still works without live browser view
+      yield ['log', `Warning: browser stack install failed (live browser view unavailable): ${browserOut.slice(0, 200)}`];
+    } else {
+      yield ['log', 'Browser & VNC stack installed'];
+
+      // Start the display server stack
+      yield ['log', 'Starting virtual display (Xvfb) and VNC services...'];
+      // Xvfb — virtual framebuffer
+      const xvfbWarning = await runOptionalBootstrapStep('browser.xvfb', 'Xvfb :99 -screen 0 1280x720x24 -ac &', 10);
+      if (xvfbWarning) yield ['log', xvfbWarning];
+      // Set DISPLAY for all subsequent processes
+      const bashrcWarning = await runOptionalBootstrapStep('browser.display-export', 'echo "export DISPLAY=:99" >> /root/.bashrc', 5);
+      if (bashrcWarning) yield ['log', bashrcWarning];
+      // x11vnc — VNC server on port 5900
+      const x11vncWarning = await runOptionalBootstrapStep(
+        'browser.x11vnc',
+        'DISPLAY=:99 x11vnc -display :99 -nopw -listen localhost -forever -shared -rfbport 5900 &',
       10,
     );
     if (x11vncWarning) yield ['log', x11vncWarning];
@@ -984,6 +1043,7 @@ export async function* createOpenclawSandbox(
     if (websockifyWarning) yield ['log', websockifyWarning];
     yield ['log', `VNC services started (websockify on port ${VNC_WS_PORT})`];
   }
+  } // end legacy install path
 
   if (sharedAuthSeed) {
     yield ['log', `Seeding shared ${sharedAuthSeed.label} into sandbox...`];
@@ -1069,6 +1129,8 @@ export async function* createOpenclawSandbox(
     }
     yield ['log', `Default model set to ${sharedCodexModel}`];
 
+    // Only probe Codex targets when using codex-auth; OpenClaw OAuth doesn't need this check
+    if (sharedAuthSeed.kind === 'codex-auth') {
     const [probeOk, probeOut] = await run(
       'openclaw models status --probe --probe-provider openai-codex --json',
       30,
@@ -1085,6 +1147,7 @@ export async function* createOpenclawSandbox(
       return;
     }
     yield ['log', 'Shared Codex auth probe succeeded'];
+    } // end codex-auth probe
   } else {
     // Write auth-profiles.json for the custom provider
     // OpenClaw's gateway requires this for API-key based custom providers.
@@ -1253,23 +1316,44 @@ export async function* createOpenclawSandbox(
     yield ['log', 'OTEL diagnostics config will be applied to gateway'];
   }
 
+  // Batch all config into a single docker exec to avoid 11+ sequential CLI calls.
+  // Each `openclaw config set` takes ~2-3s due to Node.js startup + JSON read/write.
+  // Batching saves ~25-30s of provisioning time.
   yield ['log', 'Applying required bootstrap config...'];
-  for (const step of requiredBootstrapSteps) {
-    yield ['log', `Applying required bootstrap step: ${step.label}...`];
-    const stepApplied = await runRequiredBootstrapStep(step);
-    if (!stepApplied.ok) {
-      yield await failCreate(stepApplied.error);
-      return;
+  const batchedConfigScript = requiredBootstrapSteps
+    .map((step) => step.command)
+    .join(' && ');
+  const [batchOk, batchOut] = await run(batchedConfigScript, 60);
+  if (!batchOk) {
+    // Fallback: run steps individually to identify which one failed
+    yield ['log', 'Batched config failed — retrying steps individually...'];
+    for (const step of requiredBootstrapSteps) {
+      yield ['log', `Applying required bootstrap step: ${step.label}...`];
+      const stepApplied = await runRequiredBootstrapStep(step);
+      if (!stepApplied.ok) {
+        yield await failCreate(stepApplied.error);
+        return;
+      }
     }
+  } else {
+    yield ['log', `Applied ${requiredBootstrapSteps.length} config steps`];
   }
 
-  // Read gateway token
+  // Read gateway token — prefer the device operator token (has operator.write scope)
+  // over the config auth token (may lack write scope in OpenClaw 2026.3.28+)
   let gatewayToken: string | null = null;
-  const [tokenOk, tokenOut] = await run(
-    `node -e "const fs=require('fs');const path=require('path');const os=require('os');const configPath=path.join(os.homedir(),'.openclaw','openclaw.json');process.stdout.write(JSON.parse(fs.readFileSync(configPath,'utf8')).gateway.auth.token)"`,
+  const [deviceTokenOk, deviceTokenOut] = await run(
+    `node -e "const fs=require('fs');const path=require('path');const os=require('os');` +
+    `try{const p=path.join(os.homedir(),'.openclaw','devices','paired.json');` +
+    `const d=JSON.parse(fs.readFileSync(p,'utf8'));` +
+    `const dev=Object.values(d)[0];` +
+    `const t=dev?.tokens?.operator?.token;` +
+    `if(t){process.stdout.write(t)}else{throw new Error('no device token')}}` +
+    `catch{const c=path.join(os.homedir(),'.openclaw','openclaw.json');` +
+    `process.stdout.write(JSON.parse(fs.readFileSync(c,'utf8')).gateway.auth.token)}"`,
   );
-  if (tokenOk && tokenOut.trim()) {
-    gatewayToken = tokenOut.trim();
+  if (deviceTokenOk && deviceTokenOut.trim()) {
+    gatewayToken = deviceTokenOut.trim();
     yield ['log', 'Gateway token retrieved'];
   } else {
     yield await failCreate(
@@ -1310,8 +1394,9 @@ export async function* createOpenclawSandbox(
 
   yield ['log', 'Waiting for gateway to become healthy...'];
   let healthy = false;
-  for (let i = 0; i < 20; i++) {
-    await Bun.sleep(3000);
+  // Poll every 1s instead of 3s — gateway typically starts in 2-5s
+  for (let i = 0; i < 30; i++) {
+    await Bun.sleep(1000);
     const [portCheck] = await run(
       `node -e "const n=require('net');const c=n.connect(${GATEWAY_PORT},'127.0.0.1',()=>{c.end();process.exit(0)});c.on('error',()=>process.exit(1))"`,
     );
@@ -1388,6 +1473,7 @@ export async function* createOpenclawSandbox(
     gateway_token: gatewayToken,
     gateway_port: parseInt(hostPort),
     vnc_port: vncHostPort,
+    dashboard_port: dashboardHostPort,
     ssh_command: `docker exec -it ${containerName} bash`,
     shared_codex_enabled: Boolean(sharedAuthSeed),
     shared_codex_model: sharedAuthSeed ? sharedCodexModel : null,

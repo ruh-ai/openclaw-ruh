@@ -127,6 +127,49 @@ async function resolveForgeGateway(
       `Forge sandbox ${forgeSandboxId} has no gateway URL`
     );
   }
+
+  // Health-check: verify the gateway is reachable before returning.
+  // If the container is running but the gateway process crashed, attempt
+  // to restart it via the backend before giving up.
+  try {
+    const probe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+    if (!probe.ok) throw new Error(`probe status ${probe.status}`);
+  } catch (probeErr) {
+    console.warn(
+      `[Gateway] Forge sandbox ${forgeSandboxId} gateway at ${httpUrl} is unreachable, attempting restart...`,
+    );
+    // Ask the backend to restart the gateway inside the sandbox container.
+    // POST /api/sandboxes/:id/gateway/restart is the standard restart endpoint.
+    try {
+      const restartRes = await fetch(
+        `${BACKEND_URL}/api/sandboxes/${forgeSandboxId}/gateway/restart`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(20000),
+        },
+      );
+      if (restartRes.ok) {
+        console.log(`[Gateway] Restart command sent for forge sandbox ${forgeSandboxId}, waiting for gateway...`);
+        // Wait a few seconds for the gateway to come up, then re-probe
+        await new Promise((r) => setTimeout(r, 5000));
+        const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+        if (!reProbe.ok) {
+          throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
+        }
+        console.log(`[Gateway] Forge sandbox ${forgeSandboxId} gateway recovered after restart`);
+      } else {
+        throw new Error(`Restart endpoint returned ${restartRes.status}`);
+      }
+    } catch (restartErr) {
+      throw new Error(
+        `Forge sandbox ${forgeSandboxId} gateway is unreachable at ${httpUrl} and restart failed: ${
+          restartErr instanceof Error ? restartErr.message : String(restartErr)
+        }`
+      );
+    }
+  }
+
   // Convert HTTP URL to WebSocket URL
   const wsUrl = httpUrl
     .replace(/^https:/, "wss:")
@@ -155,7 +198,7 @@ export async function POST(req: NextRequest) {
     });
 
     const body = await req.json();
-    const { session_id, request_id, message, agent, mode, soul_override, forge_sandbox_id, timeout_ms } = body;
+    const { session_id, request_id, message, agent, mode, soul_override, forge_sandbox_id, timeout_ms, agent_id } = body;
     const requestId =
       typeof request_id === "string" && request_id.trim()
         ? request_id.trim()
@@ -213,6 +256,7 @@ export async function POST(req: NextRequest) {
                 session_id,
                 agent: resolvedAgent,
                 mode: resolvedMode,
+                agent_id: typeof agent_id === "string" ? agent_id : null,
                 forge_sandbox_id:
                   typeof forge_sandbox_id === "string" && forge_sandbox_id
                     ? forge_sandbox_id
@@ -220,53 +264,81 @@ export async function POST(req: NextRequest) {
               },
               // Session groups all turns of this conversation together
               sessionId: session_id,
-              // User identifies which agent/mode originated the request
-              userId: resolvedAgent,
-              // Tags let you filter by mode and agent in the Langfuse dashboard
+              // User: per-agent instance when available, falls back to agent type
+              userId: typeof agent_id === "string" && agent_id
+                ? agent_id
+                : resolvedAgent,
+              // Tags let you filter by mode, agent type, and agent instance
               tags: [
                 `mode:${resolvedMode}`,
                 `agent:${resolvedAgent}`,
+                ...(typeof agent_id === "string" && agent_id
+                  ? [`agent-id:${agent_id}`]
+                  : []),
                 ...(typeof forge_sandbox_id === "string" && forge_sandbox_id
                   ? ["sandbox:forge"]
                   : ["sandbox:default"]),
               ],
             },
             async (trace) => {
-              // Resolve gateway credentials: forge sandbox or default env vars
-              let gateway: GatewayCredentials;
+              // Forge sandboxes use the backend's HTTP chat proxy (no WebSocket
+              // device-identity auth required). The shared gateway uses WebSocket.
               if (typeof forge_sandbox_id === "string" && forge_sandbox_id) {
-                try {
-                  gateway = await resolveForgeGateway(forge_sandbox_id);
-                  trace.recordEvent("openclaw.bridge.gateway_resolved", {
-                    forge_sandbox_id,
-                  });
-                } catch (resolveErr) {
-                  console.warn(
-                    `[Gateway] Forge sandbox resolution failed, falling back to default:`,
-                    resolveErr
-                  );
-                  trace.recordEvent(
-                    "openclaw.bridge.gateway_resolution_failed",
-                    {
-                      forge_sandbox_id,
-                      error:
-                        resolveErr instanceof Error
-                          ? resolveErr.message
-                          : String(resolveErr),
+                trace.recordEvent("openclaw.bridge.forge_http_proxy", {
+                  forge_sandbox_id,
+                });
+                onLifecycleEvent({ phase: "connecting", message: "Connecting to agent..." });
+
+                const sessionKey = `agent:main:${session_id}`;
+                const chatRes = await fetch(
+                  `${BACKEND_URL}/api/sandboxes/${forge_sandbox_id}/chat`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(sessionKey ? { "x-openclaw-session-key": sessionKey } : {}),
                     },
-                    "WARNING"
-                  );
-                  gateway = {
-                    url: DEFAULT_GATEWAY_URL,
-                    token: DEFAULT_GATEWAY_TOKEN,
-                  };
+                    body: JSON.stringify({
+                      messages: [{ role: "user", content: message }],
+                      session_key: sessionKey,
+                      ...(typeof soul_override === "string" ? { system: soul_override } : {}),
+                    }),
+                    signal: AbortSignal.timeout(
+                      typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : PER_ATTEMPT_TIMEOUT_MS
+                    ),
+                  },
+                );
+
+                if (!chatRes.ok) {
+                  const errText = await chatRes.text().catch(() => "unknown error");
+                  throw new Error(`Forge sandbox chat failed (${chatRes.status}): ${errText.slice(0, 200)}`);
                 }
-              } else {
-                gateway = {
-                  url: DEFAULT_GATEWAY_URL,
-                  token: DEFAULT_GATEWAY_TOKEN,
+
+                onLifecycleEvent({ phase: "authenticated", message: "Agent started..." });
+                onLifecycleEvent({ phase: "thinking", message: "Agent thinking..." });
+
+                const chatData = await chatRes.json() as {
+                  choices?: Array<{ message?: { content?: string } }>;
                 };
+                const content = chatData.choices?.[0]?.message?.content ?? "";
+
+                onLifecycleEvent({ phase: "start", message: "Agent started..." });
+
+                // Stream the response as delta events for SSE parity
+                send("delta", { text: content });
+
+                // Build response payload — the forge HTTP endpoint returns plain text.
+                // Structured responses (ready_for_review, discovery) are parsed by the
+                // AG-UI event consumer on the client side, so we just wrap as agent_response.
+                // The outer trace wrapper sends the final "result" SSE event.
+                return { type: "agent_response", content } as object;
               }
+
+              // Shared gateway: use WebSocket
+              const gateway: GatewayCredentials = {
+                url: DEFAULT_GATEWAY_URL,
+                token: DEFAULT_GATEWAY_TOKEN,
+              };
 
               const response = await connectWithRetry(
                 session_id,

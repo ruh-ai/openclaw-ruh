@@ -3,7 +3,6 @@
 import { useState, useCallback } from "react";
 import {
   X,
-  Loader2,
   CheckCircle2,
   AlertCircle,
   ExternalLink,
@@ -158,7 +157,7 @@ export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
                   value={githubToken}
                   onChange={(e) => setGithubToken(e.target.value)}
                   placeholder="ghp_..."
-                  className="w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 transition-colors"
+                  className="focus-breathe w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none transition-colors"
                 />
                 <p className="text-[10px] text-[var(--text-tertiary)]">
                   Needs <code className="text-[var(--primary)]">repo</code> scope
@@ -175,7 +174,7 @@ export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
                     value={repo}
                     onChange={(e) => setRepo(e.target.value)}
                     placeholder="owner/repo-name"
-                    className="flex-1 px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 transition-colors"
+                    className="focus-breathe flex-1 px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none transition-colors"
                   />
                 </div>
                 <p className="text-[10px] text-[var(--text-tertiary)]">
@@ -186,8 +185,26 @@ export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
           )}
 
           {(step === "reading" || step === "pushing") && (
-            <div className="flex flex-col items-center py-6 gap-3">
-              <Loader2 className="h-8 w-8 text-[var(--primary)] animate-spin" />
+            <div className="flex flex-col items-center py-8 gap-4">
+              <div
+                className="soul-orb rounded-full flex items-center justify-center"
+                style={{
+                  width: "64px",
+                  height: "64px",
+                  background: "radial-gradient(circle, rgba(174, 0, 208, 0.1) 0%, rgba(123, 90, 255, 0.05) 50%, transparent 70%)",
+                }}
+              >
+                <div
+                  className="rounded-full flex items-center justify-center"
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    background: "linear-gradient(135deg, #ae00d0, #7b5aff)",
+                  }}
+                >
+                  <Rocket className="h-4 w-4 text-white" />
+                </div>
+              </div>
               <p className="text-sm font-satoshi-medium text-[var(--text-primary)]">
                 {statusMsg}
               </p>
@@ -195,22 +212,40 @@ export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
           )}
 
           {step === "done" && (
-            <div className="flex flex-col items-center py-6 gap-3">
-              <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-green-50">
-                <CheckCircle2 className="h-6 w-6 text-green-600" />
+            <div className="flex flex-col items-center py-8 gap-4">
+              {/* Soul born celebration — THE moment */}
+              <div className="soul-born rounded-full flex items-center justify-center"
+                style={{
+                  width: "72px",
+                  height: "72px",
+                  background: "radial-gradient(circle, rgba(174, 0, 208, 0.1) 0%, rgba(123, 90, 255, 0.06) 50%, transparent 70%)",
+                }}
+              >
+                <div
+                  className="soul-pulse-strong rounded-full flex items-center justify-center"
+                  style={{
+                    width: "52px",
+                    height: "52px",
+                    background: "linear-gradient(135deg, #ae00d0, #7b5aff)",
+                  }}
+                >
+                  <CheckCircle2 className="h-6 w-6 text-white" />
+                </div>
               </div>
-              <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">
-                Agent shipped!
-              </p>
-              <p className="text-xs font-satoshi-regular text-[var(--text-secondary)]">
-                {statusMsg}
-              </p>
+              <div className="text-center space-y-1 spark">
+                <p className="text-lg font-satoshi-bold text-[var(--text-primary)]">
+                  {agentName} is alive
+                </p>
+                <p className="text-xs font-satoshi-regular text-[var(--text-secondary)]">
+                  {statusMsg} to GitHub
+                </p>
+              </div>
               {repoUrl && (
                 <a
                   href={repoUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--primary)] text-white text-sm font-satoshi-bold hover:opacity-90 transition-opacity"
+                  className="gradient-drift flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-white text-sm font-satoshi-bold hover:opacity-90 transition-opacity"
                 >
                   <Github className="h-4 w-4" />
                   View on GitHub

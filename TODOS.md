@@ -20,6 +20,146 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 
 > Focus window: through Friday, March 27, 2026, maintainer runs should treat agent creation, Google Ads agent buildout, MCP-backed configuration UX, and creation-loop improvements as the only priority lane. Deployed-chat Manus-parity packages are deferred unless they directly unblock that lane.
 
+### TASK-2026-03-30-13: Fail closed when Ship activation is not actually deployable
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-agent-builder-gated-skill-tool-flow.md`, `docs/knowledge-base/learnings/LEARNING-2026-03-30-copilot-ship-runtime-input-readiness-gap.md`, `docs/journal/2026-03-30.md`
+- Summary: `Completed the Ship-stage fail-closed fix for the linked forge draft. Co-Pilot deploy readiness now blocks missing required runtime inputs, the embedded Ship-stage `Save & Activate` button reuses that same readiness contract, and the page-level completion handler now returns an explicit success/failure result so a failed `pushAgentConfig()` no longer falls through to a false-success Ship UI. Local repro confirmed the backend root cause on the linked draft was blank required runtime inputs (`HELPDESK_API_KEY`, `SLACK_WEBHOOK_URL`) rather than a random frontend exception.`
+- Next step: `Fill the missing runtime inputs on `/agents/create?agentId=7653519b-c9cb-4269-a70c-5a94f2158a6d`, then rerun Ship. If activation still fails after those values are set, inspect the returned `pushAgentConfig()` detail instead of reopening runtime-input gating.`
+- Blockers: `The existing linked draft is still missing required runtime-input values, so activation remains intentionally blocked until those inputs are provided.`
+
+### TASK-2026-03-30-12: Align create-flow build output with approved architecture plan
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/_config/generate-skills.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/create/_config/generate-skills.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/journal/2026-03-30.md`
+- Summary: `Completed the plan→build handoff fix for `/agents/create`. `generateSkillsFromArchitect()` now receives the approved `architecturePlan`, injects that artifact into the build prompt, and requires `skill_graph.nodes[].skill_md` in the returned `ready_for_review` payload. `CoPilotLayout` passes the live plan into both initial build and retry flows, and the new prompt regression locks in the contract that Build must consume the approved plan instead of re-inferring a detached skill graph from name/description alone.`
+- Next step: `If the linked forge draft still looks empty in the browser, trigger one fresh build pass on that draft so the new prompt contract can repopulate the persisted `skill_graph`; the backend record inspected during this run predates the fix and still shows `skills=[]` / `skill_graph=[]`.`
+- Blockers: `Browser MCP is still blocked by the existing Chrome session, so verification will rely on focused unit coverage plus local API checks unless that session is cleared.`
+
+### TASK-2026-03-30-11: Hide create-flow dev mock bar behind explicit opt-in
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/dev-mock-bar.ts`, `agent-builder-ui/app/(platform)/agents/create/dev-mock-bar.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-copilot-config-workspace.md`, `docs/journal/2026-03-30.md`
+- Summary: `Hidden the yellow DEV mock-stage banner from the default `/agents/create` layout. The page now routes the strip through a small fail-closed visibility helper so it only appears in local development when the operator explicitly adds `?devMockBar=1`, and focused test coverage plus KB/journal updates capture that contract.`
+- Next step: `If someone needs the mock-stage controls during local debugging, reopen `/agents/create` with `?devMockBar=1` instead of re-enabling the banner globally.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-10: Unblock create-flow draft autosave for forging agents
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/validation.test.ts`, `docs/journal/2026-03-30.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`
+- Summary: `Fixed the forge-backed draft autosave regression. Backend metadata validation now accepts `status: "forging"` for `PATCH /api/agents/:id`, matching the persisted lifecycle used by `/agents/create?agentId=...`, and focused validation/store coverage plus live curl verification confirm the autosave payload now succeeds instead of returning `422`.`
+- Next step: `If draft-save failures still appear in the browser, reproduce them with a clean Chrome session and capture the exact request body plus response status before changing the create-flow autosave client again.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-09: Preserve forward lifecycle navigation after refresh and stepper rewind
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-state.test.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/__tests__/lifecycle-stage-logic.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`, `docs/journal/2026-03-30.md`
+- Summary: `Fixed the refresh-resume lifecycle regression in `/agents/create`. The Co-Pilot store now tracks `maxUnlockedDevStage` separately from the currently viewed `devStage`, so a restored Review draft can inspect Build/Plan/Think through the stepper and still return forward without re-triggering plan/build. The footer Back button remains the explicit destructive rewind path, lifecycle cache persists the furthest unlocked stage, and focused regressions now cover restore + stepper inspection behavior.`
+- Next step: `If product wants the stepper pills themselves to show a different visual state for “previously reached but not currently active,” extend the shared lifecycle-stage helper instead of collapsing back to `devStage`-only logic.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-08: Align create-flow thinking, suggestions, and architect reconfiguration
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/builder-agent.ts`, `agent-builder-ui/lib/openclaw/ag-ui/event-consumer-map.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.ts`, `agent-builder-ui/lib/openclaw/builder-chat-suggestions.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/event-consumer-map.test.ts`, `agent-builder-ui/lib/openclaw/wizard-directive-parser.test.ts`, `agent-builder-ui/lib/openclaw/builder-chat-suggestions.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-builder-contextual-refine-loop.md`, `docs/journal/2026-03-30.md`
+- Summary: `Completed the linked builder-loop fixes. Later-stage Co-Pilot runs no longer regress the Think badge back to loading, the left chat empty-state suggestions now switch from random canned examples to prompts grounded in the current agent name/description, and review/ship/test chat runs now re-seed the architect with a richer builder-state snapshot plus a dedicated REFINE-mode system instruction that carries tools, runtime inputs, triggers/heartbeat, channels, architecture-plan, and SOUL summary context forward.`
+- Next step: `If the team wants this same state-rich refine contract outside `/agents/create`, extend the deployed-agent architect/edit surfaces separately instead of reusing builder-only prompt assumptions.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-07: Finish builder thinking steps when reasoning ends
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/event-consumer-map.ts`, `agent-builder-ui/lib/openclaw/ag-ui/`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/`, `docs/journal/2026-03-30.md`, `docs/knowledge-base/008-agent-builder-ui.md`
+- Summary: `Fixed the stuck builder thinking indicator. Custom reasoning events and AG-UI `REASONING_*` events now share the same persistent thinking-step ref through `reasoning-step.ts`, so the same step id is created, updated, and finished instead of leaving the footer/reasoning list on an orphaned active step. Added focused lifecycle coverage and updated the builder KB note with the contract.`
+- Next step: `If reasoning UI regresses again, check whether any new transport path emits reasoning start/content/end without going through the shared reasoning-step helpers.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-06: Restore create-flow drafts and forge state after refresh
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/lib/openclaw/`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/__tests__/`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/`, `docs/journal/2026-03-30.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/`
+- Summary: `Fixed the create-flow refresh/resume gap. `/agents/create?agentId=...` now fetches the authoritative backend agent record on mount, restores a safe local create-session cache for in-progress builder/co-pilot state, and clears that cache on completion/discard. `saveAgentDraft()` also re-fetches the backend agent when the local store is cold after refresh, so autosave no longer fails just because Zustand forgot the draft. Added focused cache/store regressions and verified the route rehydrates a real saved draft in the browser.`
+- Next step: `If the team wants stronger proof next, extend Playwright coverage so the default create flow explicitly refreshes mid-build and asserts the restored PRD/TRD/build state after reload.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-05: Keep builder terminal commands out of the chat transcript
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/lib/openclaw/ag-ui/use-agent-chat.ts`, `agent-builder-ui/lib/openclaw/ag-ui/types.ts`, `agent-builder-ui/lib/openclaw/ag-ui/run-surface-policy.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/run-surface-policy.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-builder-terminal-transcript-isolation.md`, `docs/journal/2026-03-30.md`
+- Summary: `Completed the builder terminal transcript split. Commands entered from Agent's Computer now run on a workspace-only surface in builder mode, so the left chat transcript no longer echoes the synthetic "execute this command" prompt or streamed terminal output. Terminal/task history still survives in the right pane because completed workspace runs keep their structured steps/browser/plan state on hidden transcript messages.`
+- Next step: `If the same terminal-only behavior is needed for deployed-agent chat, add a backend-aware surface contract first so persisted conversation history stays consistent across reloads and reopen.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-04: Fix backend startup migration type mismatch in worker cost tracking
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/tests/unit/schemaMigrations.test.ts`, `ruh-backend/tests/integration/schemaMigrations.test.ts`, `docs/journal/2026-03-30.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/specs/SPEC-backend-schema-migrations.md`
+- Summary: `Fixed the startup-blocking migration bug in 0022_worker_cost_tracking. `cost_events`, `budget_policies`, and `execution_recordings` now use `agent_id TEXT REFERENCES agents(id)` instead of UUID, matching the canonical agents schema. Added unit and real-DB regression coverage, documented the contract in the KB, and verified ruh-backend now boots cleanly on port 8000.`
+- Next step: `Resume the deployed-agent investigation now that the backend is available again; the original Google Ads Optimizer Slack Agent still shows `status: draft` with no linked sandbox in the local control-plane data.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-03: Keep create-flow workspace tabs static during Co-Pilot
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/tab-workspace-autoswitch.ts`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/tab-workspace-autoswitch.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/specs/`
+- Summary: `Completed the create-agent Co-Pilot workspace focus change. Builder mode now suppresses all automatic workspace tab switches, so `/agents/create` stays on the operator-selected tab instead of jumping to terminal/code/browser/preview while runtime activity streams in. The behavior is documented in a dedicated KB spec and covered by a focused policy regression test.`
+- Next step: `If the team later wants selective builder auto-focus back, extend the pure workspace auto-switch policy helper instead of reintroducing inline effect-specific conditions in TabChat.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-02: Refresh builder chat terminal shell styling
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `agent-builder-ui/e2e/tab-chat-terminal.spec.ts`, `docs/plans/2026-03-30-agent-computer-terminal-shell-refresh-design.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-agent-computer-terminal-shell.md`, `docs/journal/2026-03-30.md`
+- Summary: `Completed the shared Agent's Computer terminal refresh in TabChat. The terminal now uses a provisioning-style dark shell with header chrome, bounded height, scrollable command log, and an embedded prompt bar so the input is visually attached to the terminal instead of sitting at the page bottom. Added a focused Playwright regression on the shared terminal shell and documented the contract in KB + journal notes.`
+- Next step: `If the team wants to continue this polish pass, align the Browser/Code/Files tabs to the same shell language so Agent's Computer feels visually consistent across all workspace surfaces.`
+- Blockers: `None.`
+
+### TASK-2026-03-30-01: RUH-11 — Skills tab and approval flow in agent builder UI
+- Status: `completed`
+- Owner: `Frontend Engineer (bc2dd403)`
+- Started: `2026-03-30`
+- Updated: `2026-03-30`
+- Areas: `agent-builder-ui/app/(platform)/agents/[id]/chat/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabSkills.tsx`
+- Summary: `Added a Skills tab to the deployed-agent chat view (agent-builder-ui). TabSkills.tsx polls GET /api/agents/:id/skills every 10s, renders three sections (Proposed / Active / Rejected), shows skill cards with name, description, confidence badge, and evolution type, and wires Approve/Reject buttons to POST /api/agents/:id/skills/:name/approve|reject with optimistic UI and error toast revert. Notification badge on the Skills tab header counts pending proposed skills. Gracefully handles 404 (backend endpoint not yet implemented by RUH-10) with an empty state.`
+- Next step: `RUH-10 (Backend Engineer) must implement GET /api/agents/:id/skills, POST /api/agents/:id/skills/:name/approve, and /reject. Once those endpoints exist this UI is fully wired. Consider Playwright E2E test for the approve/reject happy path.`
+- Blockers: `Backend skills API endpoints (RUH-10) not yet implemented — UI shows empty state until they exist.`
+
+### TASK-2026-03-29-01: Real evaluation engine with mock API services for create agent flow
+- Status: `active`
+- Owner: `Claude Opus`
+- Started: `2026-03-29`
+- Updated: `2026-03-29`
+- Areas: `agent-builder-ui/lib/openclaw/eval-scorer.ts`, `agent-builder-ui/lib/openclaw/eval-scenario-generator.ts`, `agent-builder-ui/lib/openclaw/eval-runner.ts`, `agent-builder-ui/lib/openclaw/eval-mock-generator.ts`, `agent-builder-ui/lib/openclaw/types.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer.tsx`
+- Summary: `Replaced the simulated test/eval stage (Step 5) in the create agent wizard with a real evaluation engine. Four new modules: (1) eval-scorer — heuristic keyword-based response scoring with negation detection and skill reference bonuses; (2) eval-scenario-generator — deterministic (instant) and LLM-powered (architect-generated) test scenario creation from agent config; (3) eval-runner — orchestrates sequential test execution via sendToArchitectStreaming with mode:"test", abort support, and progress tracking; (4) eval-mock-generator — generates mock API service definitions with realistic data for well-known APIs (Google Ads, Zendesk, Slack, etc.) so enterprises can evaluate agents without providing real credentials. UI updated with "Quick Generate"/"AI Generate" buttons, Mock/Live mode toggle, confidence badges, scoring rationale, and cancel support. Also fixed: discoveryDocuments:null draft save 400 error, sa.autonomy.replace() crash in StagePlan.`
+- Next step: `Run full end-to-end validation: start create agent flow with Google Ads agent → advance to Test stage → click Quick Generate → verify scenarios match skills → run in Mock Mode → verify architect receives mock data and responds realistically. Backend needs restart for validation.ts null fix. Consider adding Playwright E2E test for the eval flow.`
+- Blockers: `Backend validation.ts fix for discoveryDocuments:null requires bun restart to take effect.`
+
 ### TASK-2026-03-28-196: Make local Langfuse tracing work through the builder bridge
 - Status: `completed`
 - Owner: `Codex`

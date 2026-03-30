@@ -29,6 +29,8 @@ interface SandboxRecord {
   sandbox_name: string;
   sandbox_state?: string;
   gateway_port?: number;
+  vnc_port?: number | null;
+  dashboard_port?: number | null;
   approved?: boolean;
   created_at?: string;
 }
@@ -251,6 +253,26 @@ export function TabMissionControl({ agent, activeSandbox, sandboxes }: TabMissio
             </div>
           </div>
         </div>
+
+        {/* ── Agent Dashboard (from agent-runtime inside sandbox) ── */}
+        {activeSandbox?.dashboard_port && (
+          <div>
+            <SectionTitle>Agent Dashboard</SectionTitle>
+            <div className="rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] overflow-hidden">
+              <iframe
+                src={`http://localhost:${activeSandbox.dashboard_port}`}
+                className="w-full border-0"
+                style={{ height: "480px" }}
+                title="Agent Dashboard"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                loading="lazy"
+              />
+            </div>
+            <p className="text-[10px] text-[var(--text-tertiary)] mt-1.5">
+              Per-agent mission control running inside the sandbox on port 8080
+            </p>
+          </div>
+        )}
 
         {/* ── Quick Actions ── */}
         <div>

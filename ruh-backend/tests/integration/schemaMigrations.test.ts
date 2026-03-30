@@ -75,6 +75,26 @@ describeIfDb('schema migrations (real DB)', () => {
     ]);
   });
 
+  test('worker cost tracking tables use text agent references', async () => {
+    const { runSchemaMigrations } = await import('../../src/schemaMigrations');
+
+    await runSchemaMigrations();
+
+    const agentColumns = await pool.query(`
+      SELECT table_name, data_type
+      FROM information_schema.columns
+      WHERE table_name IN ('cost_events', 'budget_policies', 'execution_recordings')
+        AND column_name = 'agent_id'
+      ORDER BY table_name ASC
+    `);
+
+    expect(agentColumns.rows).toEqual([
+      { table_name: 'budget_policies', data_type: 'text' },
+      { table_name: 'cost_events', data_type: 'text' },
+      { table_name: 'execution_recordings', data_type: 'text' },
+    ]);
+  });
+
   test('applies only the remaining migrations when the ledger is partially populated', async () => {
     const { runSchemaMigrations, MIGRATIONS } = await import('../../src/schemaMigrations');
 

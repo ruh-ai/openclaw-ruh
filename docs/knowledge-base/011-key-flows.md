@@ -112,12 +112,16 @@ When the deployed agent has saved workspace memory and the operator starts a bra
 8. When ready_for_review:
    - skillGraph stored in useOpenClawChat
    - AG-UI builder metadata is also reduced into the canonical safe draft payload, and `useAgentChat()` debounces `saveAgentDraft()` so a backend `draft` agent exists before the operator reaches Review
+   - if the route is reopening a forge-backed draft, autosave preserves `status: forging` while patching metadata instead of forcing an artificial status transition
    - once approved discovery docs exist, the same saved draft is patched with `discoveryDocuments` so the PRD/TRD pair survives refresh and Improve Agent reopen
    - the Co-Pilot header and builder snapshot surface `Saving draft…`, `Draft saved`, or `Draft save failed` from that autosave loop
+   - per [[SPEC-agent-create-session-resume]], route re-entry on `/agents/create?agentId=<id>` re-fetches that backend draft and overlays a safe local create-session cache, so refreshes recover in-progress non-secret state and forge linkage instead of reopening blank
+   - per [[SPEC-create-flow-lifecycle-navigation]], that restored lifecycle keeps a separate furthest-unlocked stage, so the operator can click Build/Plan/Think in the stepper to inspect prior work and still return to Review without re-triggering the plan/build loop
    - User clicks "Proceed to Review"
    - the default Co-Pilot layout keeps a single `Agent's Computer` panel on the right; its `Config` tab shows the builder snapshot, phase stepper, and active step content instead of a separate wizard rail
    - in the shipped Co-Pilot path from [[SPEC-agent-builder-gated-skill-tool-flow]], the builder can also auto-generate the skill graph after debounced `name + description` entry; downstream builder tabs stay locked until that graph exists
 9. Configure phase: user approves/rejects skills, sets up tools/triggers
+   - when the operator approves the reviewed Plan stage, the build helper now sends the approved PRD/TRD plus the exact `architecture_plan` back through the architect and expects `skill_graph.nodes[].skill_md` in the build response, so the built skills stay aligned with the approved plan and draft autosave can persist real custom skill content
    - the `Skills` step now resolves each generated skill to `native`, `registry_match`, `needs_build`, or `custom_built` against the read-only backend registry
    - missing skills expose `Build Custom Skill`, which accepts an agent-local SKILL.md draft and clears the deploy blocker for that skill
    - tool connections now persist as structured metadata (`toolConnections[]`) rather than transient local booleans
@@ -128,17 +132,23 @@ When the deployed agent has saved workspace memory and the operator starts a bra
    - supported triggers persist as `triggers[]` definitions, so deploy can prefer structured schedule metadata over regex-scraping rule prose
    - builder-surfaced `improvements[]` now persist as safe metadata with `pending` / `accepted` / `dismissed` state, so accepted Google Ads recommendations survive save, Improve Agent reopen, and deploy summary views
    - the current proving-case path is a Google Ads optimizer agent with a Google Ads MCP connection and weekday schedule trigger
-   - builder phase changes can return focus to `Config`, while runtime tool activity can still auto-switch the workspace to `terminal`, `code`, or `browser`
+   - the create-flow workspace now stays on the operator-selected tab during Co-Pilot; builder runtime activity no longer auto-switches focus to `terminal`, `code`, `browser`, or `preview`
+   - manual commands entered in the builder `Terminal` tab now run as workspace activity and stay out of the left chat transcript unless the run produced no structured workspace artifact to replay
+   - once the operator has entered a real name and description, the builder empty-state prompt chips become agent-specific follow-ups instead of unrelated canned ideas
 10. Review phase: user reviews full agent spec and can optionally open "Test Agent"
     a. POST /api/openclaw { session_id, message, agent: "architect", mode: "test", soul_override }
     b. Bridge sends chat.send { sessionKey: "agent:test:<session_id>", message: "[SYSTEM] ... [USER] ..." }
     c. Test chat stays isolated from the architect build session
+    c1. Non-test builder chat after Think/Plan/Build now re-seeds the architect with a refine-mode instruction plus current tools, runtime inputs, triggers/heartbeat, channels, architecture-plan summary, and SOUL summary so follow-up changes stay grounded in the current agent
     d. In the embedded Co-Pilot stepper, the final footer CTA is now `Deploy Agent` instead of a disabled `Next`, and it calls the same completion handler as the page-level header action
+    d1. The stepper itself is non-destructive navigation, while the footer `Back` button is the destructive rewind/reset control for reopening an earlier phase
     e. Review reads persisted `toolConnections[]`, `runtimeInputs[]`, and `triggers[]` directly so connector readiness, runtime-input blockers, and trigger support details stay visible when the saved agent is reopened
 11. First-deploy handoff:
     - for a new agent or autosaved draft, the create completion path now saves or promotes that same agent id, finalizes any pending first-save connector credential commits, and routes to `/agents/<id>/deploy?source=create`
     - when the saved config summary is already ready, that handoff includes `autoStart=1` so the deploy page immediately starts provisioning; otherwise the operator lands on the deploy page with a truthful saved/blocked summary instead of being dropped back to `/agents`
     - when the page is reopening an existing saved agent through `Build`, the same Co-Pilot workspace is seeded from that saved snapshot but completion remains on the Improve Agent contract: persist edits, hot-push running sandboxes when present, then return to `/agents`
+    - both the page-level `Deploy Agent` CTA and the embedded Ship-stage `Save & Activate` button now fail closed on missing required runtime inputs, matching the backend `configure-agent` contract instead of treating blank runtime inputs as advisory-only
+    - the Ship-stage callback must also stop on `pushAgentConfig().ok === false`; a failed forge config push is an activation failure, not a successful ship with a hidden warning
 12. Deploy: POST /api/sandboxes/:id/configure-agent
     { system_name, soul_content, skills[], runtime_inputs[], cron_jobs[] }
     → writes SOUL.md + runtime env + skill SKILL.md files inside container
@@ -237,6 +247,7 @@ For broader lifecycle drift, use `GET /api/admin/sandboxes/reconcile` with the a
 - [[LEARNING-2026-03-27-agent-builder-channel-persistence-gap]] — captured the earlier saved-agent gap before planned messaging channels started persisting through save, reopen, and deploy handoff
 - [[LEARNING-2026-03-25-deployed-chat-cancellation-gap]] — both deployed sandbox chat surfaces currently lack a cancelation contract, so tab closes or route changes can still leave gateway/model work running upstream
 - [[LEARNING-2026-03-26-agent-create-session-hang]] — the live `/agents/create` Co-Pilot path can stall after the architect bridge reports `start`, so browser checks should verify the same builder `session_id` directly against `POST /api/openclaw`
+- [[LEARNING-2026-03-30-forging-status-draft-autosave-gap]] — forge-backed create sessions keep `status: forging`, so metadata PATCH validation must accept that persisted state or `Draft save failed` appears on ordinary builder edits
 - [[LEARNING-2026-03-27-tool-research-plan-persistence-gap]] — the saved connector contract still drops most structured tool research details after the operator saves a manual plan
 
 ---
@@ -263,6 +274,9 @@ For broader lifecycle drift, use `GET /api/admin/sandboxes/reconcile` with the a
 - [[SPEC-agent-improvement-persistence]] — keeps accepted builder recommendations visible after save, reopen, and deploy
 - [[SPEC-tool-integration-workspace]] — `/tools` and builder Connect Tools now share a structured research flow plus fail-closed credential handoff
 - [[SPEC-copilot-config-workspace]] — the default Co-Pilot create flow keeps a single Agent's Computer workspace and renders the active builder phase inside the Config tab
+- [[SPEC-create-flow-static-workspace-tabs]] — create-flow Co-Pilot keeps workspace tabs static and user-controlled while the builder is active
+- [[SPEC-builder-terminal-transcript-isolation]] — builder terminal commands stay in workspace history instead of echoing into the transcript
+- [[SPEC-builder-contextual-refine-loop]] — builder suggestions become current-agent-specific and post-build architect runs use refine-mode with current config context
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — purpose metadata now gates the builder workspace, skills resolve through the registry, and unresolved custom skills block deploy
 - [[SPEC-pre-deploy-agent-testing]] — adds the review-phase test loop that injects SOUL content into isolated `agent:test:*` builder sessions before deployment
 - [[SPEC-sandbox-runtime-reconciliation]] — defines the operator reconcile/report flow for DB-only and container-only sandbox drift

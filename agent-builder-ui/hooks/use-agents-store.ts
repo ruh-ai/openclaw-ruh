@@ -109,6 +109,7 @@ interface AgentsStoreState {
     patch: Partial<Omit<SavedAgent, "id" | "createdAt" | "sandboxIds">>
   ) => Promise<SavedAgent>;
   deleteAgent: (id: string) => Promise<void>;
+  deleteForge: (id: string) => Promise<void>;
   bulkDeleteAgents: (ids: string[]) => Promise<{ deleted: string[]; failed: string[]; sandboxesCleaned: number }>;
   updateAgentStatus: (id: string, status: SavedAgent["status"]) => Promise<void>;
   addSandboxToAgent: (agentId: string, sandboxId: string) => Promise<void>;
@@ -229,9 +230,13 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       saveAgentDraft: async (draft) => {
-        const existing = draft.agentId
+        let existing = draft.agentId
           ? get().agents.find((agent) => agent.id === draft.agentId) ?? null
           : null;
+
+        if (draft.agentId && !existing) {
+          existing = await get().fetchAgent(draft.agentId);
+        }
 
         const agentPayload = {
           name: draft.name,
@@ -258,10 +263,6 @@ export const useAgentsStore = create<AgentsStoreState>()(
             throw new Error(`Saved draft ${id} was not found in local store`);
           }
           return saved;
-        }
-
-        if (!existing) {
-          throw new Error(`Agent ${draft.agentId} not found in local store`);
         }
 
         return get().persistAgentEdits(draft.agentId, agentPayload);
@@ -301,6 +302,16 @@ export const useAgentsStore = create<AgentsStoreState>()(
           method: "DELETE",
         });
         if (!res.ok) throw new Error("Failed to delete agent");
+        set((state) => ({
+          agents: state.agents.filter((a) => a.id !== id),
+        }));
+      },
+
+      deleteForge: async (id) => {
+        const res = await fetch(`${API_BASE}/api/agents/${id}/forge`, {
+          method: "DELETE",
+        });
+        if (!res.ok) throw new Error("Failed to delete forge");
         set((state) => ({
           agents: state.agents.filter((a) => a.id !== id),
         }));

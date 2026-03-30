@@ -17,11 +17,14 @@ Each "sandbox" is a local Docker container running the `openclaw` CLI agent gate
 
 | Service | Path | Port | Purpose |
 |---|---|---|---|
-| `ruh-backend` | `ruh-backend/` | 8000 | TypeScript/Bun REST API — all sandbox, conversation, cron, channel logic |
-| `ruh-frontend` | `ruh-frontend/` | 3001 | Developer UI — create sandboxes, chat, manage crons/channels |
-| `agent-builder-ui` | `agent-builder-ui/` | 3000 | Agent builder — conversational UI that calls the OpenClaw architect agent |
-| `postgres` | docker/k8s | 5432 | PostgreSQL 16 — sandboxes + conversations tables |
-| `nginx` | `nginx/` | 80 | Reverse proxy — routes `/api/*` to backend, `/` to frontend |
+| `ruh-backend` | `ruh-backend/` | 8000 | TypeScript/Bun REST API — sandbox, agent, auth, marketplace logic |
+| `agent-builder-ui` | `agent-builder-ui/` | 3000 | Agent builder — conversational UI for developers to create agents |
+| `ruh-frontend` | `ruh-frontend/` | 3001 | Client app — end users interact with deployed agents (desktop app candidate) |
+| `admin-ui` | `admin-ui/` | 3002 | Admin panel — platform management, user/agent oversight, moderation |
+| `desktop-app` | `desktop-app/` | N/A | Tauri desktop wrapper for ruh-frontend |
+| `@ruh/marketplace-ui` | `packages/marketplace-ui/` | N/A | Shared marketplace React components |
+| `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
+| `nginx` | `nginx/` | 80 | Reverse proxy |
 
 ---
 
@@ -44,6 +47,12 @@ Each "sandbox" is a local Docker container running the `openclaw` CLI agent gate
 - [[008-agent-builder-ui]] — Architect chat flow, WebSocket bridge, SSE, skill graph types
 - [[009-ruh-frontend]] — Developer UI components, sandbox sidebar, chat/crons/channels panels
 
+### Platform
+- [[014-auth-system]] — JWT auth, 3 user tiers (admin/developer/end_user), bcrypt, sessions
+- [[015-admin-panel]] — Admin dashboard (admin-ui), user/agent management, moderation
+- [[016-marketplace]] — Employee Marketplace, shared UI package, publish/install flow
+- [[017-desktop-app]] — Tauri desktop app wrapping ruh-frontend, secure credentials
+
 ### Ops
 - [[010-deployment]] — Docker Compose, Kubernetes, environment variables
 - [[011-key-flows]] — End-to-end walkthroughs: create sandbox → chat → configure agent
@@ -63,10 +72,13 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-google-ads-agent-creation-loop]] — `/agents/create` uses Google Ads as the proving case for persisted MCP-style tool metadata and supported trigger definitions
 - [[SPEC-agent-builder-channel-persistence]] — builder-selected messaging channels persist through save, reopen, and deploy handoff as truthful planned state
 - [[SPEC-agent-discovery-doc-persistence]] — approved PRD/TRD discovery docs persist through draft autosave, save, reopen, and Improve Agent review
+- [[SPEC-agent-create-session-resume]] — `/agents/create?agentId=...` rehydrates from backend truth plus a safe local draft cache so refreshes do not drop builder progress or forge linkage
+- [[SPEC-create-flow-lifecycle-navigation]] — create-flow stepper clicks inspect earlier stages without discarding already-unlocked forward progress
 - [[SPEC-agent-create-deploy-handoff]] — `/agents/create` hands new agents into the real first-deploy route instead of saving and exiting to the list
 - [[SPEC-agent-improvement-persistence]] — Builder recommendations become metadata-only saved agent state across review, reopen, and deploy
 - [[SPEC-tool-integration-workspace]] — `/tools` and `/agents/create` share a truthful tool-research workspace plus fail-closed connector setup for `mcp`, `api`, and `cli`
 - [[SPEC-copilot-config-workspace]] — `/agents/create` moves Co-Pilot controls into the Agent's Computer Config tab and uses builder-aware workspace auto-focus
+- [[SPEC-create-flow-static-workspace-tabs]] — `/agents/create` keeps Co-Pilot workspace tabs static instead of auto-switching during builder activity
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — `/agents/create` locks downstream tabs until purpose metadata generates a real skill graph, resolves those skills against the registry, and blocks deploy on unresolved custom skills
 - [[SPEC-pre-deploy-agent-testing]] — Review-phase test chat reuses the architect bridge with isolated `agent:test:*` sessions and SOUL prompt injection
 - [[SPEC-gateway-tool-events]] — Structured sandbox tool events let chat UIs react to live tool execution with workspace/tab updates
@@ -108,6 +120,10 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-conversation-history-pagination]] — Cursor-based bounded reads for conversation lists and per-conversation message history across both chat UIs
 - [[SPEC-deployed-chat-workspace-memory]] — Deployed-agent chat persists reusable workspace instructions, continuity notes, and safe pinned references per agent
 - [[SPEC-agui-protocol-adoption]] — Replace custom ChatEvent/ChatTransport with AG-UI protocol standard for agent-frontend communication
+- [[SPEC-agent-computer-terminal-shell]] — Shared Agent's Computer terminal uses a bounded provisioning-style shell with an embedded prompt
+- [[SPEC-builder-terminal-transcript-isolation]] — Builder terminal commands stay in Agent's Computer history instead of echoing into the left chat transcript
+- [[SPEC-builder-contextual-refine-loop]] — Builder suggestions and post-build architect runs stay grounded in the current named agent and stage state
+- [[SPEC-competitive-intelligence-learnings]] — Self-evolving multi-worker agent architecture: internal worker teams, skill evolution, enterprise governance
 
 ---
 
@@ -150,9 +166,15 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand task plan mode, code editor, and auto-switch | [[SPEC-deployed-chat-task-mode]] + [[008-agent-builder-ui]] |
 | Understand deployed-chat workspace history replay | [[SPEC-deployed-chat-workspace-history]] + [[008-agent-builder-ui]] |
 | Understand deployed-chat task and terminal replay history | [[SPEC-deployed-chat-task-and-terminal-history]] + [[008-agent-builder-ui]] |
+| Understand the shared Agent's Computer terminal shell | [[SPEC-agent-computer-terminal-shell]] + [[008-agent-builder-ui]] |
+| Understand why builder terminal commands stay out of transcript | [[SPEC-builder-terminal-transcript-isolation]] + [[008-agent-builder-ui]] |
+| Understand builder contextual suggestions and refine-mode reconfiguration | [[SPEC-builder-contextual-refine-loop]] + [[008-agent-builder-ui]] |
 | Adopt AG-UI protocol for agent-frontend communication | [[SPEC-agui-protocol-adoption]] + [[008-agent-builder-ui]] |
 | Understand the unified Co-Pilot Config workspace | [[SPEC-copilot-config-workspace]] + [[008-agent-builder-ui]] |
+| Understand why create-flow workspace tabs stay static | [[SPEC-create-flow-static-workspace-tabs]] + [[008-agent-builder-ui]] |
 | Understand saved PRD/TRD discovery-doc persistence | [[SPEC-agent-discovery-doc-persistence]] + [[008-agent-builder-ui]] |
+| Understand create-flow refresh/reopen recovery | [[SPEC-agent-create-session-resume]] + [[008-agent-builder-ui]] |
+| Understand create-flow stepper/back navigation after refresh | [[SPEC-create-flow-lifecycle-navigation]] + [[008-agent-builder-ui]] |
 | Understand purpose-gated skill inference and deploy blocking in Co-Pilot | [[SPEC-agent-builder-gated-skill-tool-flow]] + [[008-agent-builder-ui]] |
 | Research or integrate a tool for an agent | [[SPEC-tool-integration-workspace]] + [[008-agent-builder-ui]] |
 | Understand a user journey end-to-end | [[011-key-flows]] |
@@ -162,7 +184,12 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand repo-local maintainer agent roles | [[012-automation-architecture]] + [[SPEC-automation-agent-roles]] |
 | Understand the analyst project-focus workflow | [[012-automation-architecture]] + [[SPEC-analyst-project-focus]] + `docs/project-focus.md` |
 | Understand feature-at-a-time maintainer runs | [[SPEC-feature-at-a-time-automation-contract]] + [[012-automation-architecture]] |
+| Work on authentication | [[014-auth-system]] |
+| Work on admin panel | [[015-admin-panel]] |
+| Work on marketplace | [[016-marketplace]] |
+| Work on desktop app | [[017-desktop-app]] |
 | Find chronological agent activity by date | `docs/journal/README.md` |
+| Understand multi-worker agent architecture and skill evolution | [[SPEC-competitive-intelligence-learnings]] |
 | Create a feature spec | Run `/kb spec <name>` |
 | Check KB health | Run `/kb audit` |
 | Update KB after code changes | Run `/kb update` |

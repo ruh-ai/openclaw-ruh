@@ -820,7 +820,7 @@ export function validateAgentMetadataPatchBody(body: unknown) {
   const description = readOptionalString(input, 'description', { maxLength: 4000 });
   const skills = readOptionalStringArray(input, 'skills', { maxItems: 100, itemMaxLength: 120 });
   const triggerLabel = readOptionalString(input, 'triggerLabel', { maxLength: 120 });
-  const status = readOptionalEnum(input, 'status', ['active', 'draft'] as const);
+  const status = readOptionalEnum(input, 'status', ['active', 'draft', 'forging'] as const);
   const channels = readOptionalChannels(input, 'channels');
   const forge_sandbox_id = readOptionalString(input, 'forge_sandbox_id', { maxLength: 200 });
 

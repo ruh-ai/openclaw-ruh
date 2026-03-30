@@ -43,11 +43,12 @@ export function extractKeywords(text: string): string[] {
   const words = text
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/-/g, " ")
     .split(/\s+/)
     .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
 
   // Also extract multi-word phrases (bigrams) for domain terms
-  const tokens = text.toLowerCase().split(/\s+/);
+  const tokens = text.toLowerCase().replace(/-/g, " ").split(/\s+/);
   const bigrams: string[] = [];
   for (let i = 0; i < tokens.length - 1; i++) {
     const a = tokens[i].replace(/[^a-z0-9-]/g, "");
@@ -57,7 +58,9 @@ export function extractKeywords(text: string): string[] {
     }
   }
 
-  return [...new Set([...words, ...bigrams])];
+  // Cap bigrams to avoid diluting unigram match ratio
+  const maxBigrams = Math.max(2, Math.floor(words.length / 2));
+  return [...new Set([...words, ...bigrams.slice(0, maxBigrams)])];
 }
 
 function isNegationExpectation(expectedBehavior: string): boolean {
@@ -144,7 +147,7 @@ export function scoreEvalResponse(
     };
   }
 
-  const responseLower = response.toLowerCase();
+  const responseLower = response.toLowerCase().replace(/-/g, " ");
   const matched: string[] = [];
   const missed: string[] = [];
 

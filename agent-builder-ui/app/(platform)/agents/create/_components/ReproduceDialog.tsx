@@ -156,7 +156,7 @@ export function ReproduceDialog({ onClose }: ReproduceDialogProps) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. Google Ads Manager"
-                  className="w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 transition-colors"
+                  className="w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-breathe focus:outline-none transition-colors"
                 />
               </div>
               <div className="space-y-1.5">
@@ -170,7 +170,7 @@ export function ReproduceDialog({ onClose }: ReproduceDialogProps) {
                     value={repoUrl}
                     onChange={(e) => setRepoUrl(e.target.value)}
                     placeholder="https://github.com/owner/agent-template"
-                    className="flex-1 px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 transition-colors"
+                    className="flex-1 px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-breathe focus:outline-none transition-colors"
                   />
                 </div>
               </div>
@@ -186,7 +186,7 @@ export function ReproduceDialog({ onClose }: ReproduceDialogProps) {
                   value={githubToken}
                   onChange={(e) => setGithubToken(e.target.value)}
                   placeholder="ghp_..."
-                  className="w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]/20 transition-colors"
+                  className="w-full px-3 py-2 text-sm font-satoshi-regular rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-breathe focus:outline-none transition-colors"
                 />
               </div>
             </>

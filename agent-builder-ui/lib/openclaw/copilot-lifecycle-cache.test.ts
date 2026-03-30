@@ -23,6 +23,7 @@ import {
 const makeMockState = (overrides = {}) =>
   ({
     devStage: "review",
+    maxUnlockedDevStage: "review",
     thinkStatus: "approved",
     planStatus: "approved",
     buildStatus: "done",
@@ -44,6 +45,7 @@ describe("copilot-lifecycle-cache", () => {
     const loaded = loadCoPilotLifecycleFromCache("agent-1");
     expect(loaded).not.toBeNull();
     expect(loaded!.devStage).toBe("review");
+    expect(loaded!.maxUnlockedDevStage).toBe("review");
     expect(loaded!.buildStatus).toBe("done");
     expect(loaded!.thinkStatus).toBe("approved");
   });

@@ -590,7 +590,7 @@ describe('validateAgentMetadataPatchBody', () => {
   test('rejects invalid enum values and malformed skills arrays', () => {
     expect(() => validateAgentMetadataPatchBody({
       status: 'paused',
-    })).toThrow('status must be one of: active, draft');
+    })).toThrow('status must be one of: active, draft, forging');
 
     expect(() => validateAgentMetadataPatchBody({
       skills: ['valid', 42],
@@ -628,6 +628,21 @@ describe('validateAgentMetadataPatchBody', () => {
           description: 'Manual setup still required.',
         },
       ],
+      forge_sandbox_id: undefined,
+    });
+  });
+
+  test('accepts forging status for forge-backed draft autosave', () => {
+    expect(validateAgentMetadataPatchBody({
+      status: 'forging',
+    })).toEqual({
+      name: undefined,
+      avatar: undefined,
+      description: undefined,
+      skills: undefined,
+      triggerLabel: undefined,
+      status: 'forging',
+      channels: undefined,
       forge_sandbox_id: undefined,
     });
   });

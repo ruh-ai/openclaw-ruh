@@ -258,6 +258,7 @@ describe("parseWizardDirectives", () => {
 describe("buildWizardStateContext", () => {
   it("builds context string from state", () => {
     const context = buildWizardStateContext({
+      devStage: "tools",
       phase: "tools",
       name: "Ads Bot",
       description: "",
@@ -268,6 +269,7 @@ describe("buildWizardStateContext", () => {
     });
 
     expect(context).toContain("[WIZARD_STATE]");
+    expect(context).toContain("Dev Stage: tools");
     expect(context).toContain("Phase: tools");
     expect(context).toContain("Ads Bot");
     expect(context).toContain("ads_optimizer");
@@ -276,6 +278,7 @@ describe("buildWizardStateContext", () => {
 
   it("omits empty fields", () => {
     const context = buildWizardStateContext({
+      devStage: "purpose",
       phase: "purpose",
       name: "",
       description: "",
@@ -288,5 +291,47 @@ describe("buildWizardStateContext", () => {
     expect(context).toContain("Phase: purpose");
     expect(context).not.toContain("Skills:");
     expect(context).not.toContain("Connected Tools:");
+  });
+
+  it("includes richer runtime, channel, plan, and soul context when present", () => {
+    const context = buildWizardStateContext({
+      devStage: "review",
+      phase: "review",
+      name: "Inventory Alert Bot",
+      systemName: "inventory-alert-bot",
+      description: "Monitors Shopify inventory every hour and posts ranked Slack restock alerts.",
+      selectedSkillIds: ["inventory-monitor", "slack-alert-send"],
+      builtSkillIds: ["inventory-monitor"],
+      skillGraph: [
+        { skill_id: "inventory-monitor", name: "Inventory Monitor", description: "Fetch inventory from Shopify." },
+      ],
+      connectedTools: [
+        { toolId: "shopify", status: "configured" },
+        { toolId: "slack", status: "missing_secret" },
+      ],
+      runtimeInputs: [
+        { key: "SHOPIFY_STORE_DOMAIN", required: true, value: "acme-shop.myshopify.com" },
+        { key: "SLACK_CHANNEL_ID", required: true, value: "" },
+      ],
+      triggers: [{ id: "cron-schedule", title: "Hourly Inventory Sweep" }],
+      channels: [{ kind: "slack", status: "planned" }],
+      improvements: [{ title: "Add urgency scoring", status: "accepted" }],
+      architecturePlan: {
+        skills: [{ id: "inventory-monitor", name: "Inventory Monitor", description: "Fetch inventory", dependencies: [], envVars: ["SHOPIFY_STORE_DOMAIN"] }],
+        workflow: { steps: [{ skillId: "inventory-monitor", parallel: false }] },
+        integrations: [{ toolId: "shopify", name: "Shopify", method: "api", envVars: ["SHOPIFY_STORE_DOMAIN"] }],
+        triggers: [{ id: "cron-schedule", type: "cron", config: "0 * * * *", description: "Hourly" }],
+        channels: ["slack"],
+        envVars: [{ key: "SHOPIFY_STORE_DOMAIN", description: "Store", required: true }],
+        subAgents: [],
+        missionControl: null,
+      },
+      agentRules: ["Prioritize stockouts"],
+    } as never);
+
+    expect(context).toContain("Runtime Inputs: required 1/2 filled");
+    expect(context).toContain("Channels: slack (planned)");
+    expect(context).toContain("Architecture Plan:");
+    expect(context).toContain("SOUL Summary:");
   });
 });

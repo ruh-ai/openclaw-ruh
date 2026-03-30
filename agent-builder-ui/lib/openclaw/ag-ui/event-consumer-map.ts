@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import { CustomEventName } from "./types";
 import { tracer } from "./event-tracer";
+import { ensureReasoningStep, appendReasoningStepDetail } from "./reasoning-step";
 
 // ─── Consumer dependencies (injected by use-agent-chat) ─────────────────────
 
@@ -141,12 +142,8 @@ export function consumePreviewServerDetected(value: unknown, deps: ConsumerDeps)
 
 export function consumeReasoning(value: unknown, deps: ConsumerDeps): void {
   const content = (value as { content: string }).content;
-  if (deps.thinkStepIdRef.current === -1) {
-    const id = Date.now();
-    deps.thinkStepIdRef.current = id;
-    deps.pushStep({ id, kind: "thinking", label: "Reasoning", status: "active", startedAt: Date.now() });
-  }
-  deps.updateStepDetail(deps.thinkStepIdRef.current, content);
+  ensureReasoningStep(deps.thinkStepIdRef, deps.pushStep);
+  appendReasoningStepDetail(deps.thinkStepIdRef, content, deps.updateStepDetail);
 }
 
 export function consumeThinkStatus(value: unknown, deps: ConsumerDeps): void {
@@ -156,9 +153,13 @@ export function consumeThinkStatus(value: unknown, deps: ConsumerDeps): void {
     return;
   }
   const payload = value as { status: string };
+  const currentStage = deps.coPilotStore.devStage;
+  if (currentStage && currentStage !== "think") {
+    tracer.drop("use-agent-chat", "CUSTOM", "think_status", `ignored after stage advanced to ${currentStage}`);
+    return;
+  }
   deps.coPilotStore.setThinkStatus(payload.status as StageStatus);
   // Only set devStage to "think" if it hasn't already progressed past it.
-  const currentStage = deps.coPilotStore.devStage;
   if (currentStage === "think" || !currentStage) {
     deps.coPilotStore.setDevStage("think");
   }

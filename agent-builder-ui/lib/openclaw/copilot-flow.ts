@@ -89,6 +89,7 @@ interface EvaluateCoPilotDeployReadinessInput {
   skillGraphCount: number;
   selectedSkillIds: string[];
   unresolvedSelectedSkills: string[];
+  missingRequiredRuntimeInputKeys: string[];
   deploySummary: DeployConfigSummary;
 }
 
@@ -192,6 +193,7 @@ export function evaluateCoPilotDeployReadiness({
   skillGraphCount,
   selectedSkillIds,
   unresolvedSelectedSkills,
+  missingRequiredRuntimeInputKeys,
   deploySummary,
 }: EvaluateCoPilotDeployReadinessInput): CoPilotDeployReadiness {
   if (!purposeReady) {
@@ -222,9 +224,12 @@ export function evaluateCoPilotDeployReadiness({
     };
   }
 
-  // Runtime inputs and tool connections are NOT deploy blockers during creation.
-  // Users configure these post-deploy. Only show as a warning in the banner.
-  // The deploySummary check is advisory, not blocking.
+  if (missingRequiredRuntimeInputKeys.length > 0) {
+    return {
+      canDeploy: false,
+      blockerMessage: `Add values for required runtime inputs: ${missingRequiredRuntimeInputKeys.join(", ")}.`,
+    };
+  }
 
   return {
     canDeploy: true,

@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const mockSendToArchitectStreaming = mock();
+const mockSendToForgeSandboxChat = mock();
 
 mock.module("@/lib/openclaw/api", () => ({
   sendToArchitectStreaming: mockSendToArchitectStreaming,
+  sendToForgeSandboxChat: mockSendToForgeSandboxChat,
+  BridgeApiError: class BridgeApiError extends Error { status: number; constructor(m: string, s = 0) { super(m); this.status = s; } },
 }));
 
 const { useOpenClawChat } = await import("./use-openclaw-chat");

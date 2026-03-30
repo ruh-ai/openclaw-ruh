@@ -87,6 +87,7 @@ export interface CoPilotState {
 
   // ── Agent Development Lifecycle ────────────────────────────────────────────
   devStage: AgentDevStage;
+  maxUnlockedDevStage: AgentDevStage;
 
   // Think stage
   thinkStatus: StageStatus;
@@ -194,6 +195,7 @@ function createInitialState(): CoPilotState {
     systemName: null,
     // Lifecycle
     devStage: "think",
+    maxUnlockedDevStage: "think",
     thinkStatus: "idle",
     architecturePlan: null,
     planStatus: "idle",
@@ -203,6 +205,22 @@ function createInitialState(): CoPilotState {
     deployStatus: "idle",
     buildReport: null,
   };
+}
+
+function getDevStageIndex(stage: AgentDevStage | null | undefined): number {
+  if (!stage) return 0;
+  const index = AGENT_DEV_STAGES.indexOf(stage);
+  return index >= 0 ? index : 0;
+}
+
+function maxDevStage(a: AgentDevStage, b: AgentDevStage): AgentDevStage {
+  return getDevStageIndex(a) >= getDevStageIndex(b) ? a : b;
+}
+
+function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage {
+  const currentStage = seed.devStage ?? "think";
+  const unlockedStage = seed.maxUnlockedDevStage ?? currentStage;
+  return maxDevStage(currentStage, unlockedStage);
 }
 
 // ─── Stage-status reset map (used by goBackDevStage) ────────────────────────
@@ -367,17 +385,26 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   hydrateFromSeed: (seed) => set({
     ...createInitialState(),
     ...seed,
+    maxUnlockedDevStage: resolveMaxUnlockedDevStage(seed),
   }),
 
   // ── Lifecycle actions ──────────────────────────────────────────────────────
 
-  setDevStage: (stage) => set({ devStage: stage }),
+  setDevStage: (stage) =>
+    set((state) => ({
+      devStage: stage,
+      maxUnlockedDevStage: maxDevStage(state.maxUnlockedDevStage, stage),
+    })),
 
   advanceDevStage: () => {
-    const { devStage, evalStatus } = get();
+    const { devStage, evalStatus, maxUnlockedDevStage } = get();
     const idx = AGENT_DEV_STAGES.indexOf(devStage);
     if (idx < AGENT_DEV_STAGES.length - 1) {
-      const updates: Partial<CoPilotState> = { devStage: AGENT_DEV_STAGES[idx + 1] };
+      const nextStage = AGENT_DEV_STAGES[idx + 1];
+      const updates: Partial<CoPilotState> = {
+        devStage: nextStage,
+        maxUnlockedDevStage: maxDevStage(maxUnlockedDevStage, nextStage),
+      };
       if (devStage === "test" && (evalStatus === "idle" || evalStatus === "running")) {
         (updates as Record<string, unknown>).evalStatus = "done";
       }
@@ -390,7 +417,7 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     const idx = AGENT_DEV_STAGES.indexOf(devStage);
     if (idx > 0) {
       const target = AGENT_DEV_STAGES[idx - 1];
-      set({ devStage: target, ...STAGE_STATUS_RESET[target] });
+      set({ devStage: target, maxUnlockedDevStage: target, ...STAGE_STATUS_RESET[target] });
     }
   },
 
@@ -454,6 +481,7 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       systemName: state.systemName,
       // Lifecycle
       devStage: state.devStage,
+      maxUnlockedDevStage: state.maxUnlockedDevStage,
       thinkStatus: state.thinkStatus,
       architecturePlan: state.architecturePlan,
       planStatus: state.planStatus,

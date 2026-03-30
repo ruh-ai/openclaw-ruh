@@ -340,4 +340,34 @@ describe("withLangfuseBridgeTrace", () => {
       }
     );
   });
+
+  test("per-agent instance ID propagates through userId and tags", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+    process.env.LANGFUSE_BASE_URL = "https://langfuse.example";
+
+    await langfuseModule.withLangfuseBridgeTrace(
+      {
+        name: "openclaw.bridge.request",
+        sessionId: "sess-v2",
+        // v2: userId is the agent instance ID, not just "architect"
+        userId: "agent-abc123",
+        tags: ["mode:build", "agent:architect", "agent-id:agent-abc123", "sandbox:forge"],
+      },
+      async (trace) => {
+        expect(trace.enabled).toBe(true);
+        return { ok: true };
+      }
+    );
+
+    // Verify propagateAttributes was called with the agent instance ID
+    expect(propagateAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-v2",
+        userId: "agent-abc123",
+        tags: expect.arrayContaining(["agent-id:agent-abc123", "sandbox:forge"]),
+      }),
+      expect.any(Function)
+    );
+  });
 });

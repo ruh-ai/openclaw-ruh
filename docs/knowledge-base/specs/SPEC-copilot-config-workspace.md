@@ -1,6 +1,6 @@
 # SPEC: Co-Pilot Config Workspace
 
-[[000-INDEX|← Index]] | [[008-agent-builder-ui]] | [[011-key-flows]] | [[SPEC-agui-protocol-adoption]]
+[[000-INDEX|← Index]] | [[008-agent-builder-ui]] | [[011-key-flows]] | [[SPEC-agui-protocol-adoption]] | [[SPEC-create-flow-static-workspace-tabs]] | [[SPEC-agent-create-session-resume]]
 
 ## Status
 
@@ -8,7 +8,7 @@ implemented
 
 ## Summary
 
-The default `/agents/create` Co-Pilot flow should use a single builder workspace instead of splitting controls across the `Agent's Computer` panel and a standalone wizard rail. This slice moves the active Co-Pilot phase UI into the `Config` tab, keeps the other workspace tabs available during creation, and adds builder-aware auto-focus rules so the right surface is shown as the architect moves through tools and phases.
+The default `/agents/create` Co-Pilot flow should use a single builder workspace instead of splitting controls across the `Agent's Computer` panel and a standalone wizard rail. This slice moves the active Co-Pilot phase UI into the `Config` tab and keeps the other workspace tabs available during creation. The original builder-aware auto-focus rules from this slice are now narrowed by [[SPEC-create-flow-static-workspace-tabs]], which makes the active tab fully user-controlled during the create flow.
 
 ## Related Notes
 
@@ -16,6 +16,8 @@ The default `/agents/create` Co-Pilot flow should use a single builder workspace
 - [[011-key-flows]] — the end-to-end builder walkthrough should describe the unified workspace behavior
 - [[SPEC-agui-protocol-adoption]] — builder-mode focus signals should compose with the AG-UI event/state migration instead of introducing another parallel state path
 - [[SPEC-google-ads-agent-creation-loop]] — the Google Ads proving-case path should use this unified builder workspace
+- [[SPEC-create-flow-static-workspace-tabs]] — follow-on behavior change that suppresses create-flow auto-switching once the workspace is active
+- [[SPEC-agent-create-session-resume]] — refresh/reopen must rehydrate the unified Co-Pilot workspace from backend truth plus a safe local cache
 
 ## Specification
 
@@ -25,7 +27,8 @@ Ship a builder UX where:
 - `/agents/create` no longer renders a standalone far-right Co-Pilot wizard rail
 - the `Agent's Computer` `Config` tab becomes the canonical builder-control surface
 - terminal/code/browser/files tabs remain available during creation
-- builder phase changes can focus `Config`, while runtime tool activity can still focus terminal/code/browser
+- create flow keeps the operator on the selected workspace tab instead of auto-switching surfaces during builder activity
+- dev-only mock-stage controls stay available for debugging but are hidden unless the operator explicitly opts in on the route
 - reopening an existing agent through `Build` uses that same Co-Pilot workspace instead of a separate legacy builder shell
 
 ### Layout Contract
@@ -42,19 +45,17 @@ The old standalone `WizardStepRenderer` rail must not remain visible as a separa
 
 ### Focus Contract
 
-The workspace should auto-focus according to these rules:
+The current create-flow workspace uses these rules:
 
-1. **Builder phase change wins**
-   - When the architect or the operator changes the Co-Pilot phase to `skills`, `tools`, `triggers`, or `review`, the active workspace tab should switch to `config`.
+1. **Config remains the builder control surface**
+   - The `Config` tab still hosts the phase stepper and active builder controls.
 
-2. **Runtime tool activity still drives runtime tabs**
-   - shell-like tools switch to `terminal`
-   - file/code-edit tools switch to `code`
-   - browser tools switch to `browser`
+2. **Operator tab choice wins**
+   - While `/agents/create` is active, builder runtime events do not auto-switch the workspace to terminal, code, browser, or preview.
+   - Co-Pilot phase changes also do not force the workspace back to `config`.
 
-3. **Manual override remains temporary**
-   - A recent manual tab click should continue suppressing generic tool-based auto-switching for a short debounce window.
-   - Explicit builder phase changes are allowed to override that temporary suppression and return focus to `config`, because they represent a new required operator task.
+3. **Deployed-agent chat keeps runtime auto-switching**
+   - The runtime auto-switch behavior remains available outside builder mode.
 
 ### Builder Config Surface
 
@@ -73,10 +74,12 @@ The `Config` tab should remain useful even before a skill graph exists:
 
 - `CoPilotLayout.tsx` should stop allocating a dedicated right-hand wizard column.
 - `WizardStepRenderer.tsx` should be embeddable inside `AgentConfigPanel` or a builder-only config wrapper without duplicating outer layout chrome.
-- `TabChat.tsx` / `ComputerView` should accept enough builder state to auto-focus `config` on phase changes while preserving existing runtime tab auto-switch behavior.
+- `TabChat.tsx` / `ComputerView` should keep the builder workspace static during create flow while preserving existing runtime tab auto-switch behavior outside builder mode.
 - The shipped implementation threads the shared `coPilotStore` through `TabChat` into `useAgentChat()` so architect AG-UI events and the Config-tab UI stay on one synchronized builder state source.
 - The same Config-tab workspace now also surfaces the safe draft save loop from that AG-UI state path, so operators can see `Saving draft…`, `Draft saved`, or `Draft save failed` before entering Review and final deploy can promote the existing `draftAgentId` instead of creating a second agent record.
 - Existing-agent reopen now uses one explicit Co-Pilot seed helper and a completion-kind branch so the shared workspace can serve both new-agent and Improve Agent entry paths without mixing their post-save contracts.
+- Refresh/reopen now also depends on the create-session resume contract in [[SPEC-agent-create-session-resume]] so the unified workspace can recover after a hard reload without losing forge linkage or non-secret in-progress state.
+- The debug-only `DevMockBar` must fail closed: ordinary local runs should not render it, and stage seeding now requires an explicit `?devMockBar=1` opt-in on `/agents/create`.
 - The builder `TabChat` shell must preserve an explicit full-height contract when mounted inside the create-flow wrapper; relying only on flex growth is insufficient because the Co-Pilot page hosts the chat/workspace shell inside a non-flex block container.
 - This slice should stay builder-only and avoid changing deployed-agent workspace behavior.
 
@@ -92,6 +95,7 @@ Manual/operator verification:
 - Open `/agents/create`
 - Confirm there is no standalone far-right Co-Pilot wizard column
 - Verify the `Config` tab contains the phase stepper and active Co-Pilot content
-- Send a builder prompt and confirm builder phase changes can focus `Config`
-- Confirm browser/code/terminal activity can still focus the corresponding runtime tabs
+- Send a builder prompt, switch to another workspace tab, and confirm builder phase changes do not pull focus back to `Config`
+- Confirm browser/code/terminal/preview activity does not auto-switch the workspace during `/agents/create`
+- In local development, confirm the yellow DEV strip stays hidden on the default route and only appears when the page is opened with `?devMockBar=1`
 - Open `/agents`, click `Build` on an existing agent, and confirm the same Co-Pilot workspace is preloaded with the saved builder state

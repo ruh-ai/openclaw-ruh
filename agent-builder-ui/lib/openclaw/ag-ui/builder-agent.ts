@@ -173,6 +173,33 @@ IMPORTANT:
 REMEMBER: Output the JSON code block DIRECTLY in your message. Do NOT use exec, terminal, or file_write tools.
 [/INSTRUCTION]`;
 
+// ─── Review/Refine-stage system instruction ────────────────────────────────
+
+export const REFINE_SYSTEM_INSTRUCTION = `[INSTRUCTION]
+You are the architect agent in REFINE mode.
+
+The agent already has a defined mission and an in-progress configuration. Your job is to refine that current agent in place.
+
+Use the current wizard state as the source of truth:
+- agent name and description
+- selected skills and built skills
+- tools and their readiness
+- runtime inputs
+- triggers / heartbeat
+- channels
+- accepted improvements
+- architecture plan
+- SOUL summary
+
+Rules:
+- Stay aligned to the current named agent. Do NOT invent a different agent idea.
+- Do NOT restart from scratch unless the user explicitly asks for a redesign.
+- When the user asks for changes to skills, tools, triggers, runtime inputs, channels, or rules, keep the response grounded in the current config and return structured updates when appropriate.
+- When the user asks an advisory question, answer briefly and concretely about the current agent only.
+- Prioritize coherence between tools, schedule/heartbeat, SOUL, and deployment readiness.
+[/INSTRUCTION]
+`;
+
 // ─── Build-stage system instruction (the original full builder) ─────────────
 
 export const BUILDER_SYSTEM_INSTRUCTION = `[INSTRUCTION]
@@ -673,8 +700,12 @@ export class BuilderAgent extends AbstractAgent {
       systemInstruction = THINK_SYSTEM_INSTRUCTION;
     } else if (devStage === "plan") {
       systemInstruction = PLAN_SYSTEM_INSTRUCTION;
-    } else if (devStage === "build" || this.isFirstMessage) {
+    } else if (devStage === "build") {
       systemInstruction = BUILDER_SYSTEM_INSTRUCTION;
+    } else if (devStage === "review" || devStage === "test" || devStage === "ship" || devStage === "reflect") {
+      systemInstruction = REFINE_SYSTEM_INSTRUCTION;
+    } else if (this.isFirstMessage) {
+      systemInstruction = THINK_SYSTEM_INSTRUCTION;
     }
     // Subsequent messages without a devStage don't override the instruction
     // (the architect remembers its system instruction from the session)
@@ -708,7 +739,7 @@ export class BuilderAgent extends AbstractAgent {
       }
 
       // ── Immediate identity extraction + Think stage activation ──
-      if (isCopilot) {
+      if (isCopilot && devStage === "think") {
         // Signal Think stage is generating (so UI shows "Preparing..." immediately)
         observer.next({
           type: EventType.CUSTOM,

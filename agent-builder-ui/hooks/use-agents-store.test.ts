@@ -699,6 +699,118 @@ describe("useAgentsStore", () => {
     expect(useAgentsStore.getState().agents[0]).toEqual(saved);
   });
 
+  test("saveAgentDraft re-fetches an existing draft when the local store is cold after refresh", async () => {
+    useAgentsStore.setState({
+      agents: [],
+      isLoading: false,
+    });
+
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/agents/agent-1") && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            id: "agent-1",
+            name: "Existing Agent",
+            avatar: "🤖",
+            description: "Original description",
+            skills: ["Existing Skill"],
+            trigger_label: "Manual trigger",
+            status: "forging",
+            sandbox_ids: ["forge-sb-1"],
+            forge_sandbox_id: "forge-sb-1",
+            tool_connections: [],
+            triggers: [],
+            skill_graph: [{ skill_id: "old-skill", name: "Existing Skill", description: "Old graph" }],
+            workflow: [{ step: "old-step", node_id: "old-skill" }],
+            agent_rules: ["rule: old"],
+            created_at: "2026-03-25T00:00:00.000Z",
+            updated_at: "2026-03-26T00:00:00.000Z",
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (url.endsWith("/api/agents/agent-1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body).toEqual(
+          expect.objectContaining({
+            name: "Reloaded Draft",
+            description: "Recovered after refresh",
+            status: "forging",
+          }),
+        );
+
+        return new Response(
+          JSON.stringify({
+            id: "agent-1",
+            name: "Reloaded Draft",
+            avatar: "🤖",
+            description: "Recovered after refresh",
+            skills: ["Recovered Skill"],
+            trigger_label: "Manual trigger",
+            status: "forging",
+            sandbox_ids: ["forge-sb-1"],
+            forge_sandbox_id: "forge-sb-1",
+            tool_connections: [],
+            triggers: [],
+            skill_graph: [{ skill_id: "recovered-skill", name: "Recovered Skill", description: "Recovered graph" }],
+            workflow: [{ step: "step-0", node_id: "recovered-skill" }],
+            agent_rules: ["rule: recovered"],
+            created_at: "2026-03-25T00:00:00.000Z",
+            updated_at: "2026-03-26T00:05:00.000Z",
+          }),
+          { status: 200 },
+        );
+      }
+
+      if (url.endsWith("/api/agents/agent-1/config") && init?.method === "PATCH") {
+        return new Response(
+          JSON.stringify({
+            id: "agent-1",
+            name: "Reloaded Draft",
+            avatar: "🤖",
+            description: "Recovered after refresh",
+            skills: ["Recovered Skill"],
+            trigger_label: "Manual trigger",
+            status: "forging",
+            sandbox_ids: ["forge-sb-1"],
+            forge_sandbox_id: "forge-sb-1",
+            tool_connections: [],
+            triggers: [],
+            skill_graph: [{ skill_id: "recovered-skill", name: "Recovered Skill", description: "Recovered graph" }],
+            workflow: [{ step: "step-0", node_id: "recovered-skill" }],
+            agent_rules: ["rule: recovered"],
+            created_at: "2026-03-25T00:00:00.000Z",
+            updated_at: "2026-03-26T00:05:01.000Z",
+          }),
+          { status: 200 },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+    });
+
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const saved = await useAgentsStore.getState().saveAgentDraft({
+      agentId: "agent-1",
+      name: "Reloaded Draft",
+      description: "Recovered after refresh",
+      skillGraph: [{ skill_id: "recovered-skill", name: "Recovered Skill", description: "Recovered graph" }],
+      workflow: [{ step: "step-0", node_id: "recovered-skill" }] as unknown as SavedAgent["workflow"],
+      agentRules: ["rule: recovered"],
+      toolConnections: [],
+      triggers: [],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(saved.status).toBe("forging");
+    expect(saved.forgeSandboxId).toBe("forge-sb-1");
+    expect(useAgentsStore.getState().agents[0]).toEqual(saved);
+  });
+
   test("saveAgentDraft refreshes the trigger label from updated structured triggers when editing an existing agent", async () => {
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

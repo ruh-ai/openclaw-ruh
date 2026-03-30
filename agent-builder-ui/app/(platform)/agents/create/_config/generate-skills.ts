@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import { sendToArchitectStreaming, sendToForgeSandboxChat } from "@/lib/openclaw/api";
 import type {
   ArchitectResponse,
+  ArchitecturePlan,
   DiscoveryDocuments,
   DiscoveryQuestion,
   SkillGraphNode,
@@ -91,15 +92,17 @@ Generate the PRD and TRD now.`;
 
 // ─── Skill Generation Prompt ─────────────────────────────────────────────────
 
-function buildSkillGenerationPrompt(
+export function buildSkillGenerationPrompt(
   agentName: string,
   agentDescription: string,
   discoveryContext?: Record<string, string | string[]>,
   discoveryDocuments?: DiscoveryDocuments,
+  architecturePlan?: ArchitecturePlan,
 ): string {
   const capabilities = buildCapabilitiesContext();
 
   let discoverySection = "";
+  let architectureSection = "";
 
   if (discoveryDocuments) {
     const formatDoc = (doc: DiscoveryDocuments["prd"] | DiscoveryDocuments["trd"]) =>
@@ -120,23 +123,67 @@ Build the agent EXACTLY according to these approved requirements. Do not deviate
         .join("\n")}\n`;
   }
 
-  return `[INSTRUCTION]
-You are the OpenClaw architect agent, generating a skill graph for the agent builder wizard.
+  if (architecturePlan) {
+    architectureSection = `
+## Approved Architecture Plan
+\`\`\`json
+${JSON.stringify(architecturePlan, null, 2)}
+\`\`\`
 
-The user has described an agent they want to build. Your job is to:
-1. Analyse the description and determine 3-7 specific skills this agent needs
-2. Return a structured "ready_for_review" response with the skill graph
+Treat this approved architecture plan as the source of truth for the build output:
+- keep the same planned skill ids, workflow order, tools, triggers, channels, and environment variables
+- build the skill graph from these planned skills instead of inventing a different set
+- return a complete built skill payload, including the final \`skill_md\` for every skill node
+`;
+  }
+
+  return `[INSTRUCTION]
+You are the OpenClaw architect agent, building the approved skill graph for the agent builder wizard.
+
+The user has already approved the requirements${architecturePlan ? " and architecture plan" : ""}. Your job is to:
+1. Build the exact planned agent skills from the approved requirements${architecturePlan ? " and architecture plan" : ""}
+2. Return a structured "ready_for_review" response with the built skill graph
 3. DO NOT ask clarification questions — use the provided context
 4. Each skill should have a clear, actionable description (2-3 sentences)
 5. Include requires_env for any API keys or credentials needed
 6. Include external_api for any third-party services the skill calls
 7. Set depends_on to show skill execution order where relevant
 8. For each skill that connects to an external service, set tool_type ("mcp", "api", or "cli") and tool_id (MCP registry id, only for MCP tools)
+9. Include "skill_md" with the FULL SKILL.md content for every returned skill node — this is critical, the content will be written to the agent's workspace
 
 ${capabilities}
 ${discoverySection}
+${architectureSection}
 
-Return ONLY a valid JSON response with type "ready_for_review".
+Return ONLY a valid JSON response with type "ready_for_review" in this shape:
+{
+  "type": "ready_for_review",
+  "system_name": "kebab-case-agent-name",
+  "content": "Brief build summary",
+  "skill_graph": {
+    "nodes": [
+      {
+        "skill_id": "planned-skill-id",
+        "name": "Human Readable Name",
+        "description": "What this skill does",
+        "source": "custom",
+        "depends_on": [],
+        "requires_env": ["ENV_VAR_NAME"],
+        "tool_type": "mcp",
+        "tool_id": "google-ads",
+        "skill_md": "---\\nname: planned-skill-id\\nversion: 1.0.0\\ndescription: \\"What this skill does\\"\\nuser-invocable: false\\nmetadata:\\n  openclaw:\\n    requires:\\n      bins: [bash]\\n      env: [ENV_VAR_NAME]\\n---\\n\\n# Skill Name\\n\\n## What This Skill Does\\n\\nDetailed description of the skill...\\n\\n## Steps\\n\\n### Step 1: ...\\n\\n### Step 2: ...\\n"
+      }
+    ],
+    "workflow": {
+      "steps": []
+    }
+  }
+}
+
+IMPORTANT:
+- Return ONLY the JSON — no preamble, no explanation, no markdown outside the JSON block.
+- The "skill_md" field MUST contain the complete SKILL.md file content that will be written to the agent workspace. Do not leave it empty or use a placeholder.
+- Every skill in the architecture plan must appear as a node.
 [/INSTRUCTION]
 
 Agent name: ${agentName}
@@ -395,10 +442,17 @@ export async function generateSkillsFromArchitect(
   callbacks?: GenerateSkillsCallbacks,
   discoveryContext?: Record<string, string | string[]>,
   discoveryDocuments?: DiscoveryDocuments,
+  architecturePlan?: ArchitecturePlan,
   forgeSandboxId?: string,
 ): Promise<GeneratedSkills> {
   const sessionId = uuidv4();
-  const prompt = buildSkillGenerationPrompt(agentName, agentDescription, discoveryContext, discoveryDocuments);
+  const prompt = buildSkillGenerationPrompt(
+    agentName,
+    agentDescription,
+    discoveryContext,
+    discoveryDocuments,
+    architecturePlan,
+  );
 
   callbacks?.onStatus?.("Connecting to architect agent...");
 
@@ -438,6 +492,12 @@ export async function generateSkillsFromArchitect(
     // Guard: nodes may be undefined if the architect returned a skill_graph
     // object without a nodes array (e.g. forge-chat edge cases).
     const nodes = response.skill_graph.nodes ?? [];
+
+    if (nodes.length === 0) {
+      throw new Error(
+        "The architect returned an empty skill graph. This usually means the sandbox didn't generate skills from the requirements. Retrying may fix this."
+      );
+    }
 
     const workflow = normalizeWorkflow(
       response.skill_graph.workflow,

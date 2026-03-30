@@ -375,8 +375,11 @@ test.describe("TabChat parser + ComputerView terminal", () => {
     // Tool step in task list
     await expect(page.getByText(/Using tool/i).first()).toBeVisible({ timeout: 5_000 });
 
-    // ComputerView terminal tab (default) shows the command
-    await expect(page.getByText(command, { exact: false }).first()).toBeVisible({ timeout: 5_000 });
+    // ComputerView terminal tab (default) shows the bounded shell and command
+    const terminalShell = page.getByTestId("workspace-terminal-shell");
+    await expect(terminalShell).toBeVisible({ timeout: 5_000 });
+    await expect(terminalShell.getByTestId("workspace-terminal-input")).toBeVisible({ timeout: 5_000 });
+    await expect(terminalShell.getByText(command, { exact: false }).first()).toBeVisible({ timeout: 5_000 });
   });
 
   /**

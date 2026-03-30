@@ -7,12 +7,17 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { authRouter } from './authRoutes';
+import { marketplaceRouter } from './marketplaceRoutes';
+import { createCostRouter } from './costRoutes';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import axios from 'axios';
 import { context, trace, SpanStatusCode, propagation } from '@opentelemetry/api';
+import { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } from './agentTracing';
+import { createLogger } from '@ruh/logger';
+import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
 import { requireAuth, requireRole } from './auth/middleware';
 import * as userStore from './userStore';
@@ -37,6 +42,7 @@ import * as auditStore from './auditStore';
 import * as systemEventStore from './systemEventStore';
 import * as webhookDeliveryStore from './webhookDeliveryStore';
 import { findSkill, listSkills } from './skillRegistry';
+import * as paperclipOrchestrator from './paperclipOrchestrator';
 import { getBackendReadiness } from './backendReadiness';
 import { getSandboxConversationRecord } from './conversationAccess';
 import {
@@ -77,6 +83,7 @@ import {
   getPersistedAssistantMessageFromResponse,
   getPersistedUserMessage,
   StreamingChatPersistenceCollector,
+  type ExecutionSummary,
 } from './chatPersistence';
 import {
   buildSandboxRuntimeReconciliation,
@@ -93,6 +100,8 @@ try {
 } catch {
   console.warn('[architect] architect-soul.md not found — SOUL.md will not be injected into new forge containers');
 }
+
+const appLogger = createLogger({ service: 'ruh-backend' });
 
 export const app = express();
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
@@ -157,6 +166,9 @@ app.use((req, res, next) => {
   context.with(trace.setSpan(parentCtx, span), () => next());
 });
 
+// ── Structured HTTP request/response logging ────────────────────────────────
+app.use(requestLoggerMiddleware);
+
 const allowedOrigins = getConfig().allowedOrigins;
 
 app.use(
@@ -164,12 +176,16 @@ app.use(
     origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['*'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-OpenClaw-Session-Key', 'X-Daytona-Preview-Token'],
+    exposedHeaders: ['X-Request-ID'],
+    maxAge: 86400,
   }),
 );
 
 app.use(cookieParser());
 app.use('/api/auth', authRouter);
+app.use('/api/marketplace', marketplaceRouter);
+app.use('/api/agents/:agentId', createCostRouter());
 
 // In-memory store for active creation streams (exported for test cleanup)
 export interface StreamEntry {
@@ -485,7 +501,7 @@ async function recordAuditEvent(
       origin,
     });
   } catch (error) {
-    console.error('Failed to persist control-plane audit event', error);
+    appLogger.error({ err: error }, 'Failed to persist control-plane audit event');
   }
 }
 
@@ -502,7 +518,7 @@ async function recordSystemEvent(
       span_id: typedReq.__otelSpanId ?? null,
     });
   } catch (error) {
-    console.error('Failed to persist system event', error);
+    appLogger.error({ err: error }, 'Failed to persist system event');
   }
 }
 
@@ -545,7 +561,7 @@ function buildSystemEventFilters(
     agent_id: fixed.agent_id ?? parseOptionalQueryString(req.query.agent_id),
     conversation_id: fixed.conversation_id ?? parseOptionalQueryString(req.query.conversation_id),
     source: parseOptionalQueryString(req.query.source),
-    limit: req.query.limit == null ? undefined : parsePositiveIntParam(req.query.limit, 'system-event limit'),
+    limit: req.query.limit == null ? undefined : parsePositiveIntParam(req.query.limit, 50, 'system-event limit'),
   };
 }
 
@@ -742,6 +758,25 @@ app.get('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
   res.json(await getRecord(sandbox_id));
 }));
 
+// Restart the OpenClaw gateway inside a sandbox container.
+// Containers run without systemd, so we kill the old process and start fresh.
+app.post('/api/sandboxes/:sandbox_id/gateway/restart', asyncHandler(async (req, res) => {
+  const { sandbox_id } = req.params;
+  await getRecord(sandbox_id); // throws 404 if not found
+  // Kill existing gateway process (if any), then start in background
+  await sandboxExec(sandbox_id, 'pkill -f "openclaw gateway" 2>/dev/null || true', 5);
+  const [exitCode, output] = await sandboxExec(
+    sandbox_id,
+    'nohup openclaw gateway > /tmp/openclaw-gateway.log 2>&1 & sleep 2 && curl -sf http://localhost:18789/ > /dev/null && echo "GATEWAY_OK" || echo "GATEWAY_FAIL"',
+    15,
+  );
+  const gatewayOk = output.includes('GATEWAY_OK');
+  if (!gatewayOk) {
+    throw httpError(502, `Gateway restart failed: ${output.slice(0, 300)}`);
+  }
+  res.json({ restarted: true, healthy: true });
+}));
+
 app.delete('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
   const { sandbox_id } = req.params;
   const deleted = await store.deleteSandbox(sandbox_id);
@@ -801,6 +836,9 @@ app.delete('/api/agents/:id', asyncHandler(async (req, res) => {
   // Read agent first to get sandbox_ids for cascade cleanup
   const agent = await agentStore.getAgent(req.params.id);
   if (!agent) throw httpError(404, 'Agent not found');
+
+  // Fire-and-forget: clean up Paperclip resources
+  paperclipOrchestrator.teardownPaperclipCompany(req.params.id).catch(() => {});
 
   // Cascade: delete associated sandboxes + Docker containers
   const sandboxIds: string[] = agent.sandbox_ids ?? [];
@@ -916,22 +954,37 @@ app.post('/api/agents/create', asyncHandler(async (req, res) => {
     throw httpError(400, 'name is required');
   }
 
-  // 1. Create the agent record
-  const agent = await agentStore.saveAgent({
-    name: name.trim(),
-    description: description ? String(description).trim() : '',
-    status: 'draft',
-  });
+  const span = startAgentSpan('agent.create', { 'agent.name': name.trim() });
+  try {
+    // 1. Create the agent record with "forging" status — shown as "In the Forge" in agents list
+    const agent = await agentStore.saveAgent({
+      name: name.trim(),
+      description: description ? String(description).trim() : '',
+      status: 'forging',
+    });
 
-  // 2. Set up the forge stream entry (same pattern as POST /api/agents/:id/forge)
-  const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
-  const streamId = uuidv4();
-  _streams.set(streamId, {
-    status: 'pending',
-    request: { sandbox_name: sandboxName, forge_agent_id: agent.id },
-  });
+    // 2. Set up the forge stream entry (same pattern as POST /api/agents/:id/forge)
+    const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
+    const streamId = uuidv4();
+    _streams.set(streamId, {
+      status: 'pending',
+      request: { sandbox_name: sandboxName, forge_agent_id: agent.id },
+    });
 
-  res.json({ agent_id: agent.id, stream_id: streamId });
+    span.setAttribute('agent.id', agent.id);
+    span.setAttribute('stream.id', streamId);
+    endSpanOk(span);
+
+    // Fire-and-forget: provision Paperclip company + workers in background
+    paperclipOrchestrator.provisionPaperclipCompany(agent).catch((err) => {
+      console.warn('[paperclip] Provisioning failed (non-blocking):', (err as Error).message);
+    });
+
+    res.json({ agent_id: agent.id, stream_id: streamId });
+  } catch (err) {
+    endSpanError(span, err);
+    throw err;
+  }
 }));
 
 // ── Agent Forge (per-agent builder sandbox) ─────────────────────────────────
@@ -983,6 +1036,13 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
   const stream = initializeSseStream(req, res);
   const { sendEvent } = stream;
   const sandboxName = String(entry.request.sandbox_name ?? 'forge-sandbox');
+
+  // v2: trace the entire forge provisioning lifecycle
+  const forgeSpan = startAgentSpan('agent.forge.provision', {
+    'agent.id': agentId,
+    'stream.id': stream_id,
+    'sandbox.name': sandboxName,
+  });
 
   await recordSystemEvent(req, {
     level: 'info',
@@ -1056,8 +1116,12 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
 
         // Reproduce from repo: clone the template instead of injecting Architect SOUL
         const reproduceRepoUrl = entry.request.reproduce_repo_url as string | undefined;
-        if (reproduceRepoUrl && entry.result?.['sandbox_id']) {
-          const forgeCName = getContainerName(String(entry.result['sandbox_id']));
+        const sandboxIdStr = String(entry.result?.['sandbox_id'] ?? '');
+        if (reproduceRepoUrl && sandboxIdStr) {
+          const cloneSpan = startAgentSpan('agent.forge.repo_clone', {
+            'agent.id': agentId, 'sandbox.id': sandboxIdStr, 'repo.url': reproduceRepoUrl,
+          });
+          const forgeCName = getContainerName(sandboxIdStr);
           sendEvent('log', { message: `Cloning template from ${reproduceRepoUrl}...` });
 
           // Build git clone URL (inject token for private repos)
@@ -1075,17 +1139,20 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
             120_000,
           ).catch(() => [false, 'clone command failed']);
           const cloneSuccess = typeof cloneOut === 'string' && cloneOut.includes('__CLONE_OK__');
-          sendEvent('log', { message: cloneSuccess ? 'Template cloned into workspace.' : `Clone failed: ${String(cloneOut).slice(0, 200)}` });
-
-          // Restart gateway so it picks up the cloned SOUL.md
           if (cloneSuccess) {
+            sendEvent('log', { message: 'Template cloned into workspace.' });
             sendEvent('log', { message: 'Restarting gateway with cloned soul...' });
             await restartGateway(forgeCName).catch(() => {});
+            endSpanOk(cloneSpan);
+          } else {
+            sendEvent('log', { message: `Clone failed: ${String(cloneOut).slice(0, 200)}` });
+            endSpanError(cloneSpan, `Clone failed: ${String(cloneOut).slice(0, 200)}`);
           }
-        } else if (ARCHITECT_SOUL_MD && entry.result?.['sandbox_id']) {
-          // Inject Architect SOUL.md so the Architect agent can guide creation
-          // from within this container from the very first message.
-          const forgeCName = getContainerName(String(entry.result['sandbox_id']));
+        } else if (ARCHITECT_SOUL_MD && sandboxIdStr) {
+          const soulSpan = startAgentSpan('agent.forge.soul_inject', {
+            'agent.id': agentId, 'sandbox.id': sandboxIdStr, 'method': 'architect',
+          });
+          const forgeCName = getContainerName(sandboxIdStr);
           sendEvent('log', { message: 'Injecting Architect SOUL.md into workspace...' });
           const [soulOk] = await dockerExec(
             forgeCName,
@@ -1101,7 +1168,13 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
               30_000,
             ).catch(() => {});
           }
-          sendEvent('log', { message: soulOk ? 'Architect SOUL.md ready.' : 'SOUL.md injection failed — agent will start without soul.' });
+          if (soulOk) {
+            sendEvent('log', { message: 'Architect SOUL.md ready.' });
+            endSpanOk(soulSpan);
+          } else {
+            sendEvent('log', { message: 'SOUL.md injection failed — agent will start without soul.' });
+            endSpanError(soulSpan, 'SOUL.md injection failed');
+          }
         }
 
         sendEvent('approved', data);
@@ -1123,17 +1196,20 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
           },
         });
         sendEvent('error', { message: data });
+        endSpanError(forgeSpan, String(data));
         stream.close();
         return;
       }
     }
 
     entry.status = 'done';
+    endSpanOk(forgeSpan);
     sendEvent('done', { stream_id, forge_agent_id: agentId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     entry.status = 'error';
     entry.error = msg;
+    endSpanError(forgeSpan, err);
     await recordSystemEvent(req, {
       level: 'error',
       category: 'sandbox.lifecycle',
@@ -1157,6 +1233,28 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
 /**
  * Get forge sandbox health status.
  */
+// GET forge sandbox info for the frontend useForgeSandbox hook
+app.get('/api/agents/:id/forge', asyncHandler(async (req, res) => {
+  const agent = await getAgentRecord(req.params.id);
+  if (!agent.forge_sandbox_id) {
+    res.json({ status: 'none', forge_sandbox_id: null, sandbox: null });
+    return;
+  }
+
+  const record = await store.getSandbox(agent.forge_sandbox_id).catch(() => null);
+  if (!record) {
+    res.json({ status: 'missing', forge_sandbox_id: agent.forge_sandbox_id, sandbox: null });
+    return;
+  }
+
+  const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+  res.json({
+    status: running ? 'ready' : 'stopped',
+    forge_sandbox_id: agent.forge_sandbox_id,
+    sandbox: record,
+  });
+}));
+
 app.get('/api/agents/:id/forge/status', asyncHandler(async (req, res) => {
   const agent = await getAgentRecord(req.params.id);
   if (!agent.forge_sandbox_id) {
@@ -1182,6 +1280,54 @@ app.get('/api/agents/:id/forge/status', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * Delete the agent's forge: stops and removes the Docker container,
+ * cleans up the sandbox record, and deletes the agent itself.
+ * This is a full discard — the agent and all its work are gone.
+ */
+app.delete('/api/agents/:id/forge', asyncHandler(async (req, res) => {
+  const agent = await getAgentRecord(req.params.id);
+  const span = startAgentSpan('agent.forge.delete', {
+    'agent.id': req.params.id,
+    'sandbox.id': agent.forge_sandbox_id ?? undefined,
+  });
+
+  let sandboxCleaned = false;
+  try {
+    // 1. Stop and remove the Docker container
+    if (agent.forge_sandbox_id) {
+      await stopAndRemoveContainer(agent.forge_sandbox_id).catch(() => {});
+      await store.deleteSandbox(agent.forge_sandbox_id).catch(() => {});
+      sandboxCleaned = true;
+    }
+
+    // 2. Also clean up any promoted sandbox_ids
+    for (const sid of agent.sandbox_ids ?? []) {
+      if (sid !== agent.forge_sandbox_id) {
+        await stopAndRemoveContainer(sid).catch(() => {});
+        await store.deleteSandbox(sid).catch(() => {});
+      }
+    }
+
+    // 3. Delete the agent record
+    await agentStore.deleteAgent(req.params.id);
+
+    await recordAuditEvent(req, {
+      action_type: 'agent.forge_delete',
+      target_type: 'agent',
+      target_id: req.params.id,
+      outcome: 'success',
+      details: { forge_sandbox_id: agent.forge_sandbox_id, sandbox_cleaned: sandboxCleaned },
+    });
+
+    endSpanOk(span);
+    res.json({ deleted: req.params.id, sandbox_cleaned: sandboxCleaned });
+  } catch (err) {
+    endSpanError(span, err);
+    throw err;
+  }
+}));
+
+/**
  * Switch the agent's forge container between building and live mode.
  *
  * building → Restores the Architect SOUL.md (from .soul.architect.md backup)
@@ -1201,34 +1347,41 @@ app.patch('/api/agents/:id/mode', asyncHandler(async (req, res) => {
     throw httpError(400, 'Agent has no forge sandbox — provision one first');
   }
 
-  const containerName = getContainerName(agent.forge_sandbox_id);
+  const span = startAgentSpan('agent.mode.switch', {
+    'agent.id': req.params.id,
+    'sandbox.id': agent.forge_sandbox_id,
+    'agent.mode': mode,
+  });
 
-  if (mode === 'building') {
-    // Restore Architect SOUL.md from backup
-    const [restoreOk, restoreOut] = await dockerExec(
-      containerName,
-      'cp ~/.openclaw/workspace/.soul.architect.md ~/.openclaw/workspace/SOUL.md 2>/dev/null && echo ok || echo missing',
-      15_000,
-    );
-    if (!restoreOk || restoreOut.includes('missing')) {
-      // Backup is gone — re-inject from the server copy
-      if (ARCHITECT_SOUL_MD) {
-        await dockerExec(
-          containerName,
-          buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', ARCHITECT_SOUL_MD),
-          30_000,
-        );
-      } else {
-        throw httpError(500, 'Architect SOUL.md backup not found in container and server copy is unavailable');
+  try {
+    const containerName = getContainerName(agent.forge_sandbox_id);
+
+    if (mode === 'building') {
+      const [restoreOk, restoreOut] = await dockerExec(
+        containerName,
+        'cp ~/.openclaw/workspace/.soul.architect.md ~/.openclaw/workspace/SOUL.md 2>/dev/null && echo ok || echo missing',
+        15_000,
+      );
+      if (!restoreOk || restoreOut.includes('missing')) {
+        if (ARCHITECT_SOUL_MD) {
+          await dockerExec(
+            containerName,
+            buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', ARCHITECT_SOUL_MD),
+            30_000,
+          );
+        } else {
+          throw httpError(500, 'Architect SOUL.md backup not found in container and server copy is unavailable');
+        }
       }
     }
+
+    await restartGateway(containerName);
+    endSpanOk(span);
+    res.json({ ok: true, mode, agent_id: req.params.id, sandbox_id: agent.forge_sandbox_id });
+  } catch (err) {
+    endSpanError(span, err);
+    throw err;
   }
-  // For "live" mode: SOUL.md already contains the agent's soul (written by Architect).
-  // Nothing to copy — just restart so the gateway reloads it.
-
-  await restartGateway(containerName);
-
-  res.json({ ok: true, mode, agent_id: req.params.id, sandbox_id: agent.forge_sandbox_id });
 }));
 
 /**
@@ -1250,8 +1403,98 @@ app.post('/api/agents/:id/forge/promote', asyncHandler(async (req, res) => {
     details: { sandbox_id: agent.forge_sandbox_id },
   });
 
+  // Fire-and-forget: re-provision Paperclip workers with finalized skill graph
+  if (updated) {
+    paperclipOrchestrator.provisionPaperclipCompany(updated).catch((err) => {
+      console.warn('[paperclip] Post-promote provisioning failed (non-blocking):', (err as Error).message);
+    });
+  }
+
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
+
+/**
+ * Scaffold skills into a forge sandbox workspace.
+ *
+ * The copilot build phase gets a JSON skill graph from the architect via the HTTP
+ * chat proxy — but that proxy can only return text, it cannot exec shell commands.
+ * This endpoint bridges the gap: it takes the JSON skill graph and writes the actual
+ * SKILL.md files into the container via docker exec.
+ *
+ * Accepts: { skill_graph: { nodes: [...] }, workflow?: object }
+ */
+app.post('/api/agents/:id/forge/scaffold-skills', asyncHandler(async (req, res) => {
+  const agent = await getAgentRecord(req.params.id);
+  const sandboxId = agent.forge_sandbox_id;
+  if (!sandboxId) {
+    throw httpError(400, 'Agent has no forge sandbox');
+  }
+
+  const { skill_graph, workflow } = req.body as {
+    skill_graph: { nodes: Array<{ skill_id: string; name: string; skill_md?: string; description?: string; requires_env?: string[]; external_api?: string; depends_on?: string[] }> };
+    workflow?: object;
+  };
+
+  if (!skill_graph?.nodes?.length) {
+    throw httpError(400, 'skill_graph.nodes is required and must be non-empty');
+  }
+
+  const containerName = getContainerName(sandboxId);
+  const results: Array<{ skill_id: string; ok: boolean }> = [];
+
+  for (const node of skill_graph.nodes) {
+    const skillContent = node.skill_md || buildDefaultSkillMd(node);
+    const skillPath = `.openclaw/workspace/skills/${node.skill_id}/SKILL.md`;
+    try {
+      const [ok] = await dockerExec(
+        containerName,
+        buildHomeFileWriteCommand(skillPath, skillContent),
+        30_000,
+      );
+      results.push({ skill_id: node.skill_id, ok });
+    } catch {
+      results.push({ skill_id: node.skill_id, ok: false });
+    }
+  }
+
+  if (workflow) {
+    await dockerExec(
+      containerName,
+      buildHomeFileWriteCommand(
+        '.openclaw/workspace/.openclaw/workflow.json',
+        JSON.stringify(workflow, null, 2),
+      ),
+      30_000,
+    ).catch(() => {});
+  }
+
+  const succeeded = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok).length;
+  console.info(`[scaffold-skills] Agent ${req.params.id}: ${succeeded}/${skill_graph.nodes.length} skills written (${failed} failed)`);
+  res.json({ scaffolded: succeeded, failed, total: skill_graph.nodes.length, results });
+}));
+
+function buildDefaultSkillMd(node: { skill_id: string; name: string; description?: string; requires_env?: string[]; external_api?: string; depends_on?: string[] }): string {
+  const lines: string[] = [
+    '---', `name: ${node.skill_id}`, 'version: 1.0.0',
+    `description: "${(node.description || node.name).replace(/"/g, '\\"')}"`,
+    'allowed-tools:', '  - Bash', '  - Read', '  - Write',
+    'user-invocable: true', '---', '', `# ${node.name}`, '',
+  ];
+  if (node.description) lines.push(node.description, '');
+  if (node.requires_env?.length) {
+    lines.push('## Required Environment Variables');
+    for (const env of node.requires_env) lines.push(`- \`${env}\``);
+    lines.push('');
+  }
+  if (node.external_api) lines.push(`## External API\n- ${node.external_api}`, '');
+  if (node.depends_on?.length) {
+    lines.push('## Dependencies');
+    for (const dep of node.depends_on) lines.push(`- ${dep}`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
 
 /**
  * Reproduce an agent from a GitHub repo template.
@@ -1269,28 +1512,34 @@ app.post('/api/agents/reproduce', asyncHandler(async (req, res) => {
   if (!name?.trim()) throw httpError(400, 'name is required');
   if (!repo_url?.trim()) throw httpError(400, 'repo_url is required');
 
-  // Create the agent record
-  const agent = await agentStore.saveAgent({
-    name: name.trim(),
-    description: description?.trim() ?? `Reproduced from ${repo_url}`,
-    status: 'draft',
-  });
+  const span = startAgentSpan('agent.reproduce', { 'agent.name': name.trim(), 'repo.url': repo_url.trim() });
+  try {
+    const agent = await agentStore.saveAgent({
+      name: name.trim(),
+      description: description?.trim() ?? `Reproduced from ${repo_url}`,
+      status: 'draft',
+    });
 
-  // Set up forge stream — same pattern as POST /api/agents/create
-  const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
-  const streamId = uuidv4();
-  _streams.set(streamId, {
-    status: 'pending',
-    request: {
-      sandbox_name: sandboxName,
-      forge_agent_id: agent.id,
-      // Stash repo info so the stream handler can clone after provisioning
-      reproduce_repo_url: repo_url.trim(),
-      reproduce_github_token: github_token?.trim() ?? '',
-    },
-  });
+    const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
+    const streamId = uuidv4();
+    _streams.set(streamId, {
+      status: 'pending',
+      request: {
+        sandbox_name: sandboxName,
+        forge_agent_id: agent.id,
+        reproduce_repo_url: repo_url.trim(),
+        reproduce_github_token: github_token?.trim() ?? '',
+      },
+    });
 
-  res.json({ agent_id: agent.id, stream_id: streamId });
+    span.setAttribute('agent.id', agent.id);
+    span.setAttribute('stream.id', streamId);
+    endSpanOk(span);
+    res.json({ agent_id: agent.id, stream_id: streamId });
+  } catch (err) {
+    endSpanError(span, err);
+    throw err;
+  }
 }));
 
 app.patch('/api/agents/:id/config', asyncHandler(async (req, res) => {
@@ -1803,13 +2052,13 @@ app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
         gatewayReachable,
       });
       res.json({
+        ...runtime,
+        ...resp.data,
         sandbox_id: record.sandbox_id,
         sandbox_name: record.sandbox_name,
         gateway_port: record.gateway_port ?? 18789,
         approved: record.approved ?? false,
         created_at: record.created_at,
-        ...runtime,
-        ...resp.data,
         container_running,
       });
       return;
@@ -1829,12 +2078,12 @@ app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
     gatewayReachable,
   });
   res.json({
+    ...runtime,
     sandbox_id: record.sandbox_id,
     sandbox_name: record.sandbox_name,
     gateway_port: record.gateway_port ?? 18789,
     approved: record.approved ?? false,
     created_at: record.created_at,
-    ...runtime,
   });
 }));
 
@@ -2139,6 +2388,19 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
               code: 'chat_exchange_persistence_failed',
               message: `Assistant reply was generated but could not be saved to conversation history: ${detail}`,
             })}\n\n`);
+          }
+        }
+      }
+
+      // Fire-and-forget: post-chat execution recording + skill analysis
+      if (collector.hasCompleted()) {
+        const executionSummary = collector.buildExecutionSummary();
+        if (executionSummary && executionSummary.totalToolCalls > 0) {
+          const chatAgent = await agentStore.getAgentBySandboxId(req.params.sandbox_id);
+          if (chatAgent) {
+            paperclipOrchestrator.recordAndAnalyze(chatAgent, req.params.sandbox_id, executionSummary).catch((err) => {
+              console.warn('[post-chat] Skill analysis failed (non-blocking):', (err as Error).message);
+            });
           }
         }
       }
@@ -2983,9 +3245,17 @@ app.post('/api/sandboxes/:sandbox_id/channels/:channel/pairing/approve', asyncHa
 }));
 
 // ── Error middleware (MUST be last) ──────────────────────────────────────────
-app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { status?: number }, req: Request, res: Response, _next: NextFunction) => {
   const status = err.status ?? 500;
-  res.status(status).json({ detail: err.message });
+  const requestId = (req as any).__requestId;
+  if (status >= 500) {
+    // Log full error details internally but return generic message to client
+    appLogger.error({ err, requestId, status, path: req.path }, `Unhandled error: ${err.message}`);
+    res.status(status).json({ detail: 'Internal server error', requestId });
+  } else {
+    // 4xx errors are intentional — safe to return the message
+    res.status(status).json({ detail: err.message });
+  }
 });
 
 export default app;

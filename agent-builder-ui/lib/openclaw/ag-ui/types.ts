@@ -55,6 +55,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  hiddenInTranscript?: boolean;
   steps?: AgentStep[];
   browserState?: BrowserWorkspaceState;
   taskPlan?: TaskPlan;

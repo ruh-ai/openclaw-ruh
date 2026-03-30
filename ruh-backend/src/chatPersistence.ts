@@ -425,4 +425,34 @@ export class StreamingChatPersistenceCollector {
       workspace_state,
     };
   }
+
+  /**
+   * Build an execution summary for post-chat skill analysis.
+   * Returns null if the stream didn't complete or had no tool usage.
+   */
+  buildExecutionSummary(): ExecutionSummary | null {
+    if (!this.sawDone) return null;
+
+    return {
+      responseContent: this.assistantContent,
+      toolCalls: this.taskSteps.map((step) => ({
+        tool: step.toolName ?? step.label,
+        detail: step.detail ?? null,
+        elapsedMs: step.elapsedMs ?? 0,
+        status: step.status,
+      })),
+      totalToolCalls: this.taskSteps.length,
+    };
+  }
+}
+
+export interface ExecutionSummary {
+  responseContent: string;
+  toolCalls: Array<{
+    tool: string;
+    detail: string | null;
+    elapsedMs: number;
+    status: string;
+  }>;
+  totalToolCalls: number;
 }

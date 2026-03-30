@@ -13,6 +13,7 @@ const CACHE_VERSION = 1;
 /** Lifecycle fields worth persisting across page reloads. */
 const LIFECYCLE_KEYS = [
   "devStage",
+  "maxUnlockedDevStage",
   "thinkStatus",
   "planStatus",
   "buildStatus",

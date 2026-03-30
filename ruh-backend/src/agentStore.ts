@@ -94,6 +94,14 @@ export interface AgentCredentialSummary {
 
 export type AgentStatus = 'active' | 'draft' | 'forging';
 
+export interface PaperclipWorkerRecord {
+  worker_id: string;
+  paperclip_agent_id: string;
+  role: string;
+  name: string;
+  skill_cluster: string[];
+}
+
 export interface AgentRecord {
   id: string;
   name: string;
@@ -114,6 +122,8 @@ export interface AgentRecord {
   channels: AgentChannelRecord[];
   discovery_documents: AgentDiscoveryDocumentsRecord | null;
   workspace_memory: AgentWorkspaceMemory;
+  paperclip_company_id: string | null;
+  paperclip_workers: PaperclipWorkerRecord[];
   created_at: string;
   updated_at: string;
 }
@@ -434,6 +444,8 @@ function serialize(row: Record<string, unknown>): AgentRecord {
   row['workspace_memory'] = normalizeWorkspaceMemory(row['workspace_memory']);
   // Normalize forge_sandbox_id: null if not present or not a string
   row['forge_sandbox_id'] = typeof row['forge_sandbox_id'] === 'string' ? row['forge_sandbox_id'] : null;
+  row['paperclip_company_id'] = typeof row['paperclip_company_id'] === 'string' ? row['paperclip_company_id'] : null;
+  row['paperclip_workers'] = normalizePaperclipWorkers(row['paperclip_workers']);
   return row as unknown as AgentRecord;
 }
 
@@ -444,7 +456,7 @@ function normalizeToolConnections(value: unknown): AgentToolConnectionRecord[] {
 
   return value
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
-    .map((item) => ({
+    .map((item): AgentToolConnectionRecord => ({
       toolId: typeof item.toolId === 'string' ? item.toolId : '',
       name: typeof item.name === 'string' ? item.name : '',
       description: typeof item.description === 'string' ? item.description : '',
@@ -474,7 +486,7 @@ function normalizeRuntimeInputs(value: unknown): AgentRuntimeInputRecord[] {
 
   return value
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
-    .map((item) => ({
+    .map((item): AgentRuntimeInputRecord => ({
       key: typeof item.key === 'string' ? item.key : '',
       label: typeof item.label === 'string' ? item.label : '',
       description: typeof item.description === 'string' ? item.description : '',
@@ -495,7 +507,7 @@ function normalizeTriggers(value: unknown): AgentTriggerRecord[] {
 
   return value
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
-    .map((item) => ({
+    .map((item): AgentTriggerRecord => ({
       id: typeof item.id === 'string' ? item.id : '',
       title: typeof item.title === 'string' ? item.title : '',
       kind: item.kind === 'schedule' || item.kind === 'webhook' ? item.kind : 'manual',
@@ -521,7 +533,7 @@ function normalizeImprovements(value: unknown): AgentImprovementRecord[] {
 
   return value
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
-    .map((item) => ({
+    .map((item): AgentImprovementRecord => ({
       id: typeof item.id === 'string' ? item.id : '',
       kind:
         item.kind === 'trigger' || item.kind === 'workflow' || item.kind === 'tool_connection'
@@ -547,7 +559,7 @@ function normalizeChannels(value: unknown): AgentChannelRecord[] {
 
   return value
     .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
-    .map((item) => ({
+    .map((item): AgentChannelRecord => ({
       kind:
         item.kind === 'telegram' || item.kind === 'slack' || item.kind === 'discord'
           ? item.kind
@@ -624,6 +636,53 @@ function normalizeWorkspaceMemory(value: unknown): AgentWorkspaceMemory {
       : [],
     updated_at: updatedAt,
   };
+}
+
+// ─── Paperclip integration ────────────────────────────────────────────────────
+
+function normalizePaperclipWorkers(value: unknown): PaperclipWorkerRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> =>
+      typeof item === 'object' && item !== null && !Array.isArray(item))
+    .map((item): PaperclipWorkerRecord => ({
+      worker_id: typeof item.worker_id === 'string' ? item.worker_id : '',
+      paperclip_agent_id: typeof item.paperclip_agent_id === 'string' ? item.paperclip_agent_id : '',
+      role: typeof item.role === 'string' ? item.role : 'general',
+      name: typeof item.name === 'string' ? item.name : '',
+      skill_cluster: Array.isArray(item.skill_cluster)
+        ? item.skill_cluster.filter((s): s is string => typeof s === 'string')
+        : [],
+    }))
+    .filter((item) => item.worker_id && item.paperclip_agent_id);
+}
+
+export async function updatePaperclipMapping(
+  agentId: string,
+  companyId: string,
+  workers: PaperclipWorkerRecord[],
+): Promise<AgentRecord | null> {
+  await withConn(async (client) => {
+    await client.query(
+      `UPDATE agents
+       SET paperclip_company_id = $1,
+           paperclip_workers = $2::jsonb,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [companyId, JSON.stringify(workers), agentId],
+    );
+  });
+  return getAgent(agentId);
+}
+
+export async function getAgentBySandboxId(sandboxId: string): Promise<AgentRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT * FROM agents WHERE sandbox_ids @> $1::jsonb LIMIT 1`,
+      [JSON.stringify([sandboxId])],
+    );
+    return res.rows.length > 0 ? serialize(res.rows[0]) : null;
+  });
 }
 
 // ─── Credential CRUD ──────────────────────────────────────────────────────────

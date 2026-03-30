@@ -76,6 +76,43 @@ export async function GET() {
       );
     }
 
+    // Health-check: verify the gateway port is reachable before returning.
+    // If the sandbox container is running but its gateway process is dead,
+    // returning it causes ECONNRESET errors downstream.
+    const port = typeof match.gateway_port === "number" ? match.gateway_port : 0;
+    if (port > 0) {
+      try {
+        const probe = await fetch(`http://localhost:${port}/`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!probe.ok) throw new Error(`probe status ${probe.status}`);
+      } catch {
+        console.warn(
+          `[architect-sandbox] Gateway at port ${port} (sandbox ${match.sandbox_id}) is unreachable, skipping`,
+        );
+        // Try to find another healthy sandbox
+        const fallback = sandboxes.find(
+          (sb) =>
+            sb.sandbox_id !== match!.sandbox_id &&
+            typeof sb.gateway_port === "number" &&
+            (sb.gateway_port as number) > 0,
+        );
+        if (fallback) {
+          try {
+            const fbProbe = await fetch(
+              `http://localhost:${fallback.gateway_port}/`,
+              { signal: AbortSignal.timeout(3000) },
+            );
+            if (fbProbe.ok) {
+              match = fallback;
+            }
+          } catch {
+            // fallback also dead — continue with original match anyway
+          }
+        }
+      }
+    }
+
     return NextResponse.json({
       sandbox_id: match.sandbox_id,
       sandbox_name: match.sandbox_name ?? "architect",

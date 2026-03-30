@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Rocket, Loader2, ChevronDown, MessageSquare, LayoutDashboard, MessagesSquare, Settings } from "lucide-react";
+import { ChevronLeft, Rocket, Loader2, ChevronDown, MessageSquare, LayoutDashboard, MessagesSquare, Settings, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAgentsStore } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
@@ -13,10 +13,11 @@ import { TabChat } from "./_components/TabChat";
 import { TabChats } from "./_components/TabChats";
 import { TabMissionControl } from "./_components/TabMissionControl";
 import { TabSettings } from "./_components/TabSettings";
+import { TabSkills } from "./_components/TabSkills";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type Tab = "chat" | "chats" | "mission" | "settings";
+type Tab = "chat" | "chats" | "mission" | "skills" | "settings";
 
 interface SandboxRecord {
   sandbox_id: string;
@@ -35,6 +36,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: st
   { id: "chat",     label: "Chat",             icon: MessageSquare },
   { id: "chats",    label: "All Chats",        icon: MessagesSquare },
   { id: "mission",  label: "Mission Control",  icon: LayoutDashboard },
+  { id: "skills",   label: "Skills",           icon: Brain },
   { id: "settings", label: "Settings",         icon: Settings },
 ];
 
@@ -95,7 +97,9 @@ export default function AgentChatPage() {
 
   // Active tab — driven by ?tab= search param
   const tabParam = searchParams.get("tab") as Tab | null;
-  const activeTab: Tab = tabParam && ["chat", "chats", "mission", "settings"].includes(tabParam) ? tabParam : "chat";
+  const activeTab: Tab = tabParam && ["chat", "chats", "mission", "skills", "settings"].includes(tabParam) ? tabParam : "chat";
+
+  const [proposedSkillCount, setProposedSkillCount] = useState(0);
 
   const setTab = (tab: Tab) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -265,11 +269,12 @@ export default function AgentChatPage() {
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
+            const badge = tab.id === "skills" && proposedSkillCount > 0 ? proposedSkillCount : null;
             return (
               <button
                 key={tab.id}
                 onClick={() => setTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-satoshi-bold border-b-2 transition-colors ${
+                className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-satoshi-bold border-b-2 transition-colors ${
                   active
                     ? "border-[var(--primary)] text-[var(--primary)]"
                     : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -277,6 +282,11 @@ export default function AgentChatPage() {
               >
                 <Icon className="h-3.5 w-3.5" />
                 {tab.label}
+                {badge !== null && (
+                  <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-3.5 px-1 rounded-full bg-[var(--primary)] text-white text-[9px] font-satoshi-bold">
+                    {badge > 9 ? "9+" : badge}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -347,6 +357,13 @@ export default function AgentChatPage() {
               agent={agent}
               activeSandbox={activeSandbox}
               sandboxes={sandboxes}
+            />
+          )}
+          {activeTab === "skills" && (
+            <TabSkills
+              agent={agent}
+              activeSandboxId={activeSandbox?.sandbox_id ?? null}
+              onProposedCount={setProposedSkillCount}
             />
           )}
           {activeTab === "settings" && (

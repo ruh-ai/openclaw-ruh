@@ -357,10 +357,44 @@ jobs:
           path: agent-builder-ui/playwright-report/
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ADMIN UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # ── 10. Admin UI tests ──────────────────────────────────────────────────
+  admin-ui-test:
+    name: admin-ui — tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun test
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKETPLACE UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # ── 11. Marketplace UI tests ────────────────────────────────────────────
+  marketplace-ui-test:
+    name: marketplace-ui — tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/marketplace-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun test
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DOCKER
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 10. Docker image build check ─────────────────────────────────────────
+  # ── 12. Docker image build check ─────────────────────────────────────────
   docker:
     name: Docker · build check
     runs-on: ubuntu-latest
@@ -369,6 +403,8 @@ jobs:
       - backend-integration
       - frontend-test
       - agent-builder-build
+      - admin-ui-test
+      - marketplace-ui-test
 
     steps:
       - uses: actions/checkout@v4

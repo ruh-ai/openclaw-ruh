@@ -23,7 +23,6 @@ import {
   type StepOp,
 } from "./event-middleware";
 import { dispatchCustomEvent } from "./event-consumer-map";
-import { tracer } from "./event-tracer";
 import {
   applyBrowserWorkspaceEvent,
   createEmptyBrowserWorkspaceState,
@@ -34,6 +33,11 @@ import {
 import { stripPlanTags, type TaskPlan } from "../task-plan-parser";
 import { getEffectiveChatModel } from "../shared-codex";
 import { buildWorkspaceMemorySystemMessage, hasWorkspaceMemory } from "../workspace-memory";
+import {
+  appendReasoningStepDetail,
+  ensureReasoningStep,
+  finishReasoningStep,
+} from "./reasoning-step";
 import { CustomEventName } from "./types";
 import type {
   AgentStep,
@@ -52,6 +56,12 @@ import {
   createSeededBuilderMetadataState,
   reduceBuilderMetadataEvent,
 } from "./builder-metadata-autosave";
+import {
+  shouldAppendUserMessageToTranscript,
+  shouldHideCompletedRunFromTranscript,
+  shouldShowLiveTranscript,
+  type RunSurface,
+} from "./run-surface-policy";
 import type { CoPilotActions, CoPilotState } from "../copilot-state";
 import { useAgentsStore, type SavedAgent } from "@/hooks/use-agents-store";
 import type { BuilderState } from "../builder-state";
@@ -111,7 +121,8 @@ export interface UseAgentChatReturn {
   conversationId: string | null;
   loadingHistory: boolean;
   hasMoreHistory: boolean;
-  sendMessage: (text: string, opts?: { silent?: boolean }) => Promise<void>;
+  activeRunSurface: RunSurface | null;
+  sendMessage: (text: string, opts?: { silent?: boolean; surface?: RunSurface }) => Promise<void>;
   startNewChat: () => void;
   loadOlderHistory: () => Promise<void>;
   resumeBrowserTakeover: () => void;
@@ -217,6 +228,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
   const [messageCursor, setMessageCursor] = useState<number | null>(null);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [activeRunSurface, setActiveRunSurface] = useState<RunSurface | null>(null);
   const [liveBrowserState, setLiveBrowserState] = useState<BrowserWorkspaceState>(createEmptyBrowserWorkspaceState);
   const [memoryAppliedConversationId, setMemoryAppliedConversationId] = useState<string | null>(null);
   const [liveTaskPlan, setLiveTaskPlan] = useState<TaskPlan | null>(null);
@@ -546,14 +558,16 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
   }, []);
 
   // ── Send message ────────────────────────────────────────────────────────
-  const sendMessage = useCallback(async (text: string, opts?: { silent?: boolean }) => {
+  const sendMessage = useCallback(async (text: string, opts?: { silent?: boolean; surface?: RunSurface }) => {
     const trimmed = text.trim();
     if (!trimmed || isLoading) return;
     if (!isBuilderMode && !activeSandbox) return;
+    const runSurface = opts?.surface ?? "chat";
 
-    if (!opts?.silent) {
+    if (shouldAppendUserMessageToTranscript(runSurface, Boolean(opts?.silent))) {
       setMessages(prev => [...prev, { id: newId(), role: "user", content: trimmed }]);
     }
+    setActiveRunSurface(runSurface);
     setIsLoading(true);
     liveStepsRef.current = [];
     setLiveSteps([]);
@@ -574,7 +588,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
     const taskPlanExtractor = createTaskPlanExtractor();
 
     // Track thinking step for "thinking" events (from agent mode)
-    let thinkStepId = -1;
+    const thinkStepIdRef = { current: -1 };
 
     try {
       // Agent mode: conversation + workspace memory
@@ -667,11 +681,18 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
                 const hasEndBrowser = Boolean(endBrowser);
                 const hasEndPlan = Boolean(endPlan);
 
+                const hideInTranscript = shouldHideCompletedRunFromTranscript(runSurface, {
+                  hasSteps: hasEndSteps,
+                  hasBrowser: hasEndBrowser,
+                  hasPlan: hasEndPlan,
+                });
+
                 if (hasEndContent || hasEndSteps || hasEndBrowser || hasEndPlan) {
                   setMessages(prev => [...prev, {
                     id: activeMessageIdRef.current || newId(),
                     role: "assistant" as const,
-                    content: endContent || "",
+                    content: hideInTranscript ? "" : endContent || "",
+                    hiddenInTranscript: hideInTranscript,
                     steps: hasEndSteps ? endSteps : undefined,
                     browserState: endBrowser,
                     taskPlan: endPlan ?? undefined,
@@ -693,7 +714,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
                 // Feed through all middleware
                 const deltaResult = deltaMachine.process(delta);
                 applyStepOps(deltaResult.stepOps);
-                if (deltaResult.cleanText) {
+                if (deltaResult.cleanText && shouldShowLiveTranscript(runSurface)) {
                   setLiveResponse(deltaResult.cleanText);
                 }
 
@@ -734,7 +755,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
                   onReadyForReview,
                   pushStep,
                   updateStepDetail,
-                  thinkStepIdRef: { current: thinkStepId },
+                  thinkStepIdRef,
                   readyForReviewFiredRef: (() => {
                     const ref = { current: readyForReviewFired };
                     // Sync back mutations from the consumer
@@ -745,17 +766,6 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
                     return ref;
                   })(),
                 });
-                // Sync thinkStepId back from consumer (reasoning events create steps)
-                if (thinkStepId === -1) {
-                  const traces = tracer.getTraces();
-                  const reasoningTrace = traces.find(
-                    (t) => t.eventName === "reasoning" && t.status === "applied",
-                  );
-                  if (reasoningTrace) {
-                    // thinkStepId was set inside the consumer — it's on the ref
-                    // Consumer uses pushStep which creates it
-                  }
-                }
                 break;
               }
 
@@ -839,24 +849,19 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
               // ── AG-UI Reasoning events ──────────────────────────────
               case EventType.REASONING_START:
               case EventType.REASONING_MESSAGE_START: {
-                if (thinkStepId === -1) {
-                  const id = Date.now();
-                  thinkStepId = id;
-                  pushStep({ id, kind: "thinking", label: "Reasoning", status: "active", startedAt: Date.now() });
-                }
+                ensureReasoningStep(thinkStepIdRef, pushStep);
                 break;
               }
               case EventType.REASONING_MESSAGE_CONTENT: {
                 const reasoningDelta = (event as unknown as { delta: string }).delta
                   || (event as unknown as { content: string }).content
                   || "";
-                if (thinkStepId !== -1) updateStepDetail(thinkStepId, reasoningDelta);
+                appendReasoningStepDetail(thinkStepIdRef, reasoningDelta, updateStepDetail);
                 break;
               }
               case EventType.REASONING_MESSAGE_END:
               case EventType.REASONING_END: {
-                if (thinkStepId !== -1) finishStep(thinkStepId);
-                thinkStepId = -1;
+                finishReasoningStep(thinkStepIdRef, finishStep);
                 break;
               }
 
@@ -964,11 +969,18 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
         const hasBrowser = Boolean(finalBrowserState);
         const hasPlan = Boolean(taskPlan);
 
+        const hideInTranscript = shouldHideCompletedRunFromTranscript(runSurface, {
+          hasSteps,
+          hasBrowser,
+          hasPlan,
+        });
+
         if (hasContent || hasSteps || hasBrowser || hasPlan) {
           setMessages(mp => [...mp, {
             id: activeMessageIdRef.current || newId(),
             role: "assistant",
-            content: finalContent,
+            content: hideInTranscript ? "" : finalContent,
+            hiddenInTranscript: hideInTranscript,
             steps: hasSteps ? finalSteps : undefined,
             browserState: finalBrowserState,
             taskPlan: taskPlan ?? undefined,
@@ -1000,6 +1012,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
       }]);
     } finally {
       setIsLoading(false);
+      setActiveRunSurface(null);
       setLiveResponse("");
       liveStepsRef.current = [];
       setLiveSteps([]);
@@ -1044,6 +1057,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
     conversationId,
     loadingHistory,
     hasMoreHistory,
+    activeRunSurface,
     sendMessage,
     startNewChat,
     loadOlderHistory,

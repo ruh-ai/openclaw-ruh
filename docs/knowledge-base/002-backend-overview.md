@@ -160,6 +160,29 @@ ruh-backend/
 - Proxies noVNC/websockify frames between the frontend and the sandbox's exposed VNC websocket port
 - Depends on `store.ts` `vnc_port` metadata rather than direct caller-supplied host/port values
 
+### Auth Module (`src/auth/`)
+
+| File | Purpose |
+|------|---------|
+| `auth/passwords.ts` | bcrypt hash + verify (12 salt rounds) |
+| `auth/tokens.ts` | JWT sign/verify for access tokens |
+| `auth/middleware.ts` | `requireAuth`, `optionalAuth`, `requireRole` Express middleware |
+| `authRoutes.ts` | `/api/auth/*` — register, login, refresh, logout, me |
+| `userStore.ts` | User CRUD with pagination and filtering |
+| `sessionStore.ts` | Session/refresh token management |
+| `orgStore.ts` | Organization CRUD |
+
+See [[014-auth-system]] for the full auth contract.
+
+### Marketplace Module
+
+| File | Purpose |
+|------|---------|
+| `marketplaceStore.ts` | Listing, review, install CRUD with pagination |
+| `marketplaceRoutes.ts` | `/api/marketplace/*` — 12 endpoints for browse, publish, review, install |
+
+See [[016-marketplace]] for the full marketplace contract.
+
 ### `utils.ts` — Helpers
 - `httpError(status, detail)` — creates Error with `.status` property (used by error middleware)
 - `gatewayUrlAndHeaders(record, path)` — builds URL and auth headers for gateway proxy calls

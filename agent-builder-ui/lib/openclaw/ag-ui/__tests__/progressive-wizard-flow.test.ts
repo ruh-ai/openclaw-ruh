@@ -7,6 +7,7 @@ const mockSendToForgeSandboxChat = mock();
 mock.module("@/lib/openclaw/api", () => ({
   sendToArchitectStreaming: mockSendToArchitectStreaming,
   sendToForgeSandboxChat: mockSendToForgeSandboxChat,
+  BridgeApiError: class BridgeApiError extends Error { status; constructor(m: string, s = 0) { super(m); this.status = s; } },
 }));
 
 const { BuilderAgent } = await import("../builder-agent");

@@ -68,6 +68,27 @@ Durable system/runtime history now lives in the backend-owned `system_events` ta
 
 ---
 
+## Platform Architecture (Three-Tier User Model)
+
+The platform serves three user types through dedicated interfaces:
+
+| User Tier | Interface | Service | Purpose |
+|-----------|-----------|---------|---------|
+| **Admin** | Admin Dashboard | `admin-ui` (port 3002) | Platform management, user oversight, marketplace moderation |
+| **Developer** | Agent Builder | `agent-builder-ui` (port 3000) | Create, configure, test, and publish agents |
+| **End User** | Client App / Desktop | `ruh-frontend` (port 3001) / `desktop-app` | Browse marketplace, install and interact with agents |
+
+### Auth Layer
+All services authenticate against `ruh-backend /api/auth/*`. JWT access tokens (15min) + refresh token rotation (7 days). See [[014-auth-system]].
+
+### Employee Marketplace
+Agents flow: Developer builds → submits to marketplace → Admin reviews → End user installs. See [[016-marketplace]].
+
+### Desktop Application
+Tauri v2 wraps ruh-frontend with native credential storage and configurable backend URL. See [[017-desktop-app]].
+
+---
+
 ## Related Learnings
 
 - [[LEARNING-2026-03-28-repo-testability-audit]] — repo-wide audit of the architectural seams that currently make backend and frontend behavior expensive to test in isolation

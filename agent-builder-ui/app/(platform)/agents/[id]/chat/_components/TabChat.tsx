@@ -23,17 +23,20 @@ import TaskPlanPanel from "./TaskPlanPanel";
 import TaskProgressHeader from "./TaskProgressHeader";
 import TaskProgressFooter from "./TaskProgressFooter";
 import CodeEditorPanel from "./CodeEditorPanel";
+import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
 import { WizardStepRenderer } from "@/app/(platform)/agents/create/_components/copilot/WizardStepRenderer";
 import { LifecycleStepRenderer, getStageInputPlaceholder } from "@/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer";
 import { hasPurposeMetadata } from "@/lib/openclaw/copilot-flow";
+import { AnimatedRuhLogo } from "@/app/(platform)/agents/create/_components/AnimatedRuhLogo";
 import {
   useCoPilotStore,
   type CoPilotActions,
   type CoPilotPhase,
   type CoPilotState,
 } from "@/lib/openclaw/copilot-state";
+import { buildBuilderChatSuggestions } from "@/lib/openclaw/builder-chat-suggestions";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -69,7 +72,7 @@ interface TabChatProps {
   /** Show the Co-Pilot flow inside the builder Config tab. */
   showCoPilotConfig?:    boolean;
   /** Finalize the embedded Co-Pilot flow from the review step. */
-  onBuilderComplete?:    () => void;
+  onBuilderComplete?:    () => void | Promise<boolean>;
   /** Whether the embedded Co-Pilot flow can be completed right now. */
   canBuilderComplete?:   boolean;
   /** Whether the embedded Co-Pilot completion action is currently running. */
@@ -298,88 +301,138 @@ function TerminalPanel({
   }, [handleSubmitCommand]);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[var(--background)]">
-      {/* Scrollable activity log */}
-      <div ref={terminalScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-        {allTools.length === 0 && !showInput ? (
-          <div className="flex flex-col items-center justify-center h-full">
-            <Terminal className="mb-3 h-7 w-7 text-[var(--primary)]/20" />
-            <p className="text-[10px] font-mono text-[var(--text-tertiary)]">No commands run yet</p>
-          </div>
-        ) : allTools.length === 0 && showInput ? (
-          <div className="flex flex-col items-center justify-center h-full gap-2">
-            <Terminal className="mb-1 h-6 w-6 text-[var(--primary)]/20" />
-            <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
-              Run commands to test tools, install packages, or explore the environment
-            </p>
-          </div>
-        ) : (
-          allTools.map((step, i) => (
-            <div key={`${step.id}-${i}`}>
-              {/* Tool header */}
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[9px] font-mono text-[var(--text-tertiary)] uppercase tracking-widest">
-                  {step.toolName === "code_editor" ? "code" : step.toolName ?? "tool"}
-                </span>
-                {step.status === "done"
-                  ? <span className="text-[var(--success)] text-[9px]">
-                      ✓{step.elapsedMs != null ? ` ${(step.elapsedMs / 1000).toFixed(1)}s` : ""}
-                    </span>
-                  : <span className="text-[var(--warning)] text-[9px] animate-pulse">running…</span>
-                }
-              </div>
-              {/* Command block */}
-              <div className="rounded-xl border border-[var(--tertiary-color)]/15 bg-[var(--tertiary-color)] px-3 py-2.5 shadow-sm">
-                <span className="text-[var(--success)] font-mono text-[11px] select-none">$ </span>
-                <span className="font-mono text-[11px] text-white/85 whitespace-pre-wrap break-all">
-                  {step.detail ?? "…"}
-                </span>
-                {step.status === "active" && (
-                  <span className="ml-0.5 animate-pulse font-mono text-[var(--success)]">▋</span>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-
-        {/* Idle cursor */}
-        {isLoading && liveTools.length === 0 && liveThink === undefined && (
-          <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--text-tertiary)]">
-            <span className="text-[var(--success)]/70 select-none">$</span>
-            <span className="animate-pulse">▋</span>
-          </div>
-        )}
-      </div>
-
-      {/* Interactive command input — builder copilot mode only */}
-      {showInput && (
-        <div className="shrink-0 border-t border-[var(--border-default)] bg-[var(--tertiary-color)] px-3 py-2">
+    <div className="flex-1 min-h-0 bg-[var(--background)] p-3 md:p-4">
+      <div
+        data-testid="workspace-terminal-shell"
+        className="mx-auto flex h-full min-h-[26rem] max-w-4xl flex-col overflow-hidden rounded-[22px] border border-[#241b38] bg-[#0c0a14] shadow-[0_18px_40px_rgba(8,6,14,0.28)]"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-white/5 px-4 py-2.5">
           <div className="flex items-center gap-2">
-            <span className="text-[var(--success)] font-mono text-[11px] select-none shrink-0">$</span>
-            <input
-              ref={cmdInputRef}
-              type="text"
-              value={cmdInput}
-              onChange={e => setCmdInput(e.target.value)}
-              onKeyDown={handleCmdKeyDown}
-              placeholder={isLoading ? "Waiting for agent…" : "Type a command… (npm install, curl, ls, etc.)"}
-              disabled={isLoading}
-              className="flex-1 bg-transparent font-mono text-[11px] text-white/85 placeholder:text-white/25 outline-none disabled:opacity-40"
-            />
-            <button
-              onClick={handleSubmitCommand}
-              disabled={isLoading || !cmdInput.trim()}
-              title="Run command (Enter)"
-              className="shrink-0 p-1 rounded text-white/40 hover:text-[var(--success)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <CornerDownLeft className="h-3.5 w-3.5" />
-            </button>
+            <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
+            <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
+            <span className="h-2.5 w-2.5 rounded-full bg-white/10" />
+            <span className="ml-2 text-[9px] font-mono uppercase tracking-[0.24em] text-white/25">
+              {isBuilderMode ? "architect terminal" : "agent terminal"}
+            </span>
           </div>
-          <p className="text-[9px] font-mono text-white/20 mt-1">
-            Commands run in the architect&apos;s sandbox during creation
-          </p>
+          <div className="flex items-center gap-2 text-[10px] font-mono text-white/35">
+            <span>{allTools.length} command{allTools.length === 1 ? "" : "s"}</span>
+            {isLoading ? (
+              <span className="inline-flex items-center gap-1 text-[#f5b14c]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#f5b14c] animate-pulse" />
+                live
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[#7ee787]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#7ee787]" />
+                ready
+              </span>
+            )}
+          </div>
         </div>
-      )}
+
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div
+            ref={terminalScrollRef}
+            data-testid="workspace-terminal-log"
+            className="flex-1 overflow-y-auto px-4 py-4"
+          >
+            {allTools.length === 0 && !showInput ? (
+              <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 text-center">
+                <Terminal className="h-8 w-8 text-white/15" />
+                <div className="space-y-1">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/30">
+                    Terminal ready
+                  </p>
+                  <p className="text-[11px] font-mono text-white/45">No commands run yet</p>
+                </div>
+              </div>
+            ) : allTools.length === 0 && showInput ? (
+              <div className="flex h-full min-h-[18rem] flex-col items-center justify-center gap-3 text-center">
+                <Terminal className="h-8 w-8 text-white/15" />
+                <div className="space-y-1">
+                  <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/30">
+                    Terminal ready
+                  </p>
+                  <p className="text-[11px] font-mono text-white/45">No commands run yet</p>
+                  <p className="max-w-sm text-[11px] font-mono leading-relaxed text-white/28">
+                    Run commands to test tools, install packages, or explore the environment.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {allTools.map((step, i) => (
+                  <div key={`${step.id}-${i}`} className="space-y-1.5">
+                    <div className="flex items-center gap-2 text-[9px] font-mono uppercase tracking-[0.18em] text-white/28">
+                      <span className="text-white/18">{String(i + 1).padStart(2, "0")}</span>
+                      <span>{step.toolName === "code_editor" ? "code" : step.toolName ?? "tool"}</span>
+                      {step.status === "done" ? (
+                        <span className="text-[#7ee787]">
+                          ✓{step.elapsedMs != null ? ` ${(step.elapsedMs / 1000).toFixed(1)}s` : ""}
+                        </span>
+                      ) : (
+                        <span className="text-[#f5b14c] animate-pulse">running…</span>
+                      )}
+                    </div>
+                    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
+                      <span className="select-none font-mono text-[11px] text-[#7ee787]">$ </span>
+                      <span className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-white/85">
+                        {step.detail ?? "…"}
+                      </span>
+                      {step.status === "active" && (
+                        <span className="ml-0.5 animate-pulse font-mono text-[#7ee787]">▋</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {isLoading && liveTools.length === 0 && liveThink === undefined && (
+              <div className="mt-3 flex items-center gap-1.5 font-mono text-[11px] text-white/35">
+                <span className="select-none text-[#7ee787]">$</span>
+                <span className="animate-pulse">▋</span>
+              </div>
+            )}
+          </div>
+
+          {showInput && (
+            <div
+              data-testid="workspace-terminal-input"
+              className="shrink-0 border-t border-white/6 bg-black/20 px-4 py-3"
+            >
+              <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <span className="shrink-0 select-none font-mono text-[11px] text-[#7ee787]">$</span>
+                <input
+                  ref={cmdInputRef}
+                  type="text"
+                  value={cmdInput}
+                  onChange={e => setCmdInput(e.target.value)}
+                  onKeyDown={handleCmdKeyDown}
+                  placeholder={isLoading ? "Waiting for agent…" : "Type a command… (npm install, curl, ls, etc.)"}
+                  disabled={isLoading}
+                  className="flex-1 bg-transparent font-mono text-[11px] text-white/88 placeholder:text-white/25 outline-none disabled:opacity-40"
+                />
+                <button
+                  onClick={handleSubmitCommand}
+                  disabled={isLoading || !cmdInput.trim()}
+                  title="Run command (Enter)"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-white/8 bg-white/[0.04] px-2 py-1 text-[10px] font-mono text-white/45 transition-colors hover:border-[#7ee787]/20 hover:text-[#7ee787] disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <CornerDownLeft className="h-3.5 w-3.5" />
+                  Run
+                </button>
+              </div>
+              <p className="mt-2 text-[10px] font-mono text-white/25">
+                {isBuilderMode
+                  ? "Commands run in the architect's sandbox during creation."
+                  : "Live terminal activity from the agent appears here."}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -461,7 +514,7 @@ function ComputerView({
   onBuilderRulesChange?: (rules: string[]) => void;
   existingAgent?:   SavedAgent | null;
   showCoPilotConfig?: boolean;
-  onBuilderComplete?: () => void;
+  onBuilderComplete?: () => void | Promise<boolean>;
   canBuilderComplete?: boolean;
   isCompletingBuilder?: boolean;
   coPilotPhase?: CoPilotPhase;
@@ -557,22 +610,25 @@ function ComputerView({
 
   // Auto-switch to browser tab when browser items arrive via direct events
   useEffect(() => {
+    if (!shouldAutoSwitchWorkspaceTab({ mode, reason: "browser_activity" })) return;
     if (liveBrowserState.items.length > 0) {
       autoSwitchTo("browser");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveBrowserState.items.length]);
+  }, [liveBrowserState.items.length, mode]);
 
   // Auto-switch to preview tab when dev server is detected
   useEffect(() => {
+    if (!shouldAutoSwitchWorkspaceTab({ mode, reason: "preview_detected" })) return;
     if (detectedPreviewPorts.length > 0) {
       autoSwitchTo("preview");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detectedPreviewPorts.length]);
+  }, [detectedPreviewPorts.length, mode]);
 
   // Auto-switch based on latest tool type
   useEffect(() => {
+    if (!shouldAutoSwitchWorkspaceTab({ mode, reason: "tool_activity" })) return;
     const latestTool = [...liveSteps].reverse().find(s => s.kind === "tool" && s.status === "active");
     if (!latestTool?.toolName) return;
     const name = latestTool.toolName.toLowerCase();
@@ -580,13 +636,14 @@ function ComputerView({
     else if (BROWSER_TOOLS.has(name)) autoSwitchTo("browser");
     else if (TERMINAL_TOOLS.has(name)) autoSwitchTo("terminal");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveSteps]);
+  }, [liveSteps, mode]);
 
   // Auto-switch to code tab when editor file changes
   useEffect(() => {
+    if (!shouldAutoSwitchWorkspaceTab({ mode, reason: "editor_file" })) return;
     if (activeEditorFile) autoSwitchTo("code");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEditorFile?.path]);
+  }, [activeEditorFile?.path, mode]);
 
   // TODO: Plan-mode tab switching requires the gateway to emit structured
   // TOOL_CALL events during internal tool execution. See SPEC-gateway-tool-events.
@@ -595,6 +652,7 @@ function ComputerView({
 
   // Builder phase changes should return focus to Config even after a manual runtime-tab click.
   useEffect(() => {
+    if (!shouldAutoSwitchWorkspaceTab({ mode, reason: "copilot_phase" })) return;
     if (!isBuilderMode || !showCoPilotConfig) return;
     if (!coPilotPhase) return;
     const previousPhase = previousCoPilotPhaseRef.current;
@@ -797,6 +855,15 @@ export function TabChat({
     ? coPilotStore.triggers.map((trigger) => trigger.title || trigger.id).join(", ")
     : "No trigger selected yet";
   const builderDisplayName = builderState?.name || builderState?.systemName || agent.name;
+  const builderSuggestionName = coPilotStore?.name || builderState?.name || builderState?.systemName || agent.name;
+  const builderSuggestionDescription = coPilotStore?.description || builderState?.description || agent.description || "";
+  const builderSuggestions = isBuilderMode
+    ? buildBuilderChatSuggestions({
+        devStage: coPilotStore?.devStage,
+        name: builderSuggestionName,
+        description: builderSuggestionDescription,
+      })
+    : [];
   const hasPersistedBuilderIdentity = Boolean(
     builderState?.draftAgentId || (agent.id !== "new-agent" && !agent.id.startsWith("new-")),
   );
@@ -831,11 +898,12 @@ export function TabChat({
   const {
     messages, isLoading, liveResponse, liveSteps,
     liveBrowserState, liveTaskPlan, activeEditorFile, recentEditorFiles,
-    conversationId, loadingHistory, hasMoreHistory,
+    conversationId, loadingHistory, hasMoreHistory, activeRunSurface,
     sendMessage: sendChatMessage, startNewChat, loadOlderHistory,
     resumeBrowserTakeover, selectEditorFile: handleEditorFileSelect,
     memoryBanner, tick, workspaceFilesTick, detectedPreviewPorts,
   } = chat;
+  const visibleMessages = messages.filter((message) => !message.hiddenInTranscript);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -871,9 +939,10 @@ export function TabChat({
   // it through the architect bridge so the agent executes it directly.
   const handleTerminalCommand = useCallback((command: string) => {
     sendChatMessage(
-      `Execute this command in the sandbox terminal and show me the output:\n\`\`\`bash\n${command}\n\`\`\``
+      `Execute this command in the sandbox terminal and show me the output:\n\`\`\`bash\n${command}\n\`\`\``,
+      { surface: isBuilderMode ? "workspace" : "chat" },
     );
-  }, [sendChatMessage]);
+  }, [isBuilderMode, sendChatMessage]);
 
   // ── Auto-trigger plan generation when Think → Plan transition occurs ────
   const planGenerationSentRef = useRef(false);
@@ -1041,10 +1110,10 @@ export function TabChat({
                   </div>
                 )}
                 {/* Empty state */}
-                {messages.length === 0 && !isLoading && (
+                {visibleMessages.length === 0 && !isLoading && (
                   <div className="flex items-start gap-3 animate-fadeIn">
-                    <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center">
-                      <Image src={agentLogo} alt={agent.name} width={32} height={32} className="rounded-full" />
+                    <div className="shrink-0 w-8 h-8 flex items-center justify-center">
+                      <AnimatedRuhLogo mode="alive" size={32} />
                     </div>
                     <div className="flex-1 pt-0.5">
                       <AgentLabel name={agent.name} logo={agentLogo} />
@@ -1055,13 +1124,9 @@ export function TabChat({
                           </p>
                           <div className="space-y-2">
                             <p className="text-[10px] font-satoshi-bold uppercase tracking-wider text-[var(--text-tertiary)]">
-                              Try an example
+                              {builderSuggestionDescription.trim().length > 0 ? "Suggested prompts" : "Try an example"}
                             </p>
-                            {[
-                              "A Google Ads agent that monitors campaign performance daily, detects underperforming ads, and sends optimization recommendations to Slack",
-                              "A customer support bot that triages Zendesk tickets, searches the knowledge base, drafts responses, and escalates urgent issues to Telegram",
-                              "A social media scheduler that pulls content from Notion, generates captions, and posts to Instagram and Twitter on a weekly schedule",
-                            ].map((example) => (
+                            {builderSuggestions.map((example) => (
                               <button
                                 key={example.slice(0, 30)}
                                 onClick={() => {
@@ -1107,7 +1172,7 @@ export function TabChat({
                 )}
 
                 {/* Messages */}
-                {messages.map(msg =>
+                {visibleMessages.map(msg =>
                   msg.role === "user" ? (
                     <div key={msg.id} className="flex justify-end animate-fadeIn">
                       <div className="bg-[var(--user-bubble,#f0f0ef)] text-sm font-satoshi-regular text-[var(--text-primary)] rounded-2xl rounded-br-sm px-4 py-2.5 max-w-[80%] shadow-sm">
@@ -1159,7 +1224,7 @@ export function TabChat({
                 )}
 
                 {/* Live bubble */}
-                {isLoading && (
+                {isLoading && activeRunSurface !== "workspace" && (
                   <div className="flex items-start gap-3 animate-fadeIn">
                     <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5">
                       <Image
@@ -1218,7 +1283,7 @@ export function TabChat({
         <div className="shrink-0 px-4 md:px-0 pb-6 pt-3">
           <div className="max-w-2xl mx-auto md:ml-8">
             <div className="relative flex items-end gap-2 border border-[var(--border-default)] rounded-2xl bg-white px-4 py-3 shadow-sm focus-within:border-[var(--primary)]/40 transition-colors">
-              <Image src={agentLogo} alt="" width={20} height={20} className="shrink-0 mb-1 opacity-30" />
+              <AnimatedRuhLogo mode="idle" size={20} className="shrink-0 mb-1 opacity-30" />
               <textarea
                 ref={textareaRef}
                 value={input}

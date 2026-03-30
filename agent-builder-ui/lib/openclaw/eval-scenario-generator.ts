@@ -35,8 +35,8 @@ function workflowScenario(workflow: WorkflowDefinition, skills: SkillGraphNode[]
 
   const stepNames = workflow.steps
     .map((s) => {
-      const skill = skills.find((sk) => sk.skill_id === s.skillId);
-      return skill?.name ?? s.skillId;
+      const skill = skills.find((sk) => sk.skill_id === s.skill);
+      return skill?.name ?? s.skill;
     })
     .slice(0, 3);
 
@@ -44,7 +44,7 @@ function workflowScenario(workflow: WorkflowDefinition, skills: SkillGraphNode[]
     id: "eval-auto-workflow",
     title: "Multi-step workflow execution",
     input: `Run the full workflow: ${stepNames.join(", then ")}.`,
-    expectedBehavior: `Agent executes the workflow in order: ${stepNames.join(" → ")}. Each step should complete before the next begins${workflow.steps.some((s) => s.parallel) ? " (parallel steps may run concurrently)" : ""}.`,
+    expectedBehavior: `Agent executes the workflow in order: ${stepNames.join(" → ")}. Each step should complete before the next begins.`,
     status: "pending",
   };
 }
@@ -77,7 +77,7 @@ export function generateDeterministicScenarios(config: DeterministicScenarioConf
   const tasks: EvalTask[] = [];
 
   // One happy-path per skill (max 5)
-  const skills = config.skillGraph.filter((s) => s.status !== "error");
+  const skills = config.skillGraph.filter((s) => s.status !== "rejected");
   for (const skill of skills.slice(0, 5)) {
     tasks.push(skillToScenario(skill, tasks.length));
   }
