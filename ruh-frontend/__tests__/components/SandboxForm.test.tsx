@@ -8,7 +8,15 @@ const BASE = 'http://localhost:8000';
 
 // Access the MockEventSource class set up in jest.setup.ts
 const getMockES = () =>
-  (global as unknown as { MockEventSource: { instances: { emit: (t: string, d: string) => void; close: () => void }[] } }).MockEventSource;
+  (global as unknown as {
+    MockEventSource: {
+      instances: {
+        emit: (t: string, d: string) => void;
+        close: () => void;
+        onerror?: (event: MessageEvent) => void;
+      }[];
+    };
+  }).MockEventSource;
 
 function renderForm(props: { onCreated?: () => void; onCancel?: () => void } = {}) {
   return render(<SandboxForm {...props} />);
@@ -22,9 +30,9 @@ describe('SandboxForm', () => {
 
   // ── Initial render ────────────────────────────────────────────────────────────
 
-  test('renders "New Sandbox" heading', () => {
+  test('renders the sandbox name field label', () => {
     renderForm();
-    expect(screen.getByText('New Sandbox')).toBeInTheDocument();
+    expect(screen.getByText('Sandbox Name')).toBeInTheDocument();
   });
 
   test('renders name input with default value "openclaw-gateway"', () => {
@@ -134,6 +142,26 @@ describe('SandboxForm', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Sandbox ready!')).toBeInTheDocument());
+  });
+
+  test('keeps the success state when EventSource closes after a done event', async () => {
+    renderForm();
+    await userEvent.click(screen.getByRole('button', { name: /create sandbox/i }));
+
+    await waitFor(() => expect(getMockES().instances.length).toBe(1));
+
+    act(() => {
+      getMockES().instances[0].emit('done', '{}');
+    });
+
+    await waitFor(() => expect(screen.getByText('Sandbox ready!')).toBeInTheDocument());
+
+    act(() => {
+      getMockES().instances[0].onerror?.(new MessageEvent('error'));
+    });
+
+    expect(screen.getByText('Sandbox ready!')).toBeInTheDocument();
+    expect(screen.queryByText('SSE connection error')).not.toBeInTheDocument();
   });
 
   test('shows error message on SSE error event', async () => {

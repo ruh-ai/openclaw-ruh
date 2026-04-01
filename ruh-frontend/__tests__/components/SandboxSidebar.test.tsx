@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../helpers/server';
@@ -12,6 +12,8 @@ const defaultProps = {
   onSelect: jest.fn(),
   onNew: jest.fn(),
   refreshKey: 0,
+  isCollapsed: false,
+  onToggleCollapse: jest.fn(),
 };
 
 function renderSidebar(props = {}) {
@@ -50,7 +52,7 @@ describe('SandboxSidebar', () => {
   test('renders sandbox name and truncated ID', async () => {
     renderSidebar();
     await waitFor(() => screen.getByText('openclaw-gateway'));
-    expect(screen.getByText(/sb-test-001/.test.toString() ? 'sb-test-001'.slice(0, 16) + '…' : 'openclaw-gateway')).toBeDefined();
+    expect(screen.getByText('sb-test-001…')).toBeInTheDocument();
     // sandbox name visible
     expect(screen.getAllByText('openclaw-gateway').length).toBeGreaterThan(0);
   });
@@ -88,7 +90,7 @@ describe('SandboxSidebar', () => {
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([makeSandbox()])));
     const { container } = renderSidebar({ selectedId: SANDBOX_ID });
     await waitFor(() => screen.getByText('openclaw-gateway'));
-    const item = container.querySelector('.bg-blue-600\\/20');
+    const item = container.querySelector('.bg-\\[\\#fdf4ff\\]');
     expect(item).toBeInTheDocument();
   });
 
@@ -109,12 +111,46 @@ describe('SandboxSidebar', () => {
     await waitFor(() => expect(screen.queryByText('openclaw-gateway')).not.toBeInTheDocument());
   });
 
+  test('delete button does not also select the sandbox', async () => {
+    const sandbox = makeSandbox();
+    server.use(
+      http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([sandbox])),
+      http.delete(`${BASE}/api/sandboxes/${SANDBOX_ID}`, () => HttpResponse.json({ deleted: SANDBOX_ID })),
+    );
+
+    const onSelect = jest.fn();
+    renderSidebar({ onSelect });
+    await waitFor(() => screen.getByText('openclaw-gateway'));
+
+    await userEvent.click(screen.getByTitle('Remove'));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('openclaw-gateway')).not.toBeInTheDocument());
+  });
+
+  test('delete failure keeps sandbox visible in the list', async () => {
+    const sandbox = makeSandbox();
+    server.use(
+      http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([sandbox])),
+      http.delete(
+        `${BASE}/api/sandboxes/${SANDBOX_ID}`,
+        () => HttpResponse.json({ detail: 'delete failed' }, { status: 500 }),
+      ),
+    );
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('openclaw-gateway'));
+
+    await userEvent.click(screen.getByTitle('Remove'));
+
+    expect(screen.getByText('openclaw-gateway')).toBeInTheDocument();
+  });
+
   // ── + New button ─────────────────────────────────────────────────────────────
 
   test('+ New button calls onNew', async () => {
     renderSidebar();
-    // Don't wait for load — the button is always visible in the header
-    const newBtn = screen.getByText('+ New');
+    const newBtn = screen.getByText('New Sandbox');
     await userEvent.click(newBtn);
     expect(defaultProps.onNew).toHaveBeenCalledTimes(1);
   });

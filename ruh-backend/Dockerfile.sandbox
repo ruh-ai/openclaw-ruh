@@ -1,0 +1,65 @@
+# =============================================================================
+# Dockerfile.sandbox — Pre-baked OpenClaw sandbox image
+# =============================================================================
+#
+# BUILD CONTEXT: repo root (not ruh-backend/)
+#   docker build -f ruh-backend/Dockerfile.sandbox -t ruh-sandbox:latest .
+#
+# Contains:
+# - Node.js 22 (Debian Bookworm)
+# - OpenClaw CLI
+# - Chromium + VNC stack
+# - Agent Runtime (per-agent backend + dashboard on port 8080)
+# =============================================================================
+
+# ── Stage 1: Build agent-runtime dashboard ──────────────────────────────────
+FROM node:22-bookworm AS runtime-builder
+WORKDIR /build
+COPY agent-runtime/package.json agent-runtime/package-lock.json* ./
+RUN npm ci --ignore-scripts 2>/dev/null || npm install
+COPY agent-runtime/ ./
+# Enable standalone output for the build
+RUN echo '/** @type {import("next").NextConfig} */\nmodule.exports = { output: "standalone", async headers() { return [{ source: "/(.*)", headers: [{ key: "X-Frame-Options", value: "ALLOWALL" }, { key: "Content-Security-Policy", value: "frame-ancestors *" }] }]; } };' > next.config.js \
+    && npx next build
+
+# ── Stage 2: Main sandbox image ─────────────────────────────────────────────
+FROM node:22-bookworm
+
+# Pin to 2026.3.24 — 2026.3.28 breaks HTTP chat API (missing scope: operator.write)
+ARG OPENCLAW_VERSION=2026.3.24
+
+# ─── System packages ────────────────────────────────────────────────────────
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      chromium fonts-liberation fonts-noto-color-emoji fonts-dejavu-core \
+      xvfb x11vnc websockify novnc \
+      curl git procps lsof dnsutils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# ─── OpenClaw CLI ───────────────────────────────────────────────────────────
+RUN npm install -g "openclaw@${OPENCLAW_VERSION}" --unsafe-perm \
+    && openclaw --version
+
+# ─── Agent Runtime ──────────────────────────────────────────────────────────
+COPY --from=runtime-builder /build/.next/standalone /opt/agent-runtime
+COPY --from=runtime-builder /build/.next/static /opt/agent-runtime/.next/static
+COPY --from=runtime-builder /build/src /opt/agent-runtime/src
+
+# ─── Startup scripts ───────────────────────────────────────────────────────
+COPY ruh-backend/scripts/sandbox-vnc-start.sh /usr/local/bin/sandbox-vnc-start
+COPY ruh-backend/scripts/sandbox-agent-runtime.sh /usr/local/bin/sandbox-agent-runtime
+RUN chmod +x /usr/local/bin/sandbox-vnc-start /usr/local/bin/sandbox-agent-runtime
+
+# ─── Health check ───────────────────────────────────────────────────────────
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD node -e "const n=require('net');const c=n.connect(18789,'127.0.0.1',()=>{c.end();process.exit(0)});c.on('error',()=>process.exit(1))"
+
+ENV DISPLAY=:99 \
+    CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage" \
+    NODE_ENV=production \
+    AGENT_DATA_DIR=/root/.agent-runtime
+
+EXPOSE 18789 6080 8080 3000 3001 3002 4173 5173 5174 8000
+
+CMD ["tail", "-f", "/dev/null"]

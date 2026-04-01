@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ruhFaviconIcon } from "@/shared/constants";
 import { Menu } from "lucide-react";
@@ -55,6 +55,7 @@ export const MobileDeveloperSidebar = () => {
           className="w-60 p-0 bg-card-color"
           noCloseIcon
         >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
           <DeveloperSidebar isMobile={true} onMobileClose={onClose} />
         </SheetContent>
       </Sheet>

@@ -1,7 +1,7 @@
 {
   "name": "ruh-backend",
   "version": "1.0.0",
-  "description": "OpenClaw Daytona Backend API — TypeScript/Bun port",
+  "description": "OpenClaw Backend API — TypeScript/Bun",
   "module": "src/index.ts",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -15,22 +15,43 @@
     "test:smoke": "bun test tests/smoke/",
     "test:security": "bun test tests/security/",
     "test:contract": "bun test tests/contract/",
-    "test:watch": "bun test --watch tests/unit/"
+    "test:fast": "bun test tests/unit/ tests/e2e/ tests/security/ tests/contract/",
+    "test:coverage": "bun test tests/unit/ tests/e2e/ tests/security/ tests/contract/ --coverage --coverage-reporter=text --coverage-reporter=lcov && bun run scripts/check-coverage.ts",
+    "test:watch": "bun test --watch tests/unit/",
+    "retrofit:shared-codex": "bun run scripts/retrofit-shared-codex.ts",
+    "seed:test-users": "bun run scripts/seed-test-users.ts",
+    "seed:demo-marketplace": "bun run scripts/seed-demo-marketplace.ts"
   },
   "dependencies": {
-    "@daytonaio/sdk": "^0.13.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
+    "@opentelemetry/resources": "^1.25.0",
+    "@opentelemetry/sdk-trace-base": "^1.25.0",
+    "@opentelemetry/semantic-conventions": "^1.25.0",
+    "@ruh/logger": "file:../packages/logger",
     "axios": "^1.7.0",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
     "express": "^4.19.0",
+    "express-rate-limit": "^8.3.1",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.12.0",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/express-rate-limit": "^6.0.2",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.11.6",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.13",
     "bun-types": "latest",
     "supertest": "^7.0.0",
     "typescript": "^5.5.0"

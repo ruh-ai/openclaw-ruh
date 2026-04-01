@@ -68,11 +68,11 @@ api.interceptors.response.use(
           const tokenResponse =
             await authApi.generateAccessToken(refreshToken);
 
-          if (tokenResponse.success && tokenResponse.access_token) {
+          if (tokenResponse.accessToken) {
             // Update the authorization header with the new token
             originalRequest.headers = {
               ...originalRequest.headers,
-              Authorization: `Bearer ${tokenResponse.access_token}`,
+              Authorization: `Bearer ${tokenResponse.accessToken}`,
             };
 
             // Retry the original request with the new token

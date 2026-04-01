@@ -1,0 +1,28 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ruh-backend",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "--watch", "src/index.ts"],
+      "port": 8000,
+      "cwd": "ruh-backend"
+    },
+    {
+      "name": "agent-builder-ui",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--port", "3001"],
+      "port": 3001,
+      "autoPort": false,
+      "cwd": "agent-builder-ui"
+    },
+    {
+      "name": "ruh-frontend",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev"],
+      "port": 3000,
+      "autoPort": true,
+      "cwd": "ruh-frontend"
+    }
+  ]
+}

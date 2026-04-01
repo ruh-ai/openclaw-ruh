@@ -9,6 +9,8 @@ Thumbs.db
 *.env
 frontend/.env.local
 frontend/.env*.local
+agent-builder-ui/.env*.local
+langfuse/.env
 
 # ── Node / Bun ────────────────────────────────────────────────────────────────
 node_modules/
@@ -36,6 +38,13 @@ ruh-frontend/build/
 ruh-frontend/next-env.d.ts
 ruh-frontend/tsconfig.tsbuildinfo
 
+# ── Build & test artifacts ────────────────────────────────────────────────────
+.next/
+test-results/
+agent-builder-ui/test-results/
+ruh-backend/coverage/
+
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
-openclaw-agent-builder/output/
+.worktrees/
+.gstack/

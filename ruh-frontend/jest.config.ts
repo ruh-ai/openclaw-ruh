@@ -21,6 +21,14 @@ const config: Config = {
     'app/**/*.{ts,tsx}',
     '!**/*.d.ts',
   ],
+  coverageThreshold: {
+    global: {
+      lines: 60,
+      functions: 60,
+      branches: 50,
+      statements: 60,
+    },
+  },
 };
 
 // next/jest appends its own transformIgnorePatterns that would still block MSW's

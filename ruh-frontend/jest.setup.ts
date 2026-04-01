@@ -56,6 +56,7 @@ Object.defineProperty(navigator, 'clipboard', {
 // ── scrollIntoView ─────────────────────────────────────────────────────────────
 
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
+window.HTMLElement.prototype.scrollTo = jest.fn();
 
 // ── MSW server lifecycle ──────────────────────────────────────────────────────
 

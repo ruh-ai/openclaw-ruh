@@ -1,127 +1,116 @@
-/**
- * Unit tests for withConn — verifies transaction lifecycle without a real database.
- * We patch the module-level pool variable by replacing its exported initPool.
- */
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
-import { describe, expect, test, mock, beforeEach } from 'bun:test';
+type MockClient = {
+  calls: string[];
+  query: ReturnType<typeof mock<(_: string) => Promise<{ rows: unknown[]; rowCount: number }>>>;
+  release: ReturnType<typeof mock<() => void>>;
+};
 
-// ── Minimal mock client ───────────────────────────────────────────────────────
+const state: {
+  poolConfigs: Array<Record<string, unknown>>;
+  client: MockClient | null;
+} = {
+  poolConfigs: [],
+  client: null,
+};
 
-function makeMockClient() {
+function makeClient(
+  queryImpl?: (sql: string) => Promise<{ rows: unknown[]; rowCount: number }>,
+): MockClient {
   const calls: string[] = [];
-  const client = {
+  const query = mock(async (sql: string) => {
+    calls.push(sql);
+    if (queryImpl) {
+      return queryImpl(sql);
+    }
+    return { rows: [], rowCount: 0 };
+  });
+
+  return {
     calls,
-    query: mock(async (sql: string) => {
-      calls.push(sql);
-      return { rows: [], rowCount: 0 };
-    }),
+    query,
     release: mock(() => {}),
   };
-  return client;
 }
 
-function makeMockPool(client: ReturnType<typeof makeMockClient>) {
-  return {
-    connect: mock(async () => client),
-    end: mock(async () => {}),
-  };
-}
+mock.module('pg', () => ({
+  Pool: class MockPool {
+    constructor(config: Record<string, unknown>) {
+      state.poolConfigs.push(config);
+    }
 
-// ── We test withConn by injecting our mock pool ───────────────────────────────
-// We import db, call initPool with a patched DATABASE_URL, then replace the pool
-// via direct property access (testing internal contract).
+    async connect() {
+      if (!state.client) {
+        throw new Error('Mock client not configured');
+      }
+      return state.client;
+    }
+  },
+}));
 
-describe('withConn transaction lifecycle', () => {
-  test('runs BEGIN and COMMIT on success', async () => {
-    const client = makeMockClient();
-    const pool = makeMockPool(client);
+const db = await import('../../src/db');
 
-    // Directly test the transaction logic by simulating withConn contract
-    await pool.connect();
-    await client.query('BEGIN');
-    const result = await (async () => 'hello')();
-    await client.query('COMMIT');
-    client.release();
-
-    expect(client.calls).toContain('BEGIN');
-    expect(client.calls).toContain('COMMIT');
-    expect(client.calls).not.toContain('ROLLBACK');
-    expect(result).toBe('hello');
-    expect(client.release).toHaveBeenCalled();
+describe('db connection helper', () => {
+  beforeEach(() => {
+    process.env.DATABASE_URL = 'postgres://openclaw:changeme@localhost:5432/openclaw';
+    state.poolConfigs = [];
+    state.client = null;
   });
 
-  test('runs BEGIN and ROLLBACK on failure', async () => {
-    const client = makeMockClient();
+  test('initializes the pool and commits successful work', async () => {
+    const client = makeClient();
+    state.client = client;
 
-    let rolledBack = false;
-    let released = false;
+    db.initPool();
 
-    const mockQuery = async (sql: string) => {
-      client.calls.push(sql);
-      if (sql === 'ROLLBACK') rolledBack = true;
-      return { rows: [], rowCount: 0 };
-    };
-    const mockRelease = () => { released = true; };
+    const result = await db.withConn(async (conn) => {
+      await conn.query('SELECT 1');
+      return 'ok';
+    });
 
-    const simulatedWithConn = async (fn: (c: typeof client) => Promise<unknown>) => {
-      await mockQuery('BEGIN');
-      try {
-        const r = await fn(client);
-        await mockQuery('COMMIT');
-        return r;
-      } catch (err) {
-        await mockQuery('ROLLBACK');
-        throw err;
-      } finally {
-        mockRelease();
-      }
-    };
+    expect(state.poolConfigs).toEqual([
+      {
+        connectionString: 'postgres://openclaw:changeme@localhost:5432/openclaw',
+        min: 2,
+        max: 10,
+        ssl: { rejectUnauthorized: true },
+      },
+    ]);
+    expect(client.calls).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(result).toBe('ok');
+  });
+
+  test('rolls back and rethrows when the transaction body fails', async () => {
+    const client = makeClient();
+    state.client = client;
+
+    db.initPool();
 
     await expect(
-      simulatedWithConn(async () => { throw new Error('query failed'); }),
+      db.withConn(async () => {
+        throw new Error('query failed');
+      }),
     ).rejects.toThrow('query failed');
 
-    expect(rolledBack).toBe(true);
-    expect(released).toBe(true);
-    expect(client.calls).toContain('BEGIN');
-    expect(client.calls).toContain('ROLLBACK');
-    expect(client.calls).not.toContain('COMMIT');
+    expect(client.calls).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(client.release).toHaveBeenCalledTimes(1);
   });
 
-  test('releases client even when COMMIT throws', async () => {
-    const client = makeMockClient();
-    let released = false;
-    let commitCalled = false;
-
-    const simulatedWithConn = async (fn: (c: typeof client) => Promise<unknown>) => {
-      await client.query('BEGIN');
-      try {
-        const r = await fn(client);
-        commitCalled = true;
+  test('releases the client even when COMMIT fails', async () => {
+    const client = makeClient(async (sql) => {
+      if (sql === 'COMMIT') {
         throw new Error('commit failed');
-        return r;
-      } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      } finally {
-        released = true;
       }
-    };
+      return { rows: [], rowCount: 0 };
+    });
+    state.client = client;
 
-    await expect(simulatedWithConn(async () => 'ok')).rejects.toThrow('commit failed');
-    expect(released).toBe(true);
-    expect(commitCalled).toBe(true);
-  });
+    db.initPool();
 
-  test('withConn throws when pool not initialized', async () => {
-    // We test this by importing db and checking the error without calling initPool
-    // We use a fresh module import to get an uninitialized pool state
-    process.env.DATABASE_URL = 'postgres://fake:5432/test';
+    await expect(db.withConn(async () => 'ok')).rejects.toThrow('commit failed');
 
-    // Dynamic import to get isolated module instance
-    // In bun, re-importing the same module returns the same instance,
-    // so we just verify the error message contract
-    const error = new Error('DB pool not initialized — call initPool() first');
-    expect(error.message).toContain('DB pool not initialized');
+    expect(client.calls).toEqual(['BEGIN', 'COMMIT', 'ROLLBACK']);
+    expect(client.release).toHaveBeenCalledTimes(1);
   });
 });

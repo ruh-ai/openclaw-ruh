@@ -2,10 +2,10 @@ import { SlidersHorizontal, Pencil, X, Check } from "lucide-react";
 
 interface SectionCardProps {
   title: string;
-  isEditing: boolean;
-  onEdit: () => void;
-  onSave: () => void;
-  onCancel: () => void;
+  isEditing?: boolean;
+  onEdit?: () => void;
+  onSave?: () => void;
+  onCancel?: () => void;
   children: React.ReactNode;
 }
 
@@ -17,10 +17,13 @@ export function SectionCard({
   onCancel,
   children,
 }: SectionCardProps) {
+  const editable = Boolean(onEdit && onSave && onCancel);
+  const editing = editable && Boolean(isEditing);
+
   return (
     <div
       className={`bg-[var(--card-color)] border rounded-2xl px-6 py-4 transition-all duration-200 ${
-        isEditing
+        editing
           ? "border-[var(--primary)] shadow-[0_0_0_3px_rgba(174,0,208,0.08)]"
           : "border-[var(--border-stroke)]"
       }`}
@@ -30,7 +33,7 @@ export function SectionCard({
           {title}
         </span>
         <div className="flex items-center gap-1.5">
-          {isEditing ? (
+          {!editable ? null : editing ? (
             <>
               <button
                 onClick={onCancel}

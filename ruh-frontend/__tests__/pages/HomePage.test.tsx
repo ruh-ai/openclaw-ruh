@@ -8,62 +8,49 @@ import Home from '@/app/page';
 const BASE = 'http://localhost:8000';
 
 describe('Home page', () => {
-  // ── Initial render ────────────────────────────────────────────────────────────
-
-  test('renders app title "OpenClaw on Daytona"', async () => {
-    render(<Home />);
-    expect(screen.getByText('OpenClaw on Daytona')).toBeInTheDocument();
-  });
-
-  test('renders SandboxSidebar with "Sandboxes" heading', async () => {
-    render(<Home />);
-    expect(screen.getByText('Sandboxes')).toBeInTheDocument();
-  });
-
-  test('shows empty state with paw emoji and create button', async () => {
+  test('renders the current empty state and sidebar entry point', async () => {
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([])));
     render(<Home />);
-    await waitFor(() => screen.queryByText('Loading…') === null, { timeout: 2000 }).catch(() => {});
-    // May show the paw or create button
-    const createBtn = screen.queryByRole('button', { name: /create new sandbox/i });
-    expect(createBtn ?? screen.getByText('OpenClaw on Daytona')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('Loading…')).not.toBeInTheDocument());
+
+    expect(screen.getByText('No sandbox selected')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /\+ new sandbox/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText('New Sandbox')).toBeInTheDocument();
   });
 
-  // ── Navigation to create view ─────────────────────────────────────────────────
-
-  test('clicking "+ New" in sidebar shows SandboxForm', async () => {
+  test('clicking the sidebar New Sandbox entry shows SandboxForm', async () => {
     render(<Home />);
-    const newBtn = screen.getByText('+ New');
-    await userEvent.click(newBtn);
-    await waitFor(() => expect(screen.getByText('New Sandbox')).toBeInTheDocument());
+    await userEvent.click(screen.getByText('New Sandbox'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /create sandbox/i })).toBeInTheDocument()
+    );
   });
 
-  test('clicking "+ Create New Sandbox" shows SandboxForm', async () => {
+  test('clicking the empty-state create button shows SandboxForm', async () => {
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([])));
     render(<Home />);
-    await waitFor(() => screen.queryByText('Loading…') === null, { timeout: 2000 }).catch(() => {});
+    await waitFor(() => expect(screen.queryByText('Loading…')).not.toBeInTheDocument());
 
-    const createBtn = screen.queryByRole('button', { name: /create new sandbox/i });
-    if (createBtn) {
-      await userEvent.click(createBtn);
-      await waitFor(() => expect(screen.getByText('New Sandbox')).toBeInTheDocument());
-    }
+    await userEvent.click(screen.getByRole('button', { name: /\+ new sandbox/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /create sandbox/i })).toBeInTheDocument()
+    );
   });
-
-  // ── Cancel create returns to previous view ────────────────────────────────────
 
   test('cancel button in SandboxForm returns to empty view', async () => {
     render(<Home />);
-    await userEvent.click(screen.getByText('+ New'));
-    await waitFor(() => screen.getByText('New Sandbox'));
+    await userEvent.click(screen.getByText('New Sandbox'));
+    await waitFor(() => screen.getByRole('button', { name: /create sandbox/i }));
 
     await userEvent.click(screen.getByText('✕ Cancel'));
-    await waitFor(() => expect(screen.queryByText('New Sandbox')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('No sandbox selected')).toBeInTheDocument()
+    );
   });
 
-  // ── Selecting a sandbox ───────────────────────────────────────────────────────
-
-  test('selecting a sandbox shows Chat/Crons/Channels tabs', async () => {
+  test('selecting a sandbox shows Chat, History, and Mission Control tabs', async () => {
     const sandbox = makeSandbox();
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([sandbox])));
 
@@ -73,8 +60,8 @@ describe('Home page', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Chat' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Crons' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Channels' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mission Control' })).toBeInTheDocument();
     });
   });
 
@@ -88,12 +75,10 @@ describe('Home page', () => {
 
     await waitFor(() => screen.getByRole('button', { name: 'Chat' }));
     const chatBtn = screen.getByRole('button', { name: 'Chat' });
-    expect(chatBtn).toHaveClass('bg-gray-800');
+    expect(chatBtn.className).toContain('bg-[#fdf4ff]');
   });
 
-  // ── Tab switching ─────────────────────────────────────────────────────────────
-
-  test('clicking Crons tab shows CronsPanel', async () => {
+  test('clicking History tab shows the chat history panel', async () => {
     const sandbox = makeSandbox();
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([sandbox])));
 
@@ -101,19 +86,13 @@ describe('Home page', () => {
     await waitFor(() => screen.getByText('openclaw-gateway'));
     await userEvent.click(screen.getByText('openclaw-gateway'));
 
-    await waitFor(() => screen.getByRole('button', { name: 'Crons' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Crons' }));
+    await waitFor(() => screen.getByRole('button', { name: 'History' }));
+    await userEvent.click(screen.getByRole('button', { name: 'History' }));
 
-    // CronsPanel should render — "Cron Jobs" is the panel's h2 heading
-    await waitFor(() =>
-      expect(
-        screen.queryByText('Cron Jobs') ??
-        screen.queryByText(/loading cron/i),
-      ).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText('Chat History')).toBeInTheDocument());
   });
 
-  test('clicking Channels tab shows ChannelsPanel', async () => {
+  test('clicking Mission Control shows overview content', async () => {
     const sandbox = makeSandbox();
     server.use(http.get(`${BASE}/api/sandboxes`, () => HttpResponse.json([sandbox])));
 
@@ -121,23 +100,17 @@ describe('Home page', () => {
     await waitFor(() => screen.getByText('openclaw-gateway'));
     await userEvent.click(screen.getByText('openclaw-gateway'));
 
-    await waitFor(() => screen.getByRole('button', { name: 'Channels' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Channels' }));
+    await waitFor(() => screen.getByRole('button', { name: 'Mission Control' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Mission Control' }));
 
-    await waitFor(() =>
-      expect(screen.queryByText(/telegram/i) ?? screen.queryByText(/slack/i)).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText('Gateway Status')).toBeInTheDocument());
   });
-
-  // ── Tabs not shown without sandbox ───────────────────────────────────────────
 
   test('tabs are not shown when no sandbox is selected', () => {
     render(<Home />);
     expect(screen.queryByRole('button', { name: 'Chat' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Crons' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument();
   });
-
-  // ── refreshKey increments after creation ──────────────────────────────────────
 
   test('SandboxForm onCreated triggers sidebar refresh', async () => {
     let fetchCount = 0;
@@ -157,8 +130,10 @@ describe('Home page', () => {
     render(<Home />);
     const initialFetchCount = fetchCount;
 
-    await userEvent.click(screen.getByText('+ New'));
-    await waitFor(() => screen.getByText('New Sandbox'));
+    await userEvent.click(screen.getByText('New Sandbox'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /create sandbox/i })).toBeInTheDocument()
+    );
 
     await userEvent.click(screen.getByRole('button', { name: /create sandbox/i }));
 

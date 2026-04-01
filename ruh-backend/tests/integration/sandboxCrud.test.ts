@@ -28,6 +28,10 @@ async function getStore() {
   return import('../../src/store');
 }
 
+async function getConversationStore() {
+  return import('../../src/conversationStore');
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('sandbox CRUD (real DB)', () => {
@@ -54,6 +58,29 @@ describe('sandbox CRUD (real DB)', () => {
     expect(retrieved!.sandbox_name).toBe('openclaw-gateway');
     expect(retrieved!.gateway_token).toBe('gw-tok-abc');
     expect(retrieved!.approved).toBe(false);
+  });
+
+  test('saveSandbox persists shared Codex retrofit metadata', async () => {
+    const store = await getStore();
+
+    await store.saveSandbox({
+      sandbox_id: 'sb-shared-codex',
+      sandbox_state: 'running',
+      dashboard_url: null,
+      signed_url: null,
+      standard_url: 'http://localhost:18789',
+      preview_token: null,
+      gateway_token: 'gw-shared-codex',
+      gateway_port: 18789,
+      ssh_command: 'docker exec -it openclaw-sb-shared-codex bash',
+      shared_codex_enabled: true,
+      shared_codex_model: 'openai-codex/gpt-5.4',
+    }, 'shared-codex-sandbox');
+
+    const retrieved = await store.getSandbox('sb-shared-codex');
+    expect(retrieved).not.toBeNull();
+    expect((retrieved as Record<string, unknown>).shared_codex_enabled).toBe(true);
+    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.4');
   });
 
   test('listSandboxes returns all saved records ordered by created_at DESC', async () => {
@@ -127,6 +154,41 @@ describe('sandbox CRUD (real DB)', () => {
     expect(result).toBe(false);
   });
 
+  test('deleteSandbox removes dependent conversations and cascaded messages', async () => {
+    const store = await getStore();
+    const conversationStore = await getConversationStore();
+
+    await store.saveSandbox({
+      sandbox_id: 'sb-delete-conversations',
+      sandbox_state: 'started',
+      gateway_port: 18789,
+      ssh_command: '',
+      dashboard_url: null,
+      signed_url: null,
+      standard_url: null,
+      preview_token: null,
+      gateway_token: null,
+    }, 'delete-with-history');
+
+    const conversation = await conversationStore.createConversation(
+      'sb-delete-conversations',
+      'openclaw-default',
+      'History to purge',
+    );
+    await conversationStore.appendMessages(conversation.id, [
+      { role: 'user', content: 'keep me only while sandbox exists' },
+    ]);
+
+    const deleted = await store.deleteSandbox('sb-delete-conversations');
+    expect(deleted).toBe(true);
+
+    const remainingConversation = await conversationStore.getConversation(conversation.id);
+    expect(remainingConversation).toBeNull();
+
+    const remainingMessages = await conversationStore.getMessages(conversation.id);
+    expect(remainingMessages).toEqual([]);
+  });
+
   test('saveSandbox upserts on duplicate sandbox_id', async () => {
     const store = await getStore();
 
@@ -148,5 +210,31 @@ describe('sandbox CRUD (real DB)', () => {
     const result = await store.getSandbox('sb-upsert');
     expect(result!.sandbox_state).toBe('started');
     expect(result!.sandbox_name).toBe('updated-name');
+  });
+
+  test('updateSandboxSharedCodex marks an existing sandbox as shared Codex', async () => {
+    const store = await getStore();
+
+    await store.saveSandbox({
+      sandbox_id: 'sb-retrofit',
+      sandbox_state: 'running',
+      gateway_port: 18789,
+      ssh_command: '',
+      dashboard_url: null,
+      signed_url: null,
+      standard_url: null,
+      preview_token: null,
+      gateway_token: null,
+    }, 'retrofit-target');
+
+    await (store as Record<string, unknown>).updateSandboxSharedCodex?.(
+      'sb-retrofit',
+      true,
+      'openai-codex/gpt-5.4',
+    );
+
+    const retrieved = await store.getSandbox('sb-retrofit');
+    expect((retrieved as Record<string, unknown>).shared_codex_enabled).toBe(true);
+    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.4');
   });
 });

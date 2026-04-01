@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { CustomerSessionGate } from "@/app/_components/CustomerSessionGate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OpenClaw on Daytona",
-  description: "Chat with OpenClaw agents running in Daytona sandboxes",
+  title: "Ruh Developer",
+  description: "Manage and chat with OpenClaw agents running in sandboxes",
 };
 
 export default function RootLayout({
@@ -27,7 +28,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <CustomerSessionGate>{children}</CustomerSessionGate>
       </body>
     </html>
   );

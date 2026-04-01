@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# Fast typecheck for changed files
+CHANGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+# Backend
+if echo "$CHANGED" | grep -q "^ruh-backend/"; then
+  echo "⚡ Typechecking ruh-backend..."
+  cd ruh-backend && npx tsc --noEmit || exit 1
+  cd ..
+fi
+
+# Agent builder UI
+if echo "$CHANGED" | grep -q "^agent-builder-ui/"; then
+  echo "⚡ Typechecking agent-builder-ui..."
+  cd agent-builder-ui && npx tsc --noEmit || exit 1
+  cd ..
+fi
+
+# Admin UI
+if echo "$CHANGED" | grep -q "^admin-ui/"; then
+  echo "⚡ Typechecking admin-ui..."
+  cd admin-ui && npx tsc --noEmit || exit 1
+  cd ..
+fi
+
+# Marketplace UI
+if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
+  echo "⚡ Typechecking marketplace-ui..."
+  cd packages/marketplace-ui && npx tsc --noEmit || exit 1
+  cd ..
+fi
+
+echo "✓ Pre-commit checks passed"

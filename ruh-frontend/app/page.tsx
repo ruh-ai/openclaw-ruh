@@ -2,23 +2,33 @@
 
 import { useState } from "react";
 import SandboxSidebar, { type SandboxRecord } from "@/components/SandboxSidebar";
-import ChatPanel from "@/components/ChatPanel";
-import CronsPanel from "@/components/CronsPanel";
-import ChannelsPanel from "@/components/ChannelsPanel";
+import ChatPanel, { type Conversation } from "@/components/ChatPanel";
+import HistoryPanel from "@/components/HistoryPanel";
+import MissionControlPanel from "@/components/MissionControlPanel";
 import SandboxForm from "@/components/SandboxForm";
 
-type MainView = "empty" | "chat" | "crons" | "channels" | "create";
-type SandboxTab = "chat" | "crons" | "channels";
+type MainView = "empty" | "chat" | "history" | "mission-control" | "create";
+type SandboxTab = "chat" | "history" | "mission-control";
+
+const SANDBOX_TABS: { id: SandboxTab; label: string }[] = [
+  { id: "chat",            label: "Chat" },
+  { id: "history",         label: "History" },
+  { id: "mission-control", label: "Mission Control" },
+];
 
 export default function Home() {
   const [selectedSandbox, setSelectedSandbox] = useState<SandboxRecord | null>(null);
   const [view, setView] = useState<MainView>("empty");
   const [sandboxTab, setSandboxTab] = useState<SandboxTab>("chat");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
 
   function handleSelectSandbox(sandbox: SandboxRecord) {
     setSelectedSandbox(sandbox);
+    setSandboxTab("chat");
     setView("chat");
+    setActiveConversation(null);
   }
 
   function handleNewSandbox() {
@@ -32,78 +42,103 @@ export default function Home() {
 
   function handleCancelCreate() {
     if (!selectedSandbox) { setView("empty"); return; }
-    setView(sandboxTab === "crons" ? "crons" : sandboxTab === "channels" ? "channels" : "chat");
+    setView(sandboxTab);
   }
 
-  const isSandboxView = view === "chat" || view === "crons" || view === "channels";
+  function handleSwitchTab(tab: SandboxTab) {
+    setSandboxTab(tab);
+    setView(tab);
+  }
+
+  // Called when the user clicks a conversation in History — opens it in Chat
+  function handleOpenConversation(conv: Conversation) {
+    setActiveConversation(conv);
+    handleSwitchTab("chat");
+  }
+
+  // New Chat button in ChatPanel
+  function handleNewChat() {
+    setActiveConversation(null);
+  }
+
+  // When ChatPanel auto-creates a conversation on first send
+  function handleConversationCreated(conv: Conversation) {
+    setActiveConversation(conv);
+  }
+
+  const isSandboxView = view === "chat" || view === "history" || view === "mission-control";
 
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100 overflow-hidden">
+    <main className="flex h-screen bg-[#f9f7f9] overflow-hidden max-w-[1800px] mx-auto">
       {/* Sidebar */}
-      <div className="w-60 shrink-0">
-        <SandboxSidebar
-          selectedId={selectedSandbox?.sandbox_id ?? null}
-          onSelect={handleSelectSandbox}
-          onNew={handleNewSandbox}
-          refreshKey={refreshKey}
-        />
-      </div>
+      <SandboxSidebar
+        selectedId={selectedSandbox?.sandbox_id ?? null}
+        onSelect={handleSelectSandbox}
+        onNew={handleNewSandbox}
+        refreshKey={refreshKey}
+        isCollapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+      />
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="shrink-0 h-12 flex items-center px-6 border-b border-gray-800 gap-6">
-          <h1 className="text-sm font-semibold text-white tracking-tight shrink-0">OpenClaw on Daytona</h1>
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
-          {/* Tabs — only shown when a sandbox is selected */}
-          {isSandboxView && selectedSandbox && (
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => { setSandboxTab("chat"); setView("chat"); }}
-                className={`text-xs px-3 py-1.5 rounded-lg transition-colors font-medium ${
-                  sandboxTab === "chat"
-                    ? "bg-gray-800 text-white"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                Chat
-              </button>
-              <button
-                onClick={() => { setSandboxTab("crons"); setView("crons"); }}
-                className={`text-xs px-3 py-1.5 rounded-lg transition-colors font-medium ${
-                  sandboxTab === "crons"
-                    ? "bg-gray-800 text-white"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                Crons
-              </button>
-              <button
-                onClick={() => { setSandboxTab("channels"); setView("channels"); }}
-                className={`text-xs px-3 py-1.5 rounded-lg transition-colors font-medium ${
-                  sandboxTab === "channels"
-                    ? "bg-gray-800 text-white"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                Channels
-              </button>
+        {/* Sub-header: sandbox name + tabs */}
+        {isSandboxView && selectedSandbox && (
+          <div className="shrink-0 h-12 flex items-center px-5 border-b border-[#eff0f3] bg-white gap-4">
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${selectedSandbox.approved ? "bg-green-400" : "bg-yellow-400 animate-pulse"}`} />
+              <span className="text-sm font-semibold text-gray-900 truncate max-w-[160px]">
+                {selectedSandbox.sandbox_name}
+              </span>
             </div>
-          )}
-        </header>
+
+            <div className="flex items-center gap-1">
+              {SANDBOX_TABS.map(({ id, label }) => (
+                <button
+                  key={id}
+                  onClick={() => handleSwitchTab(id)}
+                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors font-medium ${
+                    sandboxTab === id
+                      ? "bg-[#fdf4ff] text-[#ae00d0]"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Create header */}
+        {view === "create" && (
+          <div className="shrink-0 h-12 flex items-center px-5 border-b border-[#eff0f3] bg-white">
+            <span className="text-sm font-semibold text-gray-900">New Sandbox</span>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 min-h-0">
           {view === "chat" && selectedSandbox && (
-            <ChatPanel sandbox={selectedSandbox} />
+            <ChatPanel
+              sandbox={selectedSandbox}
+              conversation={activeConversation}
+              onNewChat={handleNewChat}
+              onConversationCreated={handleConversationCreated}
+            />
           )}
 
-          {view === "crons" && selectedSandbox && (
-            <CronsPanel sandbox={selectedSandbox} />
+          {view === "history" && selectedSandbox && (
+            <HistoryPanel
+              sandbox={selectedSandbox}
+              activeConvId={activeConversation?.id ?? null}
+              onOpenConversation={handleOpenConversation}
+            />
           )}
 
-          {view === "channels" && selectedSandbox && (
-            <ChannelsPanel sandbox={selectedSandbox} />
+          {view === "mission-control" && selectedSandbox && (
+            <MissionControlPanel sandbox={selectedSandbox} />
           )}
 
           {view === "create" && (
@@ -116,18 +151,28 @@ export default function Home() {
 
           {view === "empty" && (
             <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-              <div className="text-5xl">🐾</div>
-              <p className="text-gray-400 text-sm">Select a sandbox from the sidebar to start chatting.</p>
+              <div className="w-14 h-14 rounded-2xl bg-[#fdf4ff] flex items-center justify-center">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ae00d0" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/>
+                  <rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+                  <line x1="6" x2="6.01" y1="6" y2="6"/>
+                  <line x1="6" x2="6.01" y1="18" y2="18"/>
+                </svg>
+              </div>
+              <div>
+                <p className="text-gray-900 font-medium text-sm">No sandbox selected</p>
+                <p className="text-gray-400 text-xs mt-1">Select a sandbox from the sidebar or create a new one.</p>
+              </div>
               <button
                 onClick={handleNewSandbox}
-                className="text-sm bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl transition-colors font-medium"
+                className="text-sm bg-[#ae00d0] hover:bg-[#9400b4] text-white px-4 py-2 rounded-xl transition-colors font-medium"
               >
-                + Create New Sandbox
+                + New Sandbox
               </button>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 }

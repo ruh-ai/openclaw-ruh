@@ -23,14 +23,6 @@ beforeEach(() => {
   mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
 });
 
-describe('store.initDb', () => {
-  test('runs CREATE TABLE IF NOT EXISTS for sandboxes', async () => {
-    await store.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => (c[0] as string).trim());
-    expect(sqls.some((s) => s.includes('CREATE TABLE IF NOT EXISTS sandboxes'))).toBe(true);
-  });
-});
-
 describe('store.saveSandbox', () => {
   test('calls INSERT ... ON CONFLICT with sandbox_id', async () => {
     const result = {
@@ -51,6 +43,43 @@ describe('store.saveSandbox', () => {
     expect(insertCall![1]).toContain('sb-001');
     expect(insertCall![1]).toContain('my-sandbox');
   });
+
+  test('serializes shared-Codex metadata for sandbox upserts', async () => {
+    const result = {
+      sandbox_id: 'sb-shared',
+      sandbox_name: 'shared-sandbox',
+      sandbox_state: 'started',
+      dashboard_url: null,
+      signed_url: null,
+      standard_url: 'https://std.example.com',
+      preview_token: null,
+      gateway_token: 'gw-tok',
+      gateway_port: 18789,
+      ssh_command: 'daytona ssh sb-shared',
+      shared_codex_enabled: true,
+      shared_codex_model: 'openai-codex/gpt-5.4',
+    };
+
+    await store.saveSandbox(result);
+
+    const insertCall = mockQuery.mock.calls.find((c) => (c[0] as string).includes('INSERT INTO sandboxes'));
+    expect(insertCall).toBeDefined();
+    expect(insertCall![1]).toEqual([
+      'sb-shared',
+      'shared-sandbox',
+      'started',
+      null,
+      null,
+      'https://std.example.com',
+      null,
+      'gw-tok',
+      18789,
+      null,
+      'daytona ssh sb-shared',
+      true,
+      'openai-codex/gpt-5.4',
+    ]);
+  });
 });
 
 describe('store.markApproved', () => {
@@ -60,6 +89,24 @@ describe('store.markApproved', () => {
     expect(sqls.some((s) => s.includes('UPDATE sandboxes SET approved = TRUE'))).toBe(true);
     const updateCall = mockQuery.mock.calls.find((c) => (c[0] as string).includes('UPDATE sandboxes SET approved'));
     expect(updateCall![1]).toContain('sb-001');
+  });
+});
+
+describe('store.updateSandboxSharedCodex', () => {
+  test('updates shared-Codex metadata and normalizes empty sandbox_state to running', async () => {
+    await store.updateSandboxSharedCodex('sb-001', true, 'openai-codex/gpt-5.4');
+
+    const updateCall = mockQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('UPDATE sandboxes'),
+    );
+
+    expect(updateCall).toBeDefined();
+    expect(updateCall![0]).toContain('shared_codex_enabled = $2');
+    expect(updateCall![0]).toContain('shared_codex_model = $3');
+    expect(updateCall![0]).toContain(
+      "sandbox_state = COALESCE(NULLIF(sandbox_state, ''), 'running')",
+    );
+    expect(updateCall![1]).toEqual(['sb-001', true, 'openai-codex/gpt-5.4']);
   });
 });
 
@@ -129,7 +176,10 @@ describe('store.getSandbox', () => {
 
 describe('store.deleteSandbox', () => {
   test('returns true when row is deleted', async () => {
-    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 1 }));
+    mockQuery.mockImplementation(async (sql: string) => ({
+      rows: [],
+      rowCount: sql.includes('DELETE FROM sandboxes') ? 1 : 0,
+    }));
     const result = await store.deleteSandbox('sb-001');
     expect(result).toBe(true);
   });
@@ -143,8 +193,19 @@ describe('store.deleteSandbox', () => {
   test('executes DELETE FROM sandboxes', async () => {
     await store.deleteSandbox('sb-abc');
     const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
+    expect(sqls.some((s) => s.includes('DELETE FROM conversations'))).toBe(true);
     expect(sqls.some((s) => s.includes('DELETE FROM sandboxes'))).toBe(true);
     const deleteCall = mockQuery.mock.calls.find((c) => (c[0] as string).includes('DELETE FROM sandboxes'));
     expect(deleteCall![1]).toContain('sb-abc');
+  });
+
+  test('deletes dependent conversations before the sandbox row', async () => {
+    await store.deleteSandbox('sb-abc');
+    const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
+    const conversationDeleteIndex = sqls.findIndex((sql) => sql.includes('DELETE FROM conversations'));
+    const sandboxDeleteIndex = sqls.findIndex((sql) => sql.includes('DELETE FROM sandboxes'));
+
+    expect(conversationDeleteIndex).toBeGreaterThanOrEqual(0);
+    expect(sandboxDeleteIndex).toBeGreaterThan(conversationDeleteIndex);
   });
 });

@@ -237,6 +237,50 @@ describe('ChannelsPanel', () => {
     }
   });
 
+  test('approving a pairing code uppercases the payload and refreshes pending codes', async () => {
+    let approveCalled = false;
+    let listCalls = 0;
+    let capturedBody: Record<string, unknown> = {};
+
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/pairing`, () => {
+        listCalls += 1;
+        return HttpResponse.json({
+          ok: true,
+          codes: [],
+          output: 'No pending pairing requests',
+        });
+      }),
+      http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/pairing/approve`, async ({ request }) => {
+        approveCalled = true;
+        capturedBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ ok: true, output: 'Approved via test' });
+      }),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText(/telegram/i));
+
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    if (expandBtns[0]) {
+      await userEvent.click(expandBtns[0]);
+
+      const codeInput = await screen.findByPlaceholderText(/zjnty7my/i);
+      await userEvent.type(codeInput, 'abc12345');
+      expect(codeInput).toHaveValue('ABC12345');
+
+      await userEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approveCalled).toBe(true));
+      expect(capturedBody).toEqual({ code: 'ABC12345' });
+      await waitFor(() => expect(listCalls).toBe(1));
+      await waitFor(() => expect(screen.getByText(/approved via test/i)).toBeInTheDocument());
+      await waitFor(() => expect(codeInput).toHaveValue(''));
+    }
+  });
+
   // ── DM policy ─────────────────────────────────────────────────────────────────
 
   test('DM policy selector is present in Telegram section', async () => {

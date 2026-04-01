@@ -2,30 +2,36 @@ import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import {
+  ApprovalEvent,
   ChatMessage,
+  ClarificationQuestion,
   ArchitectResponse,
   SkillGraphNode,
   WorkflowDefinition,
+  WorkflowStep,
 } from "@/lib/openclaw/types";
 
-/** Delay before first poll, then between retries */
-const POLL_INITIAL_DELAY = 8000;
-const POLL_RETRY_DELAY = 5000;
-const POLL_MAX_RETRIES = 3;
+interface InitializeAgentData {
+  name: string;
+  skillGraph?: SkillGraphNode[] | null;
+  workflow?: WorkflowDefinition | null;
+  agentRules?: string[];
+}
 
 interface OpenClawChatState {
   sessionId: string;
   messages: ChatMessage[];
+  approvalEvents: ApprovalEvent[];
   isLoading: boolean;
   statusMessage: string;
   skillGraph: SkillGraphNode[] | null;
   workflow: WorkflowDefinition | null;
   systemName: string | null;
+  agentRules: string[];
   error: string | null;
-  /** Tracks whether we're waiting for a long-running build/deploy */
-  awaitingCompletion: "build" | "deploy" | null;
 
-  sendMessage: (text: string, displayContent?: string) => Promise<void>;
+  sendMessage: (text: string) => Promise<void>;
+  initialize: (agent: InitializeAgentData) => void;
   reset: () => void;
 }
 
@@ -43,113 +49,125 @@ function createInitialMessages(): ChatMessage[] {
   ];
 }
 
-// Track poll timer outside zustand to avoid serialization issues
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-let pollRetryCount = 0;
-
-function clearPollTimer() {
-  if (pollTimer) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
+// ---------------------------------------------------------------------------
+// Normalize the workflow field — gateway may return null, a WorkflowDefinition,
+// or the legacy { steps: string[] } shape. Always produce a WorkflowDefinition.
+// ---------------------------------------------------------------------------
+function normalizeWorkflow(
+  rawWorkflow: WorkflowDefinition | { steps: string[] } | null | undefined,
+  nodes: SkillGraphNode[],
+  systemName: string | null
+): WorkflowDefinition {
+  if (!rawWorkflow) {
+    // Gateway didn't provide a workflow — build a sequential one from the nodes
+    return {
+      name: "main-workflow",
+      description: `${systemName || "agent"} workflow`,
+      steps: nodes.map((node, i) => ({
+        id: `step-${i}`,
+        action: "execute",
+        skill: node.skill_id,
+        wait_for: i > 0 ? [nodes[i - 1].skill_id] : [],
+      })),
+    };
   }
-  pollRetryCount = 0;
+
+  const rawSteps = (rawWorkflow as { steps: unknown }).steps;
+  if (Array.isArray(rawSteps) && rawSteps.length > 0 && typeof rawSteps[0] === "string") {
+    // Legacy format: steps is a plain string array of skill IDs
+    return {
+      name: "main-workflow",
+      description: `${systemName || "agent"} workflow`,
+      steps: (rawSteps as string[]).map((skill, i) => ({
+        id: `step-${i}`,
+        action: "execute",
+        skill,
+        wait_for: i > 0 ? [(rawSteps as string[])[i - 1]] : [],
+      })) as WorkflowStep[],
+    };
+  }
+
+  return rawWorkflow as WorkflowDefinition;
 }
 
-/**
- * Detect if a response text contains build_started or deploy (github_push) markers.
- * Checks both raw JSON markers and human-readable text patterns.
- */
-function detectAwaitingPhase(content: string): "build" | "deploy" | null {
-  if (!content) return null;
-  // Check for deploy markers first — more specific
-  if (
-    (content.includes('"type": "build_progress"') &&
-      content.includes('"phase": "github_push"')) ||
-    content.includes("Deploying to GitHub")
-  ) {
-    return "deploy";
-  }
-  // Check for build markers — both JSON and human-readable
-  if (
-    content.includes('"type": "build_started"') ||
-    content.includes("Build started") ||
-    content.includes("Waiting for builder to complete")
-  ) {
-    return "build";
-  }
-  return null;
-}
-
-/**
- * Check if a response indicates completion of a build/deploy.
- */
-function isCompletionResponse(
-  content: string,
-  phase: "build" | "deploy"
-): boolean {
-  if (phase === "build") {
-    return (
-      content.includes("Build complete") ||
-      content.includes("build_complete") ||
-      content.includes("is ready") ||
-      content.includes("What I Built") ||
-      content.includes("Build complete!")
-    );
-  }
-  if (phase === "deploy") {
-    return (
-      content.includes("It's done") ||
-      content.includes("is live at") ||
-      content.includes("deploy_complete") ||
-      // Match actual GitHub URLs like github.com/user/repo, not just "github.com" in text
-      /github\.com\/[\w-]+\/[\w-]+/.test(content)
-    );
-  }
-  return false;
-}
-
-export const useOpenClawChat = create<OpenClawChatState>((set, get) => ({
+// ---------------------------------------------------------------------------
+// Store — no persistence. The creation flow is a session, not long-term state.
+// Persisting it was the root cause of stale-error loops: old crashes from a
+// previous session would be rehydrated and the gateway's shared session context
+// would keep replaying the broken response on every retry.
+// ---------------------------------------------------------------------------
+export const useOpenClawChat = create<OpenClawChatState>()((set, get) => ({
   sessionId: uuidv4(),
   messages: createInitialMessages(),
+  approvalEvents: [],
   isLoading: false,
   statusMessage: "",
   skillGraph: null,
   workflow: null,
   systemName: null,
+  agentRules: [],
   error: null,
-  awaitingCompletion: null,
 
-  sendMessage: async (text: string, displayContent?: string) => {
-    const { sessionId, isLoading } = get();
-    if (isLoading || !text.trim()) return;
+  sendMessage: async (text: string) => {
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
 
-    // Add user message — use displayContent for chat bubble if provided
+    inFlightRequest.abortController?.abort();
+
+    const { sessionId } = get();
+    const requestId = uuidv4();
+    const abortController = new AbortController();
+    inFlightRequest = { requestId, abortController };
+
     const userMessage: ChatMessage = {
       id: uuidv4(),
       role: "user",
-      content: displayContent || text.trim(),
+      content: trimmedText,
       timestamp: new Date().toISOString(),
     };
 
     set((state) => ({
       messages: [...state.messages, userMessage],
       isLoading: true,
-      statusMessage: "Processing your inputs...",
+      statusMessage: "Connecting to agent...",
       error: null,
     }));
 
     try {
       const response: ArchitectResponse = await sendToArchitectStreaming(
         sessionId,
-        text.trim(),
+        trimmedText,
         {
           onStatus: (_phase: string, message: string) => {
+            if (inFlightRequest.requestId !== requestId) {
+              return;
+            }
+
             set({ statusMessage: message });
           },
+          onApprovalEvent: (approvalEvent) => {
+            if (inFlightRequest.requestId !== requestId) {
+              return;
+            }
+
+            set((state) => ({
+              approvalEvents: [...state.approvalEvents, approvalEvent],
+            }));
+          },
+        },
+        {
+          requestId,
+          signal: abortController.signal,
         }
       );
 
-      // Process response based on type
+      if (
+        abortController.signal.aborted ||
+        inFlightRequest.requestId !== requestId
+      ) {
+        return;
+      }
+
       const architectMessage: ChatMessage = {
         id: uuidv4(),
         role: "architect",
@@ -157,63 +175,108 @@ export const useOpenClawChat = create<OpenClawChatState>((set, get) => ({
         timestamp: new Date().toISOString(),
       };
 
+      architectMessage.responseType = response.type;
+
       switch (response.type) {
-        case "clarification":
+        case "clarification": {
+          const rawQs = response.questions ?? [];
+          const normalised: ClarificationQuestion[] = rawQs.map((q, i) => {
+            if (typeof q === "string") {
+              return { id: `q-${i}`, question: q, type: "text" as const };
+            }
+            const qObj = q as Record<string, unknown>;
+            return {
+              id: (qObj.id as string) || `q-${i}`,
+              question: (qObj.question as string) || String(q),
+              type: (qObj.type as ClarificationQuestion["type"]) || "text",
+              placeholder: qObj.placeholder as string | undefined,
+              options: qObj.options as string[] | undefined,
+              required: qObj.required as boolean | undefined,
+            };
+          });
+          architectMessage.questions = normalised;
+          architectMessage.clarificationContext =
+            (response as unknown as Record<string, unknown>).context as string | undefined;
           architectMessage.content =
-            response.questions?.join("\n\n") ||
+            normalised.map((q) => q.question).join("\n\n") ||
             response.content ||
             "Could you provide more details?";
           break;
+        }
 
-        case "ready_for_review":
+        case "ready_for_review": {
           if (response.skill_graph) {
-            set({
-              skillGraph: response.skill_graph.nodes,
-              workflow: response.skill_graph.workflow,
-              systemName: response.skill_graph.system_name,
-            });
-            architectMessage.content = `I've analyzed your requirements and generated a skill graph with ${response.skill_graph.nodes.length} skills. Click "Proceed to Review" to see the full breakdown.`;
+            const systemName =
+              response.system_name ||
+              response.skill_graph.system_name ||
+              (response.skill_graph.nodes[0]?.skill_id
+                ? response.skill_graph.nodes[0].skill_id.replace(/_/g, "-").replace(/-skill$/, "")
+                : null) ||
+              null;
+
+            const workflow = normalizeWorkflow(
+              response.skill_graph.workflow,
+              response.skill_graph.nodes,
+              systemName
+            );
+
+            // Derive behaviour rules from agent_metadata / requirements
+            const meta = response.agent_metadata;
+            const reqs = response.requirements;
+            const rules: string[] = [];
+            if (meta?.tone) rules.push(`Communicate in a ${meta.tone} tone`);
+            if (meta?.schedule_description) rules.push(`Schedule: ${meta.schedule_description}`);
+            else if (meta?.cron_expression) rules.push(`Runs on cron: ${meta.cron_expression}`);
+            else if (reqs?.schedule) rules.push(`Schedule: ${reqs.schedule}`);
+            if (meta?.primary_users) rules.push(`Intended for: ${meta.primary_users}`);
+            if (reqs?.required_env_vars && reqs.required_env_vars.length > 0) {
+              rules.push(`Requires env: ${reqs.required_env_vars.join(", ")}`);
+            }
+
+            set({ skillGraph: response.skill_graph.nodes, workflow, systemName, agentRules: rules });
+            architectMessage.content = `I've analysed your requirements and generated a skill graph with ${response.skill_graph.nodes.length} skills. Click "Proceed to Review" to see the full breakdown.`;
           } else {
-            architectMessage.content =
-              response.content || "Analysis complete.";
+            architectMessage.content = response.content || "Analysis complete.";
           }
           break;
+        }
 
         case "agent_response":
-          architectMessage.content =
-            response.content || "I'm processing your request...";
+          architectMessage.content = response.content || "I'm processing your request...";
           break;
 
         case "error":
           architectMessage.content =
-            response.content ||
-            response.error ||
-            "Something went wrong. Please try again.";
+            response.content || response.error || "Something went wrong. Please try again.";
           set({ error: response.error || null });
           break;
 
-        default:
+        default: {
+          const raw = response as unknown as Record<string, unknown>;
           architectMessage.content =
-            response.content || "Response received.";
+            response.content ||
+            (raw.message as string) ||
+            (raw.context as string) ||
+            JSON.stringify(response, null, 2);
+          break;
+        }
       }
 
-      // Detect if this response indicates a build/deploy in progress
-      const contentToCheck = response.content || architectMessage.content;
-      const awaitingPhase = detectAwaitingPhase(contentToCheck);
       set((state) => ({
         messages: [...state.messages, architectMessage],
         isLoading: false,
         statusMessage: "",
-        awaitingCompletion: awaitingPhase,
       }));
-
-      // If build/deploy detected, start auto-polling
-      if (awaitingPhase) {
-        startPolling(awaitingPhase);
-      }
     } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : "Unknown error";
+      if (
+        abortController.signal.aborted ||
+        inFlightRequest.requestId !== requestId ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
+        return;
+      }
+
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
 
       const errorMessage: ChatMessage = {
         id: uuidv4(),
@@ -222,127 +285,75 @@ export const useOpenClawChat = create<OpenClawChatState>((set, get) => ({
         timestamp: new Date().toISOString(),
       };
 
+      // Rotate the sessionId on error so the next message gets a fresh gateway
+      // session. This breaks any loop where a broken gateway response keeps
+      // replaying because the old session still has that context.
       set((state) => ({
         messages: [...state.messages, errorMessage],
         isLoading: false,
         statusMessage: "",
         error: errorMsg,
+        sessionId: uuidv4(),
       }));
+    } finally {
+      if (inFlightRequest.requestId === requestId) {
+        inFlightRequest = {
+          requestId: null,
+          abortController: null,
+        };
+      }
     }
   },
 
+  initialize: (agent: InitializeAgentData) => {
+    const skillList =
+      agent.skillGraph?.map((n) => n.name || n.skill_id).join(", ") ?? "no skills yet";
+    const contextMsg: ChatMessage = {
+      id: uuidv4(),
+      role: "architect",
+      content: `I'm ready to help you improve **${agent.name}**. Current skills: ${skillList}.\n\nTell me what you'd like to change — add skills, update the rules, rename it, or anything else.`,
+      timestamp: new Date().toISOString(),
+    };
+    set({
+      sessionId: uuidv4(),
+      messages: [contextMsg],
+      approvalEvents: [],
+      skillGraph: agent.skillGraph ?? null,
+      workflow: agent.workflow ?? null,
+      systemName: agent.name,
+      agentRules: agent.agentRules ?? [],
+      isLoading: false,
+      statusMessage: "",
+      error: null,
+    });
+  },
+
   reset: () => {
-    clearPollTimer();
+    inFlightRequest.abortController?.abort();
+    inFlightRequest = {
+      requestId: null,
+      abortController: null,
+    };
+
     set({
       sessionId: uuidv4(),
       messages: createInitialMessages(),
+      approvalEvents: [],
       isLoading: false,
       statusMessage: "",
       skillGraph: null,
       workflow: null,
       systemName: null,
+      agentRules: [],
       error: null,
-      awaitingCompletion: null,
     });
   },
 }));
 
-/**
- * Start auto-polling the agent for build/deploy completion.
- * Shows a loading spinner with hourglass status while waiting.
- */
-function startPolling(phase: "build" | "deploy") {
-  clearPollTimer();
-  pollRetryCount = 0;
-  const statusLabel =
-    phase === "build"
-      ? "Waiting for build to complete..."
-      : "Waiting for deployment to finish...";
-
-  // Set awaiting state with loading indicator
-  useOpenClawChat.setState({
-    awaitingCompletion: phase,
-    statusMessage: statusLabel,
-  });
-
-  const poll = () => {
-    pollRetryCount++;
-
-    if (pollRetryCount > POLL_MAX_RETRIES) {
-      // Max attempts reached — show error and stop
-      const errorMessage: ChatMessage = {
-        id: uuidv4(),
-        role: "architect",
-        content:
-          phase === "build"
-            ? "Build is taking longer than expected. Please ask me to check again."
-            : "Deployment is taking longer than expected. Please ask me to check again.",
-        timestamp: new Date().toISOString(),
-      };
-      useOpenClawChat.setState((state) => ({
-        messages: [...state.messages, errorMessage],
-        awaitingCompletion: null,
-        statusMessage: "",
-      }));
-      clearPollTimer();
-      return;
-    }
-
-    const checkMessage =
-      phase === "build"
-        ? "Check if the build is complete"
-        : "Check if the deployment is complete";
-
-    const { sessionId, isLoading } = useOpenClawChat.getState();
-    if (isLoading) {
-      // User-initiated request in progress, retry later
-      pollTimer = setTimeout(poll, POLL_RETRY_DELAY);
-      return;
-    }
-
-    // Don't set isLoading — keep showing the hourglass, not the Ruh spinner
-    sendToArchitectStreaming(sessionId, checkMessage)
-      .then((response) => {
-        const content = response.content || "";
-
-        const architectMessage: ChatMessage = {
-          id: uuidv4(),
-          role: "architect",
-          content: content || "Checking...",
-          timestamp: new Date().toISOString(),
-        };
-
-        // Handle specific response types
-        if (response.type === "build_complete" || response.type === "deploy_complete") {
-          useOpenClawChat.setState((state) => ({
-            messages: [...state.messages, architectMessage],
-            statusMessage: "",
-            awaitingCompletion: null,
-          }));
-          clearPollTimer();
-          return;
-        }
-
-        // Check content for completion signals
-        if (isCompletionResponse(content, phase)) {
-          useOpenClawChat.setState((state) => ({
-            messages: [...state.messages, architectMessage],
-            statusMessage: "",
-            awaitingCompletion: null,
-          }));
-          clearPollTimer();
-          return;
-        }
-
-        // Not complete yet — schedule next poll (keep hourglass showing)
-        pollTimer = setTimeout(poll, POLL_RETRY_DELAY);
-      })
-      .catch(() => {
-        // Error polling — retry (keep hourglass showing)
-        pollTimer = setTimeout(poll, POLL_RETRY_DELAY);
-      });
-  };
-
-  // First poll after initial delay
-  pollTimer = setTimeout(poll, POLL_INITIAL_DELAY);
-}
+let inFlightRequest: {
+  requestId: string | null;
+  abortController: AbortController | null;
+} = {
+  requestId: null,
+  abortController: null,
+};

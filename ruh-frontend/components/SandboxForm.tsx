@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { apiFetch, createAuthenticatedEventSource } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -23,6 +24,12 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<"idle" | "running" | "done" | "error">("idle");
+
+  function updateStatus(nextStatus: "idle" | "running" | "done" | "error") {
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+  }
 
   function appendLog(msg: string) {
     setLogs((prev) => [...prev, msg]);
@@ -33,10 +40,10 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
     e.preventDefault();
     setLogs([]);
     setErrorMsg("");
-    setStatus("running");
+    updateStatus("running");
 
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/create`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
@@ -48,7 +55,9 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
       }
 
       const { stream_id } = await res.json();
-      const sse = new EventSource(`${API_URL}/api/sandboxes/stream/${stream_id}`);
+      const sse = createAuthenticatedEventSource(
+        `${API_URL}/api/sandboxes/stream/${stream_id}`
+      );
 
       sse.addEventListener("log", (ev) => {
         appendLog(JSON.parse(ev.data).message);
@@ -63,27 +72,27 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
       });
 
       sse.addEventListener("done", () => {
-        setStatus("done");
+        updateStatus("done");
         sse.close();
       });
 
       sse.addEventListener("error", (ev) => {
         const d = (ev as MessageEvent).data;
         setErrorMsg(d ? JSON.parse(d).message : "Connection lost");
-        setStatus("error");
+        updateStatus("error");
         sse.close();
       });
 
       sse.onerror = () => {
-        if (status !== "done" && status !== "error") {
+        if (statusRef.current !== "done" && statusRef.current !== "error") {
           setErrorMsg("SSE connection error");
-          setStatus("error");
+          updateStatus("error");
         }
         sse.close();
       };
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
-      setStatus("error");
+      updateStatus("error");
     }
   }
 
@@ -92,26 +101,25 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-base font-semibold text-white">New Sandbox</h2>
-        {onCancel && (
-          <button onClick={onCancel} className="text-gray-500 hover:text-gray-300 text-sm">
+      {onCancel && (
+        <div className="flex justify-end mb-4">
+          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 text-sm">
             ✕ Cancel
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto space-y-5 pr-1">
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Sandbox Name */}
           <div>
-            <label className="block text-xs font-medium text-gray-400 mb-1">Sandbox Name</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Sandbox Name</label>
             <input
               type="text"
               value={form.sandbox_name}
               onChange={(e) => setForm({ ...form, sandbox_name: e.target.value })}
               disabled={isRunning || isDone}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
             />
           </div>
 
@@ -119,14 +127,14 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
             <button
               type="submit"
               disabled={isRunning}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+              className="w-full bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
             >
               Create Sandbox
             </button>
           ) : null}
         </form>
 
-        {/* Logs */}
+        {/* Logs — keep dark terminal aesthetic */}
         {logs.length > 0 && (
           <div className="bg-gray-950 rounded-xl border border-gray-800 overflow-hidden">
             <div className="px-3 py-1.5 border-b border-gray-800 flex items-center gap-2">
@@ -148,12 +156,12 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
 
         {/* Error */}
         {status === "error" && (
-          <div className="bg-red-950 border border-red-800 rounded-xl p-3">
-            <p className="text-red-400 text-xs font-medium mb-1">Error</p>
-            <p className="text-red-300 text-xs">{errorMsg}</p>
+          <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+            <p className="text-red-600 text-xs font-medium mb-1">Error</p>
+            <p className="text-red-600 text-xs">{errorMsg}</p>
             <button
-              onClick={() => { setStatus("idle"); setErrorMsg(""); }}
-              className="mt-2 text-xs text-red-400 hover:text-red-300 underline"
+              onClick={() => { updateStatus("idle"); setErrorMsg(""); }}
+              className="mt-2 text-xs text-red-500 hover:text-red-700 underline"
             >
               Try again
             </button>
@@ -161,8 +169,8 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
         )}
 
         {isDone && (
-          <div className="bg-green-950 border border-green-800 rounded-xl p-3 text-center">
-            <p className="text-green-400 text-sm font-medium">Sandbox ready!</p>
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+            <p className="text-green-700 text-sm font-medium">Sandbox ready!</p>
             <p className="text-green-600 text-xs mt-1">Select it from the sidebar to start chatting.</p>
           </div>
         )}
