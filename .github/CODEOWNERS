@@ -1,0 +1,26 @@
+# Default owner for everything
+* @ruh-ai/core
+
+# Backend
+/ruh-backend/ @ruh-ai/backend
+
+# Agent Builder UI
+/agent-builder-ui/ @ruh-ai/frontend
+
+# Client Application
+/ruh-frontend/ @ruh-ai/frontend
+
+# Admin Panel
+/admin-ui/ @ruh-ai/frontend
+
+# Shared Packages
+/packages/ @ruh-ai/core
+
+# Infrastructure & CI
+/.github/ @ruh-ai/core
+/nginx/ @ruh-ai/core
+docker-compose*.yml @ruh-ai/core
+
+# Documentation
+/docs/ @ruh-ai/core
+*.md @ruh-ai/core
