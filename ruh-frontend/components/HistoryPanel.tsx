@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
 import type { Conversation } from "./ChatPanel";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -58,7 +59,7 @@ export default function HistoryPanel({ sandbox, activeConvId, onOpenConversation
         url.searchParams.set("cursor", cursor);
       }
 
-      const res = await fetch(url.toString());
+      const res = await apiFetch(url.toString());
       if (!res.ok) return;
 
       const page = (await res.json()) as ConversationPage;
@@ -88,7 +89,7 @@ export default function HistoryPanel({ sandbox, activeConvId, onOpenConversation
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    const response = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${id}`, {
+    const response = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${id}`, {
       method: "DELETE",
     });
     if (!response.ok) {
@@ -100,7 +101,7 @@ export default function HistoryPanel({ sandbox, activeConvId, onOpenConversation
   async function commitRename(id: string) {
     const name = editName.trim();
     if (!name) { setEditingId(null); return; }
-    await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${id}`, {
+    await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),

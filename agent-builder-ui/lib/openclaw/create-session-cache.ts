@@ -80,7 +80,21 @@ export function buildResumedCoPilotSeed(
   cachedCoPilot: Partial<CoPilotState> | null,
 ): Partial<CoPilotState> {
   const persistedSeed = agent ? createCoPilotSeedFromAgent(agent) : {};
-  return cachedCoPilot ? { ...persistedSeed, ...cachedCoPilot } : persistedSeed;
+  if (!cachedCoPilot) return persistedSeed;
+
+  // Merge cache over persisted seed, but never let empty-string cache values
+  // for identity fields overwrite real agent data. This prevents a stale cache
+  // (written after a page-refresh reset) from wiping the agent's name/description.
+  const merged: Partial<CoPilotState> = { ...persistedSeed, ...cachedCoPilot };
+  const identityFields: (keyof CoPilotState)[] = ["name", "description", "systemName"];
+  for (const field of identityFields) {
+    const cached = cachedCoPilot[field];
+    const persisted = (persistedSeed as Record<string, unknown>)[field];
+    if (typeof cached === "string" && cached === "" && typeof persisted === "string" && persisted !== "") {
+      (merged as Record<string, unknown>)[field] = persisted;
+    }
+  }
+  return merged;
 }
 
 export function buildResumedBuilderState(
@@ -89,13 +103,15 @@ export function buildResumedBuilderState(
   cachedBuilder: Partial<BuilderState> | null,
   cachedCoPilot: Partial<CoPilotState> | null,
 ): Partial<BuilderState> {
+  // Use `||` instead of `??` for string fields so empty strings from a stale
+  // cache fall through to the agent's real values.
   return {
     ...(cachedBuilder?.sessionId ? { sessionId: cachedBuilder.sessionId } : {}),
-    name: cachedBuilder?.name ?? cachedCoPilot?.name ?? agent?.name ?? "",
-    description: cachedBuilder?.description ?? cachedCoPilot?.description ?? agent?.description ?? "",
+    name: cachedBuilder?.name || cachedCoPilot?.name || agent?.name || "",
+    description: cachedBuilder?.description || cachedCoPilot?.description || agent?.description || "",
     skillGraph: cachedBuilder?.skillGraph ?? cachedCoPilot?.skillGraph ?? agent?.skillGraph ?? null,
     workflow: cachedBuilder?.workflow ?? cachedCoPilot?.workflow ?? agent?.workflow ?? null,
-    systemName: cachedBuilder?.systemName ?? cachedCoPilot?.systemName ?? agent?.name ?? null,
+    systemName: cachedBuilder?.systemName || cachedCoPilot?.systemName || agent?.name || null,
     agentRules: cachedBuilder?.agentRules ?? cachedCoPilot?.agentRules ?? agent?.agentRules ?? [],
     toolConnectionHints: cachedBuilder?.toolConnectionHints ?? [],
     toolConnections: cachedBuilder?.toolConnections ?? cachedCoPilot?.connectedTools ?? agent?.toolConnections ?? [],

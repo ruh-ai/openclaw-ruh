@@ -5,6 +5,33 @@
 import { v4 as uuidv4 } from 'uuid';
 import { withConn } from './db';
 
+const AGENT_SELECT_COLUMNS = `
+  id,
+  name,
+  avatar,
+  description,
+  skills,
+  trigger_label,
+  status,
+  sandbox_ids,
+  forge_sandbox_id,
+  skill_graph,
+  workflow,
+  agent_rules,
+  runtime_inputs,
+  tool_connections,
+  triggers,
+  improvements,
+  channels,
+  discovery_documents,
+  workspace_memory,
+  paperclip_company_id,
+  paperclip_workers,
+  creation_session,
+  created_at,
+  updated_at
+`;
+
 export interface AgentWorkspaceMemory {
   instructions: string;
   continuity_summary: string;
@@ -124,8 +151,15 @@ export interface AgentRecord {
   workspace_memory: AgentWorkspaceMemory;
   paperclip_company_id: string | null;
   paperclip_workers: PaperclipWorkerRecord[];
+  creation_session: unknown | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentOwnershipRecord {
+  id: string;
+  createdBy: string | null;
+  orgId: string | null;
 }
 
 export async function saveAgent(data: {
@@ -145,12 +179,14 @@ export async function saveAgent(data: {
   channels?: AgentChannelRecord[];
   discoveryDocuments?: AgentDiscoveryDocumentsRecord | null;
   forge_sandbox_id?: string;
+  createdBy?: string | null;
+  orgId?: string | null;
 }): Promise<AgentRecord> {
   const id = uuidv4();
   await withConn(async (client) => {
     await client.query(
-      `INSERT INTO agents (id, name, avatar, description, skills, trigger_label, status, skill_graph, workflow, agent_rules, runtime_inputs, tool_connections, triggers, improvements, channels, discovery_documents, forge_sandbox_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      `INSERT INTO agents (id, name, avatar, description, skills, trigger_label, status, skill_graph, workflow, agent_rules, runtime_inputs, tool_connections, triggers, improvements, channels, discovery_documents, forge_sandbox_id, created_by, org_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
       [
         id,
         data.name,
@@ -169,6 +205,8 @@ export async function saveAgent(data: {
         JSON.stringify(data.channels ?? []),
         data.discoveryDocuments ? JSON.stringify(data.discoveryDocuments) : null,
         data.forge_sandbox_id ?? null,
+        data.createdBy ?? null,
+        data.orgId ?? null,
       ],
     );
   });
@@ -180,7 +218,36 @@ export async function saveAgent(data: {
 export async function listAgents(): Promise<AgentRecord[]> {
   return withConn(async (client) => {
     const res = await client.query(
-      'SELECT * FROM agents ORDER BY created_at DESC',
+      `SELECT ${AGENT_SELECT_COLUMNS} FROM agents ORDER BY created_at DESC`,
+    );
+    return res.rows.map(serialize);
+  });
+}
+
+export async function listAgentsForCreator(createdBy: string): Promise<AgentRecord[]> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT ${AGENT_SELECT_COLUMNS}
+       FROM agents
+       WHERE created_by = $1
+       ORDER BY created_at DESC`,
+      [createdBy],
+    );
+    return res.rows.map(serialize);
+  });
+}
+
+export async function listAgentsForCreatorInOrg(
+  createdBy: string,
+  orgId: string,
+): Promise<AgentRecord[]> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT ${AGENT_SELECT_COLUMNS}
+       FROM agents
+       WHERE created_by = $1 AND org_id = $2
+       ORDER BY created_at DESC`,
+      [createdBy, orgId],
     );
     return res.rows.map(serialize);
   });
@@ -189,10 +256,57 @@ export async function listAgents(): Promise<AgentRecord[]> {
 export async function getAgent(id: string): Promise<AgentRecord | null> {
   return withConn(async (client) => {
     const res = await client.query(
-      'SELECT * FROM agents WHERE id = $1',
+      `SELECT ${AGENT_SELECT_COLUMNS} FROM agents WHERE id = $1`,
       [id],
     );
     return res.rows.length > 0 ? serialize(res.rows[0]) : null;
+  });
+}
+
+export async function getAgentForCreator(id: string, createdBy: string): Promise<AgentRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT ${AGENT_SELECT_COLUMNS}
+       FROM agents
+       WHERE id = $1 AND created_by = $2`,
+      [id, createdBy],
+    );
+    return res.rows.length > 0 ? serialize(res.rows[0]) : null;
+  });
+}
+
+export async function getAgentForCreatorInOrg(
+  id: string,
+  createdBy: string,
+  orgId: string,
+): Promise<AgentRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT ${AGENT_SELECT_COLUMNS}
+       FROM agents
+       WHERE id = $1 AND created_by = $2 AND org_id = $3`,
+      [id, createdBy, orgId],
+    );
+    return res.rows.length > 0 ? serialize(res.rows[0]) : null;
+  });
+}
+
+export async function getAgentOwnership(id: string): Promise<AgentOwnershipRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      'SELECT id, created_by, org_id FROM agents WHERE id = $1',
+      [id],
+    );
+    const row = res.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: String(row.id),
+      createdBy: row.created_by ? String(row.created_by) : null,
+      orgId: row.org_id ? String(row.org_id) : null,
+    };
   });
 }
 
@@ -248,6 +362,7 @@ export async function updateAgentConfig(
     improvements?: AgentImprovementRecord[];
     channels?: AgentChannelRecord[];
     discoveryDocuments?: AgentDiscoveryDocumentsRecord | null;
+    creationSession?: unknown;
   },
 ): Promise<AgentRecord | null> {
   const sets: string[] = [];
@@ -263,6 +378,7 @@ export async function updateAgentConfig(
   if (config.improvements !== undefined) { sets.push(`improvements = $${idx++}`); vals.push(JSON.stringify(config.improvements)); }
   if (config.channels !== undefined) { sets.push(`channels = $${idx++}`); vals.push(JSON.stringify(config.channels)); }
   if (config.discoveryDocuments !== undefined) { sets.push(`discovery_documents = $${idx++}`); vals.push(config.discoveryDocuments ? JSON.stringify(config.discoveryDocuments) : null); }
+  if (config.creationSession !== undefined) { sets.push(`creation_session = $${idx++}`); vals.push(config.creationSession ? JSON.stringify(config.creationSession) : null); }
 
   if (sets.length === 0) return getAgent(id);
 
@@ -351,6 +467,7 @@ export async function promoteForgeSandbox(agentId: string): Promise<AgentRecord 
       `UPDATE agents
        SET sandbox_ids = $1::jsonb,
            forge_sandbox_id = NULL,
+           creation_session = NULL,
            status = 'active',
            updated_at = NOW()
        WHERE id = $2`,
@@ -369,6 +486,7 @@ export async function clearForgeSandbox(agentId: string): Promise<AgentRecord | 
     await client.query(
       `UPDATE agents
        SET forge_sandbox_id = NULL,
+           creation_session = NULL,
            status = 'draft',
            updated_at = NOW()
        WHERE id = $1`,
@@ -446,6 +564,7 @@ function serialize(row: Record<string, unknown>): AgentRecord {
   row['forge_sandbox_id'] = typeof row['forge_sandbox_id'] === 'string' ? row['forge_sandbox_id'] : null;
   row['paperclip_company_id'] = typeof row['paperclip_company_id'] === 'string' ? row['paperclip_company_id'] : null;
   row['paperclip_workers'] = normalizePaperclipWorkers(row['paperclip_workers']);
+  row['creation_session'] = (typeof row['creation_session'] === 'object' && row['creation_session'] !== null) ? row['creation_session'] : null;
   return row as unknown as AgentRecord;
 }
 

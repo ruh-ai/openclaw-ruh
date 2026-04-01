@@ -4,6 +4,10 @@ const mockGetAgent = mock(async () => ({
   id: 'agent-1',
   name: 'Credentialed Agent',
 }));
+const mockGetAgentForCreator = mock(async () => ({
+  id: 'agent-1',
+  name: 'Credentialed Agent',
+}));
 const mockGetAgentCredentialSummary = mock(async () => ([
   {
     toolId: 'google-ads',
@@ -43,8 +47,10 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
+  getAgentForCreator: mockGetAgentForCreator,
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
@@ -56,17 +62,46 @@ mock.module('../../src/agentStore', () => ({
   deleteAgentCredential: mockDeleteAgentCredential,
 }));
 
+mock.module('../../src/auth/middleware', () => ({
+  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
+    req.user = {
+      userId: 'developer-1',
+      email: 'developer@test.dev',
+      role: 'developer',
+      orgId: 'org-dev-1',
+    };
+    next();
+  },
+  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+}));
+
+mock.module('../../src/auth/builderAccess', () => ({
+  requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
+    user,
+    organization: {
+      id: 'org-dev-1',
+      name: 'Developer Org',
+      slug: 'developer-org',
+      kind: 'developer',
+      plan: 'free',
+    },
+  })),
+}));
+
 mock.module('../../src/credentials', () => ({
   encryptCredentials: mockEncryptCredentials,
 }));
 
 mock.module('../../src/sandboxManager', () => ({
+  PREVIEW_PORTS: [],
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
   dockerExec: mock(async () => [true, '']),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -88,8 +123,12 @@ mock.module('../../src/docker', () => ({
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
+  dockerExec: mock(async () => [true, '']),
+  dockerSpawn: mock(async () => [0, '']),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
+  parseManagedSandboxContainerList: mock(() => []),
 }));
 
 mock.module('../../src/auditStore', () => ({
@@ -106,6 +145,7 @@ type MockReq = {
   query: Record<string, unknown>;
   body: Record<string, unknown>;
   headers: Record<string, string>;
+  user?: Record<string, unknown>;
   ip: string;
   socket: { remoteAddress: string };
 };
@@ -158,32 +198,68 @@ function getRouteHandler(method: string, path: string) {
   });
 
   const route = layer?.route as { stack: Array<{ handle: Function }> } | undefined;
-  const handle = route?.stack?.[0]?.handle;
-  if (!handle) {
+  const handles = route?.stack?.map((entry) => entry.handle) ?? [];
+  if (handles.length === 0) {
     throw new Error(`Route not found: ${method} ${path}`);
   }
 
-  return handle as (req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void;
+  return handles as Array<(req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void>;
 }
 
 async function invokeRoute(method: string, path: string, req: MockReq) {
-  const handler = getRouteHandler(method, path);
+  const handlers = getRouteHandler(method, path);
   const res = makeRes();
 
-  const nextResult = new Promise<unknown>((resolve, reject) => {
-    handler(req, res, (error?: unknown) => {
-      if (error) reject(error);
-      else resolve(undefined);
-    });
-  });
+  let index = 0;
+  const runNext = async (): Promise<void> => {
+    const handler = handlers[index++];
+    if (!handler) {
+      return;
+    }
 
-  await Promise.race([res.done, nextResult]);
+    await new Promise<void>((resolve, reject) => {
+      let nextCalled = false;
+      const next = (error?: unknown) => {
+        nextCalled = true;
+        if (error) reject(error);
+        else resolve();
+      };
+
+      try {
+        handler(req, res, next);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      queueMicrotask(() => {
+        if (!nextCalled) {
+          resolve();
+        }
+      });
+    });
+
+    if (index <= handlers.length) {
+      await runNext();
+    }
+  };
+
+  await runNext();
+  await Promise.race([
+    res.done,
+    new Promise((resolve) => setTimeout(resolve, 25)),
+  ]);
   return res;
 }
 
 beforeEach(() => {
   mockGetAgent.mockReset();
   mockGetAgent.mockImplementation(async () => ({
+    id: 'agent-1',
+    name: 'Credentialed Agent',
+  }));
+  mockGetAgentForCreator.mockReset();
+  mockGetAgentForCreator.mockImplementation(async () => ({
     id: 'agent-1',
     name: 'Credentialed Agent',
   }));

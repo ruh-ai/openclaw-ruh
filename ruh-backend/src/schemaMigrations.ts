@@ -511,6 +511,107 @@ export const MIGRATIONS: SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_exec_recordings_run ON execution_recordings (run_id)`,
     ],
   },
+  {
+    id: '0023_multi_tenant_auth_foundation',
+    statements: [
+      `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'customer'`,
+      `
+      CREATE TABLE IF NOT EXISTS organization_memberships (
+        id          TEXT        PRIMARY KEY,
+        org_id      TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role        TEXT        NOT NULL,
+        status      TEXT        NOT NULL DEFAULT 'active',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (org_id, user_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_org_memberships_user_id ON organization_memberships (user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON organization_memberships (org_id)`,
+      `
+      CREATE TABLE IF NOT EXISTS auth_identities (
+        id          TEXT        PRIMARY KEY,
+        user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        provider    TEXT        NOT NULL,
+        subject     TEXT        NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (provider, subject)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_auth_identities_user_id ON auth_identities (user_id)`,
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS active_org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_sessions_active_org_id ON sessions (active_org_id)`,
+    ],
+  },
+  {
+    id: '0024_marketplace_owner_org',
+    statements: [
+      `ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS owner_org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_mpl_owner_org ON marketplace_listings (owner_org_id)`,
+      `
+      UPDATE marketplace_listings AS mpl
+      SET owner_org_id = a.org_id
+      FROM agents AS a
+      WHERE mpl.agent_id = a.id
+        AND mpl.owner_org_id IS NULL
+        AND a.org_id IS NOT NULL
+      `,
+    ],
+  },
+  {
+    id: '0025_creation_session',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS creation_session JSONB DEFAULT NULL`,
+    ],
+  },
+  {
+    id: '0026_marketplace_runtime_installs',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS marketplace_runtime_installs (
+        id                      TEXT        PRIMARY KEY,
+        listing_id              TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
+        org_id                  TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id                 TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        agent_id                TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        source_agent_version_id TEXT        REFERENCES agent_versions(id) ON DELETE SET NULL,
+        version                 TEXT        NOT NULL,
+        installed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_launched_at        TIMESTAMPTZ NULL,
+        UNIQUE (listing_id, org_id, user_id),
+        UNIQUE (agent_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_mri_listing ON marketplace_runtime_installs (listing_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_mri_org_user ON marketplace_runtime_installs (org_id, user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_mri_user ON marketplace_runtime_installs (user_id)`,
+    ],
+  },
+  {
+    id: '0027_eval_results',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS eval_results (
+        id              TEXT        PRIMARY KEY,
+        agent_id        TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        sandbox_id      TEXT        NULL,
+        mode            TEXT        NOT NULL DEFAULT 'mock',
+        tasks           JSONB       NOT NULL DEFAULT '[]',
+        loop_state      JSONB       NULL,
+        pass_rate       REAL        NOT NULL DEFAULT 0,
+        avg_score       REAL        NOT NULL DEFAULT 0,
+        total_tasks     INTEGER     NOT NULL DEFAULT 0,
+        passed_tasks    INTEGER     NOT NULL DEFAULT 0,
+        failed_tasks    INTEGER     NOT NULL DEFAULT 0,
+        iterations      INTEGER     NOT NULL DEFAULT 1,
+        stop_reason     TEXT        NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_eval_results_agent ON eval_results (agent_id, created_at DESC)`,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {

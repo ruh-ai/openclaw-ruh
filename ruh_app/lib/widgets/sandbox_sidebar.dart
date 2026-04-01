@@ -32,9 +32,7 @@ class SandboxSidebar extends StatelessWidget {
       width: 260,
       decoration: BoxDecoration(
         color: RuhTheme.sidebar,
-        border: Border(
-          right: BorderSide(color: theme.dividerColor),
-        ),
+        border: Border(right: BorderSide(color: theme.dividerColor)),
       ),
       child: Column(
         children: [
@@ -43,10 +41,7 @@ class SandboxSidebar extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
             child: Row(
               children: [
-                Text(
-                  'Agents',
-                  style: theme.textTheme.headlineMedium,
-                ),
+                Text('Agents', style: theme.textTheme.headlineMedium),
                 const Spacer(),
                 IconButton(
                   icon: const Icon(LucideIcons.plus, size: 18),
@@ -76,8 +71,7 @@ class SandboxSidebar extends StatelessWidget {
                     itemCount: sandboxes.length,
                     itemBuilder: (context, index) {
                       final sandbox = sandboxes[index];
-                      final isSelected =
-                          sandbox.sandboxId == selectedSandboxId;
+                      final isSelected = sandbox.sandboxId == selectedSandboxId;
                       return _SandboxTile(
                         sandbox: sandbox,
                         isSelected: isSelected,
@@ -118,8 +112,9 @@ class _SandboxTileState extends State<_SandboxTile> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final statusColor =
-        widget.sandbox.approved ? RuhTheme.success : RuhTheme.warning;
+    final statusColor = widget.sandbox.approved
+        ? RuhTheme.success
+        : RuhTheme.warning;
     final idPreview = widget.sandbox.sandboxId.length >= 8
         ? widget.sandbox.sandboxId.substring(0, 8)
         : widget.sandbox.sandboxId;
@@ -144,20 +139,25 @@ class _SandboxTileState extends State<_SandboxTile> {
               color: widget.isSelected
                   ? RuhTheme.accentLight
                   : _hovering
-                      ? RuhTheme.lightPurple
-                      : Colors.transparent,
+                  ? RuhTheme.lightPurple
+                  : Colors.transparent,
             ),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             child: Row(
               children: [
                 // Status dot
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: statusColor,
-                    shape: BoxShape.circle,
+                Semantics(
+                  label: widget.sandbox.approved
+                      ? 'Status: approved'
+                      : 'Status: pending',
+                  excludeSemantics: true,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -192,7 +192,7 @@ class _SandboxTileState extends State<_SandboxTile> {
                 // Delete button (hover-reveal)
                 if (_hovering && widget.onDelete != null)
                   IconButton(
-                    icon: Icon(
+                    icon: const Icon(
                       LucideIcons.trash2,
                       size: 14,
                       color: RuhTheme.textTertiary,
@@ -203,7 +203,7 @@ class _SandboxTileState extends State<_SandboxTile> {
                       minWidth: 28,
                       minHeight: 28,
                     ),
-                    tooltip: 'Delete',
+                    tooltip: 'Delete agent',
                   ),
               ],
             ),

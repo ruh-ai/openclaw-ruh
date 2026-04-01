@@ -39,6 +39,8 @@ const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:3000';
 const DEFAULT_OLLAMA_BASE_URL = 'http://host.docker.internal:11434/v1';
 const DEFAULT_OLLAMA_MODEL = 'qwen3-coder:30b';
 const DEFAULT_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
+const DEV_JWT_ACCESS_SECRET = `dev-access-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const DEV_JWT_REFRESH_SECRET = `dev-refresh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 function readRaw(env: EnvLike, key: string): string | undefined {
   const value = env[key];
@@ -152,9 +154,9 @@ export function parseBackendConfig(
   // Never use hardcoded defaults — generate random secrets for dev mode.
   const isDev = readRaw(env, 'NODE_ENV') === 'development' || !readRaw(env, 'NODE_ENV');
   const jwtAccessSecret = readRaw(env, 'JWT_ACCESS_SECRET')
-    ?? (isDev ? `dev-access-${Date.now()}-${Math.random().toString(36).slice(2)}` : '');
+    ?? (isDev ? DEV_JWT_ACCESS_SECRET : '');
   const jwtRefreshSecret = readRaw(env, 'JWT_REFRESH_SECRET')
-    ?? (isDev ? `dev-refresh-${Date.now()}-${Math.random().toString(36).slice(2)}` : '');
+    ?? (isDev ? DEV_JWT_REFRESH_SECRET : '');
 
   if (!isDev && (!jwtAccessSecret || !jwtRefreshSecret)) {
     errors.push('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are required in production');

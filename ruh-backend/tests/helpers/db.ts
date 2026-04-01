@@ -46,6 +46,9 @@ export async function truncateAll(): Promise<void> {
     // Single statement with FK-safe ordering via DO block to minimize round-trips.
     await client.query(`
       DO $$ BEGIN
+        DELETE FROM auth_identities;
+        DELETE FROM organization_memberships;
+        DELETE FROM marketplace_runtime_installs;
         DELETE FROM marketplace_installs;
         DELETE FROM marketplace_reviews;
         DELETE FROM marketplace_listings;

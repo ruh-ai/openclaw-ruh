@@ -1,4 +1,4 @@
-# Ruh Frontend (Developer UI)
+# Ruh Frontend
 
 [[000-INDEX|← Index]] | [[008-agent-builder-ui|Agent Builder UI]] | [[010-deployment|Deployment →]]
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-A Next.js 16 dev tool (port 3001) for directly managing sandboxes. Provides a low-level interface: create sandboxes, chat with them, configure cron jobs and channels.
+A Next.js 16 web application (port 3001) that is currently in transition from a sandbox-management developer surface into the first customer-org web app. The underlying UI is still the older sandbox/chat shell, but it now boots behind the shared customer-session contract: `/login` is public, non-auth routes are gated by middleware, and runtime calls use cookie-backed auth so customer org admins and members can enter the app with the same backend `appAccess.customer` truth used by the rest of the platform. As of 2026-04-01, its marketplace is no longer browse-only: `/marketplace` remains the live catalog list, `/marketplace/[slug]` renders real agent detail from `/api/marketplace/listings/:slug`, and the detail view resolves legacy install CTA state from `/api/marketplace/my/installs` before calling `POST /api/marketplace/listings/:id/install`. Checkout/use parity and assigned inventory are still tracked in [[SPEC-marketplace-store-parity]].
 
 **Path:** `ruh-frontend/`
 
@@ -16,7 +16,12 @@ A Next.js 16 dev tool (port 3001) for directly managing sandboxes. Provides a lo
 
 ```
 app/
+  _components/
+    CustomerSessionGate.tsx — hydrates `/api/auth/me` and rejects non-customer sessions
   layout.tsx        — root layout
+  login/page.tsx    — customer login page
+  marketplace/[slug]/page.tsx — customer-web marketplace detail route
+  marketplace/[slug]/MarketplaceDetailClient.tsx — live detail + install client component
   page.tsx          — main page, renders full sandbox management UI
 components/
   SandboxSidebar.tsx    — left sidebar: list + select + delete sandboxes
@@ -34,6 +39,10 @@ __tests__/
 e2e/
   chat.spec.ts          — Playwright e2e
   navigation.spec.ts    — Playwright e2e
+lib/
+  auth/app-access.ts    — customer app-access helper
+  api/client.ts         — credentialed fetch + SSE helpers
+middleware.ts           — route guard that keeps `/login` public and redirects protected routes without auth cookies
 ```
 
 ---
@@ -106,6 +115,22 @@ Configure Telegram/Slack channels.
 
 ---
 
+## Auth State
+
+The customer-web gate is now active per [[SPEC-app-access-and-org-marketplace]]. `middleware.ts` keeps `/login` public but redirects every other page to `/login?redirect_url=...` when both auth cookies are missing. After hydration, `CustomerSessionGate.tsx` calls `GET /api/auth/me` with `credentials: "include"`, auto-switches to the first eligible customer membership through `POST /api/auth/switch-org` when a recoverable multi-org session is active on the wrong tenant, and only redirects to `/login` when no eligible customer org exists.
+
+Customer login is local-email/password for now. `app/login/page.tsx` posts to `POST /api/auth/login`, auto-switches through `POST /api/auth/switch-org` when the returned session includes a valid customer membership but started on a developer org, then requires `appAccess.customer` before redirecting back to the requested route. The shell still renders the legacy sandbox-management UI, but it now does so under a real customer-org session instead of a no-auth local surface.
+
+`CustomerSessionGate.tsx` also now renders a lightweight active-organization switcher for multi-customer-org users, so they can move between customer tenants without logging out as long as the browser session is still valid.
+
+`lib/api/client.ts` is the browser transport seam for this slice:
+- `apiFetch()` always sends `credentials: "include"` to the backend
+- `createAuthenticatedEventSource()` always opens SSE with `withCredentials: true`
+
+That helper is used by the sandbox sidebar, chat, history, mission control, cron, channel, marketplace catalog/detail/install flows, and sandbox-create flows so the web app no longer logs in successfully and then drops auth on every cross-origin backend request.
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Purpose |
@@ -135,6 +160,8 @@ npx playwright test # E2E
 
 - [[SPEC-web-security-headers]] — developer UI responses should emit the shared browser-security-header policy without breaking direct backend fetches or sandbox-create SSE
 - [[SPEC-conversation-history-pagination]] — developer chat/history now use cursor-paginated reads with explicit load-more behavior
+- [[SPEC-app-access-and-org-marketplace]] — turns ruh-frontend into a fail-closed customer-org surface and later extends it toward marketplace purchase, entitlement, and assignment parity with `ruh_app`
+- [[SPEC-marketplace-store-parity]] — defines the next customer-web marketplace slice: detail routes, CTA states, checkout/use flow, and parity with `ruh_app`
 
 ## Related Learnings
 

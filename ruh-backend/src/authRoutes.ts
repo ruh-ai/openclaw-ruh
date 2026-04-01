@@ -10,13 +10,20 @@ import { v4 as uuidv4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import { hashPassword, verifyPassword } from './auth/passwords';
 import { signAccessToken } from './auth/tokens';
+import { deriveAppAccess, type ActiveMembershipContext } from './auth/appAccess';
 import { requireAuth } from './auth/middleware';
 import { httpError } from './utils';
 import { createLogger, createModuleLogger } from '@ruh/logger';
+import type { OrgRecord } from './orgStore';
+import type { OrganizationMembershipRecord } from './organizationMembershipStore';
 import * as userStore from './userStore';
 import * as sessionStore from './sessionStore';
+import * as orgStore from './orgStore';
+import * as organizationMembershipStore from './organizationMembershipStore';
+import * as authIdentityStore from './authIdentityStore';
 
 const logger = createModuleLogger(createLogger({ service: 'ruh-backend' }), 'auth');
+const AUTH_COOKIE_SECURE = process.env.NODE_ENV === 'production';
 
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -26,7 +33,7 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 
 const COOKIE_OPTS_ACCESS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV !== 'development',
+  secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   maxAge: 15 * 60 * 1000, // 15 min
   path: '/',
@@ -34,7 +41,7 @@ const COOKIE_OPTS_ACCESS = {
 
 const COOKIE_OPTS_REFRESH = {
   httpOnly: true,
-  secure: process.env.NODE_ENV !== 'development',
+  secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   path: '/',
@@ -102,17 +109,180 @@ function clearFailedLogins(email: string): void {
   LOGIN_ATTEMPTS.delete(email);
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function trimOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function inferLegacyMembershipRole(user: userStore.UserRecord): OrganizationMembershipRecord['role'] {
+  return user.role === 'developer' ? 'developer' : 'employee';
+}
+
+function toMembershipResponse(membership: OrganizationMembershipRecord) {
+  return {
+    id: membership.id,
+    organizationId: membership.orgId,
+    organizationName: membership.organizationName,
+    organizationSlug: membership.organizationSlug,
+    organizationKind: membership.organizationKind,
+    organizationPlan: membership.organizationPlan,
+    role: membership.role,
+    status: membership.status,
+  };
+}
+
+type MembershipResponse = ReturnType<typeof toMembershipResponse>;
+
+function toActiveOrganization(record: OrgRecord | OrganizationMembershipRecord | null) {
+  if (!record) return null;
+  if ('organizationName' in record) {
+    return {
+      id: record.orgId,
+      name: record.organizationName,
+      slug: record.organizationSlug,
+      kind: record.organizationKind,
+      plan: record.organizationPlan,
+    };
+  }
+  return {
+    id: record.id,
+    name: record.name,
+    slug: record.slug,
+    kind: record.kind,
+    plan: record.plan,
+  };
+}
+
+async function listEffectiveMemberships(user: userStore.UserRecord): Promise<OrganizationMembershipRecord[]> {
+  const memberships = await organizationMembershipStore.listMembershipsForUser(user.id);
+  if (memberships.length > 0) {
+    return memberships.filter((membership) => membership.status === 'active');
+  }
+  if (!user.orgId) {
+    return [];
+  }
+  const org = await orgStore.getOrg(user.orgId);
+  if (!org) {
+    return [];
+  }
+  return [{
+    id: `legacy:${user.id}:${org.id}`,
+    orgId: org.id,
+    userId: user.id,
+    role: inferLegacyMembershipRole(user),
+    status: 'active',
+    organizationName: org.name,
+    organizationSlug: org.slug,
+    organizationKind: org.kind,
+    organizationPlan: org.plan,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  }];
+}
+
+async function buildAuthContext(
+  user: userStore.UserRecord,
+  activeOrgIdOverride?: string | null,
+): Promise<{
+  memberships: OrganizationMembershipRecord[];
+  activeOrganization: ReturnType<typeof toActiveOrganization>;
+  activeMembership: ActiveMembershipContext | null;
+  activeOrgId: string | null;
+  platformRole: 'platform_admin' | 'user';
+  appAccess: ReturnType<typeof deriveAppAccess>;
+}> {
+  const memberships = await listEffectiveMemberships(user);
+  const activeMembership =
+    memberships.find((membership) => membership.orgId === activeOrgIdOverride)
+    ?? memberships.find((membership) => membership.orgId === user.orgId)
+    ?? memberships[0]
+    ?? null;
+  const activeOrganization = toActiveOrganization(activeMembership);
+  const activeMembershipResponse = activeMembership
+    ? toMembershipResponse(activeMembership)
+    : null;
+  const platformRole = user.role === 'admin' ? 'platform_admin' : 'user';
+
+  return {
+    memberships,
+    activeOrganization,
+    activeMembership: activeMembershipResponse,
+    activeOrgId: activeMembership?.orgId ?? null,
+    platformRole,
+    appAccess: deriveAppAccess({
+      platformRole,
+      memberships: memberships.map(toMembershipResponse),
+    }),
+  };
+}
+
+function signSessionAccessToken(
+  user: userStore.UserRecord,
+  activeOrgId: string | null,
+): string {
+  return signAccessToken({
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    orgId: activeOrgId ?? user.orgId,
+  });
+}
+
+async function buildAuthResponse(
+  user: userStore.UserRecord,
+  accessToken: string,
+  refreshToken: string,
+  activeOrgIdOverride?: string | null,
+) {
+  const context = await buildAuthContext(user, activeOrgIdOverride);
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      role: user.role,
+      orgId: context.activeOrgId ?? user.orgId,
+    },
+    accessToken,
+    refreshToken,
+    platformRole: context.platformRole,
+    memberships: context.memberships.map(toMembershipResponse),
+    activeOrganization: context.activeOrganization,
+    activeMembership: context.activeMembership,
+    appAccess: context.appAccess,
+  };
+}
+
 // ── Register ─────────────────────────────────────────────────────────────────
 
 router.post('/register', registerRateLimiter, asyncHandler(async (req, res) => {
-  const { email, password, displayName, role } = req.body;
+  const rawEmail = req.body.email;
+  const { password, displayName, role } = req.body;
+  const organizationName = trimOptionalString(req.body.organizationName);
+  const requestedOrganizationKind = trimOptionalString(req.body.organizationKind);
+  const requestedMembershipRole = trimOptionalString(req.body.membershipRole);
 
-  if (!email || !password) {
+  if (!rawEmail || !password) {
     throw httpError(400, 'Email and password are required');
   }
-  if (typeof email !== 'string' || !email.includes('@')) {
+  if (typeof rawEmail !== 'string' || !rawEmail.includes('@')) {
     throw httpError(400, 'Invalid email format');
   }
+  const email = normalizeEmail(rawEmail);
   const passwordError = validatePasswordComplexity(password);
   if (passwordError) {
     throw httpError(400, passwordError);
@@ -123,8 +293,27 @@ router.post('/register', registerRateLimiter, asyncHandler(async (req, res) => {
     throw httpError(409, 'Email already registered');
   }
 
+  const organizationKind: OrgRecord['kind'] =
+    requestedOrganizationKind === 'developer' ? 'developer' : 'customer';
+  const membershipRole: OrganizationMembershipRecord['role'] =
+    requestedMembershipRole === 'admin'
+      || requestedMembershipRole === 'developer'
+      || requestedMembershipRole === 'employee'
+      || requestedMembershipRole === 'owner'
+      ? requestedMembershipRole
+      : 'owner';
+
+  const bootstrapOrg = organizationName
+    ? await orgStore.createOrg(
+      organizationName,
+      trimOptionalString(req.body.organizationSlug) ?? slugify(organizationName),
+      organizationKind,
+    )
+    : null;
+
   const allowedRoles = ['developer', 'end_user'];
-  const userRole = allowedRoles.includes(role) ? role : 'end_user';
+  const inferredUserRole = bootstrapOrg?.kind === 'developer' ? 'developer' : 'end_user';
+  const userRole = allowedRoles.includes(role) ? role : inferredUserRole;
 
   const passwordHash = await hashPassword(password);
   const user = await userStore.createUser(
@@ -132,43 +321,49 @@ router.post('/register', registerRateLimiter, asyncHandler(async (req, res) => {
     passwordHash,
     displayName || email.split('@')[0],
     userRole,
+    bootstrapOrg?.id,
   );
 
+  if (bootstrapOrg) {
+    await organizationMembershipStore.createMembership(
+      bootstrapOrg.id,
+      user.id,
+      membershipRole,
+    );
+  }
+
+  await authIdentityStore.ensureAuthIdentity(user.id, 'local', email);
+
   const refreshToken = uuidv4();
+  const context = await buildAuthContext(user, bootstrapOrg?.id ?? user.orgId);
   await sessionStore.createSession(
     user.id,
     refreshToken,
     req.headers['user-agent'],
     req.ip,
+    context.activeOrgId,
   );
 
-  const accessToken = signAccessToken({
-    userId: user.id,
-    email: user.email,
-    role: user.role,
-    orgId: user.orgId,
-  });
+  const accessToken = signSessionAccessToken(user, context.activeOrgId);
 
   res.cookie('accessToken', accessToken, COOKIE_OPTS_ACCESS);
   res.cookie('refreshToken', refreshToken, COOKIE_OPTS_REFRESH);
 
   logger.info({ userId: user.id, email: user.email, role: user.role }, 'User registered');
 
-  res.status(201).json({
-    user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-    accessToken,
-    refreshToken,
-  });
+  res.status(201).json(await buildAuthResponse(user, accessToken, refreshToken, context.activeOrgId));
 }));
 
 // ── Login ────────────────────────────────────────────────────────────────────
 
 router.post('/login', authRateLimiter, asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const rawEmail = req.body.email;
+  const { password } = req.body;
 
-  if (!email || !password) {
+  if (!rawEmail || !password) {
     throw httpError(400, 'Email and password are required');
   }
+  const email = normalizeEmail(String(rawEmail));
 
   // Check account lockout before DB lookup
   checkAccountLockout(email);
@@ -195,31 +390,26 @@ router.post('/login', authRateLimiter, asyncHandler(async (req, res) => {
   // Successful login — clear lockout
   clearFailedLogins(email);
 
+  await authIdentityStore.ensureAuthIdentity(user.id, 'local', email);
+
   const refreshToken = uuidv4();
+  const context = await buildAuthContext(user);
   await sessionStore.createSession(
     user.id,
     refreshToken,
     req.headers['user-agent'],
     req.ip,
+    context.activeOrgId,
   );
 
-  const accessToken = signAccessToken({
-    userId: user.id,
-    email: user.email,
-    role: user.role,
-    orgId: user.orgId,
-  });
+  const accessToken = signSessionAccessToken(user, context.activeOrgId);
 
   res.cookie('accessToken', accessToken, COOKIE_OPTS_ACCESS);
   res.cookie('refreshToken', refreshToken, COOKIE_OPTS_REFRESH);
 
   logger.info({ userId: user.id, email: user.email }, 'User logged in');
 
-  res.json({
-    user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-    accessToken,
-    refreshToken,
-  });
+  res.json(await buildAuthResponse(user, accessToken, refreshToken, context.activeOrgId));
 }));
 
 // ── Refresh ──────────────────────────────────────────────────────────────────
@@ -243,23 +433,20 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   // Rotate: delete old session, create new one
   await sessionStore.deleteSession(session.id);
   const newRefreshToken = uuidv4();
-  await sessionStore.createSession(user.id, newRefreshToken, req.headers['user-agent'], req.ip);
+  await sessionStore.createSession(
+    user.id,
+    newRefreshToken,
+    req.headers['user-agent'],
+    req.ip,
+    session.activeOrgId,
+  );
 
-  const accessToken = signAccessToken({
-    userId: user.id,
-    email: user.email,
-    role: user.role,
-    orgId: user.orgId,
-  });
+  const accessToken = signSessionAccessToken(user, session.activeOrgId);
 
   res.cookie('accessToken', accessToken, COOKIE_OPTS_ACCESS);
   res.cookie('refreshToken', newRefreshToken, COOKIE_OPTS_REFRESH);
 
-  res.json({
-    user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-    accessToken,
-    refreshToken: newRefreshToken,
-  });
+  res.json(await buildAuthResponse(user, accessToken, newRefreshToken, session.activeOrgId));
 }));
 
 // ── Logout ───────────────────────────────────────────────────────────────────
@@ -275,6 +462,42 @@ router.post('/logout', requireAuth, asyncHandler(async (req, res) => {
   res.json({ message: 'Logged out successfully' });
 }));
 
+// ── Switch active organization ───────────────────────────────────────────────
+
+router.post('/switch-org', requireAuth, asyncHandler(async (req, res) => {
+  const organizationId = trimOptionalString(req.body.organizationId);
+  if (!organizationId) {
+    throw httpError(400, 'organizationId is required');
+  }
+
+  const rawToken: string | undefined = req.cookies?.refreshToken || req.body.refreshToken;
+  if (!rawToken) {
+    throw httpError(400, 'Refresh token is required');
+  }
+
+  const session = await sessionStore.getSessionByRefreshToken(rawToken);
+  if (!session || session.userId !== req.user!.userId) {
+    throw httpError(401, 'Invalid refresh token');
+  }
+
+  const user = await userStore.getUserById(req.user!.userId);
+  if (!user) {
+    throw httpError(404, 'User not found');
+  }
+
+  const membership = await organizationMembershipStore.getMembershipForUserOrg(user.id, organizationId);
+  if (!membership || membership.status !== 'active') {
+    throw httpError(403, 'User does not have access to that organization');
+  }
+
+  await sessionStore.setActiveOrgId(session.id, organizationId);
+  const accessToken = signSessionAccessToken(user, organizationId);
+  res.cookie('accessToken', accessToken, COOKIE_OPTS_ACCESS);
+
+  const response = await buildAuthResponse(user, accessToken, rawToken, organizationId);
+  res.json(response);
+}));
+
 // ── Me ───────────────────────────────────────────────────────────────────────
 
 router.get('/me', requireAuth, asyncHandler(async (req, res) => {
@@ -283,15 +506,25 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
     throw httpError(404, 'User not found');
   }
 
+  const session = req.cookies?.refreshToken
+    ? await sessionStore.getSessionByRefreshToken(req.cookies.refreshToken)
+    : null;
+  const context = await buildAuthContext(user, session?.activeOrgId ?? null);
+
   res.json({
     id: user.id,
     email: user.email,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
     role: user.role,
-    orgId: user.orgId,
+    platformRole: context.platformRole,
+    orgId: context.activeOrgId ?? user.orgId,
     emailVerified: user.emailVerified,
     createdAt: user.createdAt,
+    memberships: context.memberships.map(toMembershipResponse),
+    activeOrganization: context.activeOrganization,
+    activeMembership: context.activeMembership,
+    appAccess: context.appAccess,
   });
 }));
 

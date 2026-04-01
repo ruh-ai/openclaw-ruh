@@ -12,6 +12,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+
   const pathname = request.nextUrl.pathname;
 
   const isPublicRoute = publicRoutes.some((route) =>

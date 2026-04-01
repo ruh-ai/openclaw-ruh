@@ -79,7 +79,6 @@ describe("buildSkillGenerationPrompt", () => {
     expect(prompt).toContain("Approved Architecture Plan");
     expect(prompt).toContain("google-ads-audit");
     expect(prompt).toContain("GOOGLE_ADS_CUSTOMER_ID");
-    expect(prompt).toContain('"skill_md"');
-    expect(prompt).toContain("Full SKILL.md content");
+    expect(prompt).toContain('`skill_md`');
   });
 });

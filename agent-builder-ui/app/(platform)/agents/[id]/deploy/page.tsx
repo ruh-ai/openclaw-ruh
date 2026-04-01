@@ -6,6 +6,7 @@ import { ChevronLeft, Rocket, CheckCircle2, XCircle, Loader2, Terminal } from "l
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { useAgentsStore } from "@/hooks/use-agents-store";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { pushAgentConfig } from "@/lib/openclaw/agent-config";
 import {
   buildReviewRuntimeInputItems,
@@ -214,7 +215,7 @@ export default function DeployAgentPage() {
             // Wait a moment for backend to finish
             await new Promise(r => setTimeout(r, 3000));
             // Fetch the agent from backend to see if a sandbox was assigned
-            const agentRes = await fetch(`${API_BASE}/api/agents/${id}`);
+            const agentRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}`);
             if (!agentRes.ok) throw new Error("Agent not found");
             const agentData = await agentRes.json();
             const sids: string[] = agentData.sandbox_ids ?? [];

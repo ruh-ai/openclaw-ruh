@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../config/theme.dart';
 import '../../../providers/chat_provider.dart';
 import 'agent_step_widget.dart';
+import 'task_plan_panel.dart';
+import 'task_plan_widget.dart';
 
 /// Represents a tool call made by the assistant.
 class ToolCall {
@@ -25,6 +27,7 @@ class MessageBubble extends StatelessWidget {
   final bool isStreaming;
   final String? agentName;
   final String? agentAvatar;
+  final TaskPlan? taskPlan;
 
   const MessageBubble({
     super.key,
@@ -35,6 +38,7 @@ class MessageBubble extends StatelessWidget {
     this.isStreaming = false,
     this.agentName,
     this.agentAvatar,
+    this.taskPlan,
   });
 
   @override
@@ -55,13 +59,10 @@ class MessageBubble extends StatelessWidget {
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
+          color: RuhTheme.userMessageBg,
           borderRadius: BorderRadius.circular(RuhTheme.radiusXxl),
         ),
-        child: Text(
-          content,
-          style: theme.textTheme.bodyMedium,
-        ),
+        child: Text(content, style: theme.textTheme.bodyMedium),
       ),
     );
   }
@@ -70,8 +71,7 @@ class MessageBubble extends StatelessWidget {
     final hasSteps = steps != null && steps!.isNotEmpty;
     final avatarText = agentAvatar ?? 'R';
     // Check if avatar is an emoji (multi-byte) vs a letter
-    final isEmoji = avatarText.length > 1 ||
-        (avatarText.codeUnitAt(0) > 127);
+    final isEmoji = avatarText.length > 1 || (avatarText.codeUnitAt(0) > 127);
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -82,22 +82,26 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Agent avatar circle
-            Container(
-              width: 28,
-              height: 28,
-              margin: const EdgeInsets.only(top: 4),
-              decoration: BoxDecoration(
-                gradient: isEmoji ? null : RuhTheme.brandGradient,
-                color: isEmoji ? RuhTheme.accentLight : null,
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(
-                  avatarText,
-                  style: TextStyle(
-                    color: isEmoji ? null : Colors.white,
-                    fontSize: isEmoji ? 16 : 13,
-                    fontWeight: FontWeight.w600,
+            Semantics(
+              label: 'Agent ${agentName ?? "assistant"}',
+              excludeSemantics: true,
+              child: Container(
+                width: 28,
+                height: 28,
+                margin: const EdgeInsets.only(top: 4),
+                decoration: BoxDecoration(
+                  gradient: isEmoji ? null : RuhTheme.brandGradient,
+                  color: isEmoji ? RuhTheme.accentLight : null,
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    avatarText,
+                    style: TextStyle(
+                      color: isEmoji ? null : Colors.white,
+                      fontSize: isEmoji ? 16 : 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -135,30 +139,48 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ),
 
+                  // Task plan — from explicit taskPlan prop or parsed from content
+                  Builder(
+                    builder: (context) {
+                      final plan = taskPlan ?? _parsePlanFromContent(content);
+                      if (plan != null) {
+                        return TaskPlanWidget(
+                          plan: plan,
+                          initiallyCollapsed: !isStreaming,
+                        );
+                      }
+                      // Fallback: parse markdown checkboxes
+                      if (content.contains('- [')) {
+                        final mdPlan = TaskPlan.tryParse(content);
+                        if (mdPlan != null) return TaskPlanPanel(plan: mdPlan);
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
+
                   // Main message bubble
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius:
-                          BorderRadius.circular(RuhTheme.radiusXxl),
+                      borderRadius: BorderRadius.circular(RuhTheme.radiusXxl),
                       border: Border.all(color: RuhTheme.borderDefault),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Main text content
-                        if (content.isNotEmpty)
+                        // Main text content (stripped of plan/task_update tags)
+                        if (_stripPlanTags(content).isNotEmpty)
                           Text.rich(
                             TextSpan(
                               children: [
-                                TextSpan(text: content),
+                                TextSpan(text: _stripPlanTags(content)),
                                 // Blinking cursor for streaming
                                 if (isStreaming)
-                                  const WidgetSpan(
-                                    child: _BlinkingCursor(),
-                                  ),
+                                  const WidgetSpan(child: _BlinkingCursor()),
                               ],
                             ),
                             style: theme.textTheme.bodyMedium,
@@ -178,6 +200,62 @@ class MessageBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Parse a [TaskPlan] from `<plan>` blocks in message content.
+TaskPlan? _parsePlanFromContent(String content) {
+  final planMatch = RegExp(
+    r'<plan>([\s\S]*?)</plan>',
+    multiLine: true,
+  ).firstMatch(content);
+  if (planMatch == null) return null;
+
+  final planBody = planMatch.group(1)!;
+  final items = <TaskPlanItem>[];
+  final lines = planBody.split('\n');
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) continue;
+    // Match numbered or bulleted items: "1. Do X", "- Do X", "* Do X"
+    final match = RegExp(r'^(?:\d+\.\s*|-\s*|\*\s*)(.+)$').firstMatch(trimmed);
+    if (match != null) {
+      items.add(TaskPlanItem(label: match.group(1)!.trim()));
+    }
+  }
+
+  if (items.isEmpty) return null;
+
+  // Apply task_update status from content
+  final updates = RegExp(
+    r'<task_update\s+index="(\d+)"\s+status="(\w+)"\s*/?>',
+  ).allMatches(content);
+  for (final update in updates) {
+    final idx = int.tryParse(update.group(1)!) ?? -1;
+    final status = update.group(2)!;
+    if (idx >= 0 && idx < items.length) {
+      items[idx].status = status;
+    }
+  }
+
+  // Mark first non-done as active
+  bool foundActive = false;
+  for (final item in items) {
+    if (item.status != 'done' && !foundActive) {
+      item.status = 'active';
+      foundActive = true;
+    }
+  }
+
+  return TaskPlan(items: items);
+}
+
+/// Strip `<plan>...</plan>` and `<task_update .../>` tags from display text.
+String _stripPlanTags(String content) {
+  return content
+      .replaceAll(RegExp(r'<plan>[\s\S]*?</plan>', multiLine: true), '')
+      .replaceAll(RegExp(r'<task_update\s+[^>]*/?>'), '')
+      .trim();
 }
 
 /// Expandable card showing a tool call's name and arguments.
@@ -200,7 +278,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
     return Container(
       margin: const EdgeInsets.only(top: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
+        color: RuhTheme.toolCallBg,
         borderRadius: BorderRadius.circular(RuhTheme.radiusLg),
         border: Border.all(color: RuhTheme.borderMuted),
       ),
@@ -211,8 +289,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
             onTap: () => setState(() => _expanded = !_expanded),
             borderRadius: BorderRadius.circular(RuhTheme.radiusLg),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Row(
                 children: [
                   Icon(
@@ -229,9 +306,7 @@ class _ToolCallCardState extends State<_ToolCallCard> {
                   ),
                   const Spacer(),
                   Icon(
-                    _expanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
+                    _expanded ? Icons.expand_less : Icons.expand_more,
                     size: 16,
                     color: RuhTheme.textTertiary,
                   ),

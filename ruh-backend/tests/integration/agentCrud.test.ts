@@ -4,11 +4,16 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { request } from '../helpers/app';
 import { setupTestDb, teardownTestDb, truncateAll } from '../helpers/db';
+
+process.env.NODE_ENV = 'development';
+
+let requestFn: typeof import('../helpers/app').request;
+const PASSWORD = 'SecurePass1!';
 
 beforeAll(async () => {
   await setupTestDb();
+  ({ request: requestFn } = await import('../helpers/app'));
 });
 
 beforeEach(async () => {
@@ -19,10 +24,34 @@ afterAll(async () => {
   await teardownTestDb();
 });
 
+async function registerDeveloper(email: string, orgSlug: string) {
+  const response = await requestFn()
+    .post('/api/auth/register')
+    .send({
+      email,
+      password: PASSWORD,
+      displayName: email.split('@')[0],
+      organizationName: `${orgSlug} org`,
+      organizationSlug: orgSlug,
+      organizationKind: 'developer',
+      membershipRole: 'owner',
+    })
+    .expect(201);
+
+  return {
+    userId: response.body.user.id as string,
+    orgId: response.body.activeOrganization.id as string,
+    accessToken: response.body.accessToken as string,
+  };
+}
+
 describe('agent CRUD/config routes (real DB)', () => {
   test('POST + GET /api/agents round-trip structured tool, trigger, and channel metadata', async () => {
-    const createRes = await request()
+    const developer = await registerDeveloper('agent-crud-owner@ruh.ai', 'agent-crud-owner');
+
+    const createRes = await requestFn()
       .post('/api/agents')
+      .set('Authorization', `Bearer ${developer.accessToken}`)
       .send({
         name: 'Google Ads Optimizer',
         description: 'Watches campaign pacing and budgets.',
@@ -112,7 +141,9 @@ describe('agent CRUD/config routes (real DB)', () => {
       },
     ]);
 
-    const getRes = await request().get(`/api/agents/${createRes.body.id}`);
+    const getRes = await requestFn()
+      .get(`/api/agents/${createRes.body.id}`)
+      .set('Authorization', `Bearer ${developer.accessToken}`);
     expect(getRes.status).toBe(200);
     expect(getRes.body.runtime_inputs).toEqual(createRes.body.runtime_inputs);
     expect(getRes.body.tool_connections).toEqual(createRes.body.tool_connections);
@@ -121,8 +152,11 @@ describe('agent CRUD/config routes (real DB)', () => {
   });
 
   test('credential endpoints keep secrets off normal agent reads while config patch stays structured', async () => {
-    const createRes = await request()
+    const developer = await registerDeveloper('agent-credentials-owner@ruh.ai', 'agent-credentials-owner');
+
+    const createRes = await requestFn()
       .post('/api/agents')
+      .set('Authorization', `Bearer ${developer.accessToken}`)
       .send({
         name: 'Google Ads Optimizer',
         description: 'Watches campaign pacing and budgets.',
@@ -134,8 +168,9 @@ describe('agent CRUD/config routes (real DB)', () => {
     expect(createRes.status).toBe(200);
     const agentId = createRes.body.id as string;
 
-    const saveCredentialRes = await request()
+    const saveCredentialRes = await requestFn()
       .put(`/api/agents/${agentId}/credentials/google`)
+      .set('Authorization', `Bearer ${developer.accessToken}`)
       .send({
         credentials: {
           GOOGLE_CLIENT_ID: 'client-id',
@@ -146,8 +181,9 @@ describe('agent CRUD/config routes (real DB)', () => {
     expect(saveCredentialRes.status).toBe(200);
     expect(saveCredentialRes.body).toEqual({ ok: true, toolId: 'google' });
 
-    const patchRes = await request()
+    const patchRes = await requestFn()
       .patch(`/api/agents/${agentId}/config`)
+      .set('Authorization', `Bearer ${developer.accessToken}`)
       .send({
         runtimeInputs: [
           {
@@ -215,7 +251,9 @@ describe('agent CRUD/config routes (real DB)', () => {
       },
     ]);
 
-    const getAgentRes = await request().get(`/api/agents/${agentId}`);
+    const getAgentRes = await requestFn()
+      .get(`/api/agents/${agentId}`)
+      .set('Authorization', `Bearer ${developer.accessToken}`);
     expect(getAgentRes.status).toBe(200);
     expect(getAgentRes.body.runtime_inputs).toEqual(patchRes.body.runtime_inputs);
     expect(getAgentRes.body.tool_connections).toEqual(patchRes.body.tool_connections);
@@ -223,7 +261,9 @@ describe('agent CRUD/config routes (real DB)', () => {
     expect(getAgentRes.body.agent_credentials).toBeUndefined();
     expect(getAgentRes.body.credentials).toBeUndefined();
 
-    const credentialSummaryRes = await request().get(`/api/agents/${agentId}/credentials`);
+    const credentialSummaryRes = await requestFn()
+      .get(`/api/agents/${agentId}/credentials`)
+      .set('Authorization', `Bearer ${developer.accessToken}`);
     expect(credentialSummaryRes.status).toBe(200);
     expect(credentialSummaryRes.body).toHaveLength(1);
     expect(credentialSummaryRes.body[0]).toMatchObject({

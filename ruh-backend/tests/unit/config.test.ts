@@ -129,4 +129,17 @@ describe('getConfig', () => {
     expect(config.port).toBe(18000);
     expect(Object.isFrozen(config)).toBe(true);
   });
+
+  test('reuses the same generated dev JWT secrets across repeated calls', () => {
+    const env = {
+      DATABASE_URL: 'postgres://openclaw:changeme@localhost:5432/openclaw',
+      NODE_ENV: 'development',
+    };
+
+    const first = getConfig(env);
+    const second = getConfig(env);
+
+    expect(first.jwtAccessSecret).toBe(second.jwtAccessSecret);
+    expect(first.jwtRefreshSecret).toBe(second.jwtRefreshSecret);
+  });
 });

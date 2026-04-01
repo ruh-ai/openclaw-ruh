@@ -8,7 +8,7 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
-    // Window configuration matching Tauri desktop-app spec
+    // Window configuration for the native Flutter customer app shell
     self.title = "Ruh — Your AI Assistant"
     self.minSize = NSSize(width: 800, height: 600)
     self.setContentSize(NSSize(width: 1200, height: 800))

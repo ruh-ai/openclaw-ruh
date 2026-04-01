@@ -177,19 +177,21 @@ describe('createOpenclawSandbox', () => {
     expect(logs.some((m) => m.includes('Creating container'))).toBe(true);
   });
 
-  test('skips docker pull when the base image is already cached locally', async () => {
+  test('skips docker pull when the pre-built sandbox image is already cached locally', async () => {
+    // Default spawn succeeds → ruh-sandbox:latest is present → no pull needed
     await collectEvents(BASE_OPTS);
 
     expect(
-      spawnCalls.some((args) => args[0] === 'pull' && args[1] === 'node:22-bookworm'),
+      spawnCalls.some((args) => args[0] === 'pull'),
     ).toBe(false);
     expect(
-      spawnCalls.some((args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === 'node:22-bookworm'),
+      spawnCalls.some((args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === 'ruh-sandbox:latest'),
     ).toBe(true);
   });
 
-  test('pulls the base image when it is not present locally', async () => {
-    spawnQueue.push([1, 'No such image: node:22-bookworm']); // image inspect
+  test('pulls the legacy base image when pre-built image is not present locally', async () => {
+    spawnQueue.push([1, 'No such image: ruh-sandbox:latest']); // pre-built image inspect fails
+    spawnQueue.push([1, 'No such image: node:22-bookworm']);    // legacy image inspect also fails → pull
 
     await collectEvents(BASE_OPTS);
 
@@ -232,8 +234,11 @@ describe('createOpenclawSandbox', () => {
     expect(String(errors[0][1])).toContain('Could not parse host port');
   });
 
-  test('yields error when both npm install attempts fail', async () => {
-    // All exec calls fail by default
+  test('yields error when both npm install attempts fail (legacy image path)', async () => {
+    // Force legacy path: pre-built image not available, legacy image is present
+    spawnQueue.push([1, 'No such image: ruh-sandbox:latest']); // pre-built inspect fails
+    // legacy image inspect succeeds (cmd-aware default handles node:22-bookworm)
+    // All exec calls fail by default → npm install fails twice
     defaultExec = [false, 'ERESOLVE'];
 
     const events = await collectEvents(BASE_OPTS);
@@ -242,7 +247,21 @@ describe('createOpenclawSandbox', () => {
     expect(String(errors[0][1])).toContain('OpenClaw installation failed');
   });
 
-  test('yields error when openclaw --version fails', async () => {
+  test('yields error when openclaw binary not found in pre-built image', async () => {
+    // Pre-built image present but openclaw --version fails (first exec call)
+    execQueue.push([false, '']);   // openclaw --version fails in pre-built path
+    // remaining exec calls won't be reached
+
+    const events = await collectEvents(BASE_OPTS);
+    const errors = events.filter(([t]) => t === 'error');
+    expect(errors.length).toBe(1);
+    expect(String(errors[0][1])).toContain('openclaw binary not found in pre-built image');
+  });
+
+  test('yields error when openclaw --version fails in legacy path', async () => {
+    // Force legacy path: pre-built image not available
+    spawnQueue.push([1, 'No such image: ruh-sandbox:latest']); // pre-built inspect fails
+    // legacy image inspect succeeds (cmd-aware default)
     // npm install succeeds (1st exec call), version check fails (2nd)
     execQueue.push([true, '']);    // npm install
     execQueue.push([false, '']);   // --version fails
@@ -255,9 +274,11 @@ describe('createOpenclawSandbox', () => {
   });
 
   test('yields error when onboarding fails', async () => {
-    execQueue.push([true, '']);   // npm install
-    execQueue.push([true, '']);   // --version
-    execQueue.push([false, 'apt-get failed']); // browser install degrades
+    // Pre-built path: openclaw --version succeeds, VNC start succeeds,
+    // agent runtime succeeds, then onboarding fails
+    execQueue.push([true, '']);              // openclaw --version
+    execQueue.push([true, '']);              // sandbox-vnc-start
+    execQueue.push([true, '']);              // sandbox-agent-runtime
     execQueue.push([false, 'onboard failed']); // openclaw onboard
 
     const events = await collectEvents(BASE_OPTS);
@@ -267,16 +288,21 @@ describe('createOpenclawSandbox', () => {
   });
 
   test('fails closed when a required bootstrap config step fails', async () => {
-    execQueue.push([true, '']); // npm install
-    execQueue.push([true, '']); // --version
-    execQueue.push([true, 'browser installed']); // browser install
-    execQueue.push([true, '']); // Xvfb
-    execQueue.push([true, '']); // bashrc export
-    execQueue.push([true, '']); // x11vnc
-    execQueue.push([true, '']); // websockify
-    execQueue.push([true, 'onboarded']); // onboarding
-    execQueue.push([true, 'auth profiles']); // auth-profiles.json
-    execQueue.push([false, 'permission denied']); // gateway.bind
+    // Pre-built path exec sequence:
+    // 1. openclaw --version
+    // 2. sandbox-vnc-start
+    // 3. sandbox-agent-runtime
+    // 4. openclaw onboard (onboarding)
+    // 5. auth-profiles.json node script
+    // 6. batched bootstrap config → FAIL (triggers individual step retry)
+    // 7. first individual step (gateway.bind) → FAIL → error
+    execQueue.push([true, '']);            // openclaw --version
+    execQueue.push([true, '']);            // sandbox-vnc-start
+    execQueue.push([true, '']);            // sandbox-agent-runtime
+    execQueue.push([true, 'onboarded']);   // openclaw onboard
+    execQueue.push([true, '']);            // auth-profiles.json
+    execQueue.push([false, 'batch failed']); // batched config fails → individual retry
+    execQueue.push([false, 'permission denied']); // gateway.bind step fails
 
     const events = await collectEvents(BASE_OPTS);
 
@@ -414,10 +440,10 @@ describe('createOpenclawSandbox', () => {
     }
   });
 
-  test('keeps browser stack failure non-fatal when required bootstrap config still verifies', async () => {
-    execQueue.push([true, '']); // npm install
-    execQueue.push([true, '']); // --version
-    execQueue.push([false, 'apt failure']); // browser install
+  test('keeps VNC startup failure non-fatal when required bootstrap config still verifies', async () => {
+    // Pre-built path: openclaw --version succeeds, sandbox-vnc-start fails (non-fatal)
+    execQueue.push([true, '']);              // openclaw --version
+    execQueue.push([false, 'vnc failed']); // sandbox-vnc-start fails → non-fatal
 
     const events = await collectEvents(BASE_OPTS);
     const logs = events.filter(([type]) => type === 'log').map(([, message]) => String(message));

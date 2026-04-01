@@ -20,14 +20,26 @@ declare global {
 /**
  * Require a valid access token. Rejects with 401 if missing/invalid.
  */
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+function readAccessToken(req: Request): string | null {
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid authorization header' });
+  if (header && header.startsWith('Bearer ')) {
+    return header.slice(7);
+  }
+
+  if (typeof req.cookies?.accessToken === 'string' && req.cookies.accessToken.length > 0) {
+    return req.cookies.accessToken;
+  }
+
+  return null;
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = readAccessToken(req);
+  if (!token) {
+    res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid access token' });
     return;
   }
 
-  const token = header.slice(7);
   const payload = verifyAccessToken(token);
   if (!payload) {
     res.status(401).json({ error: 'unauthorized', message: 'Invalid or expired access token' });
@@ -47,9 +59,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  * Same as requireAuth but doesn't reject — sets req.user to undefined if no valid token.
  */
 export function optionalAuth(req: Request, res: Response, next: NextFunction): void {
-  const header = req.headers.authorization;
-  if (header && header.startsWith('Bearer ')) {
-    const token = header.slice(7);
+  const token = readAccessToken(req);
+  if (token) {
     const payload = verifyAccessToken(token);
     if (payload) {
       req.user = {

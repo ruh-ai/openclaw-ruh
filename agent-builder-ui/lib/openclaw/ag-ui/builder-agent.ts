@@ -9,7 +9,7 @@ import { Observable } from "rxjs";
 import { AbstractAgent } from "@ag-ui/client";
 import { EventType } from "@ag-ui/core";
 import type { BaseEvent, RunAgentInput } from "@ag-ui/core";
-import { sendToArchitectStreaming, sendToForgeSandboxChat } from "@/lib/openclaw/api";
+import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import type { IntermediateUpdate } from "../intermediate-updates";
 import type { OpenClawRequestMode } from "../test-mode";
 import type {
@@ -881,26 +881,33 @@ export class BuilderAgent extends AbstractAgent {
             }
           }
         } : undefined,
+        // Forward workspace/build events from the WebSocket gateway as AG-UI CUSTOM events.
+        // These are dispatched to event-consumer-map.ts for workspace refresh, build progress, etc.
+        onCustomEvent: (name: string, data: unknown) => {
+          observer.next({
+            type: EventType.CUSTOM,
+            name,
+            value: data,
+          } as BaseEvent);
+        },
       };
 
-      // Route through forge sandbox HTTP chat when available (has browser tools),
-      // fall back to the shared architect WebSocket gateway.
-      const forgeMessage = message;
+      // All paths now use WebSocket via sendToArchitectStreaming.
+      // The route handler resolves forge sandbox gateway credentials when
+      // forgeSandboxId is present, giving full event support (tool execution,
+      // lifecycle events, file writes) for both forge and shared sandboxes.
       const wsMessage = systemInstruction ? systemInstruction + message : message;
-      const response: ArchitectResponse = this.forgeSandboxId
-        ? await sendToForgeSandboxChat(
-            this.forgeSandboxId,
-            this.currentSessionId,
-            forgeMessage,
-            streamCallbacks,
-            { systemInstruction },
-          )
-        : await sendToArchitectStreaming(
-            this.currentSessionId,
-            wsMessage,
-            streamCallbacks,
-            { mode: this.mode },
-          );
+      const response: ArchitectResponse = await sendToArchitectStreaming(
+        this.currentSessionId,
+        wsMessage,
+        streamCallbacks,
+        {
+          mode: this.mode,
+          forgeSandboxId: this.forgeSandboxId ?? undefined,
+          soulOverride: systemInstruction ?? undefined,
+          agentId: this.agentId ?? undefined,
+        },
+      );
 
       observer.next({
         type: EventType.STEP_FINISHED,

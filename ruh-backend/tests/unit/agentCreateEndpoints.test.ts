@@ -29,6 +29,14 @@ const mockGetAgent = mock(async (id: string) => ({
   forge_sandbox_id: 'sandbox-test-001',
   sandbox_ids: ['sandbox-test-001'],
 }));
+const mockGetAgentForCreator = mock(async (id: string) => ({
+  id,
+  name: 'Test Agent',
+  description: 'A test agent',
+  status: 'draft',
+  forge_sandbox_id: 'sandbox-test-001',
+  sandbox_ids: ['sandbox-test-001'],
+}));
 
 mock.module('../../src/store', () => ({
   getSandbox: mock(async () => null),
@@ -54,8 +62,10 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
   saveAgent: mockSaveAgent,
   getAgent: mockGetAgent,
+  getAgentForCreator: mockGetAgentForCreator,
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
@@ -65,6 +75,33 @@ mock.module('../../src/agentStore', () => ({
   clearForgeSandbox: mock(async () => ({})),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
+}));
+
+mock.module('../../src/auth/middleware', () => ({
+  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
+    req.user = {
+      userId: 'user-test-001',
+      email: 'developer@test.dev',
+      role: 'developer',
+      orgId: 'org-test-001',
+    };
+    next();
+  },
+  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+}));
+
+mock.module('../../src/auth/builderAccess', () => ({
+  requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
+    user,
+    organization: {
+      id: 'org-test-001',
+      name: 'Test Dev Org',
+      slug: 'test-dev-org',
+      kind: 'developer',
+      plan: 'free',
+    },
+  })),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
@@ -113,6 +150,7 @@ const { request, resetStreams } = await import('../helpers/app');
 beforeEach(() => {
   mockSaveAgent.mockClear();
   mockGetAgent.mockClear();
+  mockGetAgentForCreator.mockClear();
   resetStreams();
 });
 
@@ -148,6 +186,8 @@ describe('POST /api/agents/create', () => {
     const call = mockSaveAgent.mock.calls[0][0] as Record<string, unknown>;
     expect(call.name).toBe('Test Agent');
     expect(['draft', 'forging']).toContain(call.status);
+    expect(call.createdBy).toBe('user-test-001');
+    expect(call.orgId).toBe('org-test-001');
   });
 });
 
@@ -223,7 +263,7 @@ describe('DELETE /api/agents/:id/forge', () => {
   });
 
   test('returns 404 for non-existent agent', async () => {
-    mockGetAgent.mockImplementationOnce(async () => null);
+    mockGetAgentForCreator.mockImplementationOnce(async () => null);
     const res = await request().delete('/api/agents/nonexistent/forge');
     expect(res.status).toBe(404);
   });

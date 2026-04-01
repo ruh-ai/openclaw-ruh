@@ -7,28 +7,28 @@
 ## System Diagram
 
 ```
-Browser (User)
-    │
-    ▼
-┌─────────────────────────────────────────────────────────┐
-│  Nginx (:80)                                             │
-│  /api/*  → backend:8000                                 │
-│  /       → ruh-frontend:3001 OR agent-builder-ui:3000  │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-          ┌────────────────┼───────────────────┐
-          ▼                ▼                   ▼
-   ruh-frontend     agent-builder-ui      ruh-backend
-   (Next.js 16)     (Next.js 15)         (Bun/Express)
-   port 3001        port 3000             port 8000
-                         │                    │
-                         │ WebSocket          │ docker exec
-                         ▼                    ▼
-                  OpenClaw Gateway    Docker Containers
-                  (inside sandbox)    (openclaw-<uuid>)
-                                           │
-                                      PostgreSQL 16
-                                       port 5432
+Browser (User)                    Flutter App (ruh_app)
+    │                                  │
+    ▼                                  │  REST / SSE
+┌─────────────────────────────────┐    │
+│  Nginx (:80)                    │    │
+│  /api/*  → backend:8000        │    │
+│  /  → ruh-frontend / builder   │    │
+└──────────────┬──────────────────┘    │
+               │                       │
+  ┌────────────┼──────────┐            │
+  ▼            ▼          ▼            ▼
+ruh-frontend  builder-ui  ruh-backend ◄──┘
+(Next.js 16)  (Next.js 15) (Bun/Express)
+port 3001     port 3000    port 8000
+                   │            │
+                   │ WebSocket  │ docker exec
+                   ▼            ▼
+            OpenClaw Gateway  Docker Containers
+            (inside sandbox)  (openclaw-<uuid>)
+                                    │
+                               PostgreSQL 16
+                                port 5432
 ```
 
 ---
@@ -76,7 +76,8 @@ The platform serves three user types through dedicated interfaces:
 |-----------|-----------|---------|---------|
 | **Admin** | Admin Dashboard | `admin-ui` (port 3002) | Platform management, user oversight, marketplace moderation |
 | **Developer** | Agent Builder | `agent-builder-ui` (port 3000) | Create, configure, test, and publish agents |
-| **End User** | Client App / Desktop | `ruh-frontend` (port 3001) / `desktop-app` | Browse marketplace, install and interact with agents |
+| **End User** | Customer Web App | `ruh-frontend` (port 3001) | Org admins and members browse, purchase, and use agents |
+| **End User** | Flutter App | `ruh_app` (cross-platform) | Native mobile/desktop client — same API surface and customer contract as ruh-frontend |
 
 ### Auth Layer
 All services authenticate against `ruh-backend /api/auth/*`. JWT access tokens (15min) + refresh token rotation (7 days). See [[014-auth-system]].
@@ -84,8 +85,8 @@ All services authenticate against `ruh-backend /api/auth/*`. JWT access tokens (
 ### Employee Marketplace
 Agents flow: Developer builds → submits to marketplace → Admin reviews → End user installs. See [[016-marketplace]].
 
-### Desktop Application
-Tauri v2 wraps ruh-frontend with native credential storage and configurable backend URL. See [[017-desktop-app]].
+### Flutter Client App
+`ruh_app/` is a cross-platform Flutter client (iOS, Android, macOS, desktop) using Riverpod + GoRouter. It consumes the same `ruh-backend` REST/SSE API as `ruh-frontend` and features a Manus-style split-pane chat with an "Agent's Computer" panel (Terminal, Code, Browser tabs with tool-driven auto-switching). See [[018-ruh-app]].
 
 ---
 

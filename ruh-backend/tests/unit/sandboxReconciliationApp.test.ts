@@ -73,6 +73,7 @@ mock.module('../../src/docker', () => ({
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mockDockerContainerRunning,
+  dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
   listManagedSandboxContainers: mockListManagedSandboxContainers,
   joinShellArgs: (args: Array<string | number>) => args.join(' '),

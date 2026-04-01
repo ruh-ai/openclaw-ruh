@@ -56,34 +56,41 @@ class Agent {
       forgeSandboxId: json['forge_sandbox_id'] as String?,
       skillGraph: json['skill_graph'] as List<dynamic>?,
       agentRules: _stringList(json['agent_rules']),
-      runtimeInputs: (json['runtime_inputs'] as List<dynamic>?)
-              ?.map((e) =>
-                  AgentRuntimeInput.fromJson(e as Map<String, dynamic>))
-              .toList() ??
-          const [],
-      toolConnections: (json['tool_connections'] as List<dynamic>?)
-              ?.map((e) =>
-                  AgentToolConnection.fromJson(e as Map<String, dynamic>))
-              .toList() ??
-          const [],
-      triggers: (json['triggers'] as List<dynamic>?)
+      runtimeInputs:
+          (json['runtime_inputs'] as List<dynamic>?)
               ?.map(
-                  (e) => AgentTrigger.fromJson(e as Map<String, dynamic>))
+                (e) => AgentRuntimeInput.fromJson(e as Map<String, dynamic>),
+              )
               .toList() ??
           const [],
-      channels: (json['channels'] as List<dynamic>?)
+      toolConnections:
+          (json['tool_connections'] as List<dynamic>?)
               ?.map(
-                  (e) => AgentChannel.fromJson(e as Map<String, dynamic>))
+                (e) => AgentToolConnection.fromJson(e as Map<String, dynamic>),
+              )
+              .toList() ??
+          const [],
+      triggers:
+          (json['triggers'] as List<dynamic>?)
+              ?.map((e) => AgentTrigger.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      channels:
+          (json['channels'] as List<dynamic>?)
+              ?.map((e) => AgentChannel.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
       workspaceMemory: json['workspace_memory'] != null
           ? WorkspaceMemory.fromJson(
-              json['workspace_memory'] as Map<String, dynamic>)
+              json['workspace_memory'] as Map<String, dynamic>,
+            )
           : null,
       createdAt: DateTime.parse(
-          json['created_at'] as String? ?? DateTime.now().toIso8601String()),
+        json['created_at'] as String? ?? DateTime.now().toIso8601String(),
+      ),
       updatedAt: DateTime.parse(
-          json['updated_at'] as String? ?? DateTime.now().toIso8601String()),
+        json['updated_at'] as String? ?? DateTime.now().toIso8601String(),
+      ),
     );
   }
 
@@ -231,7 +238,8 @@ class WorkspaceMemory {
     return WorkspaceMemory(
       instructions: json['instructions'] as String? ?? '',
       continuitySummary: json['continuity_summary'] as String? ?? '',
-      pinnedPaths: (json['pinned_paths'] as List<dynamic>?)
+      pinnedPaths:
+          (json['pinned_paths'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],

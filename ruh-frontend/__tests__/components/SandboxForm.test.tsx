@@ -8,7 +8,15 @@ const BASE = 'http://localhost:8000';
 
 // Access the MockEventSource class set up in jest.setup.ts
 const getMockES = () =>
-  (global as unknown as { MockEventSource: { instances: { emit: (t: string, d: string) => void; close: () => void }[] } }).MockEventSource;
+  (global as unknown as {
+    MockEventSource: {
+      instances: {
+        emit: (t: string, d: string) => void;
+        close: () => void;
+        onerror?: (event: MessageEvent) => void;
+      }[];
+    };
+  }).MockEventSource;
 
 function renderForm(props: { onCreated?: () => void; onCancel?: () => void } = {}) {
   return render(<SandboxForm {...props} />);

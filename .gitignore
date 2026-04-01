@@ -47,4 +47,5 @@ ruh-backend/coverage/
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
 openclaw-agent-builder/output/
+.worktrees/
 .gstack/

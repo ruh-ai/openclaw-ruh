@@ -59,6 +59,18 @@ describe('CORS enforcement', () => {
     expect(origin).toBe('http://localhost:3000');
   });
 
+  test('preflight OPTIONS allows the builder ngrok bypass header', async () => {
+    const res = await request()
+      .options('/api/auth/me')
+      .set('Origin', 'http://localhost:3001')
+      .set('Access-Control-Request-Method', 'GET')
+      .set('Access-Control-Request-Headers', 'ngrok-skip-browser-warning')
+      .expect(204);
+
+    const allowedHeaders = String(res.headers['access-control-allow-headers'] ?? '');
+    expect(allowedHeaders.toLowerCase()).toContain('ngrok-skip-browser-warning');
+  });
+
   test('includes allowed methods in preflight response', async () => {
     const res = await request()
       .options('/api/sandboxes')

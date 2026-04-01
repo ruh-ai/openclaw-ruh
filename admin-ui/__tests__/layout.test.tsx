@@ -31,6 +31,10 @@ mock.module("next/link", () => ({
   ),
 }));
 
+mock.module("@/app/_components/AdminSessionGate", () => ({
+  AdminSessionGate: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 describe("AdminLayout", () => {
   test("renders sidebar with Ruh Admin branding", async () => {
     const { default: AdminLayout } = await import("../app/(admin)/layout");

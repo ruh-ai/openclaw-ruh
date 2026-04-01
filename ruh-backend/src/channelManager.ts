@@ -48,7 +48,7 @@ async function restartGateway(sandboxId: string): Promise<void> {
   await Bun.sleep(2000);
   await execCmd(
     sandboxId,
-    `nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
+    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
     10,
   );
 }

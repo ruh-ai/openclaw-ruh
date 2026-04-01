@@ -2,6 +2,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { assertAdminAppAccess } from "@/lib/auth/app-access";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function AdminLogin() {
@@ -25,8 +27,13 @@ export default function AdminLogin() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Login failed");
-      if (data.user.role !== "admin") throw new Error("Admin access required");
-      localStorage.setItem("accessToken", data.accessToken);
+      assertAdminAppAccess({
+        appAccess: data.appAccess ?? {
+          admin: data.user.role === "admin",
+          builder: false,
+          customer: false,
+        },
+      });
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

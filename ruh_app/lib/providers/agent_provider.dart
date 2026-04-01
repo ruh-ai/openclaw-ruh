@@ -16,9 +16,18 @@ final selectedAgentProvider = StateProvider<Agent?>((ref) => null);
 /// The active sandbox ID for the selected agent.
 final activeSandboxIdProvider = StateProvider<String?>((ref) => null);
 
+/// Fetches a single agent by ID. Used for deep-linking into /chat/:agentId
+/// when the agent hasn't been pre-loaded via the list screen.
+final agentByIdProvider = FutureProvider.family.autoDispose<Agent?, String>((
+  ref,
+  id,
+) async {
+  final service = ref.read(agentServiceProvider);
+  return service.getAgent(id);
+});
+
 /// Async provider that fetches and caches the full agent list.
-final agentListProvider =
-    AsyncNotifierProvider<AgentListNotifier, List<Agent>>(
+final agentListProvider = AsyncNotifierProvider<AgentListNotifier, List<Agent>>(
   AgentListNotifier.new,
 );
 
@@ -55,3 +64,42 @@ class AgentListNotifier extends AsyncNotifier<List<Agent>> {
     await refresh();
   }
 }
+
+/// Polls sandbox health for all active agent sandboxes.
+///
+/// Returns `Map<String, bool>` where keys are sandbox IDs and values
+/// indicate whether the sandbox gateway is healthy (reachable).
+///
+/// Green = at least one sandbox healthy, Red = all unreachable,
+/// Gray = no sandboxes deployed.
+final allSandboxHealthProvider = FutureProvider.autoDispose<Map<String, bool>>((
+  ref,
+) async {
+  final agents = ref.watch(agentListProvider).valueOrNull ?? [];
+  final service = ref.read(agentServiceProvider);
+
+  // Collect all unique sandbox IDs across agents
+  final allSandboxIds = <String>{};
+  for (final agent in agents) {
+    allSandboxIds.addAll(agent.sandboxIds);
+  }
+
+  if (allSandboxIds.isEmpty) return {};
+
+  final results = <String, bool>{};
+
+  // Fetch health for each sandbox in parallel
+  await Future.wait(
+    allSandboxIds.map((id) async {
+      try {
+        final health = await service.getSandboxHealth(id);
+        results[id] = health.isHealthy;
+      } catch (_) {
+        results[id] = false;
+      }
+    }),
+  );
+
+  Log.i('AgentProvider', 'Sandbox health: ${results.length} checked');
+  return results;
+});

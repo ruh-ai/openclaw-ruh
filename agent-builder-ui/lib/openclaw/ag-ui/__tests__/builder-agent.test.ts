@@ -680,8 +680,8 @@ describe("BuilderAgent", () => {
     expect(prompt).toContain("Make the alerts more actionable before deploy.");
   });
 
-  test("routes forge builder runs through forge chat and sends the system instruction separately", async () => {
-    mockSendToForgeSandboxChat
+  test("routes forge builder runs through architect streaming with forgeSandboxId", async () => {
+    mockSendToArchitectStreaming
       .mockResolvedValueOnce({
         type: "agent_response",
         content: "Forge run one",
@@ -699,30 +699,21 @@ describe("BuilderAgent", () => {
     const firstEvents = await collectBuilderEventsFromAgent(agent);
     const secondEvents = await collectBuilderEventsFromAgent(agent);
 
-    expect(mockSendToArchitectStreaming).not.toHaveBeenCalled();
-    expect(mockSendToForgeSandboxChat).toHaveBeenCalledTimes(2);
-    expect(mockSendToForgeSandboxChat.mock.calls[0]).toEqual([
-      "forge-sandbox-1",
-      "session-1",
-      "Build a Google Ads optimizer",
+    expect(mockSendToArchitectStreaming).toHaveBeenCalledTimes(2);
+    expect(mockSendToForgeSandboxChat).not.toHaveBeenCalled();
+    // First call includes forgeSandboxId and soulOverride (system instruction)
+    expect(mockSendToArchitectStreaming.mock.calls[0][3]).toEqual(
       expect.objectContaining({
-        onDelta: undefined,
-        onStatus: expect.any(Function),
+        forgeSandboxId: "forge-sandbox-1",
+        soulOverride: expect.stringContaining("You are the architect agent"),
       }),
+    );
+    // Second call still includes forgeSandboxId
+    expect(mockSendToArchitectStreaming.mock.calls[1][3]).toEqual(
       expect.objectContaining({
-        systemInstruction: expect.stringContaining("You are the architect agent"),
+        forgeSandboxId: "forge-sandbox-1",
       }),
-    ]);
-    expect(mockSendToForgeSandboxChat.mock.calls[1]).toEqual([
-      "forge-sandbox-1",
-      "session-1",
-      "Build a Google Ads optimizer",
-      expect.objectContaining({
-        onDelta: undefined,
-        onStatus: expect.any(Function),
-      }),
-      {},
-    ]);
+    );
 
     expect(firstEvents).toContainEqual(expect.objectContaining({
       type: EventType.TEXT_MESSAGE_CONTENT,

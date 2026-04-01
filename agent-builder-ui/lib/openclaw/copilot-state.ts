@@ -14,6 +14,7 @@ import type {
   BuildReport,
   DiscoveryDocuments,
   DiscoveryQuestion,
+  EvalLoopState,
   EvalTask,
   SkillGraphNode,
   StageStatus,
@@ -40,6 +41,21 @@ export type { AgentDevStage, StageStatus } from "./types";
 export { AGENT_DEV_STAGES } from "./types";
 
 export const PHASE_ORDER: CoPilotPhase[] = ["purpose", "discovery", "skills", "tools", "runtime_inputs", "triggers", "channels", "review"];
+
+// ─── Build activity feed ────────────────────────────────────────────────────
+
+export interface BuildActivityItem {
+  id: string;
+  type: "file" | "skill" | "tool";
+  label: string;
+  timestamp: number;
+}
+
+export interface BuildProgress {
+  completed: number;
+  total: number | null;
+  currentSkill: string | null;
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -98,10 +114,16 @@ export interface CoPilotState {
 
   // Build stage
   buildStatus: StageStatus;
+  buildActivity: BuildActivityItem[];
+  buildProgress: BuildProgress | null;
 
   // Test stage
   evalTasks: EvalTask[];
   evalStatus: StageStatus;
+  /** The agent's own sandbox container ID — set during Build, used for real eval. */
+  agentSandboxId: string | null;
+  /** Reinforcement loop state for iterative skill improvement. */
+  evalLoopState: EvalLoopState;
 
   // Ship stage
   deployStatus: StageStatus;
@@ -156,9 +178,15 @@ export interface CoPilotActions {
   updateArchitecturePlan: (partial: Partial<ArchitecturePlan>) => void;
   setPlanStatus: (status: StageStatus) => void;
   setBuildStatus: (status: StageStatus) => void;
+  pushBuildActivity: (item: Omit<BuildActivityItem, "id" | "timestamp">) => void;
+  setBuildProgress: (progress: BuildProgress) => void;
+  clearBuildActivity: () => void;
   setEvalTasks: (tasks: EvalTask[]) => void;
   updateEvalTask: (taskId: string, partial: Partial<EvalTask>) => void;
   setEvalStatus: (status: StageStatus) => void;
+  setAgentSandboxId: (id: string | null) => void;
+  setEvalLoopState: (state: Partial<EvalLoopState>) => void;
+  resetEvalLoop: () => void;
   setDeployStatus: (status: StageStatus) => void;
   setBuildReport: (report: BuildReport) => void;
 
@@ -200,8 +228,18 @@ function createInitialState(): CoPilotState {
     architecturePlan: null,
     planStatus: "idle",
     buildStatus: "idle",
+    buildActivity: [],
+    buildProgress: null,
     evalTasks: [],
     evalStatus: "idle",
+    agentSandboxId: null,
+    evalLoopState: {
+      iteration: 0,
+      maxIterations: 5,
+      scores: [],
+      mutations: [],
+      status: "idle",
+    },
     deployStatus: "idle",
     buildReport: null,
   };
@@ -302,6 +340,13 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     set({
       skillGraph: nodes,
       selectedSkillIds: nodes.map((n) => n.skill_id),
+      builtSkillIds: Array.from(
+        new Set(
+          nodes
+            .filter((node) => typeof node.skill_md === "string" && node.skill_md.trim().length > 0)
+            .map((node) => node.skill_id),
+        ),
+      ),
       workflow,
       skillGenerationStatus: nodes.length > 0 ? "ready" : get().skillGenerationStatus,
       skillGenerationError: null,
@@ -434,7 +479,28 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
 
   setPlanStatus: (status) => set({ planStatus: status }),
 
-  setBuildStatus: (status) => set({ buildStatus: status }),
+  setBuildStatus: (status) =>
+    set(
+      status === "building"
+        ? { buildStatus: status, buildActivity: [], buildProgress: null }
+        : { buildStatus: status },
+    ),
+
+  pushBuildActivity: (item) =>
+    set((state) => ({
+      buildActivity: [
+        ...state.buildActivity.slice(-19),
+        {
+          ...item,
+          id: `ba-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: Date.now(),
+        },
+      ],
+    })),
+
+  setBuildProgress: (progress) => set({ buildProgress: progress }),
+
+  clearBuildActivity: () => set({ buildActivity: [], buildProgress: null }),
 
   setEvalTasks: (tasks) => set({ evalTasks: tasks }),
 
@@ -446,6 +512,24 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     })),
 
   setEvalStatus: (status) => set({ evalStatus: status }),
+
+  setAgentSandboxId: (id) => set({ agentSandboxId: id }),
+
+  setEvalLoopState: (partial) =>
+    set((state) => ({
+      evalLoopState: { ...state.evalLoopState, ...partial },
+    })),
+
+  resetEvalLoop: () =>
+    set({
+      evalLoopState: {
+        iteration: 0,
+        maxIterations: 5,
+        scores: [],
+        mutations: [],
+        status: "idle",
+      },
+    }),
 
   setDeployStatus: (status) => set({ deployStatus: status }),
 
@@ -486,8 +570,12 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       architecturePlan: state.architecturePlan,
       planStatus: state.planStatus,
       buildStatus: state.buildStatus,
+      buildActivity: state.buildActivity,
+      buildProgress: state.buildProgress,
       evalTasks: state.evalTasks,
       evalStatus: state.evalStatus,
+      agentSandboxId: state.agentSandboxId,
+      evalLoopState: state.evalLoopState,
       deployStatus: state.deployStatus,
       buildReport: state.buildReport,
     };

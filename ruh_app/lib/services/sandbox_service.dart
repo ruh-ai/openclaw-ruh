@@ -22,8 +22,9 @@ class SandboxService {
   /// Fetch a single sandbox by [id]. Returns `null` if not found.
   Future<SandboxRecord?> getSandbox(String id) async {
     try {
-      final response =
-          await _client.get<Map<String, dynamic>>('/api/sandboxes/$id');
+      final response = await _client.get<Map<String, dynamic>>(
+        '/api/sandboxes/$id',
+      );
       final data = response.data;
       if (data == null) return null;
       return SandboxRecord.fromJson(data);
@@ -39,8 +40,9 @@ class SandboxService {
 
   /// Get health/status information for a sandbox.
   Future<SandboxHealth> getSandboxHealth(String sandboxId) async {
-    final response = await _client
-        .get<Map<String, dynamic>>('/api/sandboxes/$sandboxId/status');
+    final response = await _client.get<Map<String, dynamic>>(
+      '/api/sandboxes/$sandboxId/status',
+    );
     return SandboxHealth.fromJson(response.data!);
   }
 

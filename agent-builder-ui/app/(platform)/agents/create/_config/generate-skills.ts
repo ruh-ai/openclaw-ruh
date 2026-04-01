@@ -10,7 +10,7 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
-import { sendToArchitectStreaming, sendToForgeSandboxChat } from "@/lib/openclaw/api";
+import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import type {
   ArchitectResponse,
   ArchitecturePlan,
@@ -33,6 +33,7 @@ export interface GeneratedSkills {
 
 export interface GenerateSkillsCallbacks {
   onStatus?: (message: string) => void;
+  onCustomEvent?: (name: string, data: unknown) => void;
 }
 
 // ─── Discovery Prompt (PRD + TRD) ────────────────────────────────────────────
@@ -138,24 +139,63 @@ Treat this approved architecture plan as the source of truth for the build outpu
   }
 
   return `[INSTRUCTION]
-You are the OpenClaw architect agent, building the approved skill graph for the agent builder wizard.
+You are the OpenClaw architect agent. The user has approved the requirements${architecturePlan ? " and architecture plan" : ""}. Now BUILD the agent.
 
-The user has already approved the requirements${architecturePlan ? " and architecture plan" : ""}. Your job is to:
-1. Build the exact planned agent skills from the approved requirements${architecturePlan ? " and architecture plan" : ""}
-2. Return a structured "ready_for_review" response with the built skill graph
-3. DO NOT ask clarification questions — use the provided context
-4. Each skill should have a clear, actionable description (2-3 sentences)
-5. Include requires_env for any API keys or credentials needed
-6. Include external_api for any third-party services the skill calls
-7. Set depends_on to show skill execution order where relevant
-8. For each skill that connects to an external service, set tool_type ("mcp", "api", or "cli") and tool_id (MCP registry id, only for MCP tools)
-9. Include "skill_md" with the FULL SKILL.md content for every returned skill node — this is critical, the content will be written to the agent's workspace
+You have shell access. The workspace lives at: ~/.openclaw/workspace/
 
-${capabilities}
-${discoverySection}
-${architectureSection}
+## Your job — two steps:
 
-Return ONLY a valid JSON response with type "ready_for_review" in this shape:
+### Step 1: Write all workspace files
+
+Write each file using shell commands. This is required — the files ARE the agent.
+
+For SOUL.md:
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace && cat > ~/.openclaw/workspace/SOUL.md << 'ENDSOUL'
+# Agent Name
+...personality, purpose, behaviour rules, workflow...
+ENDSOUL
+\`\`\`
+
+For each SKILL.md:
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace/skills/<skill-id> && cat > ~/.openclaw/workspace/skills/<skill-id>/SKILL.md << 'ENDSKILL'
+---
+name: <skill-id>
+version: 1.0.0
+description: "<one line>"
+user-invocable: false
+metadata:
+  openclaw:
+    requires:
+      bins: [bash]
+      env: [REQUIRED_ENV_VAR]
+---
+# Skill Name
+## What This Skill Does
+...
+## Steps
+...
+ENDSKILL
+\`\`\`
+
+For tool configs:
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace/tools && cat > ~/.openclaw/workspace/tools/<tool-id>.json << 'ENDTOOL'
+{ "id": "<tool-id>", "name": "Human Name", "type": "mcp", "description": "...", "env_vars": ["KEY"] }
+ENDTOOL
+\`\`\`
+
+For trigger configs:
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace/triggers && cat > ~/.openclaw/workspace/triggers/<trigger>.json << 'ENDTRIGGER'
+{ "type": "cron", "name": "...", "schedule": "0 9 * * *", "enabled": true, "message": "..." }
+ENDTRIGGER
+\`\`\`
+
+### Step 2: After ALL files are written, return the skill graph JSON
+
+\`\`\`ready_for_review
 {
   "type": "ready_for_review",
   "system_name": "kebab-case-agent-name",
@@ -163,33 +203,37 @@ Return ONLY a valid JSON response with type "ready_for_review" in this shape:
   "skill_graph": {
     "nodes": [
       {
-        "skill_id": "planned-skill-id",
+        "skill_id": "skill-id-you-wrote",
         "name": "Human Readable Name",
         "description": "What this skill does",
         "source": "custom",
         "depends_on": [],
         "requires_env": ["ENV_VAR_NAME"],
-        "tool_type": "mcp",
-        "tool_id": "google-ads",
-        "skill_md": "---\\nname: planned-skill-id\\nversion: 1.0.0\\ndescription: \\"What this skill does\\"\\nuser-invocable: false\\nmetadata:\\n  openclaw:\\n    requires:\\n      bins: [bash]\\n      env: [ENV_VAR_NAME]\\n---\\n\\n# Skill Name\\n\\n## What This Skill Does\\n\\nDetailed description of the skill...\\n\\n## Steps\\n\\n### Step 1: ...\\n\\n### Step 2: ...\\n"
+        "tool_type": "mcp|api|cli",
+        "tool_id": "mcp-registry-id-if-mcp"
       }
     ],
-    "workflow": {
-      "steps": []
-    }
+    "workflow": { "steps": [] }
   }
 }
+\`\`\`
 
-IMPORTANT:
-- Return ONLY the JSON — no preamble, no explanation, no markdown outside the JSON block.
-- The "skill_md" field MUST contain the complete SKILL.md file content that will be written to the agent workspace. Do not leave it empty or use a placeholder.
-- Every skill in the architecture plan must appear as a node.
+## Rules
+
+- DO NOT ask clarification questions — use the provided context.
+- Write files FIRST, then return the JSON. The files are the agent.
+- Every skill in the JSON must correspond to a SKILL.md file you wrote.
+- Write real, specific skill content — not placeholder text.
+
+${capabilities}
+${discoverySection}
+${architectureSection}
 [/INSTRUCTION]
 
 Agent name: ${agentName}
 Agent purpose: ${agentDescription}
 
-Generate the skill graph now.`;
+Build the agent workspace now. Write all files, then return the skill graph JSON.`;
 }
 
 // ─── Workflow normalizer ──────────────────────────────────────────────────────
@@ -456,28 +500,24 @@ export async function generateSkillsFromArchitect(
 
   callbacks?.onStatus?.("Connecting to architect agent...");
 
-  // Route through forge sandbox when available (no bridge auth needed),
-  // fall back to the shared architect WebSocket gateway.
-  const response = forgeSandboxId
-    ? await sendToForgeSandboxChat(
-        forgeSandboxId,
-        sessionId,
-        prompt,
-        {
-          onStatus: (_phase, message) => {
-            callbacks?.onStatus?.(message);
-          },
-        },
-      )
-    : await sendToArchitectStreaming(
-        sessionId,
-        prompt,
-        {
-          onStatus: (_phase, message) => {
-            callbacks?.onStatus?.(message);
-          },
-        },
-      );
+  // All paths now use WebSocket via sendToArchitectStreaming.
+  // When forgeSandboxId is set, the route handler connects to the forge
+  // container's gateway via WebSocket — full tool execution support.
+  const response = await sendToArchitectStreaming(
+    sessionId,
+    prompt,
+    {
+      onStatus: (_phase, message) => {
+        callbacks?.onStatus?.(message);
+      },
+      onCustomEvent: (name, data) => {
+        callbacks?.onCustomEvent?.(name, data);
+      },
+    },
+    {
+      forgeSandboxId,
+    },
+  );
 
   callbacks?.onStatus?.("Processing skill graph...");
 

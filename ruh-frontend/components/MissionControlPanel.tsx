@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
 import CronsPanel from "./CronsPanel";
 import ChannelsPanel from "./ChannelsPanel";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -96,7 +97,7 @@ function OverviewPanel({ sandbox }: { sandbox: SandboxRecord }) {
   const fetchStatus = useCallback(async () => {
     setStatusLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/status`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/status`);
       if (res.ok) setGatewayStatus(await res.json());
     } catch { /* silently fail */ }
     finally { setStatusLoading(false); }
@@ -104,7 +105,7 @@ function OverviewPanel({ sandbox }: { sandbox: SandboxRecord }) {
 
   const fetchConvCount = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations`);
       if (res.ok) {
         const data = await res.json() as { items?: unknown[] };
         setConvCount((data.items ?? []).length);

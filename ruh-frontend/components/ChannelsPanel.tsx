@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -185,7 +186,7 @@ function ProbeSection({
     setProbeStatus("probing");
     setProbeOutput("");
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/api/sandboxes/${sandboxId}/channels/${channel}/status`
       );
       const data = await res.json();
@@ -238,7 +239,7 @@ function PairingSection({
     setListing(true);
     setListOutput(null);
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/${channel}/pairing`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/${channel}/pairing`);
       const data = await res.json();
       setListOutput({ output: data.output ?? "", codes: data.codes ?? [] });
     } catch (err) {
@@ -254,7 +255,7 @@ function PairingSection({
     setApproving(true);
     setApproveResult(null);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/api/sandboxes/${sandboxId}/channels/${channel}/pairing/approve`,
         {
           method: "POST",
@@ -403,7 +404,7 @@ function TelegramSection({
       const body: Record<string, unknown> = { enabled, dmPolicy };
       if (botToken) body.botToken = botToken;
 
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/telegram`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/telegram`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -546,7 +547,7 @@ function SlackSection({
       if (botToken) body.botToken = botToken;
       if (signingSecret) body.signingSecret = signingSecret;
 
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/slack`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandboxId}/channels/slack`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -866,7 +867,7 @@ export default function ChannelsPanel({ sandbox }: { sandbox: SandboxRecord }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/channels`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/channels`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(err.detail ?? "Failed to load channel config");

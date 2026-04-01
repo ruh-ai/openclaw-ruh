@@ -20,6 +20,8 @@ import { createLogger } from '@ruh/logger';
 import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
 import { requireAuth, requireRole } from './auth/middleware';
+import { requireActiveDeveloperOrg } from './auth/builderAccess';
+import { requireActiveCustomerOrg } from './auth/customerAccess';
 import * as userStore from './userStore';
 import { withConn } from './db';
 
@@ -37,6 +39,8 @@ import {
 import * as store from './store';
 import * as conversationStore from './conversationStore';
 import * as agentStore from './agentStore';
+import * as evalResultStore from './evalResultStore';
+import * as orgStore from './orgStore';
 import * as channelManager from './channelManager';
 import * as auditStore from './auditStore';
 import * as systemEventStore from './systemEventStore';
@@ -89,6 +93,7 @@ import {
   buildSandboxRuntimeReconciliation,
   classifySandboxRuntime,
 } from './sandboxRuntime';
+import { buildConfigurePayloadFromAgent } from './marketplaceRuntime';
 
 // ---------------------------------------------------------------------------
 // Architect SOUL.md — injected into every new agent's forge container so the
@@ -176,7 +181,14 @@ app.use(
     origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-OpenClaw-Session-Key', 'X-Daytona-Preview-Token'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-ID',
+      'X-OpenClaw-Session-Key',
+      'X-Daytona-Preview-Token',
+      'ngrok-skip-browser-warning',
+    ],
     exposedHeaders: ['X-Request-ID'],
     maxAge: 86400,
   }),
@@ -201,6 +213,31 @@ interface ConfigureAgentStepResult {
   target: string;
   ok: boolean;
   message: string;
+}
+
+interface ConfigureAgentPayload {
+  system_name: string;
+  soul_content: string;
+  skills: Array<{ skill_id: string; name: string; description: string; skill_md?: string }>;
+  cron_jobs: Array<{ name: string; schedule: string; message: string }>;
+  runtime_inputs?: Array<{
+    key: string;
+    label: string;
+    description: string;
+    required: boolean;
+    source: 'architect_requirement' | 'skill_requirement';
+    value: string;
+  }>;
+  agent_id?: string;
+}
+
+interface ConfigureAgentApplyResult {
+  statusCode: number;
+  ok: boolean;
+  applied: boolean;
+  detail?: string;
+  steps: ConfigureAgentStepResult[];
+  webhooks?: PublicWebhookProvisioning[];
 }
 
 interface PublicWebhookProvisioning {
@@ -573,6 +610,264 @@ function buildRuntimeEnvFileContent(
     .join('\n');
 }
 
+async function applyAgentConfiguration(
+  req: Request,
+  sandboxId: string,
+  payload: ConfigureAgentPayload,
+): Promise<ConfigureAgentApplyResult> {
+  const record = await getRecord(sandboxId);
+  const containerName = getContainerName(record.sandbox_id);
+  const {
+    system_name,
+    soul_content,
+    skills,
+    cron_jobs,
+    runtime_inputs,
+    agent_id,
+  } = payload;
+
+  const steps: ConfigureAgentStepResult[] = [];
+  let provisionedWebhooks: PublicWebhookProvisioning[] = [];
+
+  const pushStep = (step: ConfigureAgentStepResult) => {
+    steps.push(step);
+    return step.ok;
+  };
+
+  const fail = async (
+    detail: string,
+    statusCode = 500,
+  ): Promise<ConfigureAgentApplyResult> => {
+    await recordAuditEvent(req, {
+      action_type: 'sandbox.configure_agent',
+      target_type: 'sandbox',
+      target_id: sandboxId,
+      outcome: 'failure',
+      details: {
+        system_name: typeof system_name === 'string' ? system_name : '',
+        skill_count: Array.isArray(skills) ? skills.length : 0,
+        cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+        step_count: steps.length,
+        failed_step: steps[steps.length - 1],
+      },
+    });
+    return {
+      statusCode,
+      ok: false,
+      applied: false,
+      detail,
+      steps,
+    };
+  };
+
+  const missingRuntimeInputs = (runtime_inputs ?? []).filter(
+    (input) => input.required && String(input.value ?? '').trim().length === 0,
+  );
+  if (missingRuntimeInputs.length > 0) {
+    for (const input of missingRuntimeInputs) {
+      pushStep({
+        kind: 'runtime_env',
+        target: input.key,
+        ok: false,
+        message: `Missing required runtime input: ${input.key}`,
+      });
+    }
+    return {
+      statusCode: 400,
+      ok: false,
+      applied: false,
+      detail: `Missing required runtime inputs: ${missingRuntimeInputs.map((input) => input.key).join(', ')}`,
+      steps,
+    };
+  }
+
+  if (soul_content) {
+    const [ok, out] = await dockerExec(
+      containerName,
+      buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', soul_content),
+      30_000,
+    );
+    if (!pushStep({
+      kind: 'soul',
+      target: 'SOUL.md',
+      ok,
+      message: ok ? 'SOUL.md written' : `SOUL.md failed: ${out}`,
+    })) {
+      return fail('Agent config apply failed');
+    }
+  }
+
+  for (const skill of (skills ?? [])) {
+    const normalizedSkillId = normalizePathSegment(String(skill.skill_id ?? ''));
+    const registrySkill = findSkill(skill.skill_id) ?? findSkill(skill.name);
+    const skillContent = skill.skill_md || registrySkill?.skill_md || buildFallbackSkillContent(skill);
+    const skillMessage = skill.skill_md
+      ? `Skill ${normalizedSkillId}: built (wizard-provided)`
+      : registrySkill
+        ? `Skill ${normalizedSkillId}: registry match (${registrySkill.skill_id})`
+        : `Skill ${normalizedSkillId}: stub (no registry entry)`;
+    const [ok, out] = await dockerExec(
+      containerName,
+      buildHomeFileWriteCommand(
+        `.openclaw/workspace/skills/${normalizedSkillId}/SKILL.md`,
+        skillContent,
+      ),
+      20_000,
+    );
+    if (!pushStep({
+      kind: 'skill',
+      target: normalizedSkillId,
+      ok,
+      message: ok ? skillMessage : `Skill ${normalizedSkillId} failed: ${out}`,
+    })) {
+      return fail('Agent config apply failed');
+    }
+  }
+
+  for (const job of (cron_jobs ?? [])) {
+    const [ok, out] = await dockerExec(
+      containerName,
+      buildConfigureAgentCronAddCommand({
+        name: String(job.name ?? ''),
+        schedule: String(job.schedule ?? ''),
+        message: String(job.message ?? ''),
+      }),
+      20_000,
+    );
+    if (!pushStep({
+      kind: 'cron',
+      target: String(job.name ?? ''),
+      ok,
+      message: ok ? `Cron ${job.name} registered` : `Cron ${job.name} failed: ${out}`,
+    })) {
+      return fail('Agent config apply failed');
+    }
+  }
+
+  if ((runtime_inputs ?? []).length > 0) {
+    const runtimeEnvContent = buildRuntimeEnvFileContent(
+      (runtime_inputs ?? []).map((input) => ({
+        key: String(input.key ?? ''),
+        value: String(input.value ?? ''),
+      })),
+    );
+    const [ok, out] = await dockerExec(
+      containerName,
+      buildHomeFileWriteCommand('.openclaw/.env', runtimeEnvContent),
+      20_000,
+    );
+    if (!pushStep({
+      kind: 'runtime_env',
+      target: '.openclaw/.env',
+      ok,
+      message: ok ? `Runtime env written (${(runtime_inputs ?? []).length} values)` : `Runtime env failed: ${out}`,
+    })) {
+      return fail('Agent config apply failed');
+    }
+  }
+
+  if (agent_id) {
+    try {
+      const { decryptCredentials } = await import('./credentials');
+      const agent = await getAgentRecord(agent_id);
+      const selectedMcpToolIds = new Set(
+        agent.tool_connections
+          .filter((tool) => tool.connectorType === 'mcp' && tool.status === 'configured')
+          .map((tool) => tool.toolId),
+      );
+      const creds = await agentStore.getAgentCredentials(agent_id);
+      const credentialByToolId = new Map(creds.map((cred) => [cred.toolId, cred]));
+      const mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {};
+
+      for (const toolId of selectedMcpToolIds) {
+        const pkg = MCP_PACKAGES[toolId];
+        if (!pkg) {
+          pushStep({ kind: 'mcp', target: toolId, ok: false, message: `Selected MCP tool ${toolId} has no runtime package mapping` });
+          return fail('Agent config apply failed');
+        }
+
+        const cred = credentialByToolId.get(toolId);
+        if (!cred) {
+          pushStep({ kind: 'mcp', target: toolId, ok: false, message: `Missing saved credentials for selected MCP tool ${toolId}` });
+          return fail('Agent config apply failed');
+        }
+
+        try {
+          mcpServers[toolId] = {
+            command: 'npx',
+            args: ['-y', pkg.pkg],
+            env: decryptCredentials(cred.encrypted, cred.iv),
+          };
+        } catch {
+          pushStep({ kind: 'mcp', target: toolId, ok: false, message: `Failed to decrypt credentials for ${toolId}` });
+          return fail('Agent config apply failed');
+        }
+      }
+
+      const mcpConfig = JSON.stringify({ mcpServers }, null, 2);
+      const mcpCmd = buildHomeFileWriteCommand('.openclaw/mcp.json', mcpConfig);
+      const [mcpOk, mcpOut] = await dockerExec(containerName, mcpCmd, 15_000);
+      if (!pushStep({
+        kind: 'mcp',
+        target: '.openclaw/mcp.json',
+        ok: mcpOk,
+        message: mcpOk ? `MCP config written (${Object.keys(mcpServers).length} servers)` : `MCP config failed: ${mcpOut}`,
+      })) {
+        return fail('Agent config apply failed');
+      }
+    } catch (err) {
+      pushStep({
+        kind: 'mcp',
+        target: 'mcp-config',
+        ok: false,
+        message: `MCP config error: ${err instanceof Error ? err.message : 'unknown'}`,
+      });
+      return fail('Agent config apply failed');
+    }
+
+    try {
+      const webhookProvisioning = await ensureWebhookProvisioning(req, agent_id);
+      provisionedWebhooks = webhookProvisioning.provisioned;
+      for (const webhook of provisionedWebhooks) {
+        pushStep({
+          kind: 'webhook',
+          target: webhook.triggerId,
+          ok: true,
+          message: `Webhook ${webhook.title} provisioned at ${webhook.url}`,
+        });
+      }
+    } catch (err) {
+      pushStep({
+        kind: 'webhook',
+        target: 'webhook-provisioning',
+        ok: false,
+        message: `Webhook provisioning failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      });
+    }
+  }
+
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.configure_agent',
+    target_type: 'sandbox',
+    target_id: sandboxId,
+    outcome: 'success',
+    details: {
+      system_name: typeof system_name === 'string' ? system_name : '',
+      skill_count: Array.isArray(skills) ? skills.length : 0,
+      cron_job_count: Array.isArray(cron_jobs) ? cron_jobs.length : 0,
+      step_count: steps.length,
+    },
+  });
+
+  return {
+    statusCode: 200,
+    ok: true,
+    applied: true,
+    steps,
+    ...(provisionedWebhooks.length > 0 ? { webhooks: provisionedWebhooks } : {}),
+  };
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
@@ -595,8 +890,8 @@ app.get('/api/sandboxes/:sandbox_id/system-events', asyncHandler(async (req, res
   })));
 }));
 
-app.get('/api/agents/:id/system-events', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+app.get('/api/agents/:id/system-events', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   res.json(await systemEventStore.listSystemEvents(buildSystemEventFilters(req, {
     agent_id: req.params.id,
   })));
@@ -767,7 +1062,7 @@ app.post('/api/sandboxes/:sandbox_id/gateway/restart', asyncHandler(async (req, 
   await sandboxExec(sandbox_id, 'pkill -f "openclaw gateway" 2>/dev/null || true', 5);
   const [exitCode, output] = await sandboxExec(
     sandbox_id,
-    'nohup openclaw gateway > /tmp/openclaw-gateway.log 2>&1 & sleep 2 && curl -sf http://localhost:18789/ > /dev/null && echo "GATEWAY_OK" || echo "GATEWAY_FAIL"',
+    'OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway > /tmp/openclaw-gateway.log 2>&1 & sleep 2 && curl -sf http://localhost:18789/ > /dev/null && echo "GATEWAY_OK" || echo "GATEWAY_FAIL"',
     15,
   );
   const gatewayOk = output.includes('GATEWAY_OK');
@@ -811,31 +1106,166 @@ async function getAgentRecord(agentId: string): Promise<agentStore.AgentRecord> 
   return record;
 }
 
-app.get('/api/agents', asyncHandler(async (_req, res) => {
-  const agents = await agentStore.listAgents();
+async function requireBuilderContext(req: Request) {
+  return requireActiveDeveloperOrg(req.user);
+}
+
+async function getActiveOrgKind(req: Request): Promise<'developer' | 'customer' | null> {
+  if (!req.user?.orgId) {
+    return null;
+  }
+  const organization = await orgStore.getOrg(req.user.orgId);
+  return organization?.kind ?? null;
+}
+
+async function getOwnedAgentRecord(req: Request, agentId: string): Promise<agentStore.AgentRecord> {
+  await requireBuilderContext(req);
+  const record = await agentStore.getAgentForCreator(agentId, req.user!.userId);
+  if (!record) throw httpError(404, 'Agent not found');
+  return record;
+}
+
+async function getCustomerOwnedAgentRecord(req: Request, agentId: string): Promise<agentStore.AgentRecord> {
+  const customer = await requireActiveCustomerOrg(req.user);
+  const record = await agentStore.getAgentForCreatorInOrg(
+    agentId,
+    req.user!.userId,
+    customer.organization.id,
+  );
+  if (!record) {
+    throw httpError(404, 'Agent not found');
+  }
+  return record;
+}
+
+async function getReadableAgentRecord(req: Request, agentId: string): Promise<agentStore.AgentRecord> {
+  const activeOrgKind = await getActiveOrgKind(req);
+  if (activeOrgKind === 'customer') {
+    return getCustomerOwnedAgentRecord(req, agentId);
+  }
+  return getOwnedAgentRecord(req, agentId);
+}
+
+app.get('/api/agents', requireAuth, asyncHandler(async (req, res) => {
+  const activeOrgKind = await getActiveOrgKind(req);
+  if (activeOrgKind === 'customer') {
+    const customer = await requireActiveCustomerOrg(req.user);
+    const agents = await agentStore.listAgentsForCreatorInOrg(
+      req.user!.userId,
+      customer.organization.id,
+    );
+    res.json(agents.map(redactAgentWebhookSecrets));
+    return;
+  }
+
+  await requireBuilderContext(req);
+  const agents = await agentStore.listAgentsForCreator(req.user!.userId);
   res.json(agents.map(redactAgentWebhookSecrets));
 }));
 
-app.post('/api/agents', asyncHandler(async (req, res) => {
+app.post('/api/agents', requireAuth, asyncHandler(async (req, res) => {
+  const builder = await requireBuilderContext(req);
   const body = validateAgentCreateBody(req.body);
-  res.json(redactAgentWebhookSecrets(await agentStore.saveAgent(body)));
+  res.json(redactAgentWebhookSecrets(await agentStore.saveAgent({
+    ...body,
+    createdBy: req.user!.userId,
+    orgId: builder.organization.id,
+  })));
 }));
 
-app.get('/api/agents/:id', asyncHandler(async (req, res) => {
-  res.json(redactAgentWebhookSecrets(await getAgentRecord(req.params.id)));
+app.get('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
+  res.json(redactAgentWebhookSecrets(await getReadableAgentRecord(req, req.params.id)));
 }));
 
-app.patch('/api/agents/:id', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) => {
+  req.setTimeout(0);
+  res.setTimeout(0);
+
+  const customer = await requireActiveCustomerOrg(req.user);
+  let agent = await agentStore.getAgentForCreatorInOrg(
+    req.params.id,
+    req.user!.userId,
+    customer.organization.id,
+  );
+  if (!agent) {
+    throw httpError(404, 'Agent not found');
+  }
+
+  const activeSandbox = await resolveActiveSandboxForAgent(agent);
+  if (activeSandbox) {
+    res.json({
+      launched: false,
+      sandboxId: activeSandbox.sandbox_id,
+      agent: redactAgentWebhookSecrets(agent),
+    });
+    return;
+  }
+
+  const sandboxName = `customer-${normalizePathSegment(agent.name || 'agent').slice(0, 32)}-${agent.id.slice(0, 8)}`;
+  const config = getConfig();
+  let createdSandbox: Record<string, unknown> | null = null;
+
+  for await (const [eventType, data] of createOpenclawSandbox({
+    anthropicApiKey: config.anthropicApiKey ?? '',
+    openaiApiKey: config.openaiApiKey ?? '',
+    openrouterApiKey: config.openrouterApiKey ?? '',
+    geminiApiKey: config.geminiApiKey ?? '',
+    ollamaBaseUrl: config.ollamaBaseUrl ?? undefined,
+    ollamaModel: config.ollamaModel,
+    telegramBotToken: config.telegramBotToken ?? '',
+    discordBotToken: config.discordBotToken ?? '',
+    sandboxName,
+  })) {
+    if (eventType === 'result') {
+      createdSandbox = data as Record<string, unknown>;
+      await store.saveSandbox(createdSandbox, sandboxName);
+    } else if (eventType === 'approved' && createdSandbox?.sandbox_id) {
+      await store.markApproved(String(createdSandbox.sandbox_id));
+    } else if (eventType === 'error') {
+      throw httpError(502, String(data));
+    }
+  }
+
+  if (!createdSandbox?.sandbox_id) {
+    throw httpError(502, 'Sandbox provisioning did not return a sandbox id');
+  }
+
+  const sandboxId = String(createdSandbox.sandbox_id);
+  await agentStore.addSandboxToAgent(agent.id, sandboxId);
+  agent = await getCustomerOwnedAgentRecord(req, agent.id);
+
+  const configureResult = await applyAgentConfiguration(
+    req,
+    sandboxId,
+    buildConfigurePayloadFromAgent(agent),
+  );
+  if (!configureResult.ok) {
+    throw httpError(
+      configureResult.statusCode,
+      configureResult.detail ?? 'Agent launch configuration failed',
+    );
+  }
+
+  agent = await getCustomerOwnedAgentRecord(req, agent.id);
+  res.json({
+    launched: true,
+    sandboxId,
+    agent: redactAgentWebhookSecrets(agent),
+    steps: configureResult.steps,
+    ...(configureResult.webhooks ? { webhooks: configureResult.webhooks } : {}),
+  });
+}));
+
+app.patch('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const body = validateAgentMetadataPatchBody(req.body);
   const updated = await agentStore.updateAgent(req.params.id, body);
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
-app.delete('/api/agents/:id', asyncHandler(async (req, res) => {
+app.delete('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
   // Read agent first to get sandbox_ids for cascade cleanup
-  const agent = await agentStore.getAgent(req.params.id);
-  if (!agent) throw httpError(404, 'Agent not found');
+  const agent = await getOwnedAgentRecord(req, req.params.id);
 
   // Fire-and-forget: clean up Paperclip resources
   paperclipOrchestrator.teardownPaperclipCompany(req.params.id).catch(() => {});
@@ -859,7 +1289,8 @@ app.delete('/api/agents/:id', asyncHandler(async (req, res) => {
   res.json({ deleted: req.params.id, sandboxesCleaned: sandboxIds.length });
 }));
 
-app.post('/api/agents/bulk-delete', asyncHandler(async (req, res) => {
+app.post('/api/agents/bulk-delete', requireAuth, asyncHandler(async (req, res) => {
+  await requireBuilderContext(req);
   const { agentIds } = req.body;
   if (!Array.isArray(agentIds) || agentIds.length === 0) {
     throw httpError(400, 'agentIds must be a non-empty array');
@@ -874,7 +1305,7 @@ app.post('/api/agents/bulk-delete', asyncHandler(async (req, res) => {
 
   for (const agentId of agentIds) {
     try {
-      const agent = await agentStore.getAgent(agentId);
+      const agent = await agentStore.getAgentForCreator(agentId, req.user!.userId);
       if (!agent) { failed.push(agentId); continue; }
 
       // Cascade: delete associated sandboxes + Docker containers
@@ -907,16 +1338,60 @@ app.post('/api/agents/bulk-delete', asyncHandler(async (req, res) => {
   res.json({ deleted, failed, sandboxesCleaned: totalSandboxesCleaned });
 }));
 
-app.post('/api/agents/:id/sandbox', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+// ── Eval Results ────────────────────────────────────────────────────────────
+
+app.post('/api/agents/:id/eval-results', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const body = req.body as Record<string, unknown>;
+  const result = await evalResultStore.createEvalResult({
+    agent_id: req.params.id,
+    sandbox_id: (body.sandbox_id as string) ?? null,
+    mode: (body.mode as string) ?? 'mock',
+    tasks: Array.isArray(body.tasks) ? body.tasks : [],
+    loop_state: body.loop_state ?? null,
+    pass_rate: Number(body.pass_rate) || 0,
+    avg_score: Number(body.avg_score) || 0,
+    total_tasks: Number(body.total_tasks) || 0,
+    passed_tasks: Number(body.passed_tasks) || 0,
+    failed_tasks: Number(body.failed_tasks) || 0,
+    iterations: Number(body.iterations) || 1,
+    stop_reason: (body.stop_reason as string) ?? null,
+  });
+  res.status(201).json(result);
+}));
+
+app.get('/api/agents/:id/eval-results', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const results = await evalResultStore.listEvalResults(req.params.id, { limit, offset });
+  res.json(results);
+}));
+
+app.get('/api/agents/:id/eval-results/:evalId', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const result = await evalResultStore.getEvalResult(req.params.evalId);
+  if (!result || result.agent_id !== req.params.id) throw httpError(404, 'Eval result not found');
+  res.json(result);
+}));
+
+app.delete('/api/agents/:id/eval-results/:evalId', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const deleted = await evalResultStore.deleteEvalResult(req.params.evalId);
+  if (!deleted) throw httpError(404, 'Eval result not found');
+  res.json({ deleted: req.params.evalId });
+}));
+
+app.post('/api/agents/:id/sandbox', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const { sandbox_id } = validateAgentSandboxAttachBody(req.body);
   const updated = await agentStore.addSandboxToAgent(req.params.id, sandbox_id);
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
-app.delete('/api/agents/:id/sandbox/:sandbox_id', asyncHandler(async (req, res) => {
+app.delete('/api/agents/:id/sandbox/:sandbox_id', requireAuth, asyncHandler(async (req, res) => {
   const { id: agentId, sandbox_id: sandboxId } = req.params;
-  const agent = await getAgentRecord(agentId);
+  const agent = await getOwnedAgentRecord(req, agentId);
   const sandboxIds: string[] = agent.sandbox_ids ?? [];
   if (!sandboxIds.includes(sandboxId)) {
     throw httpError(404, 'Sandbox not associated with this agent');
@@ -948,7 +1423,7 @@ app.delete('/api/agents/:id/sandbox/:sandbox_id', asyncHandler(async (req, res) 
  * When the stream emits "done", the agent's forge sandbox is ready and
  * the Architect SOUL.md has been injected — the builder chat can start.
  */
-app.post('/api/agents/create', asyncHandler(async (req, res) => {
+app.post('/api/agents/create', requireAuth, asyncHandler(async (req, res) => {
   const { name, description } = req.body as { name?: string; description?: string };
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw httpError(400, 'name is required');
@@ -957,10 +1432,13 @@ app.post('/api/agents/create', asyncHandler(async (req, res) => {
   const span = startAgentSpan('agent.create', { 'agent.name': name.trim() });
   try {
     // 1. Create the agent record with "forging" status — shown as "In the Forge" in agents list
+    const builder = await requireBuilderContext(req);
     const agent = await agentStore.saveAgent({
       name: name.trim(),
       description: description ? String(description).trim() : '',
       status: 'forging',
+      createdBy: req.user!.userId,
+      orgId: builder.organization.id,
     });
 
     // 2. Set up the forge stream entry (same pattern as POST /api/agents/:id/forge)
@@ -994,8 +1472,8 @@ app.post('/api/agents/create', asyncHandler(async (req, res) => {
  * Idempotent: returns existing forge sandbox if one is already running.
  * Returns { stream_id } for SSE progress (same pattern as sandbox creation).
  */
-app.post('/api/agents/:id/forge', asyncHandler(async (req, res) => {
-  const agent = await getAgentRecord(req.params.id);
+app.post('/api/agents/:id/forge', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
 
   // Idempotent: if forge sandbox already exists and container is running, return it
   if (agent.forge_sandbox_id) {
@@ -1023,9 +1501,9 @@ app.post('/api/agents/:id/forge', asyncHandler(async (req, res) => {
  * SSE stream for forge sandbox creation progress.
  * Same as /api/sandboxes/stream/:stream_id but also links the sandbox to the agent on success.
  */
-app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res) => {
+app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(async (req, res) => {
   const { id: agentId, stream_id } = req.params;
-  await getAgentRecord(agentId);
+  await getOwnedAgentRecord(req, agentId);
 
   if (!_streams.has(stream_id)) throw httpError(404, 'stream_id not found');
   const entry = _streams.get(stream_id)!;
@@ -1177,6 +1655,26 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
           }
         }
 
+        // Inject backend URL + agent ID so the Architect can sync skills back
+        if (sandboxIdStr) {
+          const backendPort = getConfig().port ?? 8000;
+          const backendUrl = `http://host.docker.internal:${backendPort}`;
+          const forgeCName = getContainerName(sandboxIdStr);
+          await dockerExec(
+            forgeCName,
+            `echo 'export RUH_BACKEND_URL="${backendUrl}"\nexport RUH_AGENT_ID="${agentId}"' >> /root/.bashrc`,
+            10_000,
+          ).catch(() => {});
+          // Also write a convenience script the Architect can call
+          await dockerExec(
+            forgeCName,
+            buildHomeFileWriteCommand('.openclaw/sync-skills.sh',
+              `#!/bin/bash\ncurl -sf -X POST "$RUH_BACKEND_URL/api/agents/$RUH_AGENT_ID/forge/sync-workspace" -H "Content-Type: application/json" && echo "\\nSkills synced to backend." || echo "\\nSync failed."`),
+            10_000,
+          ).catch(() => {});
+          await dockerExec(forgeCName, 'chmod +x /root/.openclaw/sync-skills.sh', 5_000).catch(() => {});
+        }
+
         sendEvent('approved', data);
       } else if (eventType === 'error') {
         entry.status = 'error';
@@ -1234,8 +1732,8 @@ app.get('/api/agents/:id/forge/stream/:stream_id', asyncHandler(async (req, res)
  * Get forge sandbox health status.
  */
 // GET forge sandbox info for the frontend useForgeSandbox hook
-app.get('/api/agents/:id/forge', asyncHandler(async (req, res) => {
-  const agent = await getAgentRecord(req.params.id);
+app.get('/api/agents/:id/forge', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
   if (!agent.forge_sandbox_id) {
     res.json({ status: 'none', forge_sandbox_id: null, sandbox: null });
     return;
@@ -1255,8 +1753,8 @@ app.get('/api/agents/:id/forge', asyncHandler(async (req, res) => {
   });
 }));
 
-app.get('/api/agents/:id/forge/status', asyncHandler(async (req, res) => {
-  const agent = await getAgentRecord(req.params.id);
+app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
   if (!agent.forge_sandbox_id) {
     res.json({ active: false, status: 'none', reason: 'No forge sandbox provisioned' });
     return;
@@ -1284,8 +1782,8 @@ app.get('/api/agents/:id/forge/status', asyncHandler(async (req, res) => {
  * cleans up the sandbox record, and deletes the agent itself.
  * This is a full discard — the agent and all its work are gone.
  */
-app.delete('/api/agents/:id/forge', asyncHandler(async (req, res) => {
-  const agent = await getAgentRecord(req.params.id);
+app.delete('/api/agents/:id/forge', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
   const span = startAgentSpan('agent.forge.delete', {
     'agent.id': req.params.id,
     'sandbox.id': agent.forge_sandbox_id ?? undefined,
@@ -1336,13 +1834,13 @@ app.delete('/api/agents/:id/forge', asyncHandler(async (req, res) => {
  *
  * Both modes restart the OpenClaw gateway so it picks up the active SOUL.md.
  */
-app.patch('/api/agents/:id/mode', asyncHandler(async (req, res) => {
+app.patch('/api/agents/:id/mode', requireAuth, asyncHandler(async (req, res) => {
   const { mode } = req.body as { mode?: string };
   if (mode !== 'building' && mode !== 'live') {
     throw httpError(400, 'mode must be "building" or "live"');
   }
 
-  const agent = await getAgentRecord(req.params.id);
+  const agent = await getOwnedAgentRecord(req, req.params.id);
   if (!agent.forge_sandbox_id) {
     throw httpError(400, 'Agent has no forge sandbox — provision one first');
   }
@@ -1387,8 +1885,8 @@ app.patch('/api/agents/:id/mode', asyncHandler(async (req, res) => {
 /**
  * Promote a forge sandbox to production: clear forge_sandbox_id, set status to 'active'.
  */
-app.post('/api/agents/:id/forge/promote', asyncHandler(async (req, res) => {
-  const agent = await getAgentRecord(req.params.id);
+app.post('/api/agents/:id/forge/promote', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
   if (!agent.forge_sandbox_id) {
     throw httpError(400, 'Agent has no forge sandbox to promote');
   }
@@ -1413,95 +1911,105 @@ app.post('/api/agents/:id/forge/promote', asyncHandler(async (req, res) => {
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
+// scaffold-skills endpoint removed — the architect now writes SKILL.md files
+// directly via tool execution through the WebSocket gateway. See Phase 2 of
+// the event architecture plan.
+
 /**
- * Scaffold skills into a forge sandbox workspace.
+ * Sync workspace skills from the forge sandbox back to the agent record.
  *
- * The copilot build phase gets a JSON skill graph from the architect via the HTTP
- * chat proxy — but that proxy can only return text, it cannot exec shell commands.
- * This endpoint bridges the gap: it takes the JSON skill graph and writes the actual
- * SKILL.md files into the container via docker exec.
+ * Reads skill directories from the container's workspace, parses SKILL.md
+ * frontmatter, and updates the agent's skill_graph + skills in the DB.
  *
- * Accepts: { skill_graph: { nodes: [...] }, workflow?: object }
+ * This can be called by the Architect from inside the container via:
+ *   curl -s -X POST $RUH_BACKEND_URL/api/agents/$RUH_AGENT_ID/forge/sync-workspace
+ *
+ * Or by the frontend as a fallback.
  */
-app.post('/api/agents/:id/forge/scaffold-skills', asyncHandler(async (req, res) => {
+app.post('/api/agents/:id/forge/sync-workspace', asyncHandler(async (req, res) => {
   const agent = await getAgentRecord(req.params.id);
   const sandboxId = agent.forge_sandbox_id;
   if (!sandboxId) {
     throw httpError(400, 'Agent has no forge sandbox');
   }
 
-  const { skill_graph, workflow } = req.body as {
-    skill_graph: { nodes: Array<{ skill_id: string; name: string; skill_md?: string; description?: string; requires_env?: string[]; external_api?: string; depends_on?: string[] }> };
-    workflow?: object;
-  };
-
-  if (!skill_graph?.nodes?.length) {
-    throw httpError(400, 'skill_graph.nodes is required and must be non-empty');
-  }
-
   const containerName = getContainerName(sandboxId);
-  const results: Array<{ skill_id: string; ok: boolean }> = [];
 
-  for (const node of skill_graph.nodes) {
-    const skillContent = node.skill_md || buildDefaultSkillMd(node);
-    const skillPath = `.openclaw/workspace/skills/${node.skill_id}/SKILL.md`;
-    try {
-      const [ok] = await dockerExec(
-        containerName,
-        buildHomeFileWriteCommand(skillPath, skillContent),
-        30_000,
-      );
-      results.push({ skill_id: node.skill_id, ok });
-    } catch {
-      results.push({ skill_id: node.skill_id, ok: false });
-    }
+  // 1. List skill directories in the workspace
+  const [lsOk, lsOut] = await dockerExec(
+    containerName,
+    'ls -1 ~/.openclaw/workspace/skills/ 2>/dev/null || echo ""',
+    15_000,
+  );
+  if (!lsOk || !lsOut.trim()) {
+    res.json({ synced: 0, skills: [], message: 'No skills found in workspace' });
+    return;
   }
 
-  if (workflow) {
-    await dockerExec(
+  const skillDirs = lsOut.trim().split('\n').filter(Boolean);
+  const nodes: Array<{ skill_id: string; name: string; description: string; skill_md: string }> = [];
+
+  // 2. Read each SKILL.md and parse frontmatter
+  for (const dir of skillDirs) {
+    const safeName = normalizePathSegment(dir);
+    const [readOk, content] = await dockerExec(
       containerName,
-      buildHomeFileWriteCommand(
-        '.openclaw/workspace/.openclaw/workflow.json',
-        JSON.stringify(workflow, null, 2),
-      ),
-      30_000,
-    ).catch(() => {});
+      `cat ~/.openclaw/workspace/skills/${safeName}/SKILL.md 2>/dev/null || echo ""`,
+      10_000,
+    ).catch(() => [false, ''] as [boolean, string]);
+    if (!readOk || !content.trim()) continue;
+
+    // Parse YAML frontmatter
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    const frontmatter = fmMatch?.[1] ?? '';
+    const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+    const descMatch = frontmatter.match(/^description:\s*"?(.+?)"?\s*$/m);
+
+    nodes.push({
+      skill_id: safeName,
+      name: nameMatch?.[1]?.trim() ?? safeName,
+      description: descMatch?.[1]?.trim() ?? '',
+      skill_md: content,
+    });
   }
 
-  const succeeded = results.filter((r) => r.ok).length;
-  const failed = results.filter((r) => !r.ok).length;
-  console.info(`[scaffold-skills] Agent ${req.params.id}: ${succeeded}/${skill_graph.nodes.length} skills written (${failed} failed)`);
-  res.json({ scaffolded: succeeded, failed, total: skill_graph.nodes.length, results });
+  if (nodes.length === 0) {
+    res.json({ synced: 0, skills: [], message: 'No valid SKILL.md files found' });
+    return;
+  }
+
+  // 3. Read workflow.json if present
+  const [wfOk, wfOut] = await dockerExec(
+    containerName,
+    'cat ~/.openclaw/workspace/.openclaw/workflow.json 2>/dev/null || echo ""',
+    10_000,
+  ).catch(() => [false, ''] as [boolean, string]);
+  let workflow: unknown = undefined;
+  if (wfOk && wfOut.trim()) {
+    try { workflow = JSON.parse(wfOut.trim()); } catch { /* skip */ }
+  }
+
+  // 4. Update agent record: skill_graph + skills array
+  const skillNames = nodes.map((n) => n.name);
+  await agentStore.updateAgentConfig(req.params.id, {
+    skillGraph: nodes,
+    ...(workflow ? { workflow } : {}),
+  });
+  await agentStore.updateAgent(req.params.id, {
+    skills: skillNames,
+    description: agent.description || `Runs ${nodes.length} skills: ${skillNames.join(', ')}`,
+  });
+
+  console.info(`[sync-workspace] Agent ${req.params.id}: synced ${nodes.length} skills from forge sandbox`);
+  res.json({ synced: nodes.length, skills: skillNames });
 }));
-
-function buildDefaultSkillMd(node: { skill_id: string; name: string; description?: string; requires_env?: string[]; external_api?: string; depends_on?: string[] }): string {
-  const lines: string[] = [
-    '---', `name: ${node.skill_id}`, 'version: 1.0.0',
-    `description: "${(node.description || node.name).replace(/"/g, '\\"')}"`,
-    'allowed-tools:', '  - Bash', '  - Read', '  - Write',
-    'user-invocable: true', '---', '', `# ${node.name}`, '',
-  ];
-  if (node.description) lines.push(node.description, '');
-  if (node.requires_env?.length) {
-    lines.push('## Required Environment Variables');
-    for (const env of node.requires_env) lines.push(`- \`${env}\``);
-    lines.push('');
-  }
-  if (node.external_api) lines.push(`## External API\n- ${node.external_api}`, '');
-  if (node.depends_on?.length) {
-    lines.push('## Dependencies');
-    for (const dep of node.depends_on) lines.push(`- ${dep}`);
-    lines.push('');
-  }
-  return lines.join('\n');
-}
 
 /**
  * Reproduce an agent from a GitHub repo template.
  * Creates a new agent + spins up a container + clones the repo workspace.
  * Returns { agent_id, stream_id } — stream SSE for progress.
  */
-app.post('/api/agents/reproduce', asyncHandler(async (req, res) => {
+app.post('/api/agents/reproduce', requireAuth, asyncHandler(async (req, res) => {
   const { name, description, repo_url, github_token } = req.body as {
     name?: string;
     description?: string;
@@ -1514,10 +2022,13 @@ app.post('/api/agents/reproduce', asyncHandler(async (req, res) => {
 
   const span = startAgentSpan('agent.reproduce', { 'agent.name': name.trim(), 'repo.url': repo_url.trim() });
   try {
+    const builder = await requireBuilderContext(req);
     const agent = await agentStore.saveAgent({
       name: name.trim(),
       description: description?.trim() ?? `Reproduced from ${repo_url}`,
       status: 'draft',
+      createdBy: req.user!.userId,
+      orgId: builder.organization.id,
     });
 
     const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
@@ -1542,21 +2053,21 @@ app.post('/api/agents/reproduce', asyncHandler(async (req, res) => {
   }
 }));
 
-app.patch('/api/agents/:id/config', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+app.patch('/api/agents/:id/config', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const body = validateAgentConfigPatchBody(req.body);
   const updated = await agentStore.updateAgentConfig(req.params.id, body);
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
-app.get('/api/agents/:id/workspace-memory', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+app.get('/api/agents/:id/workspace-memory', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const memory = await agentStore.getAgentWorkspaceMemory(req.params.id);
   res.json(memory);
 }));
 
-app.patch('/api/agents/:id/workspace-memory', asyncHandler(async (req, res) => {
-  await getAgentRecord(req.params.id);
+app.patch('/api/agents/:id/workspace-memory', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const body = validateAgentWorkspaceMemoryPatchBody(req.body);
   const updated = await agentStore.updateAgentWorkspaceMemory(req.params.id, body);
   res.json(updated);
@@ -1564,16 +2075,14 @@ app.patch('/api/agents/:id/workspace-memory', asyncHandler(async (req, res) => {
 
 // ── Agent credentials ─────────────────────────────────────────────────────────
 
-app.get('/api/agents/:id/credentials', asyncHandler(async (req, res, _next) => {
-  const agent = await agentStore.getAgent(req.params.id);
-  if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+app.get('/api/agents/:id/credentials', requireAuth, asyncHandler(async (req, res, _next) => {
+  await getOwnedAgentRecord(req, req.params.id);
   const summary = await agentStore.getAgentCredentialSummary(req.params.id);
   res.json(summary);
 }));
 
-app.put('/api/agents/:id/credentials/:toolId', asyncHandler(async (req, res, _next) => {
-  const agent = await agentStore.getAgent(req.params.id);
-  if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+app.put('/api/agents/:id/credentials/:toolId', requireAuth, asyncHandler(async (req, res, _next) => {
+  await getOwnedAgentRecord(req, req.params.id);
 
   const { credentials } = req.body as { credentials?: Record<string, string> };
   if (!credentials || typeof credentials !== 'object' || Object.keys(credentials).length === 0) {
@@ -1594,9 +2103,8 @@ app.put('/api/agents/:id/credentials/:toolId', asyncHandler(async (req, res, _ne
   res.json({ ok: true, toolId: req.params.toolId });
 }));
 
-app.delete('/api/agents/:id/credentials/:toolId', asyncHandler(async (req, res, _next) => {
-  const agent = await agentStore.getAgent(req.params.id);
-  if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+app.delete('/api/agents/:id/credentials/:toolId', requireAuth, asyncHandler(async (req, res, _next) => {
+  await getOwnedAgentRecord(req, req.params.id);
 
   await agentStore.deleteAgentCredential(req.params.id, req.params.toolId);
   await recordAuditEvent(req, { action_type: 'agent.credential_delete', target_type: 'agent', target_id: req.params.id, outcome: 'success', details: { toolId: req.params.toolId } });

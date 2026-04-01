@@ -80,7 +80,7 @@ This replaces the old shared architect sandbox. Do not implement any feature tha
 | Work on authentication | `014-auth-system.md` |
 | Work on admin panel | `015-admin-panel.md` |
 | Work on marketplace | `016-marketplace.md` |
-| Work on desktop app | `017-desktop-app.md` |
+| Work on Flutter customer app | `018-ruh-app.md` |
 | Read a feature spec | `docs/knowledge-base/specs/` |
 
 ### Mandatory Documentation Rules
@@ -130,10 +130,10 @@ New specs should follow this structure:
 | Service | Path | Port | Stack |
 |---|---|---|---|
 | `ruh-backend` | `ruh-backend/` | 8000 | TypeScript + Bun + Express + PostgreSQL — sandbox orchestration, agent lifecycle |
-| `ruh-frontend` | `ruh-frontend/` | 3001 | Next.js 16 — client application (end-user assistant access, future desktop app candidate) |
+| `ruh-frontend` | `ruh-frontend/` | 3001 | Next.js 16 — customer web application (org admins + members) |
 | `agent-builder-ui` | `agent-builder-ui/` | 3000 | Next.js 15 — agent builder (create, configure, deploy assistants) |
 | `admin-ui` | `admin-ui/` | 3002 | Next.js 15 — admin panel (platform management, user/agent oversight, moderation) |
-| `desktop-app` | `desktop-app/` | N/A | Tauri v2 — desktop wrapper for ruh-frontend with native credential storage |
+| `ruh_app` | `ruh_app/` | N/A | Flutter customer app for web-equivalent org/member access across mobile and desktop targets |
 | `@ruh/marketplace-ui` | `packages/marketplace-ui/` | N/A | Shared React component library for marketplace UI |
 | `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
 | `nginx` | `nginx/` | 80 | Reverse proxy |
@@ -210,9 +210,9 @@ This repo may be maintained by recurring Codex automations in addition to intera
 
 10. **Employee Marketplace is a shared package.** `@ruh/marketplace-ui` contains React components consumed by agent-builder-ui (publish), ruh-frontend (browse/install), and admin-ui (moderate). Backend at `/api/marketplace/*`.
 
-11. **Desktop app uses Tauri v2.** Wraps ruh-frontend's dev server in development. Credentials stored via tauri-plugin-store. Settings at `~/.ruh/config.json`.
+11. **Customer app direction is Flutter.** `ruh_app` is the active native client path for org admins and members across mobile and desktop targets.
 
-12. **Three user tiers.** Admin (platform management via admin-ui), Developer (build+publish agents via agent-builder-ui), End User (browse+use agents via ruh-frontend/desktop).
+12. **Three user tiers.** Admin (platform management via admin-ui), Developer (build+publish agents via agent-builder-ui), End User (browse+use agents via ruh-frontend or `ruh_app`).
 
 ---
 

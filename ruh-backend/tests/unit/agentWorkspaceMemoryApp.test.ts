@@ -17,6 +17,33 @@ const mockUpdateAgentWorkspaceMemory = mock(async () => ({
   updated_at: '2026-03-25T17:30:00.000Z',
 }));
 
+mock.module('../../src/auth/middleware', () => ({
+  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
+    req.user = {
+      userId: 'user-test-001',
+      email: 'developer@test.dev',
+      role: 'developer',
+      orgId: 'org-test-001',
+    };
+    next();
+  },
+  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+}));
+
+mock.module('../../src/auth/builderAccess', () => ({
+  requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
+    user,
+    organization: {
+      id: 'org-test-001',
+      name: 'Test Dev Org',
+      slug: 'test-dev-org',
+      kind: 'developer',
+      plan: 'free',
+    },
+  })),
+}));
+
 mock.module('../../src/store', () => ({
   getSandbox: mock(async () => null),
   deleteSandbox: mock(async () => false),
@@ -43,6 +70,7 @@ mock.module('../../src/agentStore', () => ({
   listAgents: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
+  getAgentForCreator: mock(async () => ({ id: 'agent-1', name: 'Memory Agent' })),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
@@ -58,6 +86,8 @@ mock.module('../../src/sandboxManager', () => ({
   dockerExec: mock(async () => [true, '']),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  PREVIEW_PORTS: [],
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -79,6 +109,9 @@ mock.module('../../src/docker', () => ({
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
+  dockerExec: mock(async () => [true, '']),
+  dockerSpawn: mock(async () => [0, '']),
+  listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
 }));
@@ -99,6 +132,7 @@ type MockReq = {
   headers: Record<string, string>;
   ip: string;
   socket: { remoteAddress: string };
+  user?: Record<string, unknown>;
 };
 
 function makeReq(overrides: Partial<MockReq> = {}): MockReq {
@@ -110,6 +144,12 @@ function makeReq(overrides: Partial<MockReq> = {}): MockReq {
     headers: {},
     ip: '127.0.0.1',
     socket: { remoteAddress: '127.0.0.1' },
+    user: {
+      userId: 'user-test-001',
+      email: 'developer@test.dev',
+      role: 'developer',
+      orgId: 'org-test-001',
+    },
     ...overrides,
   };
 }
@@ -150,7 +190,8 @@ function getRouteHandler(method: string, path: string) {
     });
 
   const route = layer?.['route'] as { stack: Array<{ handle: Function }> } | undefined;
-  const handle = route?.stack?.[0]?.handle;
+  const stack = route?.stack;
+  const handle = stack && stack.length > 0 ? stack[stack.length - 1].handle : undefined;
   if (!handle) {
     throw new Error(`Route not found: ${method} ${path}`);
   }

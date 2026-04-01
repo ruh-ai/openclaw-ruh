@@ -38,14 +38,16 @@ class _DebugOverlayState extends State<DebugOverlay> {
 
   void _onLog(LogEntry entry) {
     if (!mounted) return;
-    setState(() {
-      _recentLogs.add(entry);
-      if (_recentLogs.length > 200) {
-        _recentLogs.removeAt(0);
-      }
-    });
-    // Auto-scroll to bottom
+    // Defer setState to avoid calling it during another widget's build phase
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _recentLogs.add(entry);
+        if (_recentLogs.length > 200) {
+          _recentLogs.removeAt(0);
+        }
+      });
+      // Auto-scroll to bottom
       if (_scrollController.hasClients) {
         _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
@@ -125,7 +127,9 @@ class _LogPanel extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xF0121212),
-        border: const Border(top: BorderSide(color: Colors.greenAccent, width: 1)),
+        border: const Border(
+          top: BorderSide(color: Colors.greenAccent, width: 1),
+        ),
       ),
       child: Column(
         children: [
@@ -166,7 +170,11 @@ class _LogPanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 _ToolButton(icon: Icons.copy, onTap: onCopy, tooltip: 'Copy'),
-                _ToolButton(icon: Icons.delete_outline, onTap: onClear, tooltip: 'Clear'),
+                _ToolButton(
+                  icon: Icons.delete_outline,
+                  onTap: onClear,
+                  tooltip: 'Clear',
+                ),
               ],
             ),
           ),

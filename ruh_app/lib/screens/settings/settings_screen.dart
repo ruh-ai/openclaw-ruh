@@ -1,52 +1,49 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/api_config.dart';
+import '../../config/responsive.dart';
 import '../../config/theme.dart';
+import '../../models/auth_session.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/theme_provider.dart';
+import '../../utils/error_formatter.dart';
 
 /// Key used to persist the backend URL in SharedPreferences.
 const String _kBackendUrlKey = 'ruh_backend_url';
 
-/// Key used to persist the theme mode in SharedPreferences.
-const String _kThemeModeKey = 'ruh_theme_mode';
-
 /// Functional settings screen with backend URL configuration,
 /// connection testing, and theme selection.
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final TextEditingController _urlController = TextEditingController();
   _ConnectionStatus _connectionStatus = _ConnectionStatus.idle;
   String? _connectionMessage;
   bool _isSaving = false;
-  ThemeMode _themeMode = ThemeMode.light;
+  bool _isSwitchingOrganization = false;
 
   @override
   void initState() {
     super.initState();
     _urlController.text = ApiConfig.baseUrl;
-    _loadPersistedSettings();
+    _loadPersistedUrl();
   }
 
-  Future<void> _loadPersistedSettings() async {
+  Future<void> _loadPersistedUrl() async {
     final prefs = await SharedPreferences.getInstance();
     final savedUrl = prefs.getString(_kBackendUrlKey);
     if (savedUrl != null && savedUrl.isNotEmpty) {
       _urlController.text = savedUrl;
       ApiConfig.baseUrl = savedUrl;
-    }
-    final savedTheme = prefs.getString(_kThemeModeKey);
-    if (savedTheme != null) {
-      setState(() {
-        _themeMode = _themeModeFromString(savedTheme);
-      });
     }
   }
 
@@ -66,11 +63,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     try {
-      final dio = Dio(BaseOptions(
-        baseUrl: url,
-        connectTimeout: const Duration(seconds: 5),
-        receiveTimeout: const Duration(seconds: 5),
-      ));
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: url,
+          connectTimeout: const Duration(seconds: 5),
+          receiveTimeout: const Duration(seconds: 5),
+        ),
+      );
       final response = await dio.get('/api/sandboxes');
       if (response.statusCode != null && response.statusCode! < 400) {
         setState(() {
@@ -83,19 +82,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _connectionMessage = 'Server returned ${response.statusCode}';
         });
       }
-    } on DioException catch (e) {
-      setState(() {
-        _connectionStatus = _ConnectionStatus.failure;
-        _connectionMessage = e.type == DioExceptionType.connectionTimeout
-            ? 'Connection timed out'
-            : e.type == DioExceptionType.connectionError
-                ? 'Could not reach server'
-                : e.message ?? 'Connection failed';
-      });
     } catch (e) {
       setState(() {
         _connectionStatus = _ConnectionStatus.failure;
-        _connectionMessage = e.toString();
+        _connectionMessage = formatError(e);
       });
     }
   }
@@ -105,13 +95,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final url = _urlController.text.trim();
     final prefs = await SharedPreferences.getInstance();
-
-    // Save backend URL
     await prefs.setString(_kBackendUrlKey, url);
     ApiConfig.baseUrl = url;
-
-    // Save theme mode
-    await prefs.setString(_kThemeModeKey, _themeModeToString(_themeMode));
 
     setState(() => _isSaving = false);
 
@@ -135,16 +120,182 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final themeModeAsync = ref.watch(themeModeProvider);
+    final themeMode = themeModeAsync.valueOrNull ?? ThemeMode.light;
+    final authState = ref.watch(authControllerProvider);
+    final session = authState.session;
+    final customerMemberships =
+        session?.memberships
+            .where(
+              (membership) =>
+                  membership.organizationKind == 'customer' &&
+                  membership.status == 'active' &&
+                  (membership.role == 'owner' ||
+                      membership.role == 'admin' ||
+                      membership.role == 'employee'),
+            )
+            .toList() ??
+        const [];
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // -- Backend Connection section --
-          _SectionHeader(title: 'Backend Connection'),
+          _SettingsHeroCard(session: session),
+          const SizedBox(height: 20),
+
+          // -- Account section --
+          const _SectionHeader(title: 'Account'),
+          _SettingsTile(
+            icon: LucideIcons.user,
+            title: 'Profile',
+            subtitle: session == null
+                ? 'Manage your account'
+                : '${session.user.email} • ${session.activeOrganization?.name ?? 'No organization'}',
+            onTap: () {},
+          ),
+          if (customerMemberships.length > 1)
+            Card(
+              margin: const EdgeInsets.only(bottom: 16),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Active Organization',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: session?.activeOrganization?.id,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(LucideIcons.building2),
+                      ),
+                      items: customerMemberships
+                          .map(
+                            (membership) => DropdownMenuItem<String>(
+                              value: membership.organizationId,
+                              child: Text(membership.organizationName),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (session?.refreshToken ?? '').isEmpty ||
+                              _isSwitchingOrganization
+                          ? null
+                          : (organizationId) async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              if (organizationId == null ||
+                                  organizationId ==
+                                      session?.activeOrganization?.id) {
+                                return;
+                              }
+
+                              setState(() => _isSwitchingOrganization = true);
+                              final success = await ref
+                                  .read(authControllerProvider.notifier)
+                                  .switchOrganization(organizationId);
+                              if (!mounted) {
+                                return;
+                              }
+                              setState(
+                                () => _isSwitchingOrganization = false,
+                              );
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    success
+                                        ? 'Active organization updated'
+                                        : 'Could not switch organization',
+                                  ),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                    ),
+                    if ((session?.refreshToken ?? '').isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Switching organizations is available after a fresh sign-in.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: RuhTheme.textTertiary,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          _SettingsTile(
+            icon: LucideIcons.key,
+            title: 'API Keys',
+            subtitle: 'Manage LLM provider keys',
+            onTap: () {},
+          ),
+          const SizedBox(height: 24),
+          _SettingsTile(
+            icon: LucideIcons.logOut,
+            title: 'Sign out',
+            subtitle: 'Clear the local session on this device',
+            onTap: () async {
+              await ref.read(authControllerProvider.notifier).logout();
+            },
+          ),
+          const SizedBox(height: 24),
+
+          // -- Appearance section --
+          const _SectionHeader(title: 'Appearance'),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Theme',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<ThemeMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: ThemeMode.light,
+                        icon: Icon(LucideIcons.sun, size: IconSizes.md),
+                        label: Text('Light'),
+                      ),
+                      ButtonSegment(
+                        value: ThemeMode.dark,
+                        icon: Icon(LucideIcons.moon, size: IconSizes.md),
+                        label: Text('Dark'),
+                      ),
+                      ButtonSegment(
+                        value: ThemeMode.system,
+                        icon: Icon(LucideIcons.monitor, size: IconSizes.md),
+                        label: Text('System'),
+                      ),
+                    ],
+                    selected: {themeMode},
+                    onSelectionChanged: (selected) {
+                      ref
+                          .read(themeModeProvider.notifier)
+                          .setThemeMode(selected.first);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // -- Advanced section --
+          const _SectionHeader(title: 'Advanced'),
           Card(
             margin: const EdgeInsets.only(bottom: 16),
             child: Padding(
@@ -166,13 +317,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       hintStyle: TextStyle(color: RuhTheme.textTertiary),
                       prefixIcon: Icon(
                         LucideIcons.server,
-                        size: 16,
+                        size: IconSizes.md,
                         color: RuhTheme.textTertiary,
                       ),
                     ),
                     keyboardType: TextInputType.url,
                     onChanged: (_) {
-                      // Reset connection status when URL changes
                       if (_connectionStatus != _ConnectionStatus.idle) {
                         setState(() {
                           _connectionStatus = _ConnectionStatus.idle;
@@ -202,9 +352,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               _connectionStatus == _ConnectionStatus.success
                                   ? LucideIcons.checkCircle
                                   : LucideIcons.xCircle,
-                              size: 14,
-                              color: _connectionStatus ==
-                                      _ConnectionStatus.success
+                              size: IconSizes.sm,
+                              color:
+                                  _connectionStatus == _ConnectionStatus.success
                                   ? RuhTheme.success
                                   : RuhTheme.error,
                             ),
@@ -213,13 +363,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             child: Text(
                               _connectionMessage ?? '',
                               style: theme.textTheme.bodySmall?.copyWith(
-                                color: _connectionStatus ==
+                                color:
+                                    _connectionStatus ==
                                         _ConnectionStatus.success
                                     ? RuhTheme.success
                                     : _connectionStatus ==
-                                            _ConnectionStatus.failure
-                                        ? RuhTheme.error
-                                        : RuhTheme.textSecondary,
+                                          _ConnectionStatus.failure
+                                    ? RuhTheme.error
+                                    : RuhTheme.textSecondary,
                               ),
                             ),
                           ),
@@ -232,7 +383,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onPressed: _connectionStatus == _ConnectionStatus.testing
                         ? null
                         : _testConnection,
-                    icon: const Icon(LucideIcons.wifi, size: 14),
+                    icon: const Icon(LucideIcons.wifi, size: IconSizes.sm),
                     label: const Text('Test Connection'),
                   ),
                 ],
@@ -240,68 +391,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // -- Appearance section --
-          _SectionHeader(title: 'Appearance'),
-          Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Theme',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SegmentedButton<ThemeMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: ThemeMode.light,
-                        icon: Icon(LucideIcons.sun, size: 16),
-                        label: Text('Light'),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.dark,
-                        icon: Icon(LucideIcons.moon, size: 16),
-                        label: Text('Dark'),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.system,
-                        icon: Icon(LucideIcons.monitor, size: 16),
-                        label: Text('System'),
-                      ),
-                    ],
-                    selected: {_themeMode},
-                    onSelectionChanged: (selected) {
-                      setState(() => _themeMode = selected.first);
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // -- Account section --
-          _SectionHeader(title: 'Account'),
-          _SettingsTile(
-            icon: LucideIcons.user,
-            title: 'Profile',
-            subtitle: 'Manage your account',
-            onTap: () {},
-          ),
-          _SettingsTile(
-            icon: LucideIcons.key,
-            title: 'API Keys',
-            subtitle: 'Manage LLM provider keys',
-            onTap: () {},
-          ),
-          const SizedBox(height: 24),
-
           // -- About section --
-          _SectionHeader(title: 'About'),
+          const _SectionHeader(title: 'About'),
           _SettingsTile(
             icon: LucideIcons.info,
             title: 'Version',
@@ -324,7 +415,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         color: Colors.white,
                       ),
                     )
-                  : const Icon(LucideIcons.save, size: 16),
+                  : const Icon(LucideIcons.save, size: IconSizes.md),
               label: Text(_isSaving ? 'Saving...' : 'Save Settings'),
             ),
           ),
@@ -346,29 +437,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+class _SettingsHeroCard extends StatelessWidget {
+  final AuthSession? session;
+
+  const _SettingsHeroCard({required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final organizationName = session?.activeOrganization?.name ?? 'No organization';
+    final email = session?.user.email ?? 'Signed out';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: RuhTheme.brandGradient,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: RuhTheme.primary.withValues(alpha: 0.14),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              'Customer workspace settings',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            organizationName,
+            style: theme.textTheme.headlineLarge?.copyWith(
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            email,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.white.withValues(alpha: 0.88),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 enum _ConnectionStatus { idle, testing, success, failure }
-
-String _themeModeToString(ThemeMode mode) {
-  switch (mode) {
-    case ThemeMode.light:
-      return 'light';
-    case ThemeMode.dark:
-      return 'dark';
-    case ThemeMode.system:
-      return 'system';
-  }
-}
-
-ThemeMode _themeModeFromString(String value) {
-  switch (value) {
-    case 'dark':
-      return ThemeMode.dark;
-    case 'system':
-      return ThemeMode.system;
-    default:
-      return ThemeMode.light;
-  }
-}
 
 class _SectionHeader extends StatelessWidget {
   final String title;
@@ -381,9 +512,9 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: RuhTheme.textSecondary,
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(color: RuhTheme.textSecondary),
       ),
     );
   }
@@ -409,12 +540,12 @@ class _SettingsTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        leading: Icon(icon, size: 20, color: RuhTheme.primary),
+        leading: Icon(icon, size: IconSizes.lg, color: RuhTheme.primary),
         title: Text(title, style: theme.textTheme.bodyMedium),
         subtitle: Text(subtitle, style: theme.textTheme.bodySmall),
         trailing: Icon(
           LucideIcons.chevronRight,
-          size: 16,
+          size: IconSizes.md,
           color: RuhTheme.textTertiary,
         ),
         onTap: onTap,

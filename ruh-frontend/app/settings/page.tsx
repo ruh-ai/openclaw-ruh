@@ -1,22 +1,32 @@
 "use client";
 import { useEffect, useState } from "react";
-import { isTauri } from "@/lib/platform";
-import { getSettings, updateSettings, type AppSettings } from "@/lib/desktop/settings";
+
+interface AppSettings {
+  backend_url: string;
+  auto_connect: boolean;
+  theme: string;
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  backend_url: "http://localhost:8000",
+  auto_connect: true,
+  theme: "light",
+};
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
-  const isDesktop = isTauri();
 
   useEffect(() => {
-    getSettings().then(setSettings);
+    const stored = localStorage.getItem("ruh-settings");
+    setSettings(stored ? JSON.parse(stored) : DEFAULT_SETTINGS);
   }, []);
 
   const handleSave = async () => {
     if (!settings) return;
-    await updateSettings(settings);
+    localStorage.setItem("ruh-settings", JSON.stringify(settings));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -40,9 +50,7 @@ export default function SettingsPage() {
   return (
     <div className="max-w-lg mx-auto px-6 py-8">
       <h1 className="text-xl font-bold">Settings</h1>
-      <p className="text-sm text-gray-500 mt-1">
-        {isDesktop ? "Desktop application preferences" : "Application preferences"}
-      </p>
+      <p className="text-sm text-gray-500 mt-1">Application preferences</p>
 
       <div className="mt-6 space-y-4">
         <div>

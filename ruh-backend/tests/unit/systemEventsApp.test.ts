@@ -82,6 +82,33 @@ async function* fakeSuccessGen(): AsyncGenerator<[string, unknown]> {
 
 const mockCreateSandbox = mock(fakeSuccessGen);
 
+mock.module('../../src/auth/middleware', () => ({
+  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
+    req.user = {
+      userId: 'user-test-001',
+      email: 'developer@test.dev',
+      role: 'developer',
+      orgId: 'org-test-001',
+    };
+    next();
+  },
+  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+}));
+
+mock.module('../../src/auth/builderAccess', () => ({
+  requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
+    user,
+    organization: {
+      id: 'org-test-001',
+      name: 'Test Dev Org',
+      slug: 'test-dev-org',
+      kind: 'developer',
+      plan: 'free',
+    },
+  })),
+}));
+
 mock.module('../../src/systemEventStore', () => ({
   writeSystemEvent: mockWriteSystemEvent,
   listSystemEvents: mockListSystemEvents,
@@ -100,6 +127,7 @@ mock.module('../../src/agentStore', () => ({
   listAgents: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
+  getAgentForCreator: mock(async () => mockGetAgent()),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
@@ -148,6 +176,7 @@ mock.module('../../src/docker', () => ({
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
+  dockerExec: mock(async () => [true, '']),
   listManagedSandboxContainers: mock(async () => []),
   dockerSpawn: mock(async () => [0, '']),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),

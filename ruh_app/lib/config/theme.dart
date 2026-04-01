@@ -22,6 +22,10 @@ class RuhTheme {
   static const Color sidebar = Color(0xFFFDFBFF);
   static const Color accentLight = Color(0xFFF7E6FA);
   static const Color lightPurple = Color(0xFFFDF4FF);
+  static const Color userMessageBg = Color(0xFFF3F4F6);
+  static const Color toolCallBg = Color(0xFFF3F4F6);
+  static const Color footerBg = Color(0xFFF9FAFB);
+  static const Color installButtonBg = Color(0xFFF3F4F6);
 
   // ── Text ──────────────────────────────────────────────────────────────
 
@@ -40,6 +44,7 @@ class RuhTheme {
   static const Color error = Color(0xFFEF4444);
   static const Color warning = Color(0xFFF59E0B);
   static const Color info = Color(0xFF3B82F6);
+  static const Color starColor = Color(0xFFF59E0B);
 
   // ── Dark surfaces ─────────────────────────────────────────────────────
 
@@ -58,6 +63,12 @@ class RuhTheme {
     end: Alignment.bottomRight,
   );
 
+  static const LinearGradient marketplaceHeroGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFfdf4ff), Color(0xFFf3e8ff), Color(0xFFede9fe)],
+  );
+
   // ── Border radius scale ───────────────────────────────────────────────
 
   static const double radiusSm = 4;
@@ -69,10 +80,12 @@ class RuhTheme {
   // ── Typography helpers ────────────────────────────────────────────────
 
   static TextTheme _buildTextTheme(Brightness brightness) {
-    final Color defaultColor =
-        brightness == Brightness.light ? textPrimary : darkTextPrimary;
-    final Color secondaryColor =
-        brightness == Brightness.light ? textSecondary : darkTextSecondary;
+    final Color defaultColor = brightness == Brightness.light
+        ? textPrimary
+        : darkTextPrimary;
+    final Color secondaryColor = brightness == Brightness.light
+        ? textSecondary
+        : darkTextSecondary;
 
     // Base body/label text — Inter as the closest Google Fonts match for Satoshi.
     final TextStyle base = GoogleFonts.inter(color: defaultColor);
@@ -86,13 +99,23 @@ class RuhTheme {
     return TextTheme(
       // ── Display / headings (Sora) ──
       displayLarge: display.copyWith(fontSize: 32, fontWeight: FontWeight.bold),
-      displayMedium: display.copyWith(fontSize: 28, fontWeight: FontWeight.bold),
+      displayMedium: display.copyWith(
+        fontSize: 28,
+        fontWeight: FontWeight.bold,
+      ),
       displaySmall: display.copyWith(fontSize: 24, fontWeight: FontWeight.bold),
-      headlineLarge: display.copyWith(fontSize: 20, fontWeight: FontWeight.bold),
-      headlineMedium:
-          display.copyWith(fontSize: 16, fontWeight: FontWeight.bold),
-      headlineSmall:
-          display.copyWith(fontSize: 14, fontWeight: FontWeight.w600),
+      headlineLarge: display.copyWith(
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+      ),
+      headlineMedium: display.copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.bold,
+      ),
+      headlineSmall: display.copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+      ),
 
       // ── Title (Jost accent) ──
       titleLarge: accent.copyWith(fontSize: 20, fontWeight: FontWeight.w600),
@@ -108,7 +131,10 @@ class RuhTheme {
       labelLarge: base.copyWith(fontSize: 14, fontWeight: FontWeight.w500),
       labelMedium: base.copyWith(fontSize: 12, fontWeight: FontWeight.w500),
       labelSmall: base.copyWith(
-          fontSize: 11, fontWeight: FontWeight.w500, color: secondaryColor),
+        fontSize: 11,
+        fontWeight: FontWeight.w500,
+        color: secondaryColor,
+      ),
     );
   }
 
@@ -166,8 +192,10 @@ class RuhTheme {
           borderRadius: BorderRadius.circular(radiusMd),
           borderSide: const BorderSide(color: primary, width: 2),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
@@ -254,8 +282,10 @@ class RuhTheme {
           borderRadius: BorderRadius.circular(radiusMd),
           borderSide: const BorderSide(color: primary, width: 2),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(

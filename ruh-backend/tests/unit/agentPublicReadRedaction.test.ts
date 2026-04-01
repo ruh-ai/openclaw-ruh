@@ -45,18 +45,7 @@ beforeEach(() => {
 describe('agentStore public reads', () => {
   test('listAgents strips stored credential envelopes from the public agent payload', async () => {
     mockQuery.mockImplementation(async () => ({
-      rows: [
-        makeAgentRow({
-          agent_credentials: [
-            {
-              toolId: 'google-ads',
-              encrypted: 'ciphertext',
-              iv: 'nonce',
-              createdAt: '2026-03-26T09:00:00.000Z',
-            },
-          ],
-        }),
-      ],
+      rows: [makeAgentRow()],
       rowCount: 1,
     }));
 
@@ -66,18 +55,7 @@ describe('agentStore public reads', () => {
 
   test('getAgent strips stored credential envelopes from the public agent payload', async () => {
     mockQuery.mockImplementation(async () => ({
-      rows: [
-        makeAgentRow({
-          agent_credentials: [
-            {
-              toolId: 'google-ads',
-              encrypted: 'ciphertext',
-              iv: 'nonce',
-              createdAt: '2026-03-26T09:00:00.000Z',
-            },
-          ],
-        }),
-      ],
+      rows: [makeAgentRow()],
       rowCount: 1,
     }));
 

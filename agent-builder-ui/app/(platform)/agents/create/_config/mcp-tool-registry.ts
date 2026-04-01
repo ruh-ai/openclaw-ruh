@@ -6,6 +6,8 @@
  * the agent's sandbox container.
  */
 
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
+
 export interface McpCredentialField {
   /** Environment variable name (e.g., GITHUB_PERSONAL_ACCESS_TOKEN) */
   key: string;
@@ -220,7 +222,7 @@ export async function saveToolCredentials(
   credentials: Record<string, string>,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/credentials/${toolId}`, {
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/credentials/${toolId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ credentials }),
@@ -240,7 +242,7 @@ export async function deleteToolCredentials(
   toolId: string,
 ): Promise<{ ok: boolean }> {
   try {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/credentials/${toolId}`, {
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/credentials/${toolId}`, {
       method: "DELETE",
     });
     return { ok: res.ok };
@@ -253,7 +255,7 @@ export async function fetchCredentialSummary(
   agentId: string,
 ): Promise<Array<{ toolId: string; hasCredentials: boolean; createdAt: string }>> {
   try {
-    const res = await fetch(`${API_BASE}/api/agents/${agentId}/credentials`);
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/credentials`);
     if (!res.ok) return [];
     return await res.json();
   } catch {
