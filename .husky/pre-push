@@ -16,7 +16,12 @@ fi
 
 if echo "$CHANGED" | grep -q "^agent-builder-ui/"; then
   echo "🧪 Running agent-builder-ui tests..."
-  cd agent-builder-ui && bun test lib/ hooks/ app/ services/ middleware.test.ts || exit 1
+  cd agent-builder-ui
+  FAIL=0
+  for f in $(find lib/ hooks/ app/ services/ -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null) middleware.test.ts; do
+    [ -f "$f" ] && { bun test "$f" || FAIL=1; }
+  done
+  [ $FAIL -eq 0 ] || exit 1
   cd ..
 fi
 
@@ -28,7 +33,12 @@ fi
 
 if echo "$CHANGED" | grep -q "^admin-ui/"; then
   echo "🧪 Running admin-ui tests..."
-  cd admin-ui && bun test || exit 1
+  cd admin-ui
+  FAIL=0
+  for f in $(find . -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null); do
+    bun test "$f" || FAIL=1
+  done
+  [ $FAIL -eq 0 ] || exit 1
   cd ..
 fi
 
