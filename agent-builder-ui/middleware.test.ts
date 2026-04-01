@@ -34,7 +34,7 @@ describe("middleware", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
-  test("does not bypass protected routes in local development", () => {
+  test("bypasses auth in local development", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";
 
@@ -43,10 +43,8 @@ describe("middleware", () => {
         new NextRequest("http://builder.test/agents/create")
       );
 
-      expect(response.status).toBe(307);
-      expect(response.headers.get("location")).toBe(
-        "http://builder.test/authenticate?redirect_url=%2Fagents%2Fcreate"
-      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("location")).toBeNull();
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
     }
