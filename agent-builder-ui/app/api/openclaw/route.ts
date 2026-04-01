@@ -1,52 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
 import WebSocket from "ws";
 import { randomUUID } from "crypto";
-import yaml from "js-yaml";
-import { appendFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import { evaluateApprovalRequest } from "@/lib/openclaw/approval-policy";
+import {
+  requireAuthenticatedBridgeSession,
+  RouteAuthError,
+} from "@/lib/openclaw/bridge-auth";
+import { classifyGatewayRunError } from "@/lib/openclaw/error-classification";
+import {
+  extractMessageText,
+  finalizeGatewayResponse,
+} from "@/lib/openclaw/gateway-response";
+import { extractIntermediateUpdates } from "@/lib/openclaw/intermediate-updates";
+import {
+  withLangfuseBridgeTrace,
+  type BridgeTraceHandle,
+  type ToolSpanHandle,
+} from "@/lib/openclaw/langfuse";
+import {
+  buildGatewaySessionKey,
+  buildGatewayUserMessage,
+  type OpenClawRequestMode,
+} from "@/lib/openclaw/test-mode";
+import type { LifecycleEvent } from "@/lib/openclaw/types";
 
-// ---------------------------------------------------------------------------
-// Chat logger — saves all request/response data to logs/openclaw-chat.log
-// ---------------------------------------------------------------------------
-const LOG_DIR = join(process.cwd(), "logs");
-const LOG_FILE = join(LOG_DIR, "openclaw-chat.log");
+export const runtime = "nodejs";
 
-function chatLog(direction: "SEND" | "RECV" | "INFO" | "USER" | "AGENT", data: unknown) {
-  try {
-    mkdirSync(LOG_DIR, { recursive: true });
-    const timestamp = new Date().toISOString();
-    const line = `[${timestamp}] [${direction}] ${typeof data === "string" ? data : JSON.stringify(data, null, 2)}\n`;
-    appendFileSync(LOG_FILE, line);
-  } catch {
-    // Logging should never break the app
-  }
-}
-
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
-const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
+const DEFAULT_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
+const DEFAULT_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 const GATEWAY_ORIGIN =
   process.env.OPENCLAW_GATEWAY_ORIGIN || "https://clawagentbuilder.ruh.ai";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const PER_ATTEMPT_TIMEOUT_MS = parseInt(
-  process.env.OPENCLAW_TIMEOUT_MS || "600000",
+  process.env.OPENCLAW_TIMEOUT_MS || "180000",
   10
 );
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2000;
+const AUTH_ME_PATH = "/users/me";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface LifecycleEvent {
-  phase: string;
-  message: string;
-  detail?: string;
-}
+type StreamEventSender = (event: string, data: object) => void;
 
 class AuthError extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = "AuthError";
+  }
+}
+
+class RequestAbortedError extends Error {
+  constructor(msg = "Request aborted by client") {
+    super(msg);
+    this.name = "RequestAbortedError";
+  }
+}
+
+class GatewayRetryBoundaryError extends Error {
+  readonly stage: "pre_accept" | "post_accept";
+
+  constructor(stage: "pre_accept" | "post_accept", msg: string) {
+    super(msg);
+    this.name = "GatewayRetryBoundaryError";
+    this.stage = stage;
   }
 }
 
@@ -64,13 +79,13 @@ function sseEncode(event: string, data: object): Uint8Array {
 // ---------------------------------------------------------------------------
 
 const PHASE_MESSAGES: Record<string, string> = {
-  start: "Processing your inputs...",
-  thinking: "Analyzing requirements...",
-  planning: "Planning agent architecture...",
+  start: "Agent started...",
+  thinking: "Agent thinking...",
+  planning: "Planning approach...",
   searching: "Searching for existing skills...",
   generating: "Generating skill graph...",
-  reviewing: "Reviewing agent design...",
-  writing: "Preparing response...",
+  reviewing: "Reviewing results...",
+  writing: "Writing response...",
   end: "Complete",
 };
 
@@ -82,15 +97,112 @@ function mapLifecyclePhase(phase: string): LifecycleEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Forge sandbox gateway resolution
+// ---------------------------------------------------------------------------
+
+interface GatewayCredentials {
+  url: string;
+  token: string;
+  /** Origin header to send when connecting. Forge sandboxes need an origin from their allowed list. */
+  origin?: string;
+}
+
+/**
+ * Resolve gateway credentials for a forge sandbox by querying the backend.
+ * Converts HTTP URL to WebSocket URL for the gateway connection.
+ */
+async function resolveForgeGateway(
+  forgeSandboxId: string
+): Promise<GatewayCredentials> {
+  const res = await fetch(`${BACKEND_URL}/api/sandboxes/${forgeSandboxId}`);
+  if (!res.ok) {
+    throw new Error(
+      `Failed to resolve forge sandbox ${forgeSandboxId}: ${res.status}`
+    );
+  }
+  const record = await res.json();
+  const httpUrl: string = record.standard_url || record.dashboard_url || "";
+  if (!httpUrl) {
+    throw new Error(
+      `Forge sandbox ${forgeSandboxId} has no gateway URL`
+    );
+  }
+
+  // Health-check: verify the gateway is reachable before returning.
+  // If the container is running but the gateway process crashed, attempt
+  // to restart it via the backend before giving up.
+  try {
+    const probe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+    if (!probe.ok) throw new Error(`probe status ${probe.status}`);
+  } catch (probeErr) {
+    console.warn(
+      `[Gateway] Forge sandbox ${forgeSandboxId} gateway at ${httpUrl} is unreachable, attempting restart...`,
+    );
+    // Ask the backend to restart the gateway inside the sandbox container.
+    // POST /api/sandboxes/:id/gateway/restart is the standard restart endpoint.
+    try {
+      const restartRes = await fetch(
+        `${BACKEND_URL}/api/sandboxes/${forgeSandboxId}/gateway/restart`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(20000),
+        },
+      );
+      if (restartRes.ok) {
+        console.log(`[Gateway] Restart command sent for forge sandbox ${forgeSandboxId}, waiting for gateway...`);
+        // Wait a few seconds for the gateway to come up, then re-probe
+        await new Promise((r) => setTimeout(r, 5000));
+        const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+        if (!reProbe.ok) {
+          throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
+        }
+        console.log(`[Gateway] Forge sandbox ${forgeSandboxId} gateway recovered after restart`);
+      } else {
+        throw new Error(`Restart endpoint returned ${restartRes.status}`);
+      }
+    } catch (restartErr) {
+      throw new Error(
+        `Forge sandbox ${forgeSandboxId} gateway is unreachable at ${httpUrl} and restart failed: ${
+          restartErr instanceof Error ? restartErr.message : String(restartErr)
+        }`
+      );
+    }
+  }
+
+  // Convert HTTP URL to WebSocket URL
+  const wsUrl = httpUrl
+    .replace(/^https:/, "wss:")
+    .replace(/^http:/, "ws:");
+  // Derive an origin the forge sandbox will accept (localhost sandboxes allow http://localhost)
+  const parsedUrl = new URL(httpUrl);
+  const forgeOrigin = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+  return {
+    url: wsUrl,
+    token: record.gateway_token || "",
+    origin: forgeOrigin,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Route handler
 // ---------------------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { session_id, message, agent } = body;
+    await requireAuthenticatedBridgeSession(req, {
+      backendUrl: BACKEND_URL,
+      authMePath: AUTH_ME_PATH,
+      nodeEnv: process.env.NODE_ENV,
+      allowLocalDevelopmentBypass: true,
+    });
 
-    chatLog("USER", { session_id, message, agent });
+    const body = await req.json();
+    const { session_id, request_id, message, agent, mode, soul_override, forge_sandbox_id, timeout_ms, agent_id } = body;
+    const requestId =
+      typeof request_id === "string" && request_id.trim()
+        ? request_id.trim()
+        : randomUUID();
 
     if (!session_id || !message) {
       return NextResponse.json(
@@ -109,40 +221,225 @@ export async function POST(req: NextRequest) {
           }
         };
 
+        // SSE keepalive: send comment lines every 30s to prevent proxy idle timeouts
+        const keepaliveInterval = setInterval(() => {
+          try {
+            controller.enqueue(new TextEncoder().encode(":keepalive\n\n"));
+          } catch {
+            clearInterval(keepaliveInterval);
+          }
+        }, 30_000);
+
         const onLifecycleEvent = (evt: LifecycleEvent) => {
           send("status", evt);
         };
 
         try {
-          const response = await connectWithRetry(
-            session_id,
-            message,
-            agent || "architect",
-            onLifecycleEvent
+          const resolvedMode =
+            mode === "test"
+              ? "test"
+              : mode === "copilot"
+                ? "copilot"
+                : mode === "agent"
+                  ? "agent"
+                  : "build";
+          const resolvedAgent = agent || "architect";
+
+          const traced = await withLangfuseBridgeTrace(
+            {
+              name: "openclaw.bridge.request",
+              input: {
+                message,
+                requestId,
+              },
+              metadata: {
+                session_id,
+                agent: resolvedAgent,
+                mode: resolvedMode,
+                agent_id: typeof agent_id === "string" ? agent_id : null,
+                forge_sandbox_id:
+                  typeof forge_sandbox_id === "string" && forge_sandbox_id
+                    ? forge_sandbox_id
+                    : null,
+              },
+              // Session groups all turns of this conversation together
+              sessionId: session_id,
+              // User: per-agent instance when available, falls back to agent type
+              userId: typeof agent_id === "string" && agent_id
+                ? agent_id
+                : resolvedAgent,
+              // Tags let you filter by mode, agent type, and agent instance
+              tags: [
+                `mode:${resolvedMode}`,
+                `agent:${resolvedAgent}`,
+                ...(typeof agent_id === "string" && agent_id
+                  ? [`agent-id:${agent_id}`]
+                  : []),
+                ...(typeof forge_sandbox_id === "string" && forge_sandbox_id
+                  ? ["sandbox:forge"]
+                  : ["sandbox:default"]),
+              ],
+            },
+            async (trace) => {
+              // Forge sandboxes use the backend's HTTP chat proxy (no WebSocket
+              // device-identity auth required). The shared gateway uses WebSocket.
+              if (typeof forge_sandbox_id === "string" && forge_sandbox_id) {
+                trace.recordEvent("openclaw.bridge.forge_http_proxy", {
+                  forge_sandbox_id,
+                });
+                onLifecycleEvent({ phase: "connecting", message: "Connecting to agent..." });
+
+                const sessionKey = `agent:main:${session_id}`;
+                const chatRes = await fetch(
+                  `${BACKEND_URL}/api/sandboxes/${forge_sandbox_id}/chat`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(sessionKey ? { "x-openclaw-session-key": sessionKey } : {}),
+                    },
+                    body: JSON.stringify({
+                      messages: [{ role: "user", content: message }],
+                      session_key: sessionKey,
+                      ...(typeof soul_override === "string" ? { system: soul_override } : {}),
+                    }),
+                    signal: AbortSignal.timeout(
+                      typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : PER_ATTEMPT_TIMEOUT_MS
+                    ),
+                  },
+                );
+
+                if (!chatRes.ok) {
+                  const errText = await chatRes.text().catch(() => "unknown error");
+                  throw new Error(`Forge sandbox chat failed (${chatRes.status}): ${errText.slice(0, 200)}`);
+                }
+
+                onLifecycleEvent({ phase: "authenticated", message: "Agent started..." });
+                onLifecycleEvent({ phase: "thinking", message: "Agent thinking..." });
+
+                const chatData = await chatRes.json() as {
+                  choices?: Array<{ message?: { content?: string } }>;
+                };
+                const content = chatData.choices?.[0]?.message?.content ?? "";
+
+                onLifecycleEvent({ phase: "start", message: "Agent started..." });
+
+                // Stream the response as delta events for SSE parity
+                send("delta", { text: content });
+
+                // Build response payload — the forge HTTP endpoint returns plain text.
+                // Structured responses (ready_for_review, discovery) are parsed by the
+                // AG-UI event consumer on the client side, so we just wrap as agent_response.
+                // The outer trace wrapper sends the final "result" SSE event.
+                return { type: "agent_response", content } as object;
+              }
+
+              // Shared gateway: use WebSocket
+              const gateway: GatewayCredentials = {
+                url: DEFAULT_GATEWAY_URL,
+                token: DEFAULT_GATEWAY_TOKEN,
+              };
+
+              const response = await connectWithRetry(
+                session_id,
+                message,
+                resolvedAgent,
+                resolvedMode,
+                typeof soul_override === "string" ? soul_override : undefined,
+                onLifecycleEvent,
+                send,
+                requestId,
+                req.signal,
+                gateway,
+                typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : undefined,
+                trace
+              );
+
+              const responseType =
+                typeof response === "object" &&
+                response !== null &&
+                "type" in response
+                  ? (response as { type?: unknown }).type ?? null
+                  : null;
+
+              trace.update({
+                statusMessage: "Bridge request succeeded",
+                output: { type: responseType },
+              });
+
+              // Score the request outcome so quality trends appear in Langfuse
+              const isSuccess = responseType !== "error";
+              await trace.addScore(
+                "request_success",
+                isSuccess ? 1 : 0,
+                isSuccess ? "Request completed successfully" : "Request ended with an error response"
+              );
+
+              return response;
+            }
           );
 
-          chatLog("AGENT", response);
-          send("result", response as Record<string, unknown>);
+          const responsePayload =
+            traced.traceId &&
+            typeof traced.result === "object" &&
+            traced.result !== null
+              ? {
+                  ...(traced.result as Record<string, unknown>),
+                  trace_id: traced.traceId,
+                }
+              : (traced.result as Record<string, unknown>);
+
+          send("result", responsePayload);
         } catch (gatewayError) {
+          if (gatewayError instanceof RequestAbortedError) {
+            clearInterval(keepaliveInterval);
+            controller.close();
+            return;
+          }
+
           const errMsg =
             gatewayError instanceof Error
               ? gatewayError.message
               : String(gatewayError);
-          console.warn(
-            "OpenClaw Gateway unreachable after retries:",
-            errMsg
-          );
-          send("status", {
-            phase: "error",
-            message: "Unable to reach agent gateway",
-          });
-          send("result", {
-            type: "error",
-            error: errMsg,
-            content: `Unable to reach the OpenClaw gateway. Please ensure the gateway is running.\n\nError: ${errMsg}`,
-          });
+
+          if (
+            gatewayError instanceof GatewayRetryBoundaryError &&
+            gatewayError.stage === "post_accept"
+          ) {
+            console.warn(
+              `[Gateway][${requestId}] connection dropped after run acceptance:`,
+              errMsg
+            );
+            send("status", {
+              phase: "error",
+              message: "Connection lost after the agent run started",
+            });
+            send("result", {
+              type: "error",
+              error: errMsg,
+              content:
+                "The architect run was accepted before the connection dropped, so it may still be running remotely. Start a new request only if you want a new run.",
+              request_id: requestId,
+            });
+          } else {
+            console.warn(
+              `[Gateway][${requestId}] unreachable after retries:`,
+              errMsg
+            );
+            send("status", {
+              phase: "error",
+              message: "Unable to reach agent gateway",
+            });
+            send("result", {
+              type: "error",
+              error: errMsg,
+              content: `Unable to reach the OpenClaw gateway. Please ensure the gateway is running.\n\nError: ${errMsg}`,
+              request_id: requestId,
+            });
+          }
         }
 
+        clearInterval(keepaliveInterval);
         controller.close();
       },
     });
@@ -155,6 +452,15 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof RouteAuthError) {
+      return NextResponse.json(
+        {
+          error: error.code,
+          detail: error.detail,
+        },
+        { status: error.status }
+      );
+    }
     console.error("Bridge API error:", error);
     return NextResponse.json(
       { type: "error", error: "Internal server error" },
@@ -171,12 +477,24 @@ async function connectWithRetry(
   sessionId: string,
   message: string,
   agentId: string,
-  onLifecycleEvent: (evt: LifecycleEvent) => void
+  mode: OpenClawRequestMode,
+  soulOverride: string | undefined,
+  onLifecycleEvent: (evt: LifecycleEvent) => void,
+  onStreamEvent: StreamEventSender,
+  requestId: string,
+  abortSignal?: AbortSignal,
+  gateway?: GatewayCredentials,
+  perAttemptTimeoutMs?: number,
+  trace?: BridgeTraceHandle
 ): Promise<object> {
+  const gatewayUrl = gateway?.url || DEFAULT_GATEWAY_URL;
+  const gatewayToken = gateway?.token || DEFAULT_GATEWAY_TOKEN;
+  const gatewayOrigin = gateway?.origin || GATEWAY_ORIGIN;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
+      throwIfAborted(abortSignal);
       onLifecycleEvent({
         phase: "connecting",
         message:
@@ -185,28 +503,50 @@ async function connectWithRetry(
             : `Reconnecting (attempt ${attempt + 1}/${MAX_RETRIES})...`,
       });
 
-      if (!GATEWAY_URL) {
+      if (!gatewayUrl) {
         throw new Error(
           "OPENCLAW_GATEWAY_URL is not configured. Set it in your .env file."
         );
       }
       return await forwardToGateway(
-        GATEWAY_URL,
+        gatewayUrl,
         sessionId,
         message,
         agentId,
-        onLifecycleEvent
+        mode,
+        soulOverride,
+        onLifecycleEvent,
+        onStreamEvent,
+        requestId,
+        abortSignal,
+        gatewayToken,
+        gatewayOrigin,
+        perAttemptTimeoutMs,
+        trace
       );
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
-      if (err instanceof AuthError) {
+      if (
+        err instanceof AuthError ||
+        err instanceof RequestAbortedError ||
+        (err instanceof GatewayRetryBoundaryError &&
+          err.stage === "post_accept")
+      ) {
         throw err;
       }
 
       console.warn(
-        `[Gateway] Attempt ${attempt + 1}/${MAX_RETRIES} failed:`,
+        `[Gateway][${requestId}] Attempt ${attempt + 1}/${MAX_RETRIES} failed:`,
         lastError.message
+      );
+      trace?.recordEvent(
+        "openclaw.bridge.retry",
+        {
+          attempt: attempt + 1,
+          error: lastError.message,
+        },
+        "WARNING"
       );
 
       if (attempt < MAX_RETRIES - 1) {
@@ -215,32 +555,12 @@ async function connectWithRetry(
           phase: "retrying",
           message: `Connection lost. Retrying in ${delay / 1000}s...`,
         });
-        await new Promise((r) => setTimeout(r, delay));
+        await waitFor(delay, abortSignal);
       }
     }
   }
 
   throw lastError || new Error("All gateway connection attempts failed");
-}
-
-// ---------------------------------------------------------------------------
-// Extract text from OpenClaw message
-// ---------------------------------------------------------------------------
-
-function extractMessageText(message: unknown): string {
-  if (!message) return "";
-  if (typeof message === "string") return message;
-  if (typeof message === "object" && message !== null) {
-    const msg = message as Record<string, unknown>;
-    if (Array.isArray(msg.content)) {
-      return msg.content
-        .filter((b: Record<string, unknown>) => b.type === "text")
-        .map((b: Record<string, unknown>) => b.text)
-        .join("");
-    }
-    if (typeof msg.content === "string") return msg.content;
-  }
-  return "";
 }
 
 // ---------------------------------------------------------------------------
@@ -252,29 +572,54 @@ async function forwardToGateway(
   sessionId: string,
   message: string,
   agentId: string,
-  onLifecycleEvent: (evt: LifecycleEvent) => void
+  mode: OpenClawRequestMode,
+  soulOverride: string | undefined,
+  onLifecycleEvent: (evt: LifecycleEvent) => void,
+  onStreamEvent: StreamEventSender,
+  requestId: string,
+  abortSignal?: AbortSignal,
+  gatewayToken?: string,
+  origin?: string,
+  perAttemptTimeoutMs?: number,
+  trace?: BridgeTraceHandle
 ): Promise<object> {
+  const effectiveTimeout = perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
+  const token = gatewayToken || DEFAULT_GATEWAY_TOKEN;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(gatewayUrl, {
-      headers: { Origin: GATEWAY_ORIGIN },
+      headers: { Origin: origin || GATEWAY_ORIGIN },
     });
+    let chatAccepted = false;
     const timeout = setTimeout(() => {
       rejectOnce(
-        new Error(
-          `Gateway timeout (${PER_ATTEMPT_TIMEOUT_MS / 1000}s)`
+        new GatewayRetryBoundaryError(
+          chatAccepted ? "post_accept" : "pre_accept",
+          `Gateway timeout (${effectiveTimeout / 1000}s)`
         )
       );
-    }, PER_ATTEMPT_TIMEOUT_MS);
+    }, effectiveTimeout);
 
     let connected = false;
     let resolved = false;
     let agentText = "";
     let runId = "";
+    let activeToolName: string | null = null;
+    let activeToolSpan: ToolSpanHandle | null = null;
+    const emittedIntermediateUpdates = new Set<string>();
+
+    /** End the active tool span, if any, before transitioning phase. */
+    const endActiveToolSpan = (output?: unknown) => {
+      if (activeToolSpan) {
+        activeToolSpan.end(output);
+        activeToolSpan = null;
+      }
+    };
 
     const resolveOnce = (value: object) => {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
+      abortSignal?.removeEventListener("abort", onAbort);
       ws.close();
       resolve(value);
     };
@@ -283,129 +628,87 @@ async function forwardToGateway(
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
+      abortSignal?.removeEventListener("abort", onAbort);
       ws.close();
       reject(err);
     };
 
-    const finalizeResponse = (text: string) => {
-      // Try JSON parse first
-      try {
-        resolveOnce(JSON.parse(text));
-        return;
-      } catch {
-        // Not JSON, try other formats
-      }
-
-      // Try YAML code blocks tagged with response type
-      const codeBlockMatch = text.match(
-        /```(ready_for_review|clarification|deploy_complete|agent_response)\s*\n([\s\S]*?)```/
+    const onAbort = () => {
+      trace?.recordEvent(
+        "openclaw.bridge.request_aborted",
+        {
+          request_id: requestId,
+          run_id: runId || null,
+        },
+        "WARNING"
       );
-      if (codeBlockMatch) {
-        const blockType = codeBlockMatch[1];
-        const blockContent = codeBlockMatch[2];
-        try {
-          const parsed = yaml.load(blockContent) as Record<string, unknown>;
+      rejectOnce(new RequestAbortedError());
+    };
 
-          if (
-            blockType === "ready_for_review" &&
-            parsed?.skill_graph &&
-            typeof parsed.skill_graph === "object"
-          ) {
-            const sg = parsed.skill_graph as Record<string, unknown>;
-            const nodes = (
-              (sg.nodes as Array<Record<string, unknown>>) || []
-            ).map((node) => ({
-              skill_id:
-                (node.id as string) || (node.skill_id as string),
-              name:
-                (node.id as string) ||
-                (node.skill_id as string) ||
-                ((node.description as string) || "").slice(0, 40),
-              source:
-                (node.type as string) === "ingestion"
-                  ? "data_ingestion"
-                  : "custom",
-              status:
-                (node.type as string) === "trigger" ||
-                (node.type as string) === "config"
-                  ? "always_included"
-                  : "generating",
-              depends_on: (
-                ((sg.edges as Array<Record<string, unknown>>) || [])
-                  .filter((e) => e.to === node.id)
-                  .map((e) => e.from as string)
-              ),
-              description: (node.description as string) || "",
-            }));
+    throwIfAborted(abortSignal);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
 
-            const workflow = {
-              name: "main-workflow",
-              description: `${(parsed.automation_type as string) || "pipeline"} — ${nodes.length} nodes`,
-              steps: (
-                (sg.edges as Array<Record<string, unknown>>) || []
-              ).map((edge, i) => ({
-                id: `step-${i}`,
-                action: "execute",
-                skill: edge.to as string,
-                wait_for: [edge.from as string],
-              })),
-            };
-
-            resolveOnce({
-              type: "ready_for_review",
-              skill_graph: {
-                system_name:
-                  (parsed.automation_type as string) ||
-                  `system-${Date.now().toString(36)}`,
-                nodes,
-                workflow,
-              },
-              adapter_availability: buildAdapterAvailability(
-                (sg.nodes as Array<Record<string, unknown>>) || []
-              ),
-              raw_spec: parsed,
-            });
-            return;
-          }
-
-          resolveOnce({ type: blockType, ...parsed });
-          return;
-        } catch (yamlErr) {
-          console.warn("[Gateway] YAML parse failed:", yamlErr);
-        }
-      }
-
-      // Check for clarification keywords
-      if (
-        text.includes("What I need from you") ||
-        text.includes("questions") ||
-        text.includes("?")
-      ) {
-        resolveOnce({
-          type: "agent_response",
+    const finalizeResponse = (text: string) => {
+      resolveOnce(
+        finalizeGatewayResponse(text, {
+          agentId,
           runId,
-          agent: agentId,
-          content: text,
-        });
-        return;
-      }
-
-      // Default: wrap as agent_response
-      resolveOnce({
-        type: "agent_response",
-        runId,
-        agent: agentId,
-        content: text,
-      });
+        }),
+      );
     };
 
     ws.on("error", (err) => {
-      rejectOnce(err instanceof Error ? err : new Error(String(err)));
+      const error = err instanceof Error ? err : new Error(String(err));
+      trace?.recordEvent(
+        "openclaw.bridge.socket_error",
+        {
+          request_id: requestId,
+          run_id: runId || null,
+          stage: chatAccepted ? "post_accept" : "pre_accept",
+        },
+        "ERROR"
+      );
+      rejectOnce(
+        new GatewayRetryBoundaryError(
+          chatAccepted ? "post_accept" : "pre_accept",
+          error.message
+        )
+      );
     });
 
     ws.on("close", () => {
       if (!connected) {
-        rejectOnce(new Error("WebSocket closed before connect"));
+        trace?.recordEvent(
+          "openclaw.bridge.socket_closed",
+          {
+            request_id: requestId,
+            run_id: runId || null,
+            stage: "pre_accept",
+          },
+          "WARNING"
+        );
+        rejectOnce(
+          new GatewayRetryBoundaryError(
+            "pre_accept",
+            "WebSocket closed before connect"
+          )
+        );
+      } else if (chatAccepted) {
+        trace?.recordEvent(
+          "openclaw.bridge.socket_closed",
+          {
+            request_id: requestId,
+            run_id: runId || null,
+            stage: "post_accept",
+          },
+          "WARNING"
+        );
+        rejectOnce(
+          new GatewayRetryBoundaryError(
+            "post_accept",
+            "WebSocket closed after agent run started"
+          )
+        );
       }
     });
 
@@ -416,33 +719,27 @@ async function forwardToGateway(
       } catch {
         return;
       }
-      chatLog("RECV", frame);
 
       // Step 1: Server sends connect.challenge
       if (frame.type === "event" && frame.event === "connect.challenge") {
-        const connectMsg = {
-          type: "req",
-          id: "1",
-          method: "connect",
-          params: {
-            minProtocol: 3,
-            maxProtocol: 3,
-            client: {
-              id: "openclaw-control-ui",
-              version: "2026.3.13",
-              platform: "web",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            auth: { token: "***" },
-          },
-        };
-        chatLog("SEND", connectMsg);
         ws.send(
           JSON.stringify({
-            ...connectMsg,
-            params: { ...connectMsg.params, auth: { token: GATEWAY_TOKEN } },
+            type: "req",
+            id: "1",
+            method: "connect",
+            params: {
+              minProtocol: 3,
+              maxProtocol: 3,
+              client: {
+                id: "openclaw-control-ui",
+                version: "2026.3.13",
+                platform: "web",
+                mode: "webchat",
+              },
+              role: "operator",
+              scopes: ["operator.read", "operator.write"],
+              auth: { token },
+            },
           })
         );
         return;
@@ -451,6 +748,13 @@ async function forwardToGateway(
       // Step 2: Server responds with hello-ok
       if (frame.type === "res" && frame.id === "1") {
         if (!frame.ok) {
+          trace?.recordEvent(
+            "openclaw.bridge.auth_failed",
+            {
+              request_id: requestId,
+            },
+            "ERROR"
+          );
           rejectOnce(
             new AuthError(
               `Auth failed: ${JSON.stringify(frame.error || frame.payload)}`
@@ -460,25 +764,36 @@ async function forwardToGateway(
         }
 
         connected = true;
+        trace?.recordEvent("openclaw.bridge.connected", {
+          request_id: requestId,
+        });
         onLifecycleEvent({
           phase: "authenticated",
-          message: "Processing your inputs...",
+          message: "Agent started...",
         });
 
         // Step 3: Send chat.send
-        const chatSendMsg = {
-          type: "req",
-          id: "2",
-          method: "chat.send",
-          params: {
-            sessionKey: `agent:${agentId}:main`,
-            message,
-            idempotencyKey: randomUUID(),
-            deliver: false,
-          },
-        };
-        chatLog("SEND", chatSendMsg);
-        ws.send(JSON.stringify(chatSendMsg));
+        // Use sessionId in the session key so every create-agent session gets its
+        // own isolated conversation context on the gateway. Previously the hardcoded
+        // "agent:architect:main" key meant all sessions shared one context — a
+        // crash or malformed response in any session would poison every future one
+        // until the gateway was restarted.
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id: "2",
+            method: "chat.send",
+            params: {
+              sessionKey: buildGatewaySessionKey(agentId, sessionId, mode),
+              message: buildGatewayUserMessage(message, {
+                mode,
+                soulOverride,
+              }),
+              idempotencyKey: requestId,
+              deliver: false,
+            },
+          })
+        );
         return;
       }
 
@@ -494,9 +809,14 @@ async function forwardToGateway(
         }
         const payload = frame.payload as Record<string, unknown> | undefined;
         runId = (payload?.runId as string) || "";
+        chatAccepted = true;
+        trace?.recordEvent("openclaw.bridge.chat_accepted", {
+          request_id: requestId,
+          run_id: runId || null,
+        });
         onLifecycleEvent({
           phase: "thinking",
-          message: "Analyzing requirements...",
+          message: "Agent thinking...",
         });
         return;
       }
@@ -507,28 +827,67 @@ async function forwardToGateway(
         if (chat.state === "final") {
           const finalText =
             extractMessageText(chat.message) || agentText;
+          endActiveToolSpan();
+          // Record the final agent response as a generation so it appears in
+          // the Langfuse Generations view with response-length usage data.
+          trace?.recordGeneration("openclaw.bridge.generation", {
+            input: { message: undefined }, // message already on root span
+            output: { text: finalText },
+            model: "openclaw-architect",
+            usageDetails: {
+              output: finalText.length,
+              total: finalText.length,
+            },
+            metadata: {
+              request_id: requestId,
+              run_id: runId || null,
+            },
+          });
+          trace?.recordEvent("openclaw.bridge.chat_final", {
+            request_id: requestId,
+            run_id: runId || null,
+            response_length: finalText.length,
+          });
           finalizeResponse(finalText);
         } else if (chat.state === "error") {
           const errorMsg =
             (chat.errorMessage as string) ||
             "Agent execution error";
-          // Model-level errors should not be retried
-          if (
-            errorMsg.includes("failed_generation") ||
-            errorMsg.includes("Failed to call a function") ||
-            errorMsg.includes("rate_limit") ||
-            errorMsg.includes("context_length")
-          ) {
-            resolveOnce({
-              type: "error",
-              error: errorMsg,
-              content: `The agent encountered an error: ${errorMsg}. This may be a model limitation — try simplifying your message or the agent model may need upgrading.`,
-            });
+          const classification = classifyGatewayRunError(errorMsg);
+          trace?.recordEvent(
+            "openclaw.bridge.chat_error",
+            {
+              request_id: requestId,
+              run_id: runId || null,
+              retryable: classification.retryable,
+            },
+            "ERROR"
+          );
+          if (!classification.retryable && classification.response) {
+            resolveOnce(classification.response);
           } else {
-            rejectOnce(new Error(errorMsg));
+            rejectOnce(
+              new GatewayRetryBoundaryError(
+                chatAccepted ? "post_accept" : "pre_accept",
+                errorMsg
+              )
+            );
           }
         } else if (chat.state === "aborted") {
-          rejectOnce(new Error("Agent execution aborted"));
+          trace?.recordEvent(
+            "openclaw.bridge.chat_aborted",
+            {
+              request_id: requestId,
+              run_id: runId || null,
+            },
+            "ERROR"
+          );
+          rejectOnce(
+            new GatewayRetryBoundaryError(
+              chatAccepted ? "post_accept" : "pre_accept",
+              "Agent execution aborted"
+            )
+          );
         }
         return;
       }
@@ -540,36 +899,105 @@ async function forwardToGateway(
           const agentData = agentPayload.data as
             | Record<string, unknown>
             | undefined;
-          agentText =
+          const newText =
             (agentData?.text as string) || agentText;
+          // Emit incremental delta SSE events for workspace panel extraction
+          if (newText.length > agentText.length) {
+            const chunk = newText.slice(agentText.length);
+            onStreamEvent("delta", { text: chunk });
+            for (const update of extractIntermediateUpdates(
+              newText,
+              emittedIntermediateUpdates,
+            )) {
+              onStreamEvent("intermediate", update);
+            }
+          }
+          agentText = newText;
         } else if (agentPayload.stream === "lifecycle") {
           const agentData = agentPayload.data as
             | Record<string, unknown>
             | undefined;
           const phase = agentData?.phase as string;
+          // Emit tool_end when lifecycle moves away from tool_execution
+          if (activeToolName && phase !== "tool_execution") {
+            onStreamEvent("tool_end", { tool: activeToolName });
+            endActiveToolSpan();
+            activeToolName = null;
+          }
           onLifecycleEvent(mapLifecyclePhase(phase));
           if (phase === "end" && agentText) {
+            endActiveToolSpan();
             finalizeResponse(agentText);
           }
         }
         return;
       }
 
-      // Auto-approve tool executions
+      // Auto-approve tool executions (mode-aware)
       if (
         frame.type === "event" &&
         frame.event === "exec.approval.requested"
       ) {
         const payload = frame.payload as Record<string, unknown>;
-        const toolName =
-          (payload.tool as string) ||
-          (payload.name as string) ||
-          (payload.id as string) ||
-          "tool";
-        onLifecycleEvent({
-          phase: "tool_execution",
-          message: `Executing: ${toolName}...`,
-        });
+        const evaluation = evaluateApprovalRequest(payload, { mode });
+
+        if (evaluation.decision === "allow") {
+          trace?.recordEvent("openclaw.bridge.approval_allowed", {
+            request_id: requestId,
+            run_id: runId || null,
+            approval_id: evaluation.autoAllowedEvent.approvalId,
+            tool_name: evaluation.toolName,
+            mode,
+          });
+          onStreamEvent("approval_auto_allowed", evaluation.autoAllowedEvent);
+          // Emit structured tool_start event so the frontend can drive tab switching
+          if (activeToolName && activeToolName !== evaluation.toolName) {
+            onStreamEvent("tool_end", { tool: activeToolName });
+            endActiveToolSpan();
+          }
+          activeToolName = evaluation.toolName;
+          // Start a timed tool span — ended when lifecycle leaves tool_execution
+          activeToolSpan = trace?.startToolSpan(evaluation.toolName, {
+            approval_id: evaluation.autoAllowedEvent.approvalId,
+            run_id: runId || null,
+            mode,
+          }) ?? null;
+          onStreamEvent("tool_start", {
+            tool: evaluation.toolName,
+            input: evaluation.autoAllowedEvent.summary,
+          });
+          onLifecycleEvent({
+            phase: "tool_execution",
+            message: `Executing: ${evaluation.toolName}...`,
+          });
+          ws.send(
+            JSON.stringify({
+              type: "req",
+              id: randomUUID(),
+              method: "exec.approval.resolve",
+              params: {
+                id: payload.id,
+                decision: "allow",
+              },
+            })
+          );
+          return;
+        }
+
+        endActiveToolSpan({ denied: true });
+        trace?.recordEvent(
+          "openclaw.bridge.approval_denied",
+          {
+            request_id: requestId,
+            run_id: runId || null,
+            approval_id: evaluation.requiredEvent.approvalId,
+            tool_name: evaluation.toolName,
+            mode,
+          },
+          "WARNING"
+        );
+        onStreamEvent("approval_required", evaluation.requiredEvent);
+        onStreamEvent("approval_denied", evaluation.deniedEvent);
         ws.send(
           JSON.stringify({
             type: "req",
@@ -577,39 +1005,43 @@ async function forwardToGateway(
             method: "exec.approval.resolve",
             params: {
               id: payload.id,
-              decision: "allow",
+              decision: "deny",
             },
           })
         );
+        resolveOnce({
+          type: "error",
+          error: "approval_denied",
+          content: evaluation.deniedEvent.message,
+          request_id: requestId,
+        });
         return;
       }
     });
   });
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract adapter availability from skill graph nodes
-// ---------------------------------------------------------------------------
-
-function buildAdapterAvailability(
-  nodes: Array<Record<string, unknown>>
-): Record<string, unknown> {
-  const availability: Record<string, unknown> = {};
-  for (const node of nodes) {
-    if (
-      node.type === "ingestion" &&
-      Array.isArray(node.data_sources)
-    ) {
-      for (const ds of node.data_sources as Array<
-        Record<string, unknown>
-      >) {
-        availability[ds.source_type as string] = {
-          source_type: ds.source_type,
-          has_adapter: ds.access_method === "adapter",
-          access_method: ds.access_method,
-        };
-      }
-    }
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new RequestAbortedError();
   }
-  return availability;
+}
+
+function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    throwIfAborted(signal);
+
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new RequestAbortedError());
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

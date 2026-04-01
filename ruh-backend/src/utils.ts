@@ -4,6 +4,10 @@
 
 import type { SandboxRecord } from './store';
 
+function stripAnsi(input: string): string {
+  return input.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 export function httpError(status: number, detail: string): Error & { status: number } {
   const err = new Error(detail) as Error & { status: number };
   err.status = status;
@@ -28,11 +32,24 @@ export function gatewayUrlAndHeaders(
 }
 
 export function parseJsonOutput(output: string): unknown {
-  const lines = output.split('\n');
+  const lines = stripAnsi(output).split('\n');
   for (let i = 0; i < lines.length; i++) {
     const stripped = lines[i].trim();
     if (stripped.startsWith('{') || stripped.startsWith('[')) {
-      return JSON.parse(lines.slice(i).join('\n'));
+      const candidate = lines.slice(i).join('\n');
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        const endChar = stripped.startsWith('{') ? '}' : ']';
+        const endIdx = candidate.lastIndexOf(endChar);
+        if (endIdx !== -1) {
+          try {
+            return JSON.parse(candidate.slice(0, endIdx + 1));
+          } catch {
+            continue;
+          }
+        }
+      }
     }
   }
   throw new Error(`No JSON found in output: ${output.slice(0, 200)}`);

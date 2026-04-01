@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test, mock, beforeEach, afterEach } from 'bun:test';
-import { request, resetStreams } from '../helpers/app';
+import { app, request, resetStreams, _streams } from '../helpers/app';
 
 // ── Mock sandboxManager ───────────────────────────────────────────────────────
 
@@ -29,15 +29,34 @@ async function* fakeErrorGen(): AsyncGenerator<[string, unknown]> {
   yield ['error', 'Installation failed'];
 }
 
+async function* fakeDisconnectResilientGen(): AsyncGenerator<[string, unknown]> {
+  yield ['log', 'Creating sandbox...'];
+  await Bun.sleep(25);
+  yield ['result', {
+    sandbox_id: 'sb-e2e-disconnect',
+    sandbox_state: 'started',
+    dashboard_url: 'https://preview.daytona.io/sb-e2e-disconnect',
+    signed_url: null,
+    standard_url: 'https://preview.daytona.io/sb-e2e-disconnect',
+    preview_token: null,
+    gateway_token: 'gw-tok',
+    gateway_port: 18789,
+    ssh_command: 'daytona ssh sb-e2e-disconnect',
+  }];
+  yield ['approved', { message: 'Approved device' }];
+}
+
 const mockCreateSandbox = mock(fakeSuccessGen);
+const mockSaveSandbox = mock(async () => {});
+const mockMarkApproved = mock(async () => {});
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mockCreateSandbox,
 }));
 
 mock.module('../../src/store', () => ({
-  saveSandbox: mock(async () => {}),
-  markApproved: mock(async () => {}),
+  saveSandbox: mockSaveSandbox,
+  markApproved: mockMarkApproved,
   listSandboxes: mock(async () => []),
   getSandbox: mock(async () => null),
   deleteSandbox: mock(async () => false),
@@ -49,6 +68,8 @@ mock.module('../../src/store', () => ({
 beforeEach(() => {
   resetStreams();
   mockCreateSandbox.mockImplementation(fakeSuccessGen);
+  mockSaveSandbox.mockClear();
+  mockMarkApproved.mockClear();
 });
 
 afterEach(() => {
@@ -156,5 +177,48 @@ describe('GET /api/sandboxes/stream/:stream_id', () => {
     const body = res.body as string;
     expect(body).toContain('event: error');
     expect(body).toContain('Installation failed');
+  });
+
+  test('continues provisioning after the SSE client disconnects', async () => {
+    mockCreateSandbox.mockImplementation(fakeDisconnectResilientGen);
+
+    const createRes = await request()
+      .post('/api/sandboxes/create')
+      .send({ sandbox_name: 'disconnect-test' })
+      .expect(200);
+
+    const { stream_id } = createRes.body;
+    const server = app.listen(0);
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('Failed to bind test server');
+      }
+
+      const res = await fetch(`http://127.0.0.1:${address.port}/api/sandboxes/stream/${stream_id}`);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+
+      const firstChunk = await reader!.read();
+      expect(firstChunk.done).toBe(false);
+      await reader!.cancel();
+
+      await Bun.sleep(80);
+
+      expect(mockSaveSandbox).toHaveBeenCalledTimes(1);
+      expect(mockSaveSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ sandbox_id: 'sb-e2e-disconnect' }),
+        'disconnect-test',
+      );
+      expect(mockMarkApproved).toHaveBeenCalledTimes(1);
+      expect(_streams.get(stream_id)?.status).toBe('done');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    }
   });
 });

@@ -1,0 +1,48 @@
+name: ruh_app
+description: "Ruh.ai — Your AI Assistant"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # HTTP + networking
+  dio: ^5.7.0
+
+  # Routing
+  go_router: ^14.8.1
+
+  # Secure credential storage
+  flutter_secure_storage: ^9.2.4
+
+  # Icons (matches current Lucide icon set)
+  lucide_icons: ^0.257.0
+
+  # Google Fonts (Satoshi not on Google Fonts — we'll bundle it)
+  google_fonts: ^6.2.1
+
+  # URL launcher
+  url_launcher: ^6.3.1
+
+  # Shared preferences (settings)
+  shared_preferences: ^2.3.4
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  riverpod_generator: ^2.6.3
+  build_runner: ^2.4.14
+
+flutter:
+  uses-material-design: true

@@ -39,22 +39,6 @@ beforeEach(() => {
   mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
 });
 
-describe('conversationStore.initDb', () => {
-  test('creates conversations and messages tables', async () => {
-    await convStore.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
-    expect(sqls.some((s) => s.includes('CREATE TABLE IF NOT EXISTS conversations'))).toBe(true);
-    expect(sqls.some((s) => s.includes('CREATE TABLE IF NOT EXISTS messages'))).toBe(true);
-  });
-
-  test('creates indexes', async () => {
-    await convStore.initDb();
-    const sqls = mockQuery.mock.calls.map((c) => c[0] as string);
-    expect(sqls.some((s) => s.includes('CREATE INDEX IF NOT EXISTS idx_messages_conv_id'))).toBe(true);
-    expect(sqls.some((s) => s.includes('CREATE INDEX IF NOT EXISTS idx_conversations_sandbox_id'))).toBe(true);
-  });
-});
-
 describe('conversationStore.createConversation', () => {
   test('inserts conversation and returns record', async () => {
     // First call: INSERT, second call: SELECT (via getConversation)
@@ -105,6 +89,46 @@ describe('conversationStore.listConversations', () => {
   });
 });
 
+describe('conversationStore.listConversationsPage', () => {
+  test('returns a bounded page plus pagination metadata', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeConvRow(), makeConvRow({ id: 'conv-2' }), makeConvRow({ id: 'conv-3' })],
+      rowCount: 3,
+    }));
+
+    const result = await convStore.listConversationsPage(SANDBOX_ID, { limit: 2 });
+
+    expect(result.items.length).toBe(2);
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toContain('|');
+  });
+
+  test('applies a cursor filter when fetching older conversations', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeConvRow()],
+      rowCount: 1,
+    }));
+
+    await convStore.listConversationsPage(SANDBOX_ID, {
+      limit: 20,
+      cursor: `${new Date('2026-03-25T10:00:00.000Z').toISOString()}|conv-9`,
+    });
+
+    const selectCall = mockQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('FROM conversations'),
+    );
+
+    expect(selectCall).toBeDefined();
+    expect(selectCall![0]).toContain('updated_at < $2::timestamptz');
+    expect(selectCall![1]).toEqual([
+      SANDBOX_ID,
+      '2026-03-25T10:00:00.000Z',
+      'conv-9',
+      21,
+    ]);
+  });
+});
+
 describe('conversationStore.getConversation', () => {
   test('returns null when not found', async () => {
     const result = await convStore.getConversation('nonexistent');
@@ -119,6 +143,30 @@ describe('conversationStore.getConversation', () => {
     const result = await convStore.getConversation(CONV_ID);
     expect(result).not.toBeNull();
     expect(result!.id).toBe(CONV_ID);
+  });
+});
+
+describe('conversationStore.getConversationForSandbox', () => {
+  test('returns null when the conversation belongs to a different sandbox', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeConvRow({ sandbox_id: 'sb-other' })],
+      rowCount: 1,
+    }));
+
+    const result = await convStore.getConversationForSandbox(CONV_ID, SANDBOX_ID);
+    expect(result).toBeNull();
+  });
+
+  test('returns the conversation when both conversation and sandbox ids match', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeConvRow()],
+      rowCount: 1,
+    }));
+
+    const result = await convStore.getConversationForSandbox(CONV_ID, SANDBOX_ID);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(CONV_ID);
+    expect(result!.sandbox_id).toBe(SANDBOX_ID);
   });
 });
 
@@ -138,6 +186,78 @@ describe('conversationStore.getMessages', () => {
     expect(result.length).toBe(2);
     expect(result[0].role).toBe('user');
     expect(result[1].role).toBe('assistant');
+  });
+
+  test('returns persisted workspace_state when present', async () => {
+    const workspaceState = {
+      version: 1,
+      browser: {
+        items: [
+          {
+            id: 0,
+            kind: 'navigation',
+            label: 'Example',
+            url: 'https://example.com',
+            timestamp: 1_711_111_111_000,
+          },
+        ],
+        previewUrl: 'https://example.com',
+        takeover: null,
+      },
+    };
+    mockQuery.mockImplementation(async () => ({
+      rows: [{ role: 'assistant', content: 'Hi there', workspace_state: workspaceState }],
+      rowCount: 1,
+    }));
+
+    const result = await convStore.getMessages(CONV_ID);
+    expect(result[0].workspace_state).toEqual(workspaceState);
+  });
+});
+
+describe('conversationStore.getMessagesPage', () => {
+  test('returns chronological messages plus older-page metadata', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [
+        {
+          id: 12,
+          role: 'assistant',
+          content: 'Newest',
+          created_at: new Date('2026-03-25T10:02:00.000Z').toISOString(),
+          workspace_state: { version: 1, browser: { items: [], previewUrl: 'https://example.com', takeover: null } },
+        },
+        { id: 11, role: 'assistant', content: 'Newest', created_at: new Date('2026-03-25T10:01:00.000Z').toISOString() },
+        { id: 10, role: 'user', content: 'Older', created_at: new Date('2026-03-25T10:00:00.000Z').toISOString() },
+      ],
+      rowCount: 3,
+    }));
+
+    const result = await convStore.getMessagesPage(CONV_ID, { limit: 2 });
+
+    expect(result.messages.map((message) => message.id)).toEqual([11, 12]);
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toBe(11);
+    expect(result.messages[1].workspace_state).toEqual({
+      version: 1,
+      browser: { items: [], previewUrl: 'https://example.com', takeover: null },
+    });
+  });
+
+  test('uses the before cursor when fetching older transcript pages', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [],
+      rowCount: 0,
+    }));
+
+    await convStore.getMessagesPage(CONV_ID, { limit: 50, before: 25 });
+
+    const selectCall = mockQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('FROM messages'),
+    );
+
+    expect(selectCall).toBeDefined();
+    expect(selectCall![0]).toContain('conversation_id = $1 AND id < $2');
+    expect(selectCall![1]).toEqual([CONV_ID, 25, 51]);
   });
 });
 
@@ -159,6 +279,44 @@ describe('conversationStore.appendMessages', () => {
   test('returns true', async () => {
     const result = await convStore.appendMessages(CONV_ID, [{ role: 'user', content: 'hi' }]);
     expect(result).toBe(true);
+  });
+
+  test('stores an empty string when a message omits content', async () => {
+    await convStore.appendMessages(CONV_ID, [{ role: 'assistant' }]);
+
+    const insertCall = mockQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('INSERT INTO messages'),
+    );
+
+    expect(insertCall).toBeDefined();
+    expect(insertCall![1]).toEqual([CONV_ID, 'assistant', '']);
+  });
+
+  test('stores workspace_state JSON when provided', async () => {
+    const workspaceState = {
+      version: 1,
+      browser: {
+        items: [],
+        previewUrl: 'https://example.com',
+        takeover: {
+          status: 'requested',
+          reason: 'Need operator login',
+          actionLabel: 'Resume agent run',
+          updatedAt: 1_711_111_111_000,
+        },
+      },
+    };
+
+    await convStore.appendMessages(CONV_ID, [
+      { role: 'assistant', content: 'Stateful reply', workspace_state: workspaceState },
+    ]);
+
+    const insertCall = mockQuery.mock.calls.find((c) =>
+      (c[0] as string).includes('INSERT INTO messages'),
+    );
+
+    expect(insertCall).toBeDefined();
+    expect(insertCall![1]).toEqual([CONV_ID, 'assistant', 'Stateful reply', workspaceState]);
   });
 });
 

@@ -124,6 +124,23 @@ describe('parseJsonOutput', () => {
     const output = 'log: starting\n{\n  "key": "value"\n}';
     expect(parseJsonOutput(output)).toEqual({ key: 'value' });
   });
+
+  test('parses JSON object when trailing log noise follows the payload', () => {
+    const output = [
+      '\u001b[32mprobe:\u001b[0m starting',
+      '{"auth":{"probes":{"totalTargets":1,"results":[{"status":"ok"}]}}}',
+      'post-run log line',
+    ].join('\n');
+
+    expect(parseJsonOutput(output)).toEqual({
+      auth: {
+        probes: {
+          totalTargets: 1,
+          results: [{ status: 'ok' }],
+        },
+      },
+    });
+  });
 });
 
 // ── syntheticModels ──────────────────────────────────────────────────────────

@@ -55,7 +55,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className="antialiased">
+    <html lang="en" className="antialiased">
       <head>
         <link rel="shortcut icon" href="/favicon.ico" />
         <link rel="icon" type="image/x-icon" href="/favicon.ico" />
@@ -69,18 +69,6 @@ export default function RootLayout({
         <RobotsMetaTag />
       </head>
       <body className="font-satoshi-medium bg-white text-text-primary relative">
-        {/* Force light theme */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              try {
-                localStorage.setItem('theme', 'light');
-                document.documentElement.classList.remove('dark');
-                document.documentElement.classList.add('light');
-              } catch (e) {}
-            `,
-          }}
-        />
         <Providers>{children}</Providers>
       </body>
     </html>

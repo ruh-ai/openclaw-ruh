@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
 
@@ -15,16 +16,16 @@ interface OAModel {
 interface ToolCall {
   id: string;
   name: string;
-  args: string;   // accumulated JSON arguments string
+  args: string;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
-  tool_calls?: ToolCall[];  // present for assistant messages that invoked tools
+  tool_calls?: ToolCall[];
 }
 
-interface Conversation {
+export interface Conversation {
   id: string;
   sandbox_id: string;
   name: string;
@@ -35,292 +36,65 @@ interface Conversation {
   message_count: number;
 }
 
-// ── ConversationList ──────────────────────────────────────────────────────────
+interface MessagePage {
+  messages: ChatMessage[];
+  next_cursor: number | null;
+  has_more: boolean;
+}
 
-function ConversationList({
-  sandboxId,
-  activeId,
-  model,
-  onSelect,
-  onNew,
-}: {
-  sandboxId: string;
-  activeId: string | null;
-  model: string;
-  onSelect: (c: Conversation) => void;
-  onNew: (c: Conversation) => void;
-}) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/conversations`);
-      if (res.ok) setConversations(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  }, [sandboxId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  async function handleNew() {
-    setCreating(true);
-    try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/conversations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "New Conversation", model }),
-      });
-      const conv: Conversation = await res.json();
-      setConversations((prev) => [conv, ...prev]);
-      onNew(conv);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleDelete(e: React.MouseEvent, id: string) {
-    e.stopPropagation();
-    await fetch(`${API_URL}/api/sandboxes/${sandboxId}/conversations/${id}`, { method: "DELETE" });
-    setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (id === activeId) onNew({ id: "", sandbox_id: sandboxId, name: "", model, openclaw_session_key: "", created_at: "", updated_at: "", message_count: 0 });
-  }
-
-  async function commitRename(id: string) {
-    const name = editName.trim();
-    if (!name) { setEditingId(null); return; }
-    await fetch(`${API_URL}/api/sandboxes/${sandboxId}/conversations/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, name } : c));
-    setEditingId(null);
-  }
-
-  // Called by parent to update name in list after auto-naming
-  // (exposed via a simple refresh)
-  const refreshOne = useCallback((id: string, name: string) => {
-    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, name } : c));
-  }, []);
-
-  // Expose refresh to parent via window event
+function useElapsedSeconds(running: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    function handler(e: Event) {
-      const { id, name } = (e as CustomEvent).detail;
-      refreshOne(id, name);
-    }
-    window.addEventListener("conv:renamed", handler);
-    return () => window.removeEventListener("conv:renamed", handler);
-  }, [refreshOne]);
+    if (!running) { setElapsed(0); return; }
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+  return elapsed;
+}
 
+const PHASE_LABELS: Record<string, string> = {
+  thinking:       "Thinking...",
+  planning:       "Planning...",
+  searching:      "Searching...",
+  generating:     "Generating...",
+  reviewing:      "Reviewing...",
+  writing:        "Writing...",
+  tool_execution: "Using a tool...",
+  connecting:     "Connecting...",
+  authenticated:  "Connected",
+};
+
+// ── Inline SVGs ───────────────────────────────────────────────────────────────
+
+function SendIcon() {
   return (
-    <div className="flex flex-col h-full border-r border-gray-800 bg-gray-900/50">
-      {/* Header */}
-      <div className="shrink-0 px-3 py-3 border-b border-gray-800 flex items-center justify-between">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Conversations</span>
-        <button
-          onClick={handleNew}
-          disabled={creating}
-          className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 font-medium flex items-center gap-1"
-          title="New conversation"
-        >
-          {creating ? "…" : "+ New"}
-        </button>
-      </div>
-
-      {/* List */}
-      <div className="flex-1 overflow-y-auto py-1">
-        {loading ? (
-          <p className="text-xs text-gray-600 px-3 py-3">Loading…</p>
-        ) : conversations.length === 0 ? (
-          <div className="px-3 py-6 text-center">
-            <p className="text-xs text-gray-600">No conversations yet.</p>
-            <button onClick={handleNew} className="mt-1 text-xs text-blue-400 hover:text-blue-300">
-              Start one →
-            </button>
-          </div>
-        ) : (
-          conversations.map((c) => {
-            const isActive = c.id === activeId;
-            return (
-              <div
-                key={c.id}
-                onClick={() => onSelect(c)}
-                className={`group relative flex flex-col px-3 py-2.5 cursor-pointer transition-colors ${
-                  isActive ? "bg-blue-600/15 border-r-2 border-blue-500" : "hover:bg-gray-800/50"
-                }`}
-              >
-                {editingId === c.id ? (
-                  <input
-                    autoFocus
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={() => commitRename(c.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename(c.id);
-                      if (e.key === "Escape") setEditingId(null);
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-full bg-gray-800 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                  />
-                ) : (
-                  <>
-                    <p className={`text-xs font-medium truncate pr-10 ${isActive ? "text-white" : "text-gray-300"}`}>
-                      {c.name}
-                    </p>
-                    <p className="text-[10px] text-gray-600 mt-0.5">
-                      {c.message_count} msg{c.message_count !== 1 ? "s" : ""} ·{" "}
-                      {new Date(c.updated_at).toLocaleDateString()}
-                    </p>
-                    {/* Action buttons — appear on hover */}
-                    <div className="absolute right-2 top-2.5 hidden group-hover:flex items-center gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditName(c.name); }}
-                        className="text-gray-600 hover:text-gray-300 text-[10px] p-0.5"
-                        title="Rename"
-                      >
-                        ✎
-                      </button>
-                      <button
-                        onClick={(e) => handleDelete(e, c.id)}
-                        className="text-gray-700 hover:text-red-400 text-[10px] p-0.5"
-                        title="Delete"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
+    </svg>
   );
 }
 
-// ── ContextMessages ───────────────────────────────────────────────────────────
-// Shows a collapsible "[N previous messages — context]" label above the latest
-// exchange, matching the pattern used by Claude Code.
-
-function ContextMessages({ messages }: { messages: ChatMessage[] }) {
-  // Split into "prior" (all but last assistant+user pair) and "recent"
-  const splitIdx = messages.length > 2 ? messages.length - 2 : 0;
-  const priorMessages = messages.slice(0, splitIdx);
-  const recentMessages = messages.slice(splitIdx);
-
-  const [collapsed, setCollapsed] = useState(true);
-
-  if (priorMessages.length === 0) {
-    return <>{messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}</>;
-  }
-
+function PlusSmIcon({ className }: { className?: string }) {
   return (
-    <>
-      {/* Collapsible context indicator */}
-      <button
-        onClick={() => setCollapsed((v) => !v)}
-        className="w-full flex items-center gap-2 py-1 group"
-      >
-        <div className="flex-1 h-px bg-gray-800 group-hover:bg-gray-700 transition-colors" />
-        <span className="text-[11px] text-gray-500 group-hover:text-gray-400 transition-colors whitespace-nowrap select-none">
-          {collapsed
-            ? `↑ ${priorMessages.length} previous message${priorMessages.length !== 1 ? "s" : ""} — for context`
-            : `↑ hide ${priorMessages.length} previous message${priorMessages.length !== 1 ? "s" : ""}`}
-        </span>
-        <div className="flex-1 h-px bg-gray-800 group-hover:bg-gray-700 transition-colors" />
-      </button>
-
-      {/* Prior messages (expanded) */}
-      {!collapsed && priorMessages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
-
-      {/* Always-visible recent messages */}
-      {recentMessages.map((msg, i) => <MessageBubble key={splitIdx + i} msg={msg} />)}
-    </>
+    <svg className={className} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14"/><path d="M12 5v14"/>
+    </svg>
   );
 }
 
-// ── AgentDetails ──────────────────────────────────────────────────────────────
+// ── ThinkingIndicator ─────────────────────────────────────────────────────────
 
-function AgentDetails({
-  sandbox,
-  model,
-  conversation,
-}: {
-  sandbox: SandboxRecord;
-  model: OAModel | null;
-  conversation: Conversation | null;
-}) {
-  const [status, setStatus] = useState<Record<string, unknown> | null>(null);
-
-  useEffect(() => {
-    fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/status`)
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => null);
-  }, [sandbox.sandbox_id]);
-
+function ThinkingIndicator({ statusMessage, elapsed }: { statusMessage: string; elapsed: number }) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Agent Details</h3>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
-        <div>
-          <span className="text-gray-500 block">Sandbox</span>
-          <span className="text-white font-medium">{sandbox.sandbox_name}</span>
-        </div>
-        <div>
-          <span className="text-gray-500 block">Status</span>
-          <span className={`font-medium ${sandbox.approved ? "text-green-400" : "text-yellow-400"}`}>
-            {sandbox.approved ? "Approved" : "Pending pairing"}
-          </span>
-        </div>
-        <div>
-          <span className="text-gray-500 block">Agent / Model</span>
-          <span className="text-white font-mono truncate">{model?.id ?? "—"}</span>
-        </div>
-        <div>
-          <span className="text-gray-500 block">Provider</span>
-          <span className="text-white">{model?.owned_by ?? "—"}</span>
-        </div>
-        {conversation && (
-          <>
-            <div>
-              <span className="text-gray-500 block">Session key</span>
-              <span className="text-gray-400 font-mono text-[10px] truncate block" title={conversation.openclaw_session_key}>
-                {conversation.openclaw_session_key}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-500 block">Messages</span>
-              <span className="text-white">{conversation.message_count}</span>
-            </div>
-          </>
-        )}
-        {status && "version" in status && (
-          <div>
-            <span className="text-gray-500 block">Gateway version</span>
-            <span className="text-white font-mono">{String(status.version)}</span>
-          </div>
-        )}
-      </div>
-      {sandbox.dashboard_url && (
-        <a
-          href={sandbox.dashboard_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-3 transition-colors"
-        >
-          Open Dashboard ↗
-        </a>
-      )}
+    <div className="flex items-center gap-2">
+      <span className="relative flex h-2 w-2 shrink-0">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ae00d0] opacity-60" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-[#ae00d0]" />
+      </span>
+      <span className="text-sm text-gray-500">{statusMessage || "Thinking..."}</span>
+      <span className="text-[11px] text-gray-400 tabular-nums ml-2">{elapsed}s</span>
     </div>
   );
 }
@@ -330,31 +104,19 @@ function AgentDetails({
 function ToolCallBubble({ tc, streaming = false }: { tc: ToolCall; streaming?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   let prettyArgs = tc.args;
-  try { prettyArgs = JSON.stringify(JSON.parse(tc.args), null, 2); } catch { /* not yet complete JSON */ }
+  try { prettyArgs = JSON.stringify(JSON.parse(tc.args), null, 2); } catch { /* partial */ }
 
   return (
-    <div className="flex justify-start">
-      <div className="bg-gray-900 border border-gray-700/60 rounded-xl px-3.5 py-2 max-w-sm">
-        <button
-          onClick={() => tc.args && setExpanded((v) => !v)}
-          className="flex items-center gap-2 w-full text-left"
-        >
-          {/* bolt icon */}
-          <span className={`text-xs ${streaming ? "text-yellow-400 animate-pulse" : "text-orange-400"}`}>⚡</span>
-          <span className="text-xs text-gray-400 font-medium">
-            {streaming ? "Tool" : "Tool output"}
-          </span>
-          <span className="bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-[10px] font-mono">
-            {tc.name || "…"}
-          </span>
-          {tc.args && (
-            <span className="text-gray-600 text-[10px] ml-auto">{expanded ? "▾" : "▸"}</span>
-          )}
+    <div className="flex justify-start ml-11">
+      <div className="bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2 max-w-sm">
+        <button onClick={() => tc.args && setExpanded((v) => !v)} className="flex items-center gap-2 w-full text-left">
+          <span className={`text-xs ${streaming ? "text-yellow-500 animate-pulse" : "text-orange-500"}`}>⚡</span>
+          <span className="text-xs text-gray-500 font-medium">{streaming ? "Tool" : "Tool output"}</span>
+          <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-[10px] font-mono">{tc.name || "…"}</span>
+          {tc.args && <span className="text-gray-400 text-[10px] ml-auto">{expanded ? "▾" : "▸"}</span>}
         </button>
         {expanded && prettyArgs && (
-          <pre className="mt-2 text-[10px] text-gray-500 font-mono overflow-auto max-h-32 leading-relaxed">
-            {prettyArgs}
-          </pre>
+          <pre className="mt-2 text-[10px] text-gray-500 font-mono overflow-auto max-h-32 leading-relaxed">{prettyArgs}</pre>
         )}
       </div>
     </div>
@@ -363,267 +125,88 @@ function ToolCallBubble({ tc, streaming = false }: { tc: ToolCall; streaming?: b
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+function MessageBubble({ msg, sandboxName }: { msg: ChatMessage; sandboxName: string }) {
   const isUser = msg.role === "user";
   return (
     <>
-      {/* Tool calls attached to this message */}
-      {msg.tool_calls?.map((tc, i) => (
-        <ToolCallBubble key={i} tc={tc} streaming={false} />
-      ))}
+      {msg.tool_calls?.map((tc, i) => <ToolCallBubble key={i} tc={tc} />)}
       {msg.content && (
-        <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-          <div
-            className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap wrap-break-word ${
-              isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-gray-800 text-gray-100 rounded-bl-sm"
-            }`}
-          >
-            {msg.content}
+        isUser ? (
+          <div className="flex justify-end">
+            <div className="bg-[#f3f4f6] text-sm text-gray-900 rounded-2xl px-4 py-2.5 max-w-[80%] whitespace-pre-wrap">
+              {msg.content}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-start gap-3">
+            <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5">
+              <Image src="/assets/logos/favicon.svg" alt={sandboxName} width={32} height={32} className="rounded-full" />
+            </div>
+            <div className="flex-1 min-w-0 pt-0.5">
+              <p className="text-sm text-gray-900 leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+            </div>
+          </div>
+        )
       )}
     </>
   );
 }
 
-// ── ChatView ──────────────────────────────────────────────────────────────────
+// ── ContextMessages ───────────────────────────────────────────────────────────
 
-function ChatView({
-  sandbox,
-  conversation,
-  models,
-  selectedModel,
-  modelsSynthetic,
-  onModelsRetry,
-  onModelChange,
-}: {
-  sandbox: SandboxRecord;
-  conversation: Conversation | null;
-  models: OAModel[];
-  selectedModel: string;
-  modelsSynthetic: boolean;
-  onModelsRetry: () => void;
-  onModelChange: (id: string) => void;
-}) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [streamingContent, setStreamingContent] = useState("");
+function ContextMessages({ messages, sandboxName }: { messages: ChatMessage[]; sandboxName: string }) {
+  const splitIdx = messages.length > 2 ? messages.length - 2 : 0;
+  const priorMessages = messages.slice(0, splitIdx);
+  const recentMessages = messages.slice(splitIdx);
+  const [collapsed, setCollapsed] = useState(true);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  // Load history when conversation changes
-  useEffect(() => {
-    if (!conversation?.id) { setMessages([]); return; }
-    setMessages([]);
-    setStreamingContent("");
-    setMessagesLoading(true);
-    fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages`)
-      .then((r) => r.ok ? r.json() : [])
-      .then(setMessages)
-      .catch(() => setMessages([]))
-      .finally(() => setMessagesLoading(false));
-  }, [conversation?.id, sandbox.sandbox_id]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
-
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || sending || !selectedModel || !conversation) return;
-
-    const userMsg: ChatMessage = { role: "user", content: text };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    setSending(true);
-    setStreamingContent("");
-    let assistantContent = "";
-
-    try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [...messages, userMsg],
-          stream: true,
-          conversation_id: conversation.id,   // ← routes to openclaw_session_key
-        }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${errText}` }]);
-        await saveMessages(conversation.id, [userMsg]);
-        return;
-      }
-
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const line of decoder.decode(value, { stream: true }).split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (raw === "[DONE]") break;
-          try {
-            const delta = JSON.parse(raw)?.choices?.[0]?.delta?.content ?? "";
-            if (delta) { assistantContent += delta; setStreamingContent(assistantContent); }
-          } catch { /* partial chunk */ }
-        }
-      }
-
-      const assistantMsg: ChatMessage = { role: "assistant", content: assistantContent };
-      setMessages((prev) => [...prev, assistantMsg]);
-      setStreamingContent("");
-
-      // Persist both messages
-      await saveMessages(conversation.id, [userMsg, assistantMsg]);
-
-      // Auto-name after the first exchange
-      if (messages.length === 0 && conversation.name === "New Conversation") {
-        const autoName = text.slice(0, 45) + (text.length > 45 ? "…" : "");
-        await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: autoName }),
-        });
-        // Notify ConversationList to refresh the displayed name
-        window.dispatchEvent(new CustomEvent("conv:renamed", { detail: { id: conversation.id, name: autoName } }));
-      }
-    } catch (err: unknown) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `Error: ${err instanceof Error ? err.message : String(err)}` },
-      ]);
-      setStreamingContent("");
-    } finally {
-      setSending(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+  if (priorMessages.length === 0) {
+    return <>{messages.map((msg, i) => <MessageBubble key={i} msg={msg} sandboxName={sandboxName} />)}</>;
   }
-
-  async function saveMessages(convId: string, msgs: ChatMessage[]) {
-    await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${convId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: msgs }),
-    }).catch(() => null);
-  }
-
-  const activeModel = models.find((m) => m.id === selectedModel) ?? null;
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="shrink-0 px-5 py-2.5 border-b border-gray-800 flex items-center gap-3 flex-wrap">
-        <span className="text-xs text-gray-500">Agent</span>
-        {models.length === 0 ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-600">No agents</span>
-            <button onClick={onModelsRetry} className="text-xs text-blue-400 hover:text-blue-300">Retry</button>
-          </div>
-        ) : (
-          <>
-            <select
-              value={selectedModel}
-              onChange={(e) => onModelChange(e.target.value)}
-              className="bg-gray-800 border border-gray-700 text-white text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {models.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
-            </select>
-            {modelsSynthetic && (
-              <span className="text-[10px] text-yellow-600" title="Gateway did not return a model list">default agent</span>
-            )}
-          </>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${sandbox.approved ? "bg-green-400" : "bg-yellow-400 animate-pulse"}`} />
-          <span className="text-xs text-gray-500">{sandbox.sandbox_name}</span>
-        </div>
-      </div>
-
-      {/* Agent details */}
-      <div className="shrink-0 px-5 py-3">
-        <AgentDetails sandbox={sandbox} model={activeModel} conversation={conversation} />
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-2 space-y-3">
-        {messagesLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <span className="text-xs text-gray-600">Loading history…</span>
-          </div>
-        ) : !conversation ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            <p className="text-gray-600 text-sm">Select or create a conversation on the left.</p>
-          </div>
-        ) : messages.length === 0 && !sending ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            <p className="text-gray-600 text-sm">No messages yet.</p>
-            <p className="text-gray-700 text-xs mt-1">Type a message below to start.</p>
-          </div>
-        ) : (
-          <ContextMessages messages={messages} />
-        )}
-        {streamingContent && <MessageBubble msg={{ role: "assistant", content: streamingContent }} />}
-        {sending && !streamingContent && (
-          <div className="flex justify-start">
-            <div className="bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-3 flex gap-1">
-              {[0, 150, 300].map((d) => (
-                <span key={d} className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: `${d}ms` }} />
-              ))}
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="shrink-0 px-5 py-4 border-t border-gray-800">
-        <div className="flex items-end gap-3">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder={!conversation ? "Select a conversation first…" : `Message ${selectedModel || "agent"}… (Enter to send)`}
-            disabled={sending || !selectedModel || !conversation}
-            rows={1}
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none disabled:opacity-50"
-            style={{ maxHeight: "8rem", overflowY: "auto" }}
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${el.scrollHeight}px`;
-            }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={sending || !input.trim() || !selectedModel || !conversation}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-3 rounded-xl transition-colors text-sm font-medium shrink-0"
-          >
-            {sending ? "…" : "Send"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <>
+      <button onClick={() => setCollapsed((v) => !v)} className="w-full flex items-center gap-2 py-1 group">
+        <div className="flex-1 h-px bg-gray-200 group-hover:bg-gray-300 transition-colors" />
+        <span className="text-[11px] text-gray-400 group-hover:text-gray-600 whitespace-nowrap select-none">
+          {collapsed ? `↑ ${priorMessages.length} earlier — for context` : `↑ hide ${priorMessages.length} earlier`}
+        </span>
+        <div className="flex-1 h-px bg-gray-200 group-hover:bg-gray-300 transition-colors" />
+      </button>
+      {!collapsed && priorMessages.map((msg, i) => <MessageBubble key={i} msg={msg} sandboxName={sandboxName} />)}
+      {recentMessages.map((msg, i) => <MessageBubble key={splitIdx + i} msg={msg} sandboxName={sandboxName} />)}
+    </>
   );
 }
 
-// ── ChatPanel (root) ──────────────────────────────────────────────────────────
+// ── ChatPanel ─────────────────────────────────────────────────────────────────
 
-export default function ChatPanel({ sandbox }: { sandbox: SandboxRecord }) {
+interface Props {
+  sandbox: SandboxRecord;
+  conversation: Conversation | null;
+  onNewChat: () => void;
+  onConversationCreated: (conv: Conversation) => void;
+}
+
+export default function ChatPanel({ sandbox, conversation, onNewChat, onConversationCreated }: Props) {
   const [models, setModels] = useState<OAModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsSynthetic, setModelsSynthetic] = useState(false);
-  const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesLoadingMore, setMessagesLoadingMore] = useState(false);
+  const [messagesHasMore, setMessagesHasMore] = useState(false);
+  const [messagesCursor, setMessagesCursor] = useState<number | null>(null);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingTools, setStreamingTools] = useState<ToolCall[]>([]);
+  const [statusMessage, setStatusMessage] = useState("Thinking...");
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedSeconds(sending && !streamingContent);
 
   // Reset on sandbox change
   useEffect(() => {
@@ -631,9 +214,9 @@ export default function ChatPanel({ sandbox }: { sandbox: SandboxRecord }) {
     setSelectedModel("");
     setModelsLoading(true);
     setModelsSynthetic(false);
-    setActiveConversation(null);
   }, [sandbox.sandbox_id]);
 
+  // Fetch models
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     try {
@@ -643,45 +226,367 @@ export default function ChatPanel({ sandbox }: { sandbox: SandboxRecord }) {
       setModels(list);
       setModelsSynthetic(!!data._synthetic);
       if (list.length > 0) setSelectedModel(list[0].id);
-    } catch {
-      setModels([]);
-    } finally {
-      setModelsLoading(false);
-    }
+    } catch { setModels([]); }
+    finally { setModelsLoading(false); }
   }, [sandbox.sandbox_id]);
 
   useEffect(() => { loadModels(); }, [loadModels]);
 
+  // Load messages when conversation changes
+  useEffect(() => {
+    if (!conversation?.id) {
+      setMessages([]);
+      setMessagesHasMore(false);
+      setMessagesCursor(null);
+      return;
+    }
+    setMessages([]);
+    setStreamingContent("");
+    setMessagesLoading(true);
+    fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages?limit=50`)
+      .then((r) => r.ok ? r.json() : { messages: [], next_cursor: null, has_more: false })
+      .then((page: MessagePage) => {
+        setMessages(page.messages);
+        setMessagesCursor(page.next_cursor);
+        setMessagesHasMore(page.has_more);
+      })
+      .catch(() => setMessages([]))
+      .finally(() => setMessagesLoading(false));
+  }, [conversation?.id, sandbox.sandbox_id]);
+
+  async function loadOlderMessages() {
+    if (!conversation?.id || messagesCursor == null || messagesLoadingMore) return;
+    setMessagesLoadingMore(true);
+    try {
+      const res = await fetch(
+        `${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages?limit=50&before=${messagesCursor}`,
+      );
+      if (!res.ok) return;
+      const page = (await res.json()) as MessagePage;
+      setMessages((prev) => [...page.messages, ...prev]);
+      setMessagesCursor(page.next_cursor);
+      setMessagesHasMore(page.has_more);
+    } finally {
+      setMessagesLoadingMore(false);
+    }
+  }
+
+  // Auto-scroll
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    });
+  }, [messages, streamingContent, sending]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
+  async function ensureConversation(): Promise<Conversation> {
+    if (conversation) return conversation;
+    const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "New Conversation", model: selectedModel || "openclaw-default" }),
+    });
+    const conv: Conversation = await res.json();
+    onConversationCreated(conv);
+    return conv;
+  }
+
+  // Abort in-flight request on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (!text || sending) return;
+
+    // Abort any previous in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const userMsg: ChatMessage = { role: "user", content: text };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setSending(true);
+    setStreamingContent("");
+    setStreamingTools([]);
+    setStatusMessage("Connecting...");
+    let assistantContent = "";
+    let currentSseEvent = "";
+    let persistenceError: string | null = null;
+    const toolCalls: ToolCall[] = [];
+
+    try {
+      const conv = await ensureConversation();
+
+      // Use the WebSocket-bridged endpoint for full agent capabilities
+      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat/ws`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [...messages, userMsg],
+          conversation_id: conv.id,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${errText}` }]);
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value, { stream: true }).split("\n")) {
+          if (line.startsWith("event: ")) {
+            const evt = line.slice(7).trim();
+            currentSseEvent = evt;
+            // Handle named SSE events (status, error, persistence_error)
+            if (PHASE_LABELS[evt]) setStatusMessage(PHASE_LABELS[evt]);
+            continue;
+          }
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") break outer;
+          try {
+            const parsed = JSON.parse(raw);
+
+            // Persistence error event from backend
+            if (currentSseEvent === "persistence_error") {
+              persistenceError = typeof parsed?.message === "string"
+                ? parsed.message
+                : "Assistant reply could not be saved to conversation history.";
+              currentSseEvent = "";
+              continue;
+            }
+
+            // Status/lifecycle event (from event: status)
+            if (currentSseEvent === "status" && parsed.phase) {
+              if (PHASE_LABELS[parsed.phase]) setStatusMessage(PHASE_LABELS[parsed.phase]);
+              currentSseEvent = "";
+              continue;
+            }
+
+            // Error event
+            if (currentSseEvent === "error") {
+              setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${parsed.message || "Unknown error"}` }]);
+              currentSseEvent = "";
+              break outer;
+            }
+
+            // Tool execution start: {tool: "name", input: "summary"}
+            if (parsed.tool && !parsed.result) {
+              const toolName = parsed.tool as string;
+              const toolInput = (parsed.input as string) || "";
+              const tc: ToolCall = { id: `tool-${toolCalls.length}`, name: toolName, args: toolInput };
+              toolCalls.push(tc);
+              setStreamingTools([...toolCalls]);
+              setStatusMessage(`Using tool: ${toolName}...`);
+              continue;
+            }
+
+            // Tool completion: {result: "Completed: toolname"}
+            if (parsed.result && typeof parsed.result === "string" && parsed.result.startsWith("Completed:")) {
+              setStatusMessage("Thinking...");
+              continue;
+            }
+
+            // Inline phase update (legacy format)
+            if (parsed.phase) {
+              if (PHASE_LABELS[parsed.phase]) setStatusMessage(PHASE_LABELS[parsed.phase]);
+              continue;
+            }
+
+            // OpenAI-compatible text delta: {choices: [{delta: {content: "..."}}]}
+            const delta = parsed?.choices?.[0]?.delta?.content ?? "";
+            if (delta) {
+              assistantContent += delta;
+              setStreamingContent(assistantContent);
+              setStatusMessage("");
+            }
+            currentSseEvent = "";
+          } catch { /* partial JSON chunk — ignore */ }
+        }
+      }
+
+      setStreamingContent("");
+      setStreamingTools([]);
+
+      if (persistenceError) {
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          content: `Error: ${persistenceError}`,
+        }]);
+        return;
+      }
+
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: assistantContent,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+
+      if (messages.length === 0 && conv.name === "New Conversation") {
+        const autoName = text.slice(0, 45) + (text.length > 45 ? "…" : "");
+        await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conv.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: autoName }),
+        });
+        window.dispatchEvent(new CustomEvent("conv:renamed", { detail: { id: conv.id, name: autoName } }));
+      }
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setMessages((prev) => [...prev, { role: "assistant", content: `Error: ${err instanceof Error ? err.message : String(err)}` }]);
+      setStreamingContent("");
+      setStreamingTools([]);
+    } finally {
+      setSending(false);
+      setStatusMessage("Thinking...");
+      abortRef.current = null;
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }
+
+  const canSend = !sending && !!input.trim();
+
   return (
-    <div className="flex h-full">
-      {/* Conversation list — fixed width left panel */}
-      <div className="w-52 shrink-0">
-        <ConversationList
-          sandboxId={sandbox.sandbox_id}
-          activeId={activeConversation?.id ?? null}
-          model={selectedModel || "openclaw-default"}
-          onSelect={setActiveConversation}
-          onNew={(c) => setActiveConversation(c.id ? c : null)}
-        />
+    <div className="flex flex-col h-full bg-white">
+      {/* Top bar: model selector + New Chat */}
+      <div className="shrink-0 flex items-center justify-between px-6 py-2 border-b border-[#eff0f3]">
+        <div className="flex items-center gap-2">
+          {modelsLoading ? (
+            <span className="text-[11px] text-gray-400">Loading agents…</span>
+          ) : models.length === 0 ? (
+            <span className="text-[11px] text-gray-400">
+              No agents —{" "}
+              <button onClick={loadModels} className="text-[#ae00d0] hover:text-[#9400b4]">Retry</button>
+            </span>
+          ) : (
+            <span className="bg-gray-50 border border-gray-200 text-gray-600 text-[11px] rounded-lg px-2 py-1 font-mono">
+              {selectedModel || models[0]?.id}
+              {modelsSynthetic && <span className="text-yellow-600 ml-1">default</span>}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onNewChat}
+          className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium text-gray-500 border border-gray-200 hover:bg-[#fdf4ff] hover:text-[#ae00d0] hover:border-[#ae00d0] transition-colors"
+        >
+          <PlusSmIcon />
+          New Chat
+        </button>
       </div>
 
-      {/* Chat area */}
-      <div className="flex-1 min-w-0">
-        {modelsLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <span className="text-xs text-gray-600">Loading agents…</span>
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-0">
+        <div className="max-w-3xl mx-auto md:ml-8 lg:ml-16 py-6 space-y-6">
+          {messagesLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <span className="text-xs text-gray-400">Loading history…</span>
+            </div>
+          ) : (
+            <>
+              {messagesHasMore && (
+                <div className="flex justify-center">
+                  <button
+                    onClick={loadOlderMessages}
+                    disabled={messagesLoadingMore}
+                    className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500 hover:text-[#ae00d0] hover:border-[#ae00d0]/30 transition-colors disabled:opacity-50"
+                  >
+                    {messagesLoadingMore ? "Loading older messages…" : "Load older messages"}
+                  </button>
+                </div>
+              )}
+              {messages.length === 0 && !sending && (
+                <div className="flex items-start gap-3">
+                  <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center">
+                    <Image src="/assets/logos/favicon.svg" alt={sandbox.sandbox_name} width={32} height={32} className="rounded-full" />
+                  </div>
+                  <div className="flex-1 pt-1">
+                    <p className="text-sm text-gray-700 leading-relaxed">
+                      Hi! I&apos;m <strong>{sandbox.sandbox_name}</strong>. How can I help you today?
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <ContextMessages messages={messages} sandboxName={sandbox.sandbox_name} />
+
+              {sending && streamingTools.length > 0 && streamingTools.map((tc, i) => (
+                <ToolCallBubble key={tc.id} tc={tc} streaming={i === streamingTools.length - 1} />
+              ))}
+
+              {streamingContent && (
+                <div className="flex items-start gap-3">
+                  <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5">
+                    <Image src="/assets/logos/favicon.svg" alt={sandbox.sandbox_name} width={28} height={28} className="rounded-full animate-spin" />
+                  </div>
+                  <div className="flex-1 min-w-0 pt-0.5">
+                    <p className="text-sm text-gray-900 leading-relaxed whitespace-pre-wrap">{streamingContent}</p>
+                  </div>
+                </div>
+              )}
+
+              {sending && !streamingContent && (
+                <div className="flex items-start gap-3">
+                  <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-0.5">
+                    <Image src="/assets/logos/favicon.svg" alt={sandbox.sandbox_name} width={28} height={28} className="rounded-full opacity-60" />
+                  </div>
+                  <div className="flex-1 min-w-0 pt-1.5">
+                    <ThinkingIndicator statusMessage={statusMessage} elapsed={elapsed} />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Input */}
+      <div className="shrink-0 px-4 md:px-0 pb-6 pt-3">
+        <div className="max-w-3xl mx-auto md:ml-8 lg:ml-16">
+          <div className="relative flex items-end gap-2 border border-gray-200 rounded-2xl bg-white px-4 py-3 shadow-sm">
+            <Image src="/assets/logos/favicon.svg" alt="" width={20} height={20} className="shrink-0 mb-1 opacity-40" />
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              placeholder={`Message ${sandbox.sandbox_name}…`}
+              disabled={sending}
+              rows={1}
+              className="flex-1 resize-none bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none min-h-[24px] leading-relaxed disabled:opacity-50"
+              style={{ maxHeight: "120px" }}
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!canSend}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-400 hover:bg-[#ae00d0] hover:text-white hover:border-[#ae00d0] disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 disabled:hover:border-gray-200 transition-all shrink-0 mb-0.5"
+            >
+              <SendIcon />
+            </button>
           </div>
-        ) : (
-          <ChatView
-            sandbox={sandbox}
-            conversation={activeConversation}
-            models={models}
-            selectedModel={selectedModel}
-            modelsSynthetic={modelsSynthetic}
-            onModelsRetry={loadModels}
-            onModelChange={setSelectedModel}
-          />
-        )}
+          <p className="text-center text-[11px] text-gray-400 mt-2">
+            {conversation
+              ? <span className="font-medium text-gray-600">{conversation.name}</span>
+              : "Start typing to create a new conversation"}
+          </p>
+        </div>
       </div>
     </div>
   );

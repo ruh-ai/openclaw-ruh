@@ -15,9 +15,12 @@ export function makeSandboxRecord(overrides: Partial<SandboxRecord> = {}): Sandb
     preview_token: null,
     gateway_token: 'gw-tok-xyz',
     gateway_port: 18789,
+    vnc_port: null,
     ssh_command: `daytona ssh ${SANDBOX_ID}`,
     created_at: new Date().toISOString(),
     approved: false,
+    shared_codex_enabled: false,
+    shared_codex_model: null,
     ...overrides,
   };
 }
@@ -32,6 +35,39 @@ export function makeConversationRecord(overrides: Partial<ConversationRecord> = 
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     message_count: 0,
+    ...overrides,
+  };
+}
+
+export const AGENT_ID = 'test-agent-abc123';
+export const FORGE_SANDBOX_ID = 'forge-sandbox-xyz789';
+
+export function makeAgentRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: AGENT_ID,
+    name: 'Test Agent',
+    avatar: '🤖',
+    description: 'A test agent',
+    skills: ['exec'],
+    trigger_label: 'Manual trigger',
+    status: 'draft',
+    sandbox_ids: [],
+    forge_sandbox_id: null,
+    skill_graph: null,
+    workflow: null,
+    agent_rules: [],
+    tool_connections: [],
+    triggers: [],
+    improvements: [],
+    workspace_memory: {
+      instructions: '',
+      continuity_summary: '',
+      pinned_paths: [],
+      updated_at: null,
+    },
+    agent_credentials: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
     ...overrides,
   };
 }

@@ -1,22 +1,46 @@
 "use client";
 
-import { useEffect, useState, ReactNode, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, ReactNode, Suspense } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useUserStore } from "@/hooks/use-user";
 import { userApi } from "@/app/api/user";
 import { getAccessToken, getRefreshToken } from "@/services/authCookies";
 import Image from "next/image";
 import { ruhLogoGif } from "@/shared/constants";
+import { resolveSessionGateDecision, type SessionBootstrapStatus } from "@/lib/auth/session-guard";
 
 interface SessionInitializerProps {
   children: ReactNode;
 }
 
+const IS_DEV = process.env.NODE_ENV === "development";
+
 function SessionInitializerContent({ children }: SessionInitializerProps) {
+  // Bypass auth entirely in local development
+  if (IS_DEV) {
+    return <>{children}</>;
+  }
+
+  return <SessionInitializerContentInner>{children}</SessionInitializerContentInner>;
+}
+
+function SessionInitializerContentInner({ children }: SessionInitializerProps) {
   const { user, setUser, clearUser } = useUserStore();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [shouldFetchData, setShouldFetchData] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [hasAccessToken, setHasAccessToken] = useState(false);
+  const [hasRefreshToken, setHasRefreshToken] = useState(false);
+  const [bootstrapStatus, setBootstrapStatus] =
+    useState<SessionBootstrapStatus>("idle");
+  const [bootstrapErrorStatus, setBootstrapErrorStatus] = useState<number>();
+  // Guard: once a fetch has been attempted and failed, don't re-trigger.
+  // Without this, clearUser() sets user=null → effect re-fires → sees !user →
+  // sets shouldFetchData(true) → query fails → clearUser() → infinite loop.
+  const [fetchAttempted, setFetchAttempted] = useState(false);
 
   // Wait for Zustand stores to hydrate from localStorage
   useEffect(() => {
@@ -34,29 +58,43 @@ function SessionInitializerContent({ children }: SessionInitializerProps) {
       try {
         const currentToken = await getAccessToken();
         const refreshToken = await getRefreshToken();
+        const hasCurrentToken = Boolean(currentToken);
+        const hasCurrentRefreshToken = Boolean(refreshToken);
 
-        if (!currentToken && !refreshToken) {
-          setIsInitialized(true);
+        setHasAccessToken(hasCurrentToken);
+        setHasRefreshToken(hasCurrentRefreshToken);
+
+        if (!hasCurrentToken && !hasCurrentRefreshToken) {
+          setBootstrapStatus("idle");
+          setShouldFetchData(false);
           return;
         }
 
         const storedToken = user?.accessToken;
 
-        // Only fetch if token changed, no stored token, or missing user data
-        if (storedToken !== currentToken || !user) {
+        // Only fetch if token changed, no stored token, or missing user data.
+        // But never re-fetch after a failed attempt — that causes an infinite
+        // clearUser → re-fire → fetch → fail → clearUser loop.
+        if ((storedToken !== currentToken || !user) && !fetchAttempted) {
+          setBootstrapStatus("loading");
           setShouldFetchData(true);
-        } else {
-          setIsInitialized(true);
+          setFetchAttempted(true);
+        } else if (user && storedToken === currentToken) {
+          setBootstrapStatus("success");
+          setShouldFetchData(false);
         }
       } catch (error) {
         console.error("Token check error:", error);
         clearUser("checkToken catch");
-        setIsInitialized(true);
+        setHasAccessToken(false);
+        setHasRefreshToken(false);
+        setBootstrapStatus("auth_error");
+        setShouldFetchData(false);
       }
     };
 
     checkToken();
-  }, [isHydrated, user, clearUser]);
+  }, [isHydrated, user, clearUser, fetchAttempted]);
 
   // React Query for user data
   const {
@@ -90,8 +128,11 @@ function SessionInitializerContent({ children }: SessionInitializerProps) {
             isFirstLogin: userData.isFirstLogin,
             accessToken: currentToken || "",
           });
+          setBootstrapErrorStatus(undefined);
+          setBootstrapStatus("success");
         } catch (error) {
           console.error("Error getting access token for user store:", error);
+          setBootstrapStatus("success");
         }
       };
       updateUserWithToken();
@@ -103,8 +144,18 @@ function SessionInitializerContent({ children }: SessionInitializerProps) {
     if (userError) {
       console.error("Session initialization error:", userError);
       clearUser("Session initialization error");
+      const status =
+        typeof userError === "object" &&
+        userError !== null &&
+        "response" in userError &&
+        typeof (userError as { response?: { status?: number } }).response?.status === "number"
+          ? (userError as { response?: { status?: number } }).response?.status
+          : undefined;
+      setBootstrapErrorStatus(status);
+      setBootstrapStatus(
+        status === 401 || status === 403 ? "auth_error" : "error"
+      );
       setShouldFetchData(false);
-      setIsInitialized(true);
     }
   }, [userError, clearUser]);
 
@@ -112,12 +163,52 @@ function SessionInitializerContent({ children }: SessionInitializerProps) {
   useEffect(() => {
     if (shouldFetchData && !isUserLoading) {
       setShouldFetchData(false);
-      setIsInitialized(true);
     }
   }, [shouldFetchData, isUserLoading]);
 
+  const hasUser = Boolean(user);
+  const searchString = searchParams.toString();
+  const decision = useMemo(
+    () =>
+      resolveSessionGateDecision({
+        pathname,
+        search: searchString ? `?${searchString}` : "",
+        hasAccessToken,
+        hasRefreshToken,
+        hasUser,
+        bootstrapStatus,
+        bootstrapErrorStatus,
+      }),
+    [pathname, searchString, hasAccessToken, hasRefreshToken, hasUser, bootstrapStatus, bootstrapErrorStatus],
+  );
+
+  // Track whether clearUser has already been called for this decision to
+  // prevent the infinite loop: clearUser → user=null → re-render → new
+  // decision object → clearUser again.
+  const clearedForDecisionRef = useRef(false);
+
+  useEffect(() => {
+    if (decision.clearUser && !clearedForDecisionRef.current) {
+      clearedForDecisionRef.current = true;
+      clearUser("session gate decision");
+    }
+
+    if (!decision.clearUser) {
+      clearedForDecisionRef.current = false;
+    }
+
+    if (decision.type === "redirect") {
+      router.replace(decision.href);
+    }
+  }, [clearUser, decision, router]);
+
   // Show loading spinner until hydration and initialization are complete
-  if (!isHydrated || !isInitialized || (shouldFetchData && isUserLoading)) {
+  if (
+    !isHydrated ||
+    decision.type === "pending" ||
+    decision.type === "redirect" ||
+    (shouldFetchData && isUserLoading)
+  ) {
     return (
       <div className="flex h-screen flex-1 items-center justify-center">
         <Image src={ruhLogoGif} alt="Loading..." width={80} height={80} />

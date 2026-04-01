@@ -9,7 +9,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 interface TelegramConfig {
   enabled: boolean;
-  botToken: string;   // masked on load, new value on save
+  botToken: string;
   dmPolicy: string;
 }
 
@@ -39,11 +39,11 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
     <span
       className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
         enabled
-          ? "bg-green-500/15 text-green-400"
-          : "bg-gray-700/50 text-gray-500"
+          ? "bg-green-50 text-green-600"
+          : "bg-gray-100 text-gray-400"
       }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${enabled ? "bg-green-400" : "bg-gray-600"}`} />
+      <span className={`w-1.5 h-1.5 rounded-full ${enabled ? "bg-green-500" : "bg-gray-300"}`} />
       {enabled ? "Enabled" : "Disabled"}
     </span>
   );
@@ -51,14 +51,14 @@ function StatusBadge({ enabled }: { enabled: boolean }) {
 
 function SaveFeedback({ status, logs }: { status: SaveStatus; logs: string[] }) {
   if (status === "saving") {
-    return <span className="text-xs text-blue-400 animate-pulse">Saving & restarting gateway…</span>;
+    return <span className="text-xs text-violet-600 animate-pulse">Saving & restarting gateway…</span>;
   }
   if (status === "saved") {
     return (
       <div className="space-y-1">
-        <span className="text-xs text-green-400">Saved — gateway restarted</span>
+        <span className="text-xs text-green-600">Saved — gateway restarted</span>
         {logs.length > 0 && (
-          <pre className="text-[10px] text-gray-500 font-mono whitespace-pre-wrap leading-relaxed">
+          <pre className="text-[10px] text-gray-400 font-mono whitespace-pre-wrap leading-relaxed">
             {logs.join("\n")}
           </pre>
         )}
@@ -66,7 +66,7 @@ function SaveFeedback({ status, logs }: { status: SaveStatus; logs: string[] }) 
     );
   }
   if (status === "error") {
-    return <span className="text-xs text-red-400">Failed to save — check console</span>;
+    return <span className="text-xs text-red-500">Failed to save — check console</span>;
   }
   return null;
 }
@@ -82,9 +82,9 @@ function FieldRow({
 }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-gray-400">
+      <label className="text-xs font-medium text-gray-600">
         {label}
-        {hint && <span className="ml-1.5 text-gray-600 font-normal">{hint}</span>}
+        {hint && <span className="ml-1.5 text-gray-400 font-normal">{hint}</span>}
       </label>
       {children}
     </div>
@@ -111,7 +111,7 @@ function TextInput({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-40"
+      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-40"
     />
   );
 }
@@ -132,7 +132,7 @@ function SelectInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-40"
+      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-40"
     >
       {options.map((o) => (
         <option key={o} value={o}>
@@ -157,7 +157,7 @@ function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-        checked ? "bg-blue-600" : "bg-gray-700"
+        checked ? "bg-violet-600" : "bg-gray-200"
       }`}
     >
       <span
@@ -198,19 +198,19 @@ function ProbeSection({
   }
 
   return (
-    <div className="pt-3 border-t border-gray-800 space-y-2">
+    <div className="pt-3 border-t border-gray-200 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-500">Connection status</span>
+        <span className="text-xs text-gray-400">Connection status</span>
         <button
           onClick={probe}
           disabled={probeStatus === "probing"}
-          className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
+          className="text-xs text-violet-600 hover:text-violet-500 disabled:opacity-50 transition-colors"
         >
           {probeStatus === "probing" ? "Probing…" : "Check status ↗"}
         </button>
       </div>
       {probeStatus === "done" && probeOutput && (
-        <pre className="text-[10px] text-gray-400 font-mono bg-gray-900 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed border border-gray-800">
+        <pre className="text-[10px] text-gray-600 font-mono bg-gray-50 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed border border-gray-200">
           {probeOutput}
         </pre>
       )}
@@ -266,7 +266,6 @@ function PairingSection({
       setApproveResult({ ok: res.ok, output: data.output ?? (res.ok ? "Approved!" : data.detail ?? "Failed") });
       if (res.ok) {
         setCode("");
-        // Refresh the list to reflect the now-approved code
         listPending();
       }
     } catch (err) {
@@ -277,19 +276,19 @@ function PairingSection({
   }
 
   return (
-    <div className="pt-3 border-t border-gray-800 space-y-3">
+    <div className="pt-3 border-t border-gray-200 space-y-3">
       {/* Header row */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs font-medium text-gray-300">Device Pairing</p>
-          <p className="text-[10px] text-gray-600 mt-0.5">
+          <p className="text-xs font-medium text-gray-700">Device Pairing</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">
             Approve users who receive "access not configured" when messaging the bot
           </p>
         </div>
         <button
           onClick={listPending}
           disabled={listing}
-          className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors shrink-0"
+          className="text-xs text-violet-600 hover:text-violet-500 disabled:opacity-50 transition-colors shrink-0"
         >
           {listing ? "Loading…" : "List pending ↻"}
         </button>
@@ -297,22 +296,22 @@ function PairingSection({
 
       {/* Pending list */}
       {listOutput && (
-        <div className="bg-gray-800/60 rounded-lg p-3 space-y-2">
+        <div className="bg-gray-50 rounded-lg p-3 space-y-2">
           {listOutput.codes.length > 0 ? (
             <>
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider font-medium">
                 Pending codes
               </p>
               <div className="space-y-1.5">
                 {listOutput.codes.map((c) => (
                   <div key={c} className="flex items-center justify-between gap-3">
-                    <code className="text-xs font-mono text-yellow-400 bg-yellow-400/10 px-2 py-0.5 rounded">
+                    <code className="text-xs font-mono text-yellow-700 bg-yellow-50 px-2 py-0.5 rounded">
                       {c}
                     </code>
                     <button
                       onClick={() => approve(c)}
                       disabled={approving}
-                      className="text-xs text-green-400 hover:text-green-300 disabled:opacity-50 transition-colors"
+                      className="text-xs text-green-600 hover:text-green-500 disabled:opacity-50 transition-colors"
                     >
                       {approving ? "Approving…" : "Approve ✓"}
                     </button>
@@ -321,7 +320,7 @@ function PairingSection({
               </div>
             </>
           ) : (
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-400">
               {listOutput.output.trim() || "No pending pairing requests"}
             </p>
           )}
@@ -330,7 +329,7 @@ function PairingSection({
 
       {/* Manual code entry */}
       <div className="space-y-2">
-        <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">
+        <p className="text-[10px] text-gray-400 uppercase tracking-wider font-medium">
           Approve by code
         </p>
         <div className="flex gap-2">
@@ -344,12 +343,12 @@ function PairingSection({
             onKeyDown={(e) => { if (e.key === "Enter") approve(code); }}
             placeholder="e.g. ZJNTY7MY"
             maxLength={8}
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-violet-500"
           />
           <button
             onClick={() => approve(code)}
             disabled={approving || !code.trim()}
-            className="text-sm bg-green-700 hover:bg-green-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium shrink-0"
+            className="text-sm bg-green-600 hover:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium shrink-0"
           >
             {approving ? "…" : "Approve"}
           </button>
@@ -360,8 +359,8 @@ function PairingSection({
           <div
             className={`rounded-lg px-3 py-2 text-xs font-mono whitespace-pre-wrap ${
               approveResult.ok
-                ? "bg-green-500/10 text-green-400 border border-green-500/20"
-                : "bg-red-500/10 text-red-400 border border-red-500/20"
+                ? "bg-green-50 text-green-700 border border-green-200"
+                : "bg-red-50 text-red-600 border border-red-200"
             }`}
           >
             {approveResult.output}
@@ -382,13 +381,12 @@ function TelegramSection({
   initial: TelegramConfig;
 }) {
   const [enabled, setEnabled] = useState(initial.enabled);
-  const [botToken, setBotToken] = useState("");          // empty = keep existing
+  const [botToken, setBotToken] = useState("");
   const [dmPolicy, setDmPolicy] = useState(initial.dmPolicy);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [expanded, setExpanded] = useState(initial.enabled);
 
-  // Reset when sandbox changes (parent remounts with new `initial`)
   useEffect(() => {
     setEnabled(initial.enabled);
     setBotToken("");
@@ -414,33 +412,33 @@ function TelegramSection({
       if (!res.ok) throw new Error(data.detail ?? "Request failed");
       setLogs(data.logs ?? []);
       setSaveStatus("saved");
-      setBotToken("");  // clear — token is now stored in sandbox
+      setBotToken("");
     } catch (err) {
       console.error(err);
       setSaveStatus("error");
     }
   }
 
-  const existingToken = initial.botToken; // masked value from server
+  const existingToken = initial.botToken;
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#2CA5E0]/15 flex items-center justify-center text-base">
+          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-base">
             ✈️
           </div>
           <div>
-            <p className="text-sm font-semibold text-white">Telegram</p>
-            <p className="text-[10px] text-gray-500 mt-0.5">Bot via @BotFather</p>
+            <p className="text-sm font-semibold text-gray-900">Telegram</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Bot via @BotFather</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge enabled={enabled} />
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
+            className="text-gray-400 hover:text-gray-600 text-xs transition-colors"
           >
             {expanded ? "▲" : "▼"}
           </button>
@@ -449,10 +447,10 @@ function TelegramSection({
 
       {/* Body */}
       {expanded && (
-        <div className="px-5 pb-5 space-y-4 border-t border-gray-800 pt-4">
+        <div className="px-5 pb-5 space-y-4 border-t border-gray-200 pt-4">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-300">Enable Telegram</span>
+            <span className="text-sm text-gray-700">Enable Telegram</span>
             <Toggle checked={enabled} onChange={setEnabled} />
           </div>
 
@@ -480,7 +478,7 @@ function TelegramSection({
             <button
               onClick={save}
               disabled={saveStatus === "saving"}
-              className="ml-auto text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
+              className="ml-auto text-sm bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
             >
               {saveStatus === "saving" ? "Saving…" : "Save & Restart"}
             </button>
@@ -493,13 +491,13 @@ function TelegramSection({
           <PairingSection sandboxId={sandboxId} channel="telegram" />
 
           {/* Setup hint */}
-          <div className="bg-gray-800/50 rounded-lg p-3 space-y-1">
+          <div className="bg-gray-50 rounded-lg p-3 space-y-1">
             <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Setup</p>
-            <ol className="text-xs text-gray-400 space-y-0.5 list-decimal list-inside">
-              <li>Chat with <span className="text-blue-400">@BotFather</span> on Telegram</li>
-              <li>Run <code className="text-gray-300">/newbot</code> and follow prompts</li>
+            <ol className="text-xs text-gray-500 space-y-0.5 list-decimal list-inside">
+              <li>Chat with <span className="text-violet-600">@BotFather</span> on Telegram</li>
+              <li>Run <code className="text-gray-700">/newbot</code> and follow prompts</li>
               <li>Paste the token above and save</li>
-              <li>Optionally disable group privacy with <code className="text-gray-300">/setprivacy</code></li>
+              <li>Optionally disable group privacy with <code className="text-gray-700">/setprivacy</code></li>
             </ol>
           </div>
         </div>
@@ -567,23 +565,23 @@ function SlackSection({
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[#4A154B]/30 flex items-center justify-center text-base">
+          <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center text-base">
             💬
           </div>
           <div>
-            <p className="text-sm font-semibold text-white">Slack</p>
-            <p className="text-[10px] text-gray-500 mt-0.5">Socket or HTTP Events API</p>
+            <p className="text-sm font-semibold text-gray-900">Slack</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Socket or HTTP Events API</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge enabled={enabled} />
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
+            className="text-gray-400 hover:text-gray-600 text-xs transition-colors"
           >
             {expanded ? "▲" : "▼"}
           </button>
@@ -592,10 +590,10 @@ function SlackSection({
 
       {/* Body */}
       {expanded && (
-        <div className="px-5 pb-5 space-y-4 border-t border-gray-800 pt-4">
+        <div className="px-5 pb-5 space-y-4 border-t border-gray-200 pt-4">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-300">Enable Slack</span>
+            <span className="text-sm text-gray-700">Enable Slack</span>
             <Toggle checked={enabled} onChange={setEnabled} />
           </div>
 
@@ -662,7 +660,7 @@ function SlackSection({
             <button
               onClick={save}
               disabled={saveStatus === "saving"}
-              className="ml-auto text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
+              className="ml-auto text-sm bg-violet-600 hover:bg-violet-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-lg transition-colors font-medium"
             >
               {saveStatus === "saving" ? "Saving…" : "Save & Restart"}
             </button>
@@ -673,31 +671,31 @@ function SlackSection({
 
           {/* Setup guide */}
           {mode === "socket" ? (
-            <div className="bg-gray-800/50 rounded-lg p-3 space-y-4">
+            <div className="bg-gray-50 rounded-lg p-3 space-y-4">
               <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">
                 Socket mode setup guide
               </p>
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">1 · Create the Slack app</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
-                  <li>Go to <span className="text-blue-400">api.slack.com/apps</span> → click <em>Create New App</em> → choose <em>From scratch</em></li>
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+                  <li>Go to <span className="text-violet-600">api.slack.com/apps</span> → click <em>Create New App</em> → choose <em>From scratch</em></li>
                   <li>Give your app a name and select the target workspace, then click <em>Create App</em></li>
                 </ol>
               </div>
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">2 · Enable Socket Mode &amp; get the App Token</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Settings</em> click <em>Socket Mode</em> and toggle <em>Enable Socket Mode</em> on</li>
-                  <li>A dialog appears — give the token a name (e.g. <em>openclaw</em>), ensure the scope <code className="text-gray-300">connections:write</code> is selected, then click <em>Generate</em></li>
-                  <li>Copy the token shown — it starts with <code className="text-gray-300">xapp-1-</code> — and paste it into the <em>App Token</em> field above</li>
+                  <li>A dialog appears — give the token a name (e.g. <em>openclaw</em>), ensure the scope <code className="text-gray-700 bg-gray-100 px-1 rounded">connections:write</code> is selected, then click <em>Generate</em></li>
+                  <li>Copy the token shown — it starts with <code className="text-gray-700 bg-gray-100 px-1 rounded">xapp-1-</code> — and paste it into the <em>App Token</em> field above</li>
                 </ol>
               </div>
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">3 · Add bot scopes</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>OAuth &amp; Permissions</em></li>
                   <li>Scroll down to the <em>Scopes</em> section and find <em>Bot Token Scopes</em></li>
                   <li>Click <em>Add an OAuth Scope</em> and add each of the following scopes one by one:</li>
@@ -720,8 +718,8 @@ function SlackSection({
                     ["commands",           "Add slash commands"],
                   ].map(([scope, desc]) => (
                     <div key={scope} className="flex items-start gap-1.5">
-                      <code className="text-[10px] text-gray-300 bg-gray-700 rounded px-1 py-0.5 shrink-0 mt-0.5">{scope}</code>
-                      <span className="text-[10px] text-gray-600 leading-tight">{desc}</span>
+                      <code className="text-[10px] text-gray-700 bg-gray-100 rounded px-1 py-0.5 shrink-0 mt-0.5">{scope}</code>
+                      <span className="text-[10px] text-gray-400 leading-tight">{desc}</span>
                     </div>
                   ))}
                 </div>
@@ -729,7 +727,7 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">4 · Subscribe to bot events</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>Event Subscriptions</em> and toggle <em>Enable Events</em> on</li>
                   <li>Expand <em>Subscribe to bot events</em> and click <em>Add Bot User Event</em> for each:</li>
                 </ol>
@@ -748,8 +746,8 @@ function SlackSection({
                     ["member_left_channel",   "Member leaves a channel"],
                   ].map(([evt, desc]) => (
                     <div key={evt} className="flex items-start gap-1.5">
-                      <code className="text-[10px] text-gray-300 bg-gray-700 rounded px-1 py-0.5 shrink-0 mt-0.5">{evt}</code>
-                      <span className="text-[10px] text-gray-600 leading-tight">{desc}</span>
+                      <code className="text-[10px] text-gray-700 bg-gray-100 rounded px-1 py-0.5 shrink-0 mt-0.5">{evt}</code>
+                      <span className="text-[10px] text-gray-400 leading-tight">{desc}</span>
                     </div>
                   ))}
                 </div>
@@ -757,7 +755,7 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">5 · Enable DMs via App Home</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>App Home</em></li>
                   <li>Scroll to <em>Show Tabs</em> and enable the <em>Messages Tab</em></li>
                   <li>Tick <em>Allow users to send Slash commands and messages from the messages tab</em></li>
@@ -766,30 +764,30 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">6 · Install the app &amp; copy the Bot Token</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Settings</em> click <em>Install App</em> (or go to <em>OAuth &amp; Permissions</em> and click <em>Install to Workspace</em>)</li>
                   <li>Review the permissions and click <em>Allow</em></li>
-                  <li>You are redirected back — copy the <em>Bot User OAuth Token</em> (starts with <code className="text-gray-300">xoxb-</code>) and paste it in the <em>Bot Token</em> field above</li>
+                  <li>You are redirected back — copy the <em>Bot User OAuth Token</em> (starts with <code className="text-gray-700 bg-gray-100 px-1 rounded">xoxb-</code>) and paste it in the <em>Bot Token</em> field above</li>
                 </ol>
               </div>
             </div>
           ) : (
-            <div className="bg-gray-800/50 rounded-lg p-3 space-y-4">
+            <div className="bg-gray-50 rounded-lg p-3 space-y-4">
               <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">
                 HTTP Events API setup guide
               </p>
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">1 · Create the Slack app</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
-                  <li>Go to <span className="text-blue-400">api.slack.com/apps</span> → click <em>Create New App</em> → choose <em>From scratch</em></li>
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+                  <li>Go to <span className="text-violet-600">api.slack.com/apps</span> → click <em>Create New App</em> → choose <em>From scratch</em></li>
                   <li>Give your app a name and select the target workspace, then click <em>Create App</em></li>
                 </ol>
               </div>
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">2 · Add bot scopes</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>OAuth &amp; Permissions</em></li>
                   <li>Scroll to <em>Scopes → Bot Token Scopes</em> and click <em>Add an OAuth Scope</em> for each:</li>
                 </ol>
@@ -811,8 +809,8 @@ function SlackSection({
                     ["commands",           "Add slash commands"],
                   ].map(([scope, desc]) => (
                     <div key={scope} className="flex items-start gap-1.5">
-                      <code className="text-[10px] text-gray-300 bg-gray-700 rounded px-1 py-0.5 shrink-0 mt-0.5">{scope}</code>
-                      <span className="text-[10px] text-gray-600 leading-tight">{desc}</span>
+                      <code className="text-[10px] text-gray-700 bg-gray-100 rounded px-1 py-0.5 shrink-0 mt-0.5">{scope}</code>
+                      <span className="text-[10px] text-gray-400 leading-tight">{desc}</span>
                     </div>
                   ))}
                 </div>
@@ -820,9 +818,9 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">3 · Configure Event Subscriptions</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>Event Subscriptions</em> and toggle <em>Enable Events</em> on</li>
-                  <li>In the <em>Request URL</em> field enter your public gateway URL followed by <code className="text-gray-300">/slack/events</code> (e.g. <code className="text-gray-300">https://your-gateway/slack/events</code>)</li>
+                  <li>In the <em>Request URL</em> field enter your public gateway URL followed by <code className="text-gray-700 bg-gray-100 px-1 rounded">/slack/events</code></li>
                   <li>Slack immediately sends a <em>url_verification</em> challenge — the gateway must already be running and reachable for this to pass</li>
                   <li>Once verified, expand <em>Subscribe to bot events</em> and add the same events as listed in the socket mode guide above</li>
                 </ol>
@@ -830,7 +828,7 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">4 · Enable DMs via App Home</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>In the left sidebar under <em>Features</em> click <em>App Home</em></li>
                   <li>Enable the <em>Messages Tab</em> and tick <em>Allow users to send Slash commands and messages from the messages tab</em></li>
                 </ol>
@@ -838,14 +836,14 @@ function SlackSection({
 
               <div className="space-y-1.5">
                 <p className="text-[10px] text-gray-500 font-medium">5 · Install &amp; collect credentials</p>
-                <ol className="text-xs text-gray-400 space-y-1 list-decimal list-inside">
+                <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
                   <li>Go to <em>OAuth &amp; Permissions</em> → click <em>Install to Workspace</em> and allow</li>
-                  <li>Copy the <em>Bot User OAuth Token</em> (starts with <code className="text-gray-300">xoxb-</code>) and paste it in the <em>Bot Token</em> field above</li>
+                  <li>Copy the <em>Bot User OAuth Token</em> (starts with <code className="text-gray-700 bg-gray-100 px-1 rounded">xoxb-</code>) and paste it in the <em>Bot Token</em> field above</li>
                   <li>Go to <em>Basic Information → App Credentials</em> and copy the <em>Signing Secret</em> — paste it in the <em>Signing Secret</em> field above</li>
                 </ol>
               </div>
 
-              <div className="space-y-1 border-t border-gray-700 pt-2">
+              <div className="space-y-1 border-t border-gray-200 pt-2">
                 <p className="text-[10px] text-yellow-600 font-medium">Tip</p>
                 <p className="text-xs text-gray-500">HTTP mode requires the gateway to have a public HTTPS URL before Slack can verify it. Socket mode works behind firewalls and NAT with no public URL needed — prefer it unless you have a specific reason to use HTTP.</p>
               </div>
@@ -888,7 +886,7 @@ export default function ChannelsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <span className="text-xs text-gray-600 animate-pulse">Loading channel config…</span>
+        <span className="text-xs text-gray-400 animate-pulse">Loading channel config…</span>
       </div>
     );
   }
@@ -896,10 +894,10 @@ export default function ChannelsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
-        <p className="text-sm text-red-400">{error}</p>
+        <p className="text-sm text-red-500">{error}</p>
         <button
           onClick={loadConfig}
-          className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+          className="text-xs text-violet-600 hover:text-violet-500 transition-colors"
         >
           Retry
         </button>
@@ -912,10 +910,10 @@ export default function ChannelsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   return (
     <div className="h-full overflow-y-auto px-6 py-6 space-y-4 max-w-2xl mx-auto">
       <div className="space-y-1 mb-6">
-        <h2 className="text-sm font-semibold text-white">Channels</h2>
+        <h2 className="text-sm font-semibold text-gray-900">Channels</h2>
         <p className="text-xs text-gray-500">
-          Configure messaging channels for <span className="text-gray-300">{sandbox.sandbox_name}</span>.
-          Saving applies <code className="text-gray-400">openclaw config set</code> on the sandbox and restarts the gateway.
+          Configure messaging channels for <span className="text-gray-700">{sandbox.sandbox_name}</span>.
+          Saving applies <code className="text-gray-600 bg-gray-100 px-1 rounded">openclaw config set</code> on the sandbox and restarts the gateway.
         </p>
       </div>
 

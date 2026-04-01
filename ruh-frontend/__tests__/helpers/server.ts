@@ -22,7 +22,11 @@ export const handlers = [
   // ── Conversations ─────────────────────────────────────────────────────────────
 
   http.get(`${BASE}/api/sandboxes/:sandbox_id/conversations`, () =>
-    HttpResponse.json([makeConversation()]),
+    HttpResponse.json({
+      items: [makeConversation()],
+      next_cursor: null,
+      has_more: false,
+    }),
   ),
 
   http.post(`${BASE}/api/sandboxes/:sandbox_id/conversations`, async ({ request }) => {
@@ -39,10 +43,14 @@ export const handlers = [
   ),
 
   http.get(`${BASE}/api/sandboxes/:sandbox_id/conversations/:conv_id/messages`, () =>
-    HttpResponse.json([
-      { role: 'user', content: 'Hello' },
-      { role: 'assistant', content: 'Hi there!' },
-    ]),
+    HttpResponse.json({
+      messages: [
+        { id: 1, role: 'user', content: 'Hello', created_at: new Date('2025-01-15T10:05:01Z').toISOString() },
+        { id: 2, role: 'assistant', content: 'Hi there!', created_at: new Date('2025-01-15T10:05:02Z').toISOString() },
+      ],
+      next_cursor: null,
+      has_more: false,
+    }),
   ),
 
   http.post(`${BASE}/api/sandboxes/:sandbox_id/conversations/:conv_id/messages`, () =>

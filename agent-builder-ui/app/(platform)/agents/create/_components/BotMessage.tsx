@@ -1,25 +1,38 @@
 "use client";
 
-import { useMemo } from "react";
+import React from "react";
 import Image from "next/image";
 import MessageContent from "./MessageContent";
-import { AgentReviewCard } from "./AgentReviewCard";
-import {
-  parseAgentContent,
-  type ParsedReviewData,
-} from "@/lib/openclaw/parse-response";
+import { ClarificationMessage } from "./ClarificationMessage";
+import { ChatMessage } from "@/lib/openclaw/types";
 
 interface BotMessageProps {
-  message: string;
+  message: ChatMessage;
   animate?: boolean;
-  onSendMessage?: (text: string) => void;
+  onSelectOption?: (text: string) => void;
 }
 
 export const BotMessage: React.FC<BotMessageProps> = ({
   message,
   animate = false,
+  onSelectOption,
 }) => {
-  const parsed = useMemo(() => parseAgentContent(message), [message]);
+  const renderContent = () => {
+    if (
+      message.responseType === "clarification" &&
+      message.questions &&
+      message.questions.length > 0
+    ) {
+      return (
+        <ClarificationMessage
+          context={message.clarificationContext}
+          questions={message.questions}
+          onSelectOption={onSelectOption}
+        />
+      );
+    }
+    return <MessageContent content={message.content} />;
+  };
 
   return (
     <div
@@ -35,20 +48,7 @@ export const BotMessage: React.FC<BotMessageProps> = ({
         />
       </div>
       <div className="flex-1 min-w-0 pt-0.5">
-        {/* Text before JSON block */}
-        {parsed.before && <MessageContent content={parsed.before} />}
-
-        {/* Clarification — handled by page-level wizard now, just show the before text */}
-
-        {/* Agent review card */}
-        {parsed.json?.type === "ready_for_review" && (
-          <AgentReviewCard data={parsed.json as ParsedReviewData} />
-        )}
-
-        {/* Text after JSON block (skip for clarification — wizard handles it) */}
-        {parsed.after && parsed.json?.type !== "clarification" && (
-          <MessageContent content={parsed.after} />
-        )}
+        {renderContent()}
       </div>
     </div>
   );

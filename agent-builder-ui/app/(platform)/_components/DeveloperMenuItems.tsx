@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import React from "react";
+// useOpenClawChat removed — create page now manages its own state via useBuilderState
 
 interface DeveloperMenuItemsProps {
   onMobileClose?: () => void;
@@ -35,7 +36,6 @@ export const DeveloperMenuItems: React.FC<DeveloperMenuItemsProps> = ({
 }) => {
   const router = useRouter();
   const pathname = usePathname();
-
   const handleNewAgent = () => {
     if (onMobileClose) onMobileClose();
     router.push("/agents/create");
