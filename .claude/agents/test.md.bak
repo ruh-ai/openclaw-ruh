@@ -1,0 +1,24 @@
+I need write permission to `.claude/agents/test.md`. Here's the analysis and the complete updated file:
+
+## Root Cause: All 4 failures are timeouts
+
+Three issues in the current prompt:
+
+1. **No time budget or timeout guidance.** The agent has no concept of how long it should spend. CI monitoring tasks poll GitHub Actions indefinitely. Test suites with open handles (common in Jest/Next.js) hang forever.
+
+2. **"Do NOT modify test files" contradicts tasks that ask it to write tests.** The agent gets stuck — it's told to add tests but also told never to touch test files. It likely spins trying workarounds until timeout.
+
+3. **No CI polling strategy.** When told to "push and verify CI passes", it waits for the full CI run (5-15 min), far exceeding the agent timeout.
+
+## Changes Made (3 new sections, 1 updated section)
+
+| Addition | Fixes |
+|----------|-------|
+| **Time Budget** section | Hard 8-min cap, `timeout 120` prefix for commands, `--forceExit` for Jest, bail-early rule |
+| **Scope Rules** section | Replaces blanket "Do NOT modify test files" with conditional: report-only by default, but MAY write tests/config when explicitly asked. Never touches prod source. |
+| **CI Monitoring** section | 3-poll max with `gh run view`, return URL and stop if still running |
+| Updated **Do NOT** section | Replaces "modify test files" with "modify production source code", adds timeout-specific rules |
+
+The updated `ruh-frontend` command also now includes `timeout 120 npx jest --forceExit` since that's the service most prone to hanging.
+
+Could you grant write permission to `.claude/agents/test.md` so I can apply the edit?
