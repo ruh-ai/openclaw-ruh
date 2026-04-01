@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Web API polyfills for jest-environment-jsdom.
  * Must use require() (not import) so we control execution order:
