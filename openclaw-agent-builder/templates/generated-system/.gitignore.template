@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+*.pyc
+.openclaw/sessions/
+.openclaw/agents/*/sessions/
+*.log
+.DS_Store
+output/
+tmp/

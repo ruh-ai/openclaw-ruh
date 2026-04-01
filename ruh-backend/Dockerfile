@@ -3,11 +3,11 @@ FROM oven/bun:1 AS base
 WORKDIR /app
 
 # Install dependencies (bun.lockb copied for reproducible installs)
-COPY package.json bun.lockb* ./
+COPY ruh-backend/package.json ruh-backend/bun.lock* ./
 RUN bun install --frozen-lockfile
 
 # Copy source
-COPY . .
+COPY ruh-backend/ .
 
 # Non-root user for security
 RUN groupadd --gid 1001 appgroup && \

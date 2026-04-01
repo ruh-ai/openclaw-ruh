@@ -1,0 +1,99 @@
+#!/bin/bash
+# install-dependencies.sh
+# Installs required dependencies for {{SYSTEM_NAME}} (OpenClaw-Native)
+
+set -e
+
+echo "📦 Installing {{SYSTEM_NAME}} Dependencies..."
+echo ""
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Check if running with sudo (for system packages)
+if [ "$EUID" -eq 0 ]; then 
+    SUDO=""
+else
+    SUDO="sudo"
+fi
+
+echo "=== System Package Dependencies ==="
+
+# Detect OS
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+else
+    OS=$(uname -s)
+fi
+
+echo "Detected OS: $OS"
+echo ""
+
+# Install system packages based on OS
+case $OS in
+    ubuntu|debian)
+        echo "Installing via apt-get..."
+        $SUDO apt-get update
+        $SUDO apt-get install -y {{SYSTEM_PACKAGES_APT}}
+        echo -e "${GREEN}✓${NC} System packages installed"
+        ;;
+    
+    centos|rhel|fedora)
+        echo "Installing via yum..."
+        $SUDO yum install -y {{SYSTEM_PACKAGES_YUM}}
+        echo -e "${GREEN}✓${NC} System packages installed"
+        ;;
+    
+    darwin|Darwin)
+        echo "Installing via brew (macOS)..."
+        if ! command -v brew &> /dev/null; then
+            echo -e "${RED}✗${NC} Homebrew not found. Install from https://brew.sh"
+            exit 1
+        fi
+        brew install {{SYSTEM_PACKAGES_BREW}}
+        echo -e "${GREEN}✓${NC} System packages installed"
+        ;;
+    
+    *)
+        echo -e "${YELLOW}⚠${NC} Unknown OS: $OS"
+        echo "Please install manually: {{SYSTEM_PACKAGES_LIST}}"
+        ;;
+esac
+
+echo ""
+echo "=== Node.js & npm ==="
+
+if ! command -v node &> /dev/null; then
+    echo -e "${YELLOW}⚠${NC} Node.js not found"
+    echo "Please install Node.js from https://nodejs.org"
+    echo "Or use a version manager like nvm: https://github.com/nvm-sh/nvm"
+    exit 1
+else
+    NODE_VERSION=$(node --version)
+    echo -e "${GREEN}✓${NC} Node.js is installed (version: $NODE_VERSION)"
+fi
+
+if ! command -v npm &> /dev/null; then
+    echo -e "${RED}✗${NC} npm not found (should come with Node.js)"
+    exit 1
+else
+    NPM_VERSION=$(npm --version)
+    echo -e "${GREEN}✓${NC} npm is installed (version: $NPM_VERSION)"
+fi
+
+{{NPM_PACKAGES_INSTALL}}
+
+echo ""
+echo "=== Installation Complete ==="
+echo ""
+echo "Next steps:"
+echo "1. Set environment variables in OpenClaw's .env file"
+echo "2. Run: ./check-environment.sh"
+echo "3. Copy files to OpenClaw instance"
+echo "4. Restart OpenClaw: openclaw gateway restart"
+echo ""
+echo "See README.md for full deployment guide."

@@ -54,6 +54,14 @@ spec:
                 name: backend
                 port:
                   number: 8000
+          # Agent Builder UI
+          - path: /builder
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-builder-ui
+                port:
+                  number: 3000
           # Frontend: everything else
           - path: /
             pathType: Prefix
@@ -61,4 +69,4 @@ spec:
               service:
                 name: frontend
                 port:
-                  number: 3000
+                  number: 3001
