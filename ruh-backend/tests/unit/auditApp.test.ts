@@ -68,6 +68,8 @@ mock.module('../../src/sandboxManager', () => ({
   dockerExec: mockDockerExec,
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  PREVIEW_PORTS: [],
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -89,6 +91,9 @@ mock.module('../../src/docker', () => ({
   buildCronRunCommand: (jobId: string) => `cron run ${jobId}`,
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
+  dockerExec: mockDockerExec,
+  dockerSpawn: mock(async () => [0, '']),
+  listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
 }));

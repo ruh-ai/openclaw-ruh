@@ -186,7 +186,7 @@ describe('POST /api/agents/create', () => {
     const call = mockSaveAgent.mock.calls[0][0] as Record<string, unknown>;
     expect(call.name).toBe('Test Agent');
     expect(['draft', 'forging']).toContain(call.status);
-    expect(call.createdBy).toBe('developer-1');
+    expect(call.createdBy).toBe('user-test-001');
     expect(call.orgId).toBe('org-test-001');
   });
 });

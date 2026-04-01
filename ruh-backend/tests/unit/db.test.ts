@@ -73,6 +73,7 @@ describe('db connection helper', () => {
         connectionString: 'postgres://openclaw:changeme@localhost:5432/openclaw',
         min: 2,
         max: 10,
+        ssl: { rejectUnauthorized: true },
       },
     ]);
     expect(client.calls).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);

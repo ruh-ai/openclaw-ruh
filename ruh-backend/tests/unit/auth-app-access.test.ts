@@ -2,13 +2,29 @@ import { describe, expect, test } from 'bun:test';
 
 import { deriveAppAccess } from '../../src/auth/appAccess';
 
+function membership(overrides: {
+  kind: 'developer' | 'customer';
+  role: string;
+  status?: string;
+}) {
+  return {
+    id: `mem-${overrides.role}`,
+    organizationId: `org-${overrides.kind}`,
+    organizationName: `${overrides.kind} Org`,
+    organizationSlug: `${overrides.kind}-org`,
+    organizationKind: overrides.kind,
+    organizationPlan: 'free',
+    role: overrides.role,
+    status: overrides.status ?? 'active',
+  };
+}
+
 describe('deriveAppAccess', () => {
-  test('grants only admin-ui access to platform admins without an active membership', () => {
+  test('grants only admin-ui access to platform admins without memberships', () => {
     expect(
       deriveAppAccess({
         platformRole: 'platform_admin',
-        activeOrganization: null,
-        activeMembership: null,
+        memberships: [],
       }),
     ).toEqual({
       admin: true,
@@ -22,23 +38,7 @@ describe('deriveAppAccess', () => {
       expect(
         deriveAppAccess({
           platformRole: 'user',
-          activeOrganization: {
-            id: 'org-dev',
-            name: 'Dev Org',
-            slug: 'dev-org',
-            kind: 'developer',
-            plan: 'free',
-          },
-          activeMembership: {
-            id: `mem-${role}`,
-            organizationId: 'org-dev',
-            organizationName: 'Dev Org',
-            organizationSlug: 'dev-org',
-            organizationKind: 'developer',
-            organizationPlan: 'free',
-            role,
-            status: 'active',
-          },
+          memberships: [membership({ kind: 'developer', role })],
         }),
       ).toEqual({
         admin: false,
@@ -53,23 +53,7 @@ describe('deriveAppAccess', () => {
       expect(
         deriveAppAccess({
           platformRole: 'user',
-          activeOrganization: {
-            id: 'org-customer',
-            name: 'Customer Org',
-            slug: 'customer-org',
-            kind: 'customer',
-            plan: 'free',
-          },
-          activeMembership: {
-            id: `mem-${role}`,
-            organizationId: 'org-customer',
-            organizationName: 'Customer Org',
-            organizationSlug: 'customer-org',
-            organizationKind: 'customer',
-            organizationPlan: 'free',
-            role,
-            status: 'active',
-          },
+          memberships: [membership({ kind: 'customer', role })],
         }),
       ).toEqual({
         admin: false,
@@ -79,27 +63,45 @@ describe('deriveAppAccess', () => {
     }
   });
 
+  test('grants both builder and customer when user has memberships in both org kinds', () => {
+    expect(
+      deriveAppAccess({
+        platformRole: 'user',
+        memberships: [
+          membership({ kind: 'developer', role: 'owner' }),
+          membership({ kind: 'customer', role: 'admin' }),
+        ],
+      }),
+    ).toEqual({
+      admin: false,
+      builder: true,
+      customer: true,
+    });
+  });
+
+  test('grants admin + builder + customer for platform admin with both memberships', () => {
+    expect(
+      deriveAppAccess({
+        platformRole: 'platform_admin',
+        memberships: [
+          membership({ kind: 'developer', role: 'owner' }),
+          membership({ kind: 'customer', role: 'admin' }),
+        ],
+      }),
+    ).toEqual({
+      admin: true,
+      builder: true,
+      customer: true,
+    });
+  });
+
   test('fails closed for inactive memberships', () => {
     expect(
       deriveAppAccess({
         platformRole: 'user',
-        activeOrganization: {
-          id: 'org-dev',
-          name: 'Dev Org',
-          slug: 'dev-org',
-          kind: 'developer',
-          plan: 'free',
-        },
-        activeMembership: {
-          id: 'mem-inactive',
-          organizationId: 'org-dev',
-          organizationName: 'Dev Org',
-          organizationSlug: 'dev-org',
-          organizationKind: 'developer',
-          organizationPlan: 'free',
-          role: 'developer',
-          status: 'invited',
-        },
+        memberships: [
+          membership({ kind: 'developer', role: 'developer', status: 'invited' }),
+        ],
       }),
     ).toEqual({
       admin: false,
@@ -108,27 +110,13 @@ describe('deriveAppAccess', () => {
     });
   });
 
-  test('fails closed when org kind and membership role do not grant the surface', () => {
+  test('fails closed when membership role does not grant the surface', () => {
     expect(
       deriveAppAccess({
         platformRole: 'user',
-        activeOrganization: {
-          id: 'org-customer',
-          name: 'Customer Org',
-          slug: 'customer-org',
-          kind: 'customer',
-          plan: 'free',
-        },
-        activeMembership: {
-          id: 'mem-dev-on-customer',
-          organizationId: 'org-customer',
-          organizationName: 'Customer Org',
-          organizationSlug: 'customer-org',
-          organizationKind: 'customer',
-          organizationPlan: 'free',
-          role: 'developer',
-          status: 'active',
-        },
+        memberships: [
+          membership({ kind: 'customer', role: 'developer' }),
+        ],
       }),
     ).toEqual({
       admin: false,

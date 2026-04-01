@@ -5,7 +5,12 @@ CHANGED=$(git diff HEAD @{push} --name-only 2>/dev/null || git diff HEAD~1 --nam
 
 if echo "$CHANGED" | grep -q "^ruh-backend/"; then
   echo "🧪 Running ruh-backend tests..."
-  cd ruh-backend && bun test tests/unit/ || exit 1
+  cd ruh-backend
+  FAIL=0
+  for f in tests/unit/*.test.ts; do
+    bun test "$f" || FAIL=1
+  done
+  [ $FAIL -eq 0 ] || exit 1
   cd ..
 fi
 
