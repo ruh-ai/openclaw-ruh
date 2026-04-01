@@ -79,4 +79,68 @@ describe('HistoryPanel', () => {
 
     expect(screen.getByText('Keep Me')).toBeInTheDocument();
   });
+
+  test('rename flow: click edit, type new name, press Enter to commit', async () => {
+    const user = userEvent.setup();
+
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [makeConversation({ id: 'conv-rename', name: 'Old Name' })],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+      http.patch(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/conv-rename`, () =>
+        HttpResponse.json({ ok: true }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Old Name')).toBeInTheDocument());
+
+    await user.hover(screen.getByText('Old Name').closest('.group') as HTMLElement);
+    await user.click(screen.getByTitle('Rename'));
+
+    const input = screen.getByDisplayValue('Old Name');
+    await user.clear(input);
+    await user.type(input, 'New Name{Enter}');
+
+    await waitFor(() => expect(screen.getByText('New Name')).toBeInTheDocument());
+  });
+
+  test('updates conversation name when conv:renamed event fires', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [makeConversation({ id: 'conv-evt', name: 'Before Event' })],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Before Event')).toBeInTheDocument());
+
+    window.dispatchEvent(
+      new CustomEvent('conv:renamed', { detail: { id: 'conv-evt', name: 'After Event' } }),
+    );
+
+    await waitFor(() => expect(screen.getByText('After Event')).toBeInTheDocument());
+  });
 });

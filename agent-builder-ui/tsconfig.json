@@ -27,6 +27,9 @@
     "node_modules",
     "**/*.test.ts",
     "**/*.test.tsx",
+    "__tests__/**",
+    "jest.config.ts",
+    "jest.setup.ts",
     "e2e/**",
     "test-results/**"
   ]

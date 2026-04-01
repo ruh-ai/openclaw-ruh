@@ -48,9 +48,15 @@ interface MessagePage {
 function useElapsedSeconds(running: boolean): number {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (!running) { setElapsed(0); return; }
-    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => clearInterval(t);
+    if (!running) return;
+    const start = Date.now();
+    const t = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => {
+      clearInterval(t);
+      setElapsed(0);
+    };
   }, [running]);
   return elapsed;
 }

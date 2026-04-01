@@ -27,14 +27,16 @@ beforeEach(() => {
 
 describe("AdminSessionGate", () => {
   test("shows loading spinner initially", () => {
-    const { container } = render(
+    const { container, queryByText } = render(
       <AdminSessionGate>
         <div>Protected</div>
       </AdminSessionGate>
     );
 
-    expect(container.querySelector(".animate-spin")).toBeTruthy();
-    expect(container.textContent).not.toContain("Protected");
+    // Component should not render children while loading
+    expect(queryByText("Protected")).toBeNull();
+    // Should render spinner wrapper (two nested divs, no children text)
+    expect(container.querySelector("div > div")).toBeTruthy();
   });
 
   test("renders children when authenticated with admin access", async () => {
