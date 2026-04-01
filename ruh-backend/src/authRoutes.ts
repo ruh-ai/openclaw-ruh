@@ -225,8 +225,7 @@ async function buildAuthContext(
     platformRole,
     appAccess: deriveAppAccess({
       platformRole,
-      activeOrganization,
-      activeMembership: activeMembershipResponse,
+      memberships: memberships.map(toMembershipResponse),
     }),
   };
 }

@@ -25,43 +25,26 @@ export interface ActiveMembershipContext {
 
 export interface DeriveAppAccessInput {
   platformRole: 'platform_admin' | 'user';
-  activeOrganization: ActiveOrganizationContext | null;
-  activeMembership: ActiveMembershipContext | null;
-}
-
-function isActiveMembership(
-  activeOrganization: ActiveOrganizationContext | null,
-  activeMembership: ActiveMembershipContext | null,
-): boolean {
-  if (!activeOrganization || !activeMembership) {
-    return false;
-  }
-  if (activeMembership.status !== 'active') {
-    return false;
-  }
-  return activeMembership.organizationId === activeOrganization.id;
+  memberships: ActiveMembershipContext[];
 }
 
 export function deriveAppAccess({
   platformRole,
-  activeOrganization,
-  activeMembership,
+  memberships,
 }: DeriveAppAccessInput): AppAccess {
-  const activeMembershipMatchesOrg = isActiveMembership(activeOrganization, activeMembership);
+  const active = memberships.filter((m) => m.status === 'active');
 
-  const builder =
-    activeMembershipMatchesOrg
-    && activeOrganization?.kind === 'developer'
-    && (activeMembership?.role === 'owner' || activeMembership?.role === 'developer');
+  const builder = active.some(
+    (m) =>
+      m.organizationKind === 'developer' &&
+      (m.role === 'owner' || m.role === 'developer'),
+  );
 
-  const customer =
-    activeMembershipMatchesOrg
-    && activeOrganization?.kind === 'customer'
-    && (
-      activeMembership?.role === 'owner'
-      || activeMembership?.role === 'admin'
-      || activeMembership?.role === 'employee'
-    );
+  const customer = active.some(
+    (m) =>
+      m.organizationKind === 'customer' &&
+      (m.role === 'owner' || m.role === 'admin' || m.role === 'employee'),
+  );
 
   return {
     admin: platformRole === 'platform_admin',
