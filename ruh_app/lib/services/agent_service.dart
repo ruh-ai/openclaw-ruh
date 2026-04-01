@@ -10,21 +10,19 @@ class AgentService {
 
   /// Fetch all agents.
   Future<List<Agent>> listAgents() async {
-    final response = await _client.get<Map<String, dynamic>>('/api/agents');
+    final response = await _client.get<List<dynamic>>('/api/agents');
     final data = response.data;
     if (data == null) return [];
 
-    final list = data['agents'] as List<dynamic>? ?? [];
-    return list
-        .map((e) => Agent.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return data.map((e) => Agent.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   /// Fetch a single agent by [id]. Returns `null` if not found.
   Future<Agent?> getAgent(String id) async {
     try {
-      final response =
-          await _client.get<Map<String, dynamic>>('/api/agents/$id');
+      final response = await _client.get<Map<String, dynamic>>(
+        '/api/agents/$id',
+      );
       final data = response.data;
       if (data == null) return null;
       return Agent.fromJson(data);
@@ -33,11 +31,21 @@ class AgentService {
     }
   }
 
+  /// Provision and return a customer runtime agent's launchable record.
+  Future<Agent> launchAgent(String id) async {
+    final response = await _client.postLongRunning<Map<String, dynamic>>(
+      '/api/agents/$id/launch',
+    );
+    final data = response.data ?? const <String, dynamic>{};
+    final agentJson = data['agent'];
+    if (agentJson is! Map<String, dynamic>) {
+      throw StateError('Launch response did not include an agent');
+    }
+    return Agent.fromJson(agentJson);
+  }
+
   /// Partially update an agent. Returns the updated record.
-  Future<Agent> updateAgent(
-    String id,
-    Map<String, dynamic> patch,
-  ) async {
+  Future<Agent> updateAgent(String id, Map<String, dynamic> patch) async {
     final response = await _client.patch<Map<String, dynamic>>(
       '/api/agents/$id',
       data: patch,
@@ -71,8 +79,9 @@ class AgentService {
 
   /// Get health status for a sandbox.
   Future<SandboxHealth> getSandboxHealth(String sandboxId) async {
-    final response = await _client
-        .get<Map<String, dynamic>>('/api/sandboxes/$sandboxId/status');
+    final response = await _client.get<Map<String, dynamic>>(
+      '/api/sandboxes/$sandboxId/status',
+    );
     return SandboxHealth.fromJson(response.data!);
   }
 

@@ -18,9 +18,8 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("accessToken");
     fetch(`${API_URL}/api/admin/agents`, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
     })
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => setAgents(data.items || data))

@@ -85,7 +85,39 @@ export const CustomEventName = {
   PREVIEW_SERVER_DETECTED: "preview_server_detected",
   /** @deprecated Use AG-UI REASONING_* EventType instead. Kept for backward compatibility. */
   REASONING: "reasoning",
+  // ── Workspace & build events (from tool execution via WebSocket) ──
+  /** A file was written to the agent workspace via exec. */
+  FILE_WRITTEN: "file_written",
+  /** A SKILL.md file was created in skills/. */
+  SKILL_CREATED: "skill_created",
+  /** Build progress update — tracks how many skills have been written. */
+  BUILD_PROGRESS: "build_progress",
+  /** Any workspace file change (create/update/delete). */
+  WORKSPACE_CHANGED: "workspace_changed",
 } as const;
+
+// ─── Event payload types ─────────────────────────────────────────────────────
+
+export interface FileWrittenPayload {
+  path: string;
+  tool: string;
+}
+
+export interface SkillCreatedPayload {
+  skillId: string;
+  path: string;
+}
+
+export interface BuildProgressPayload {
+  completed: number;
+  total: number | null;
+  currentSkill: string | null;
+}
+
+export interface WorkspaceChangedPayload {
+  action: "create" | "update" | "delete";
+  path: string;
+}
 
 // ─── Editor file changed payload ────────────────────────────────────────────
 

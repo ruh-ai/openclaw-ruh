@@ -54,9 +54,7 @@ class SandboxRecord {
       if (vncPort != null) 'vnc_port': vncPort,
       if (dashboardUrl != null) 'dashboard_url': dashboardUrl,
       if (previewPorts.isNotEmpty)
-        'preview_ports': previewPorts.map(
-          (k, v) => MapEntry(k.toString(), v),
-        ),
+        'preview_ports': previewPorts.map((k, v) => MapEntry(k.toString(), v)),
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -109,8 +107,7 @@ class SandboxHealth {
       deployedAt: json['deployed_at'] != null
           ? DateTime.tryParse(json['deployed_at'] as String)
           : null,
-      conversationCount:
-          (json['conversation_count'] as num?)?.toInt() ?? 0,
+      conversationCount: (json['conversation_count'] as num?)?.toInt() ?? 0,
     );
   }
 

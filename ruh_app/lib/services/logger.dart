@@ -25,7 +25,8 @@ class LogEntry {
   });
 
   String get formatted {
-    final ts = '${timestamp.hour.toString().padLeft(2, '0')}:'
+    final ts =
+        '${timestamp.hour.toString().padLeft(2, '0')}:'
         '${timestamp.minute.toString().padLeft(2, '0')}:'
         '${timestamp.second.toString().padLeft(2, '0')}.'
         '${timestamp.millisecond.toString().padLeft(3, '0')}';
@@ -58,8 +59,13 @@ class Log {
     _listeners.remove(listener);
   }
 
-  static void _log(LogLevel level, String tag, String message,
-      [Object? error, StackTrace? stackTrace]) {
+  static void _log(
+    LogLevel level,
+    String tag,
+    String message, [
+    Object? error,
+    StackTrace? stackTrace,
+  ]) {
     if (level.index < minLevel.index) return;
 
     final entry = LogEntry(
@@ -117,9 +123,12 @@ class Log {
       _log(LogLevel.warn, tag, message, error);
 
   /// Log an error.
-  static void e(String tag, String message,
-          [Object? error, StackTrace? stackTrace]) =>
-      _log(LogLevel.error, tag, message, error, stackTrace);
+  static void e(
+    String tag,
+    String message, [
+    Object? error,
+    StackTrace? stackTrace,
+  ]) => _log(LogLevel.error, tag, message, error, stackTrace);
 
   /// Clear all entries.
   static void clear() => _entries.clear();

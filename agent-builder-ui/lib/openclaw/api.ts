@@ -7,6 +7,8 @@ export interface StreamCallbacks {
   onApprovalEvent?: (event: ApprovalEvent) => void;
   onDelta?: (text: string) => void;
   onIntermediate?: (update: IntermediateUpdate) => void;
+  /** Generic handler for custom SSE events (file_written, skill_created, build_progress, workspace_changed). */
+  onCustomEvent?: (name: string, data: unknown) => void;
 }
 
 export interface SendToArchitectOptions {
@@ -151,6 +153,15 @@ export async function sendToArchitectStreaming(
         callbacks?.onIntermediate?.(parsed as IntermediateUpdate);
       } else if (eventName === "result") {
         finalResult = parsed as ArchitectResponse;
+      } else if (
+        eventName === "file_written" ||
+        eventName === "skill_created" ||
+        eventName === "build_progress" ||
+        eventName === "workspace_changed" ||
+        eventName === "tool_start" ||
+        eventName === "tool_end"
+      ) {
+        callbacks?.onCustomEvent?.(eventName, parsed);
       }
     } catch {
       console.warn(
@@ -280,6 +291,15 @@ export async function sendToForgeSandboxChat(
         callbacks?.onIntermediate?.(parsed as IntermediateUpdate);
       } else if (eventName === "result") {
         finalResult = parsed as ArchitectResponse;
+      } else if (
+        eventName === "file_written" ||
+        eventName === "skill_created" ||
+        eventName === "build_progress" ||
+        eventName === "workspace_changed" ||
+        eventName === "tool_start" ||
+        eventName === "tool_end"
+      ) {
+        callbacks?.onCustomEvent?.(eventName, parsed);
       }
     } catch {
       // Skip malformed events

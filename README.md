@@ -93,7 +93,6 @@ Ship to GitHub. Agent is live.
 | **agent-builder-ui** | Next.js 15, React, Tailwind | Conversational agent creation (7-stage wizard) |
 | **ruh-frontend** | Next.js 16, React | Client app for daily agent interaction |
 | **admin-ui** | Next.js 15, React | Platform management and moderation |
-| **desktop-app** | Tauri v2 | Native desktop wrapper for the client app |
 | **@ruh/marketplace-ui** | React (shared package) | Reusable marketplace components |
 
 ---
@@ -221,9 +220,9 @@ npm run coverage:all      # Coverage with threshold enforcement
 openclaw-ruh/
   ruh-backend/            # Express API + sandbox orchestration
   agent-builder-ui/       # Agent creation wizard (Next.js 15)
-  ruh-frontend/           # Client application (Next.js 16)
+  ruh-frontend/           # Customer web application (Next.js 16)
+  ruh_app/                # Flutter customer application
   admin-ui/               # Admin panel (Next.js 15)
-  desktop-app/            # Tauri v2 desktop wrapper
   packages/
     marketplace-ui/       # Shared marketplace components
   docs/
@@ -264,7 +263,7 @@ Ruh is designed to work with the broader AI agent ecosystem:
 
 - [ ] Event-driven architecture for real-time tool execution
 - [ ] Agent marketplace with community templates
-- [ ] Desktop app (Tauri v2) general availability
+- [ ] Flutter desktop builds for customer app
 - [ ] Mobile companion app
 - [ ] OpenSpace self-evolving skills integration
 - [ ] Multi-agent delegation and coordination

@@ -37,7 +37,8 @@ interface CoPilotLayoutProps {
   onBuilderStateChange: (partial: Partial<BuilderState>) => void;
   onComplete: () => void | Promise<boolean>;
   onCancel: () => void;
-  architectSandbox?: ArchitectSandboxInfo | null;
+  /** The sandbox for this agent — either its forge sandbox or the shared architect. */
+  activeSandbox?: ArchitectSandboxInfo | null;
 }
 
 export function CoPilotLayout({
@@ -48,7 +49,7 @@ export function CoPilotLayout({
   onBuilderStateChange,
   onComplete,
   onCancel,
-  architectSandbox,
+  activeSandbox,
 }: CoPilotLayoutProps) {
   const coPilotStore = useCoPilotStore();
   const {
@@ -84,6 +85,8 @@ export function CoPilotLayout({
     setThinkStatus,
     setPlanStatus,
     setBuildStatus,
+    pushBuildActivity,
+    setBuildProgress,
   } = coPilotStore;
   const [skillRegistry, setSkillRegistry] = useState<SkillRegistryEntry[]>([]);
   const lastGeneratedSignatureRef = useRef<string | null>(null);
@@ -261,46 +264,42 @@ export function CoPilotLayout({
       void generateSkillsFromArchitect(
         trimmedName,
         trimmedDescription,
-        undefined,
+        {
+          onStatus: (message) => {
+            pushBuildActivity({ type: "tool", label: message });
+          },
+          onCustomEvent: (eventName, data) => {
+            const payload = data as Record<string, unknown>;
+            if (eventName === "skill_created") {
+              const skillId = (payload.skillId as string) || "";
+              pushBuildActivity({ type: "skill", label: skillId.replace(/[-_]/g, " ") });
+            } else if (eventName === "file_written") {
+              const path = (payload.path as string) || "unknown file";
+              pushBuildActivity({ type: "file", label: path.split("/").slice(-2).join("/") });
+            } else if (eventName === "build_progress") {
+              setBuildProgress(payload as { completed: number; total: number | null; currentSkill: string | null });
+            }
+          },
+        },
         context,
         docs,
         plan ?? undefined,
-        architectSandbox?.sandbox_id,
+        activeSandbox?.sandbox_id,
       )
-        .then(async (generated) => {
+        .then((generated) => {
           if (latestPurposeSignatureRef.current !== signature) return;
 
-          // Write skill files into the forge sandbox workspace.
-          // The HTTP chat proxy can only return text — it can't exec commands.
-          // So we call the backend to write SKILL.md files via docker exec.
-          const agentId = existingAgent?.id;
-          if (agentId && generated.nodes.length > 0) {
-            try {
-              const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-              const scaffoldRes = await fetch(
-                `${API}/api/agents/${agentId}/forge/scaffold-skills`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    skill_graph: { nodes: generated.nodes },
-                    workflow: generated.workflow,
-                  }),
-                },
-              );
-              if (scaffoldRes.ok) {
-                const result = await scaffoldRes.json();
-                console.log(`[Build] Scaffolded ${result.scaffolded}/${result.total} skills into forge sandbox`);
-              } else {
-                console.warn("[Build] Scaffold-skills failed:", scaffoldRes.status);
-              }
-            } catch (err) {
-              console.warn("[Build] Failed to scaffold skills:", err);
-            }
-          }
+          // Skills are written directly by the architect via tool execution
+          // through the WebSocket gateway. No scaffold endpoint needed —
+          // file_written and skill_created events update the UI in real-time.
 
           buildRetryCountRef.current = 0;
           lastGeneratedSignatureRef.current = signature;
+          // Wire the agent's sandbox ID to the eval system so the Test stage
+          // can run evaluations against the real agent container.
+          if (activeSandbox?.sandbox_id) {
+            coPilotStore.setAgentSandboxId(activeSandbox.sandbox_id);
+          }
           setSkillGraph(generated.nodes, generated.workflow, generated.agentRules);
           updateFields({ systemName: generated.systemName ?? trimmedName });
           onBuilderStateChange({
@@ -342,7 +341,7 @@ export function CoPilotLayout({
           setBuildStatus("failed");
         });
     },
-    [architectSandbox?.sandbox_id, onBuilderStateChange, setBuildStatus, setDevStage, setSkillGeneration, setSkillGraph, updateFields],
+    [activeSandbox?.sandbox_id, onBuilderStateChange, pushBuildActivity, setBuildProgress, setBuildStatus, setDevStage, setSkillGeneration, setSkillGraph, updateFields],
   );
 
   // Called when user completes discovery (Think stage) or clicks "Skip"
@@ -487,7 +486,7 @@ export function CoPilotLayout({
       <div className="flex-1 min-h-0 overflow-hidden">
         <TabChat
           agent={syntheticAgent}
-          activeSandbox={architectSandbox ?? null}
+          activeSandbox={activeSandbox ?? null}
           selectedConvId={null}
           onConversationCreated={() => {}}
           mode="builder"

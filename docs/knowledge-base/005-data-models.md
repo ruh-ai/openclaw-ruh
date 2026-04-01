@@ -336,9 +336,14 @@ See [[014-auth-system]] for the full auth contract.
 CREATE TABLE organizations (
   id         TEXT        PRIMARY KEY,
   name       TEXT        NOT NULL,
+  slug       TEXT        NOT NULL UNIQUE,
+  kind       TEXT        NOT NULL DEFAULT 'customer',
+  plan       TEXT        NOT NULL DEFAULT 'free',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+`organizations.kind` now distinguishes `developer` and `customer` tenants for multi-tenant auth and ownership.
 
 ---
 
@@ -349,12 +354,49 @@ CREATE TABLE sessions (
   id            TEXT        PRIMARY KEY,
   user_id       TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   refresh_token TEXT        NOT NULL UNIQUE,
+  active_org_id TEXT        REFERENCES organizations(id) ON DELETE SET NULL,
   expires_at    TIMESTAMPTZ NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-Refresh tokens are raw UUIDs, rotated on each use. See [[014-auth-system]].
+Refresh tokens are raw UUIDs, rotated on each use. `active_org_id` stores the session's current tenant context for refresh rotation, `/api/auth/me`, and org switching. See [[014-auth-system]].
+
+---
+
+### `organization_memberships`
+
+```sql
+CREATE TABLE organization_memberships (
+  id          TEXT        PRIMARY KEY,
+  org_id      TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role        TEXT        NOT NULL,
+  status      TEXT        NOT NULL DEFAULT 'active',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (org_id, user_id)
+);
+```
+
+One user can now belong to multiple organizations. Roles are tenant-scoped: `owner`, `admin`, `developer`, or `employee`.
+
+---
+
+### `auth_identities`
+
+```sql
+CREATE TABLE auth_identities (
+  id          TEXT        PRIMARY KEY,
+  user_id     TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider    TEXT        NOT NULL,
+  subject     TEXT        NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (provider, subject)
+);
+```
+
+This table is the bridge to future SSO providers. The local email/password flow also writes a `provider = 'local'` identity row so the auth model stays consistent.
 
 ---
 
@@ -377,22 +419,28 @@ CREATE TABLE api_keys (
 
 ```sql
 CREATE TABLE marketplace_listings (
-  id          TEXT        PRIMARY KEY,
-  agent_id    TEXT        NOT NULL,
-  slug        TEXT        NOT NULL UNIQUE,
-  title       TEXT        NOT NULL,
-  tagline     TEXT        NOT NULL DEFAULT '',
-  description TEXT        NOT NULL DEFAULT '',
-  category    TEXT        NOT NULL DEFAULT 'other',
-  icon_url    TEXT,
-  status      TEXT        NOT NULL DEFAULT 'draft',  -- draft | pending_review | published | rejected
-  author_id   TEXT        NOT NULL,
-  org_id      TEXT,
-  version     TEXT        NOT NULL DEFAULT '1.0.0',
-  install_count INTEGER  NOT NULL DEFAULT 0,
-  avg_rating  NUMERIC(3,2) NOT NULL DEFAULT 0,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id            TEXT        PRIMARY KEY,
+  agent_id      TEXT        NOT NULL REFERENCES agents(id),
+  publisher_id  TEXT        NOT NULL REFERENCES users(id),
+  owner_org_id  TEXT        REFERENCES organizations(id) ON DELETE SET NULL,
+  slug          TEXT        NOT NULL UNIQUE,
+  title         TEXT        NOT NULL,
+  summary       TEXT        NOT NULL DEFAULT '',
+  description   TEXT        NOT NULL DEFAULT '',
+  category      TEXT        NOT NULL DEFAULT 'general',
+  tags          JSONB       NOT NULL DEFAULT '[]',
+  icon_url      TEXT,
+  screenshots   JSONB       NOT NULL DEFAULT '[]',
+  version       TEXT        NOT NULL DEFAULT '1.0.0',
+  status        TEXT        NOT NULL DEFAULT 'draft',
+  review_notes  TEXT,
+  reviewed_by   TEXT        REFERENCES users(id),
+  reviewed_at   TIMESTAMPTZ,
+  install_count INTEGER     NOT NULL DEFAULT 0,
+  avg_rating    NUMERIC(3,2) DEFAULT 0,
+  published_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -427,6 +475,30 @@ CREATE TABLE marketplace_installs (
 );
 ```
 
+Legacy per-user install badge table. New customer runtime installs should prefer `marketplace_runtime_installs`; this table remains for older flows and possible backfill/migration work.
+
+---
+
+### `marketplace_runtime_installs`
+
+```sql
+CREATE TABLE marketplace_runtime_installs (
+  id                      TEXT        PRIMARY KEY,
+  listing_id              TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
+  org_id                  TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id                 TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id                TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  source_agent_version_id TEXT        REFERENCES agent_versions(id) ON DELETE SET NULL,
+  version                 TEXT        NOT NULL,
+  installed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_launched_at        TIMESTAMPTZ,
+  UNIQUE(listing_id, org_id, user_id),
+  UNIQUE(agent_id)
+);
+```
+
+This table is the new per-user customer runtime bridge for marketplace installs. Each row says “user X in customer org Y installed listing Z, which created runnable agent A from published snapshot V.”
+
 ---
 
 ### `agent_versions`
@@ -440,6 +512,8 @@ CREATE TABLE agent_versions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+Marketplace publish/install now treats `snapshot` as the reusable runtime package for installed customer agents. The current slice stores SOUL/config/skill payloads there so first-open sandbox provisioning does not have to reconstruct runtime state from listing metadata.
 
 ---
 
@@ -697,12 +771,15 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - [[SPEC-agent-improvement-persistence]] — adds `agents.improvements` as the persisted builder recommendation and operator-decision contract
 - [[SPEC-tool-integration-workspace]] — adds fail-closed credential summary/readback rules and broadens `tool_connections[].connectorType` to `mcp`, `api`, or `cli`
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — defines the builder-visible read-only `SkillRegistryEntry` contract and the `native` / `registry_match` / `needs_build` / `custom_built` availability model
+- [[SPEC-multi-tenant-auth-foundation]] — adds tenant membership, identity-provider linkage, and active-org session storage for multi-tenant auth
+- [[SPEC-local-test-user-seeding]] — documents the local QA fixture writer that populates `users`, `organizations`, `organization_memberships`, and `auth_identities`
 - [[SPEC-shared-codex-retrofit]] — documents the shared-Codex sandbox fields and how retrofit writes them for existing running sandboxes
 - [[SPEC-sandbox-runtime-reconciliation]] — clarifies that `sandboxes` rows are persisted metadata and must be reconciled with Docker runtime state for truthful health
 - [[SPEC-sandbox-conversation-cleanup]] — documents the backend-owned delete-by-sandbox cleanup path while the schema still lacks a sandbox foreign key
 - [[SPEC-deployed-chat-workspace-memory]] — defines the persisted agent-level workspace-memory JSON shape used by deployed chat
 - [[014-auth-system]] — defines the `users`, `organizations`, `sessions`, and `api_keys` tables
 - [[016-marketplace]] — defines the `marketplace_listings`, `marketplace_reviews`, `marketplace_installs`, and `agent_versions` tables
+- [[SPEC-marketplace-store-parity]] — plans the typed marketplace-item, entitlement, assignment, and customer-inventory schema work needed for store parity
 
 ## Related Learnings
 

@@ -29,12 +29,11 @@ export default function UsersPage() {
 
   const fetchUsers = () => {
     setLoading(true);
-    const token = localStorage.getItem("accessToken");
     const params = new URLSearchParams();
     if (roleFilter) params.set("role", roleFilter);
     if (search) params.set("search", search);
     fetch(`${API_URL}/api/admin/users?${params}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
     })
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(data => { setUsers(data.items); setTotal(data.total); })
@@ -45,20 +44,20 @@ export default function UsersPage() {
   useEffect(() => { fetchUsers(); }, [roleFilter, search]);
 
   const updateRole = async (userId: string, role: string) => {
-    const token = localStorage.getItem("accessToken");
     await fetch(`${API_URL}/api/admin/users/${userId}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role }),
     });
     fetchUsers();
   };
 
   const toggleStatus = async (userId: string, currentStatus: string) => {
-    const token = localStorage.getItem("accessToken");
     await fetch(`${API_URL}/api/admin/users/${userId}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: currentStatus === "active" ? "suspended" : "active" }),
     });
     fetchUsers();

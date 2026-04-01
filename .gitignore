@@ -46,4 +46,5 @@ ruh-backend/coverage/
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
+.worktrees/
 .gstack/

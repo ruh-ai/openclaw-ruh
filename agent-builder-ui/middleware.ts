@@ -7,11 +7,6 @@ import { getAuthRedirectPath } from "@/lib/auth/session-guard";
 const publicRoutes = [loginRoute];
 
 export function middleware(request: NextRequest) {
-  // Bypass auth entirely in local development
-  if (process.env.NODE_ENV === "development") {
-    return NextResponse.next();
-  }
-
   const pathname = request.nextUrl.pathname;
 
   const isPublicRoute = publicRoutes.some((route) =>

@@ -1,4 +1,13 @@
-import { agentsRoute, loginRoute } from "@/shared/routes";
+import {
+  activityRoute,
+  agentsRoute,
+  createAgentRoute,
+  dashboardRoute,
+  loginRoute,
+  marketplaceRoute,
+  settingsRoute,
+  toolsRoute,
+} from "@/shared/routes";
 
 export type SessionBootstrapStatus =
   | "idle"
@@ -61,7 +70,43 @@ function getRequestedRedirect(search: string): string | null {
     return null;
   }
 
-  return redirectUrl;
+  return resolveBuilderRedirectTarget(redirectUrl);
+}
+
+const allowedExactRedirectPaths = new Set([
+  dashboardRoute,
+  agentsRoute,
+  createAgentRoute,
+  toolsRoute,
+  activityRoute,
+  settingsRoute,
+  marketplaceRoute,
+]);
+
+function resolveBuilderRedirectTarget(redirectUrl: string): string {
+  try {
+    const parsed = new URL(redirectUrl, "http://builder.local");
+    const pathname = parsed.pathname;
+
+    if (
+      pathname.startsWith(loginRoute) ||
+      pathname.startsWith("/api") ||
+      pathname.startsWith("/_next")
+    ) {
+      return agentsRoute;
+    }
+
+    if (
+      allowedExactRedirectPaths.has(pathname) ||
+      pathname.startsWith("/agents/")
+    ) {
+      return redirectUrl;
+    }
+  } catch {
+    return agentsRoute;
+  }
+
+  return agentsRoute;
 }
 
 export function resolveSessionGateDecision(

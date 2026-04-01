@@ -8,6 +8,7 @@ import {
   Github,
   Copy,
 } from "lucide-react";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 
 interface ReproduceDialogProps {
   onClose: () => void;
@@ -34,7 +35,7 @@ export function ReproduceDialog({ onClose }: ReproduceDialogProps) {
 
     try {
       // 1. Call reproduce endpoint
-      const createRes = await fetch(`${API_BASE}/api/agents/reproduce`, {
+      const createRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/reproduce`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -52,7 +53,7 @@ export function ReproduceDialog({ onClose }: ReproduceDialogProps) {
       setLog((prev) => [...prev, "Provisioning container..."]);
 
       // 2. Stream SSE progress
-      const sseRes = await fetch(
+      const sseRes = await fetchBackendWithAuth(
         `${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`,
       );
       if (!sseRes.ok || !sseRes.body)

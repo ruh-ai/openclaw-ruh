@@ -274,6 +274,69 @@ export interface ArchitecturePlan {
 
 export type EvalTaskStatus = "pending" | "running" | "pass" | "fail" | "manual";
 
+/** A single tool invocation captured from the agent container's execution. */
+export interface ToolCallTrace {
+  toolName: string;
+  input: string;
+  output: string;
+  durationMs: number;
+}
+
+/** Full execution trace for one eval task — captured from the real agent container. */
+export interface ExecutionTrace {
+  response: string;
+  toolCalls: ToolCallTrace[];
+  skillsActivated: string[];
+  errors: string[];
+  totalDurationMs: number;
+}
+
+/** Per-skill diagnosis from the LLM trace judge. */
+export interface SkillDiagnosis {
+  skillId: string;
+  verdict: "working" | "partial" | "broken" | "unused";
+  issue?: string;
+}
+
+/** LLM trace judge output for one eval task. */
+export interface TraceScore {
+  passed: boolean;
+  score: number;
+  feedback: string;
+  skillDiagnosis: SkillDiagnosis[];
+  suggestedFixes: string[];
+}
+
+/** A single skill mutation applied during the reinforcement loop. */
+export interface SkillMutation {
+  iteration: number;
+  skillId: string;
+  before: string;
+  after: string;
+  rationale: string;
+  accepted: boolean;
+}
+
+/** Cost tracking for eval runs. */
+export interface EvalCostEstimate {
+  agentCalls: number;
+  judgeCalls: number;
+  reflectorCalls: number;
+  totalLlmCalls: number;
+  estimatedCostUsd: number;
+}
+
+/** Reinforcement loop state — tracks iterations, scores, and mutations. */
+export interface EvalLoopState {
+  iteration: number;
+  maxIterations: number;
+  scores: Array<{ iteration: number; passRate: number; avgScore: number }>;
+  mutations: SkillMutation[];
+  status: "idle" | "running" | "paused" | "completed" | "degraded";
+  stopReason?: string;
+  cost?: EvalCostEstimate;
+}
+
 export interface EvalTask {
   id: string;
   title: string;
@@ -281,10 +344,13 @@ export interface EvalTask {
   expectedBehavior: string;
   status: EvalTaskStatus;
   response?: string;
+  trace?: ExecutionTrace;
+  traceScore?: TraceScore;
   toolsUsed?: string[];
   duration?: number;
   confidence?: number;
   reasons?: string[];
+  iteration?: number;
 }
 
 // ── Build Report (Reflect stage) ────────────────────────────────────────────

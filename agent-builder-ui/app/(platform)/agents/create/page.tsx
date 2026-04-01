@@ -11,8 +11,8 @@ import { TabChat } from "@/app/(platform)/agents/[id]/chat/_components/TabChat";
 import { useAgentsStore } from "@/hooks/use-agents-store";
 import { pushAgentConfig } from "@/lib/openclaw/agent-config";
 import { saveToolCredentials } from "./_config/mcp-tool-registry";
-import { useBuilderState } from "@/lib/openclaw/builder-state";
-import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
+import { useBuilderState, type BuilderState } from "@/lib/openclaw/builder-state";
+import { useCoPilotStore, type CoPilotState } from "@/lib/openclaw/copilot-state";
 import { buildDeployConfigSummary } from "@/lib/agents/operator-config-summary";
 import { mergeRuntimeInputDefinitions } from "@/lib/agents/runtime-inputs";
 import { buildCreateDeployHref, resolveImproveAgentCompletionHref } from "@/lib/agents/deploy-handoff";
@@ -20,6 +20,7 @@ import { finalizeCredentialBackedToolConnections } from "@/lib/tools/tool-integr
 import { CoPilotLayout } from "./_components/copilot/CoPilotLayout";
 import { WorkspacePanel } from "./_components/WorkspacePanel";
 import { ShipDialog } from "./_components/ShipDialog";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { CreationProgressCard, deriveCreationPhase } from "./_components/CreationProgressCard";
 import { AnimatedRuhLogo } from "./_components/AnimatedRuhLogo";
 import { OnboardingSequence } from "./_components/OnboardingSequence";
@@ -40,6 +41,7 @@ import {
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
 import { useForgeSandbox } from "@/hooks/use-forge-sandbox";
 import { CREATE_AGENT_MODE_OPTIONS, normalizeCreateMode, type CreateAgentMode } from "./create-mode";
+import { resolveCreatePageChatMode, type ForgeAgentMode } from "./agent-mode";
 import { DEV_MOCK_BAR_QUERY_PARAM, shouldShowDevMockBar } from "./dev-mock-bar";
 import {
   saveCoPilotLifecycleToCache,
@@ -118,7 +120,7 @@ function CreateAgentPageContent() {
   );
   const [forgeLog, setForgeLog] = useState<string[]>([]);
   const [forgeError, setForgeError] = useState<string | null>(null);
-  const [agentMode, setAgentMode] = useState<"building" | "live">("building");
+  const [agentMode, setAgentMode] = useState<ForgeAgentMode>("building");
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showShipDialog, setShowShipDialog] = useState(false);
@@ -134,7 +136,7 @@ function CreateAgentPageContent() {
     setForgeError(null);
 
     try {
-      const createRes = await fetch(`${API_BASE}/api/agents/create`, {
+      const createRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, description }),
@@ -146,7 +148,7 @@ function CreateAgentPageContent() {
       window.history.replaceState(null, "", `/agents/create?agentId=${agent_id}`);
       setForgeLog((prev) => [...prev, "Starting container..."]);
 
-      const sseRes = await fetch(`${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`);
+      const sseRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`);
       if (!sseRes.ok || !sseRes.body) throw new Error("Failed to open provisioning stream");
 
       const reader = sseRes.body.getReader();
@@ -239,47 +241,24 @@ function CreateAgentPageContent() {
   const effectiveAgentId = workingAgent?.id ?? createdAgentId;
 
   // v2: each agent gets its own container — resolve its forge sandbox.
-  // Falls back to the shared architect sandbox for the copilot flow.
-  const { sandbox: forgeSandbox } = useForgeSandbox(
+  // When a forge sandbox is provisioned, NEVER fall back to the shared architect.
+  const { sandbox: forgeSandbox, error: forgeSandboxError } = useForgeSandbox(
     workingAgent?.forgeSandboxId ? workingAgent.id : null
   );
-  const effectiveSandbox = forgeSandbox ?? architectSandbox;
+  const hasForgeAgent = Boolean(workingAgent?.forgeSandboxId);
+  const effectiveSandbox = hasForgeAgent ? forgeSandbox : architectSandbox;
 
-  // v2: Poll workspace file count to detect new file writes from the Architect.
-  // Shows a badge on the Files button and auto-opens the panel on first write.
+  // v2: Workspace updates are event-driven via file_written/workspace_changed events
+  // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
+  // and auto-opening the workspace panel on first file write.
   useEffect(() => {
-    const sandboxId = workingAgent?.forgeSandboxId;
-    if (!sandboxId || forgePhase) return;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const url = new URL(`${API_BASE}/api/sandboxes/${sandboxId}/workspace/files`);
-        url.searchParams.set("depth", "1");
-        url.searchParams.set("limit", "1");
-        const res = await fetch(url.toString());
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        const count = (data.items as unknown[])?.length ?? 0;
-        if (!cancelled) {
-          setWorkspaceFileCount((prev) => {
-            if (count > prev && prev > 0) {
-              setWorkspaceBadge(true);
-            }
-            if (count > 0 && prev === 0 && !showWorkspace) {
-              // Auto-open on first file write
-              setShowWorkspace(true);
-            }
-            return count;
-          });
-        }
-      } catch { /* non-critical */ }
-    };
-
-    poll();
-    const interval = setInterval(poll, 8000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [workingAgent?.forgeSandboxId, forgePhase, showWorkspace]);
+    if (workspaceFileCount > 0 && !showWorkspace) {
+      setShowWorkspace(true);
+    }
+    if (workspaceFileCount > 0) {
+      setWorkspaceBadge(true);
+    }
+  }, [workspaceFileCount, showWorkspace]);
 
   // Clear badge when panel is opened
   useEffect(() => {
@@ -292,7 +271,7 @@ function CreateAgentPageContent() {
     const targetMode = agentMode === "building" ? "live" : "building";
     setIsSwitchingMode(true);
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${workingAgent.id}/mode`, {
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${workingAgent.id}/mode`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: targetMode }),
@@ -410,6 +389,33 @@ function CreateAgentPageContent() {
 
     if (cachedCoPilot || cachedBuilder) {
       applyRecoveredSession(null);
+      return;
+    }
+
+    // Backend fallback: hydrate from creation_session when localStorage is empty
+    const agentForBackendRestore = workingAgent ?? existingAgent ?? null;
+    if (agentForBackendRestore?.creationSession) {
+      const session = agentForBackendRestore.creationSession as { coPilot?: Partial<CoPilotState>; builder?: Partial<BuilderState> };
+      const backendCoPilot = session.coPilot ?? null;
+      const backendBuilder = session.builder ?? null;
+
+      updateBuilderState(
+        buildResumedBuilderState(
+          restoreId ?? agentForBackendRestore.id ?? "draft",
+          agentForBackendRestore,
+          backendBuilder,
+          backendCoPilot,
+        ),
+      );
+      coPilotStore.hydrateFromSeed(buildResumedCoPilotSeed(agentForBackendRestore, backendCoPilot));
+      // Re-populate localStorage for subsequent reloads
+      if (restoreId && backendCoPilot) {
+        saveCreateSessionToCache(restoreId, {
+          coPilot: backendCoPilot as CoPilotState,
+          builder: (backendBuilder ?? {}) as BuilderState,
+        });
+      }
+      setHasRestoredSession(true);
       return;
     }
 
@@ -548,6 +554,27 @@ function CreateAgentPageContent() {
         saveCoPilotLifecycleToCache(agentId, snapshot);
       }
     }, 300);
+
+    return () => window.clearTimeout(timeout);
+  });
+
+  // Persist full session to backend (2s debounce) so progress survives
+  // browser cache clears, device switches, and build-error refreshes.
+  useEffect(() => {
+    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
+    if (!agentId || !hasRestoredSession || isCompleting || existingAgent) return;
+
+    const timeout = window.setTimeout(() => {
+      const snapshot = coPilotStore.snapshot();
+      void updateAgentConfig(agentId, {
+        creationSession: {
+          version: 1,
+          coPilot: snapshot,
+          builder: builderState,
+          savedAt: new Date().toISOString(),
+        },
+      });
+    }, 2000);
 
     return () => window.clearTimeout(timeout);
   });
@@ -971,14 +998,15 @@ function CreateAgentPageContent() {
             );
             setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds: failedSandboxIds });
             setIsCompleting(false);
-            return false;
+            throw new Error(`${succeededCount} updated, ${failedSandboxIds.length} failed`);
           }
-        } catch {
+        } catch (err) {
+          if (err instanceof Error && err.message.includes("failed")) throw err;
           setHotPushStatus("error");
           setHotPushSummary("Config push failed before all running instances could be updated");
           setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds });
           setIsCompleting(false);
-          return false;
+          throw new Error("Config push failed before all running instances could be updated");
         }
         await new Promise((r) => setTimeout(r, 1200));
 
@@ -990,6 +1018,35 @@ function CreateAgentPageContent() {
         return true;
       }
 
+      // Forge-created agent: push config to the forge sandbox instead of redirecting.
+      // The forge sandbox is tracked as forgeSandboxId, not in sandboxIds.
+      const existingForgeSandboxId = savedAgent.forgeSandboxId ?? existingAgent.forgeSandboxId;
+      if (existingForgeSandboxId) {
+        try {
+          const pushResult = await pushAgentConfig(
+            existingForgeSandboxId,
+            savedAgent as Parameters<typeof pushAgentConfig>[1],
+          );
+          if (!pushResult.ok) {
+            const msg = pushResult.detail ?? "Failed to activate agent in forge sandbox";
+            setCompletionError(msg);
+            setIsCompleting(false);
+            throw new Error(msg);
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("Failed to activate")) throw error;
+          const msg = error instanceof Error ? error.message : "Failed to activate agent";
+          setCompletionError(msg);
+          setIsCompleting(false);
+          throw error instanceof Error ? error : new Error(msg);
+        }
+        setIsCompleting(false);
+        // Return true — StageShip owns the remaining steps (deploy confirmation,
+        // GitHub export) and will advance to Reflect when all steps complete.
+        return true;
+      }
+
+      // Legacy path: no forge sandbox, no deployed sandboxes — redirect to deploy page.
       const deploySummary = buildDeployConfigSummary({
         runtimeInputs: finalFields.runtimeInputs,
         toolConnections: savedAgent.toolConnections ?? finalFields.toolConnections,
@@ -1011,7 +1068,7 @@ function CreateAgentPageContent() {
     // Include the forge sandbox ID so we can skip re-deployment.
     // The forge step already provisioned a Docker sandbox — Ship just saves config
     // and pushes it to the existing sandbox instead of creating a new one.
-    const forgeSandboxId = workingAgent?.forgeSandboxId ?? architectSandbox?.sandbox_id ?? undefined;
+    const forgeSandboxId = workingAgent?.forgeSandboxId ?? undefined;
 
     const agentId = completionKind === "deploy-draft" && builderState.draftAgentId
       ? (
@@ -1035,7 +1092,7 @@ function CreateAgentPageContent() {
     if (credentialResult.error) {
       setCompletionError(credentialResult.error);
       setIsCompleting(false);
-      return false;
+      throw new Error(credentialResult.error);
     }
 
     // If a forge sandbox already exists, push config to it instead of redirecting
@@ -1048,25 +1105,20 @@ function CreateAgentPageContent() {
           savedAgent as Parameters<typeof pushAgentConfig>[1],
         );
         if (!pushResult.ok) {
-          setCompletionError(pushResult.detail ?? "Failed to activate agent");
+          const msg = pushResult.detail ?? "Failed to activate agent";
+          setCompletionError(msg);
           setIsCompleting(false);
-          return false;
+          throw new Error(msg);
         }
       } catch (error) {
-        setCompletionError(
-          error instanceof Error ? error.message : "Failed to activate agent",
-        );
+        const msg = error instanceof Error ? error.message : "Failed to activate agent";
+        setCompletionError(msg);
         setIsCompleting(false);
-        return false;
+        throw error instanceof Error ? error : new Error(msg);
       }
-      resetBuilderState();
-      if (agentId) clearCoPilotLifecycleCache(agentId);
-      if (agentId) clearCreateSessionCache(agentId);
-      coPilotStore.reset();
       setIsCompleting(false);
-      // Stay on the page — advance the wizard to Reflect stage
-      coPilotStore.setDeployStatus("done");
-      coPilotStore.advanceDevStage(); // ship → reflect
+      // Return true — StageShip owns the remaining steps (deploy confirmation,
+      // GitHub export) and will advance to Reflect when all steps complete.
       return true;
     }
 
@@ -1085,7 +1137,7 @@ function CreateAgentPageContent() {
       buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
     );
     return true;
-  }, [architectSandbox, builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.skills]);
+  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
   // ── v2 init form: shown when creating a brand-new agent ──────────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {
@@ -1152,7 +1204,7 @@ function CreateAgentPageContent() {
             onBuilderStateChange={handleBuilderStateChange}
             onComplete={handleCoPilotComplete}
             onCancel={() => router.push("/agents")}
-            architectSandbox={effectiveSandbox}
+            activeSandbox={effectiveSandbox}
           />
         </div>
       </div>
@@ -1392,7 +1444,7 @@ function CreateAgentPageContent() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div key={modeTransitionKey} className="flex-1 flex flex-col overflow-hidden min-h-0 stage-enter">
           <TabChat
-            mode="builder"
+            mode={resolveCreatePageChatMode(agentMode)}
             disableBuilderAutosave={isCompleting}
             agent={syntheticAgent}
             activeSandbox={effectiveSandbox}

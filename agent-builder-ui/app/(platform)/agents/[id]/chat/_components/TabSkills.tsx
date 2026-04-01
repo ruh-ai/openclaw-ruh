@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SavedAgent } from "@/hooks/use-agents-store";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const POLL_INTERVAL_MS = 10_000;
@@ -190,7 +191,7 @@ export function TabSkills({ agent, activeSandboxId, onProposedCount }: TabSkills
 
   const fetchSkills = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agent.id}/skills`);
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent.id}/skills`);
       if (!res.ok) {
         if (res.status === 404) {
           // Endpoint not yet implemented — show empty state gracefully
@@ -239,7 +240,7 @@ export function TabSkills({ agent, activeSandboxId, onProposedCount }: TabSkills
       prev.map((s) => (s.id === skill.id ? { ...s, status: "active" as SkillStatus, approvedAt: new Date().toISOString() } : s))
     );
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agent.id}/skills/${encodeURIComponent(skill.name)}/approve`, {
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent.id}/skills/${encodeURIComponent(skill.name)}/approve`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -266,7 +267,7 @@ export function TabSkills({ agent, activeSandboxId, onProposedCount }: TabSkills
       prev.map((s) => (s.id === skill.id ? { ...s, status: "rejected" as SkillStatus, rejectedAt: new Date().toISOString() } : s))
     );
     try {
-      const res = await fetch(`${API_BASE}/api/agents/${agent.id}/skills/${encodeURIComponent(skill.name)}/reject`, {
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent.id}/skills/${encodeURIComponent(skill.name)}/reject`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

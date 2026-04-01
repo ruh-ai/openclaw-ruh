@@ -8,6 +8,7 @@ import type {
   AgentToolConnection,
   AgentTriggerDefinition,
 } from "@/lib/agents/types";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { normalizeWorkspaceMemory, type WorkspaceMemory } from "@/lib/openclaw/workspace-memory";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -38,6 +39,8 @@ export interface SavedAgent {
   model?: string;
   /** Forge sandbox — dedicated per-agent builder sandbox. Null if not forging. */
   forgeSandboxId?: string | null;
+  /** Backend-persisted creation session snapshot for recovery on page refresh. */
+  creationSession?: unknown | null;
 }
 
 export interface SaveAgentDraftInput {
@@ -79,6 +82,7 @@ function fromBackend(r: Record<string, unknown>): SavedAgent {
     discoveryDocuments: (r.discovery_documents as DiscoveryDocuments | null | undefined) ?? null,
     workspaceMemory: normalizeWorkspaceMemory(r.workspace_memory),
     forgeSandboxId: (r.forge_sandbox_id as string | null) ?? null,
+    creationSession: (r.creation_session as unknown) ?? null,
   };
 }
 
@@ -94,7 +98,7 @@ interface AgentsStoreState {
   updateAgent: (id: string, patch: Partial<Omit<SavedAgent, "id" | "createdAt" | "sandboxIds">>) => Promise<SavedAgent>;
   updateAgentConfig: (
     agentId: string,
-    patch: Pick<SavedAgent, "skillGraph" | "workflow" | "agentRules" | "runtimeInputs" | "toolConnections" | "triggers" | "improvements" | "channels" | "discoveryDocuments">
+    patch: Partial<Pick<SavedAgent, "skillGraph" | "workflow" | "agentRules" | "runtimeInputs" | "toolConnections" | "triggers" | "improvements" | "channels" | "discoveryDocuments" | "creationSession">>
   ) => Promise<SavedAgent>;
   updateAgentWorkspaceMemory: (
     agentId: string,
@@ -157,7 +161,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       fetchAgents: async () => {
         set({ isLoading: true });
         try {
-          const res = await fetch(`${API_BASE}/api/agents`);
+          const res = await fetchBackendWithAuth(`${API_BASE}/api/agents`);
           if (!res.ok) throw new Error("Failed to fetch agents");
           const data = await res.json();
           // Preserve client-only fields (e.g. model) that are not synced to the backend
@@ -179,7 +183,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
 
       fetchAgent: async (id: string) => {
         try {
-          const res = await fetch(`${API_BASE}/api/agents/${id}`);
+          const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}`);
           if (!res.ok) return null;
           const data = await res.json();
           // Preserve client-only fields when merging backend response
@@ -199,7 +203,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       saveAgent: async (agent) => {
-        const res = await fetch(`${API_BASE}/api/agents`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -269,7 +273,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       updateAgent: async (id, patch) => {
-        const res = await fetch(`${API_BASE}/api/agents/${id}`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -298,7 +302,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       deleteAgent: async (id) => {
-        const res = await fetch(`${API_BASE}/api/agents/${id}`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}`, {
           method: "DELETE",
         });
         if (!res.ok) throw new Error("Failed to delete agent");
@@ -308,7 +312,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       deleteForge: async (id) => {
-        const res = await fetch(`${API_BASE}/api/agents/${id}/forge`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}/forge`, {
           method: "DELETE",
         });
         if (!res.ok) throw new Error("Failed to delete forge");
@@ -318,7 +322,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       bulkDeleteAgents: async (ids: string[]) => {
-        const res = await fetch(`${API_BASE}/api/agents/bulk-delete`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/bulk-delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ agentIds: ids }),
@@ -337,7 +341,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       updateAgentConfig: async (agentId, patch) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/config`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/config`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -350,6 +354,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
             improvements: patch.improvements,
             channels: patch.channels,
             discoveryDocuments: patch.discoveryDocuments,
+            creationSession: patch.creationSession,
           }),
         });
         if (!res.ok) throw new Error("Failed to update agent config");
@@ -366,7 +371,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       updateAgentWorkspaceMemory: async (agentId, patch) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/workspace-memory`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/workspace-memory`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -437,7 +442,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       addSandboxToAgent: async (agentId, sandboxId) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/sandbox`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/sandbox`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sandbox_id: sandboxId }),
@@ -451,7 +456,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       removeSandboxFromAgent: async (agentId, sandboxId) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/sandbox/${sandboxId}`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/sandbox/${sandboxId}`, {
           method: "DELETE",
         });
         if (!res.ok) throw new Error("Failed to remove sandbox from agent");
@@ -476,7 +481,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
 
       startForge: async (agentId, onLog) => {
         // Initiate forge sandbox creation
-        const initRes = await fetch(`${API_BASE}/api/agents/${agentId}/forge`, {
+        const initRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
@@ -505,7 +510,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
         const streamId = initData.stream_id as string;
         if (!streamId) throw new Error("No stream_id returned from forge");
 
-        const sseRes = await fetch(`${API_BASE}/api/agents/${agentId}/forge/stream/${streamId}`);
+        const sseRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stream/${streamId}`);
         if (!sseRes.ok || !sseRes.body) throw new Error("Failed to open forge SSE stream");
 
         const reader = sseRes.body.getReader();
@@ -555,7 +560,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
 
         // Refresh agent in store
         if (forgeSandboxId) {
-          const fetchRes = await fetch(`${API_BASE}/api/agents/${agentId}`);
+          const fetchRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}`);
           if (fetchRes.ok) {
             const data = await fetchRes.json();
             const updated = fromBackend(data);
@@ -569,13 +574,13 @@ export const useAgentsStore = create<AgentsStoreState>()(
       },
 
       getForgeStatus: async (agentId) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/forge/status`);
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/status`);
         if (!res.ok) throw new Error("Failed to get forge status");
         return res.json();
       },
 
       promoteForge: async (agentId) => {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/forge/promote`, {
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/promote`, {
           method: "POST",
         });
         if (!res.ok) {

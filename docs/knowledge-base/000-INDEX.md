@@ -19,9 +19,9 @@ Each "sandbox" is a local Docker container running the `openclaw` CLI agent gate
 |---|---|---|---|
 | `ruh-backend` | `ruh-backend/` | 8000 | TypeScript/Bun REST API — sandbox, agent, auth, marketplace logic |
 | `agent-builder-ui` | `agent-builder-ui/` | 3000 | Agent builder — conversational UI for developers to create agents |
-| `ruh-frontend` | `ruh-frontend/` | 3001 | Client app — end users interact with deployed agents (desktop app candidate) |
+| `ruh-frontend` | `ruh-frontend/` | 3001 | Customer web app — org admins and members interact with deployed agents |
+| `ruh_app` | `ruh_app/` | N/A | Flutter cross-platform client app (iOS, Android, macOS, desktop) |
 | `admin-ui` | `admin-ui/` | 3002 | Admin panel — platform management, user/agent oversight, moderation |
-| `desktop-app` | `desktop-app/` | N/A | Tauri desktop wrapper for ruh-frontend |
 | `@ruh/marketplace-ui` | `packages/marketplace-ui/` | N/A | Shared marketplace React components |
 | `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
 | `nginx` | `nginx/` | 80 | Reverse proxy |
@@ -46,12 +46,13 @@ Each "sandbox" is a local Docker container running the `openclaw` CLI agent gate
 ### Frontends
 - [[008-agent-builder-ui]] — Architect chat flow, WebSocket bridge, SSE, skill graph types
 - [[009-ruh-frontend]] — Developer UI components, sandbox sidebar, chat/crons/channels panels
+- [[018-ruh-app]] — Flutter customer app for organization admins and members
 
 ### Platform
 - [[014-auth-system]] — JWT auth, 3 user tiers (admin/developer/end_user), bcrypt, sessions
 - [[015-admin-panel]] — Admin dashboard (admin-ui), user/agent management, moderation
 - [[016-marketplace]] — Employee Marketplace, shared UI package, publish/install flow
-- [[017-desktop-app]] — Tauri desktop app wrapping ruh-frontend, secure credentials
+- [[017-desktop-app]] — Deprecated Tauri desktop wrapper note retained for historical context
 
 ### Ops
 - [[010-deployment]] — Docker Compose, Kubernetes, environment variables
@@ -81,6 +82,14 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-create-flow-static-workspace-tabs]] — `/agents/create` keeps Co-Pilot workspace tabs static instead of auto-switching during builder activity
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — `/agents/create` locks downstream tabs until purpose metadata generates a real skill graph, resolves those skills against the registry, and blocks deploy on unresolved custom skills
 - [[SPEC-pre-deploy-agent-testing]] — Review-phase test chat reuses the architect bridge with isolated `agent:test:*` sessions and SOUL prompt injection
+- [[SPEC-multi-tenant-auth-foundation]] — Multi-tenant auth foundation: org memberships, active-org sessions, and local login fallback ahead of SSO
+- [[SPEC-app-access-and-org-marketplace]] — Shared app-access contract, org-owned marketplace flow, Stripe checkout, and seat-based member assignment program
+- [[SPEC-marketplace-store-parity]] — Research-backed rollout for store.ruh.ai-style catalog/detail/use parity across web and Flutter without abandoning org-owned entitlements
+- [[SPEC-ruh-app-customer-surface-redesign]] — Redesigns the Flutter customer shell, workspace, marketplace, and detail surfaces around customer trust and clearer hierarchy
+- [[SPEC-ruh-app-login-convenience]] — Flutter login page adds password visibility and remembered email without storing raw passwords
+- [[SPEC-local-test-user-seeding]] — Idempotent backend seed command for local QA users across platform, developer-org, customer-org, and cross-org roles
+- [[SPEC-local-demo-marketplace-seeding]] — Idempotent local demo seed for real agent-backed published marketplace listings
+- [[SPEC-remove-tauri-desktop-app]] — Removes the deprecated Tauri wrapper and makes `ruh_app` the only native client path
 - [[SPEC-gateway-tool-events]] — Structured sandbox tool events let chat UIs react to live tool execution with workspace/tab updates
 - [[SPEC-agent-builder-session-token-hardening]] — Agent Builder auth moves to HttpOnly cookies plus a same-origin BFF so browser JS never handles bearer tokens
 - [[SPEC-agent-builder-auth-gate]] — Builder pages fail closed behind middleware and session-bootstrap redirects while token hardening remains a follow-on
@@ -90,6 +99,7 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-atomic-chat-persistence]] — Backend-owned chat delivery now persists successful conversation exchanges and reports streamed persistence failures explicitly
 - [[SPEC-agent-edit-config-persistence]] — Improve Agent persists metadata and architect config before hot-pushing running sandboxes
 - [[SPEC-agent-config-apply-contract]] — Sandbox config apply becomes a verified fail-closed contract for deploy and hot-push flows
+- [[SPEC-real-agent-evaluation]] — Real agent evaluation with execution traces, LLM judge scoring, and GEPA-inspired reinforcement loop for iterative skill improvement
 - [[SPEC-agent-sandbox-health-surface]] — Deployed-agent surfaces poll sandbox status and use explicit runtime `container_running` instead of DB-only liveness guesses
 - [[SPEC-backend-request-validation]] — Shared backend request schemas and deterministic fail-fast 4xx validation for high-risk write/proxy routes
 - [[SPEC-backend-config-schema]] — Centralized typed backend env parsing, defaults, and startup-fail validation contract
@@ -184,10 +194,17 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand repo-local maintainer agent roles | [[012-automation-architecture]] + [[SPEC-automation-agent-roles]] |
 | Understand the analyst project-focus workflow | [[012-automation-architecture]] + [[SPEC-analyst-project-focus]] + `docs/project-focus.md` |
 | Understand feature-at-a-time maintainer runs | [[SPEC-feature-at-a-time-automation-contract]] + [[012-automation-architecture]] |
+| Understand the multi-tenant auth foundation | [[SPEC-multi-tenant-auth-foundation]] + [[014-auth-system]] + [[005-data-models]] |
+| Understand the app-access, marketplace, checkout, and seat-assignment program | [[SPEC-app-access-and-org-marketplace]] + [[014-auth-system]] + [[016-marketplace]] |
+| Understand the store.ruh.ai marketplace parity rollout | [[SPEC-marketplace-store-parity]] + [[016-marketplace]] + [[018-ruh-app]] |
+| Understand the Flutter customer-surface redesign | [[SPEC-ruh-app-customer-surface-redesign]] + [[018-ruh-app]] + [[016-marketplace]] |
+| Understand Flutter login convenience behavior | [[SPEC-ruh-app-login-convenience]] + [[018-ruh-app]] + [[014-auth-system]] |
+| Seed local QA accounts for auth and tenant testing | [[SPEC-local-test-user-seeding]] + [[014-auth-system]] |
+| Seed real local marketplace demo listings | [[SPEC-local-demo-marketplace-seeding]] + [[016-marketplace]] + [[SPEC-local-test-user-seeding]] |
 | Work on authentication | [[014-auth-system]] |
 | Work on admin panel | [[015-admin-panel]] |
 | Work on marketplace | [[016-marketplace]] |
-| Work on desktop app | [[017-desktop-app]] |
+| Work on Flutter customer app | [[018-ruh-app]] |
 | Find chronological agent activity by date | `docs/journal/README.md` |
 | Understand multi-worker agent architecture and skill evolution | [[SPEC-competitive-intelligence-learnings]] |
 | Create a feature spec | Run `/kb spec <name>` |

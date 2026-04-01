@@ -1,23 +1,159 @@
 import api from "@/services/axios";
 import { APIError } from "@/shared/interfaces";
-import { clearAuthCookies, setAuthCookies } from "@/services/authCookies";
+import {
+  clearAuthCookies,
+  getRefreshToken,
+  setAuthCookies,
+} from "@/services/authCookies";
 import { useUserStore } from "@/hooks/use-user";
+import { assertBuilderAppAccess } from "@/lib/auth/app-access";
+import { ensureBuilderSurfaceSession } from "@/lib/auth/tenant-switch";
 
-// ==========================================
-// Auth API Interfaces
-// ==========================================
+interface AuthSessionResponse {
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+  };
+  accessToken: string;
+  refreshToken: string;
+  platformRole?: "platform_admin" | "user";
+  activeOrganization?: {
+    id: string;
+    name: string;
+    slug: string;
+    kind: "developer" | "customer";
+    plan: string;
+  } | null;
+  activeMembership?: {
+    id: string;
+    organizationId: string;
+    organizationName: string;
+    organizationSlug: string;
+    organizationKind: "developer" | "customer";
+    organizationPlan: string;
+    role: string;
+    status: string;
+  } | null;
+  memberships?: Array<{
+    id: string;
+    organizationId: string;
+    organizationName: string;
+    organizationSlug: string;
+    organizationKind: "developer" | "customer";
+    organizationPlan: string;
+    role: string;
+    status: string;
+  }>;
+  appAccess?: {
+    admin: boolean;
+    builder: boolean;
+    customer: boolean;
+  };
+}
 
 /**
  * Response from token refresh API
  */
-export interface TokenResponse {
-  success: boolean;
-  access_token: string;
-  token_type: string;
-  tokenExpireAt: string;
+export interface TokenResponse extends AuthSessionResponse {}
+
+interface LocalRegisterInput {
+  email: string;
+  password: string;
+  displayName: string;
+  organizationName?: string;
+  organizationSlug?: string;
+  organizationKind?: "developer" | "customer";
+  membershipRole?: "owner" | "admin" | "developer" | "employee";
+}
+
+const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
+const REFRESH_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+
+function syncBuilderUser(session: AuthSessionResponse) {
+  useUserStore.getState().setUser({
+    id: session.user.id,
+    fullName: session.user.displayName || session.user.email,
+    email: session.user.email,
+    company: session.activeOrganization?.name,
+    accessToken: session.accessToken,
+    activeOrganization: session.activeOrganization ?? null,
+    activeMembership: session.activeMembership ?? null,
+    memberships: session.memberships ?? [],
+    platformRole: session.platformRole ?? "user",
+    appAccess: session.appAccess ?? null,
+  });
+}
+
+async function persistSession(session: AuthSessionResponse): Promise<void> {
+  await setAuthCookies(
+    session.accessToken,
+    session.refreshToken,
+    ACCESS_TOKEN_MAX_AGE_SECONDS,
+    REFRESH_TOKEN_MAX_AGE_SECONDS
+  );
+  syncBuilderUser(session);
+}
+
+export async function switchBuilderOrganizationRequest(
+  organizationId: string,
+  refreshToken?: string
+): Promise<AuthSessionResponse> {
+  const resolvedRefreshToken = refreshToken ?? (await getRefreshToken());
+  const response = await api.post<AuthSessionResponse>("/api/auth/switch-org", {
+    organizationId,
+    ...(resolvedRefreshToken ? { refreshToken: resolvedRefreshToken } : {}),
+  });
+  return response.data;
+}
+
+async function ensureBuilderSession(
+  session: AuthSessionResponse
+): Promise<AuthSessionResponse> {
+  return ensureBuilderSurfaceSession(session, async (organizationId) =>
+    switchBuilderOrganizationRequest(organizationId, session.refreshToken)
+  );
 }
 
 export const authApi = {
+  login: async (email: string, password: string): Promise<AuthSessionResponse> => {
+    try {
+      const response = await api.post<AuthSessionResponse>("/api/auth/login", {
+        email,
+        password,
+      });
+      const session = await ensureBuilderSession(response.data);
+      assertBuilderAppAccess(session);
+      await persistSession(session);
+      return session;
+    } catch (error: unknown) {
+      const axiosError = error as APIError;
+      throw new Error(
+        axiosError.response?.data?.detail ||
+          axiosError.response?.data?.message ||
+          "Login failed"
+      );
+    }
+  },
+
+  register: async (input: LocalRegisterInput): Promise<AuthSessionResponse> => {
+    try {
+      const response = await api.post<AuthSessionResponse>("/api/auth/register", input);
+      const session = await ensureBuilderSession(response.data);
+      assertBuilderAppAccess(session);
+      await persistSession(session);
+      return session;
+    } catch (error: unknown) {
+      const axiosError = error as APIError;
+      throw new Error(
+        axiosError.response?.data?.detail ||
+          axiosError.response?.data?.message ||
+          "Registration failed"
+      );
+    }
+  },
+
   /**
    * Logout user
    * Calls backend logout endpoint and clears local session data
@@ -25,7 +161,7 @@ export const authApi = {
   logout: async (): Promise<void> => {
     try {
       // Call backend logout endpoint
-      await api.post("/auth/logout");
+      await api.post("/api/auth/logout");
 
       // Clear auth cookies
       await clearAuthCookies();
@@ -47,46 +183,37 @@ export const authApi = {
     refreshToken: string
   ): Promise<TokenResponse> => {
     try {
-      const response = await api.post<TokenResponse>(
-        "/auth/access-token",
-        {},
-        {
-          params: { refresh_token: refreshToken },
-        }
-      );
-
-      // Update the access token in cookies if successful
-      if (response.data.success && response.data.access_token) {
-        // Calculate token age in seconds from tokenExpireAt
-        const expireAt = new Date(
-          Number(response.data.tokenExpireAt) * 1000
-        ).getTime();
-        const now = new Date().getTime();
-        const accessTokenAge = Math.floor((expireAt - now) / 1000);
-        await setAuthCookies(
-          response.data.access_token,
-          refreshToken,
-          accessTokenAge > 0 ? accessTokenAge : 3600, // Default to 1 hour if calculation is negative
-          null // Don't update refresh token age
-        );
-
-        // Also update the access token in the user store
-        const currentUser = useUserStore.getState().user;
-        if (currentUser) {
-          useUserStore.getState().setUser({
-            ...currentUser,
-            accessToken: response.data.access_token,
-          });
-        }
-      }
-
-      return response.data;
+      const response = await api.post<TokenResponse>("/api/auth/refresh", {
+        refreshToken,
+      });
+      const session = await ensureBuilderSession(response.data);
+      assertBuilderAppAccess(session);
+      await persistSession(session);
+      return session;
     } catch (error: unknown) {
       const axiosError = error as APIError;
       throw new Error(
         axiosError.response?.data?.detail ||
           axiosError.response?.data?.message ||
           "Failed to generate new access token"
+      );
+    }
+  },
+
+  switchOrganization: async (
+    organizationId: string
+  ): Promise<AuthSessionResponse> => {
+    try {
+      const session = await switchBuilderOrganizationRequest(organizationId);
+      assertBuilderAppAccess(session);
+      await persistSession(session);
+      return session;
+    } catch (error: unknown) {
+      const axiosError = error as APIError;
+      throw new Error(
+        axiosError.response?.data?.detail ||
+          axiosError.response?.data?.message ||
+          "Could not switch organization"
       );
     }
   },

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 
 export interface ForgeSandboxInfo {
   sandbox_id: string;
@@ -29,7 +30,7 @@ export function useForgeSandbox(agentId: string | null | undefined) {
 
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/agents/${agentId}/forge`);
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge`);
         if (!res.ok) { setSandbox(null); return; }
         const data = await res.json();
         if (cancelled) return;
@@ -54,5 +55,9 @@ export function useForgeSandbox(agentId: string | null | undefined) {
     return () => { cancelled = true; };
   }, [agentId]);
 
-  return { sandbox, loading };
+  const error = !loading && agentId && !sandbox
+    ? "Forge sandbox is not available. The agent's container may still be provisioning or has stopped."
+    : null;
+
+  return { sandbox, loading, error };
 }

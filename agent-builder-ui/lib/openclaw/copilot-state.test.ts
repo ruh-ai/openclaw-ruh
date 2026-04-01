@@ -54,6 +54,37 @@ describe("copilot-state", () => {
     expect(useCoPilotStore.getState().devStage).toBe("review");
     expect(useCoPilotStore.getState().maxUnlockedDevStage).toBe("review");
   });
+
+  test("setSkillGraph marks nodes with skill_md as built", () => {
+    useCoPilotStore.getState().reset();
+    useCoPilotStore.getState().setSkillGraph(
+      [
+        {
+          skill_id: "inventory-monitor",
+          name: "Inventory Monitor",
+          description: "Poll Shopify inventory and detect threshold breaches.",
+          depends_on: [],
+          requires_env: [],
+          skill_md: "# Inventory Monitor",
+        } as any,
+        {
+          skill_id: "slack-alert-send",
+          name: "Slack Alert Send",
+          description: "Post the ranked report to Slack.",
+          depends_on: [],
+          requires_env: [],
+        } as any,
+      ],
+      null,
+      [],
+    );
+
+    expect(useCoPilotStore.getState().selectedSkillIds).toEqual([
+      "inventory-monitor",
+      "slack-alert-send",
+    ]);
+    expect(useCoPilotStore.getState().builtSkillIds).toEqual(["inventory-monitor"]);
+  });
 });
 
 // ── Batch 1 UX fixes ────────────────────────────────────────────────────────

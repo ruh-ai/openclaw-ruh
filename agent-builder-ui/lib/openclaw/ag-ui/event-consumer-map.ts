@@ -58,6 +58,8 @@ interface CoPilotStoreLike {
   setArchitecturePlan: (plan: ArchitecturePlan) => void;
   setPlanStatus: (status: StageStatus) => void;
   setBuildStatus: (status: StageStatus) => void;
+  pushBuildActivity: (item: { type: "file" | "skill" | "tool"; label: string }) => void;
+  setBuildProgress: (progress: { completed: number; total: number | null; currentSkill: string | null }) => void;
   devStage: AgentDevStage;
 }
 
@@ -224,6 +226,44 @@ export function consumeWizardPhase(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", CustomEventName.WIZARD_SET_PHASE);
 }
 
+// ─── Workspace & build event consumers ──────────────────────────────────────
+
+function consumeFileWritten(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("use-agent-chat", "CUSTOM", CustomEventName.FILE_WRITTEN);
+  deps.setWorkspaceFilesTick((prev) => prev + 1);
+  if (deps.coPilotStore) {
+    const payload = value as { path?: string; tool?: string };
+    const path = payload.path || "unknown file";
+    const shortPath = path.split("/").slice(-2).join("/");
+    deps.coPilotStore.pushBuildActivity({ type: "file", label: shortPath });
+  }
+}
+
+function consumeSkillCreated(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.SKILL_CREATED);
+  deps.setWorkspaceFilesTick((prev) => prev + 1);
+  if (deps.coPilotStore) {
+    const payload = value as { skillId?: string; path?: string };
+    const label = payload.skillId
+      ? payload.skillId.replace(/[-_]/g, " ")
+      : payload.path?.split("/").slice(-2).join("/") || "skill";
+    deps.coPilotStore.pushBuildActivity({ type: "skill", label });
+  }
+}
+
+function consumeBuildProgress(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.BUILD_PROGRESS);
+  if (deps.coPilotStore) {
+    const payload = value as { completed: number; total: number | null; currentSkill: string | null };
+    deps.coPilotStore.setBuildProgress(payload);
+  }
+}
+
+function consumeWorkspaceChanged(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("use-agent-chat", "CUSTOM", CustomEventName.WORKSPACE_CHANGED);
+  deps.setWorkspaceFilesTick((prev) => prev + 1);
+}
+
 // ─── Consumer registry ──────────────────────────────────────────────────────
 
 // Consumers that receive (value, deps)
@@ -237,6 +277,10 @@ const simpleConsumers: Record<string, EventConsumer> = {
   discovery_documents: consumeDiscoveryDocuments,
   architecture_plan_ready: consumeArchitecturePlanReady,
   [CustomEventName.WIZARD_SET_PHASE]: consumeWizardPhase,
+  [CustomEventName.FILE_WRITTEN]: consumeFileWritten,
+  [CustomEventName.SKILL_CREATED]: consumeSkillCreated,
+  [CustomEventName.BUILD_PROGRESS]: consumeBuildProgress,
+  [CustomEventName.WORKSPACE_CHANGED]: consumeWorkspaceChanged,
 };
 
 // Wizard events that go through commitBuilderMetadata (need the event name)

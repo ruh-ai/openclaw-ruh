@@ -768,6 +768,7 @@ export function validateAgentConfigPatchBody(body: unknown) {
       'improvements',
       'channels',
       'discoveryDocuments',
+      'creationSession',
     ],
   });
 
@@ -780,8 +781,15 @@ export function validateAgentConfigPatchBody(body: unknown) {
   const improvements = readOptionalImprovements(input, 'improvements');
   const channels = readOptionalChannels(input, 'channels');
   const discoveryDocuments = readOptionalDiscoveryDocuments(input, 'discoveryDocuments');
+  const creationSession = readOptionalUnknown(input, 'creationSession');
+  if (creationSession !== undefined && creationSession !== null) {
+    const serialized = JSON.stringify(creationSession);
+    if (serialized.length > 512_000) {
+      throw httpError(400, 'creationSession exceeds 512 KB size limit');
+    }
+  }
 
-  if (skillGraph === undefined && workflow === undefined && agentRules === undefined && runtimeInputs === undefined && toolConnections === undefined && triggers === undefined && improvements === undefined && channels === undefined && discoveryDocuments === undefined) {
+  if (skillGraph === undefined && workflow === undefined && agentRules === undefined && runtimeInputs === undefined && toolConnections === undefined && triggers === undefined && improvements === undefined && channels === undefined && discoveryDocuments === undefined && creationSession === undefined) {
     throw httpError(400, 'At least one config field is required');
   }
 
@@ -795,6 +803,7 @@ export function validateAgentConfigPatchBody(body: unknown) {
     improvements,
     channels,
     discoveryDocuments,
+    creationSession,
   };
 }
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -69,7 +70,7 @@ function RunHistoryModal({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`${API_URL}/api/sandboxes/${sandboxId}/crons/${job.id}/runs`)
+    apiFetch(`${API_URL}/api/sandboxes/${sandboxId}/crons/${job.id}/runs`)
       .then((r) => {
         if (!r.ok) throw new Error(r.statusText);
         return r.json();
@@ -188,7 +189,7 @@ function EditCronModal({
     const payloadKind = job.payload?.kind ?? "agentTurn";
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/api/sandboxes/${sandboxId}/crons/${job.id}`,
         {
           method: "PATCH",
@@ -335,7 +336,7 @@ function CreateCronModal({
     else if (scheduleKind === "at") { schedule.at = new Date(atDate).toISOString(); }
 
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandboxId}/crons`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandboxId}/crons`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -463,7 +464,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons`);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? res.statusText);
       const data = await res.json();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -480,7 +481,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   async function handleToggle(job: CronJob) {
     setActionLoading(job.id + "-toggle");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/toggle`, { method: "POST" });
+      await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/toggle`, { method: "POST" });
       setJobs((prev) => prev.map((j) => j.id === job.id ? { ...j, enabled: !j.enabled } : j));
     } finally {
       setActionLoading(null);
@@ -490,7 +491,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
   async function handleRun(job: CronJob) {
     setActionLoading(job.id + "-run");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/run`, { method: "POST" });
+      await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}/run`, { method: "POST" });
       await loadJobs();
     } finally {
       setActionLoading(null);
@@ -501,7 +502,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
     if (!confirm(`Delete cron job "${job.name}"?`)) return;
     setActionLoading(job.id + "-delete");
     try {
-      await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}`, { method: "DELETE" });
+      await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/crons/${job.id}`, { method: "DELETE" });
       setJobs((prev) => prev.filter((j) => j.id !== job.id));
     } finally {
       setActionLoading(null);

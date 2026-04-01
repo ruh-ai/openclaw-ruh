@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { useCoPilotStore, type CoPilotState, type CoPilotActions } from "@/lib/openclaw/copilot-state";
+import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress } from "@/lib/openclaw/copilot-state";
 import { AGENT_DEV_STAGES, type AgentDevStage } from "@/lib/openclaw/types";
 import {
   Lightbulb,
@@ -42,6 +42,11 @@ import {
   ExternalLink,
   Database,
   ArrowRight,
+  FileText,
+  RefreshCw,
+  TrendingUp,
+  Diff,
+  Terminal,
 } from "lucide-react";
 import type {
   ArchitecturePlan,
@@ -51,8 +56,12 @@ import type {
   ArchitecturePlanEnvVar,
   EvalTask,
   EvalTaskStatus,
+  EvalLoopState,
   SkillGraphNode,
+  ToolCallTrace,
+  SkillMutation,
 } from "@/lib/openclaw/types";
+import type { EvalLoopProgress } from "@/lib/openclaw/eval-loop";
 import { StepDiscovery } from "../configure/StepDiscovery";
 
 const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb; description: string }> = {
@@ -117,6 +126,387 @@ function ElapsedTimer({ active, estimate }: { active: boolean; estimate: string 
     <p className="mt-2 text-[10px] font-mono text-[var(--text-tertiary)]">
       {elapsed}s elapsed — {estimate}
     </p>
+  );
+}
+
+// ─── Build phase SVG animations ───────────────────────────────────────────
+
+function SvgConnecting() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Pulsing concentric rings */}
+      <circle cx="60" cy="60" r="8" fill="var(--primary)" opacity="0.9">
+        <animate attributeName="r" values="8;10;8" dur="1.2s" repeatCount="indefinite" />
+      </circle>
+      <circle cx="60" cy="60" r="20" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.5">
+        <animate attributeName="r" values="18;28;18" dur="2s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.5;0.1;0.5" dur="2s" repeatCount="indefinite" />
+      </circle>
+      <circle cx="60" cy="60" r="35" fill="none" stroke="var(--primary)" strokeWidth="1" opacity="0.3">
+        <animate attributeName="r" values="32;42;32" dur="2.5s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.3;0.05;0.3" dur="2.5s" repeatCount="indefinite" />
+      </circle>
+      {/* Orbiting dots */}
+      <circle cx="60" cy="60" r="3" fill="var(--primary)" opacity="0.7">
+        <animateTransform attributeName="transform" type="rotate" from="0 60 60" to="360 60 60" dur="3s" repeatCount="indefinite" />
+        <animate attributeName="cx" values="60;85;60;35;60" dur="3s" repeatCount="indefinite" />
+        <animate attributeName="cy" values="35;60;85;60;35" dur="3s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+function SvgAnalyzing() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Brain network nodes */}
+      <g opacity="0.8">
+        <circle cx="60" cy="35" r="5" fill="var(--primary)"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" repeatCount="indefinite" /></circle>
+        <circle cx="35" cy="55" r="4" fill="var(--primary)"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" begin="0.3s" repeatCount="indefinite" /></circle>
+        <circle cx="85" cy="55" r="4" fill="var(--primary)"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" begin="0.6s" repeatCount="indefinite" /></circle>
+        <circle cx="45" cy="80" r="4" fill="var(--primary)"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" begin="0.9s" repeatCount="indefinite" /></circle>
+        <circle cx="75" cy="80" r="4" fill="var(--primary)"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.5s" begin="1.2s" repeatCount="indefinite" /></circle>
+      </g>
+      {/* Connecting lines that pulse */}
+      <g stroke="var(--primary)" strokeWidth="1" fill="none" opacity="0.3">
+        <line x1="60" y1="35" x2="35" y2="55"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" repeatCount="indefinite" /></line>
+        <line x1="60" y1="35" x2="85" y2="55"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" begin="0.4s" repeatCount="indefinite" /></line>
+        <line x1="35" y1="55" x2="45" y2="80"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" begin="0.8s" repeatCount="indefinite" /></line>
+        <line x1="85" y1="55" x2="75" y2="80"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" begin="1.2s" repeatCount="indefinite" /></line>
+        <line x1="45" y1="80" x2="75" y2="80"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" begin="0.6s" repeatCount="indefinite" /></line>
+        <line x1="35" y1="55" x2="85" y2="55"><animate attributeName="opacity" values="0.1;0.5;0.1" dur="2s" begin="1s" repeatCount="indefinite" /></line>
+      </g>
+      {/* Scanning beam */}
+      <line x1="20" y1="60" x2="100" y2="60" stroke="var(--primary)" strokeWidth="0.5" opacity="0.2">
+        <animate attributeName="y1" values="25;95;25" dur="3s" repeatCount="indefinite" />
+        <animate attributeName="y2" values="25;95;25" dur="3s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.4;0.1;0.4" dur="3s" repeatCount="indefinite" />
+      </line>
+    </svg>
+  );
+}
+
+function SvgPlanning() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Blueprint grid */}
+      <g stroke="var(--primary)" strokeWidth="0.3" opacity="0.15">
+        {[30, 45, 60, 75, 90].map((y) => <line key={`h${y}`} x1="20" y1={y} x2="100" y2={y} />)}
+        {[30, 45, 60, 75, 90].map((x) => <line key={`v${x}`} x1={x} y1="20" x2={x} y2="100" />)}
+      </g>
+      {/* Drawing rectangles that appear one by one */}
+      <rect x="30" y="30" width="25" height="15" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="80" strokeDashoffset="80">
+        <animate attributeName="stroke-dashoffset" values="80;0" dur="1.5s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.5s" fill="freeze" />
+      </rect>
+      <rect x="65" y="30" width="25" height="15" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="80" strokeDashoffset="80">
+        <animate attributeName="stroke-dashoffset" values="80;0" dur="1.5s" begin="0.5s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.5s" begin="0.5s" fill="freeze" />
+      </rect>
+      <rect x="30" y="55" width="60" height="15" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="150" strokeDashoffset="150">
+        <animate attributeName="stroke-dashoffset" values="150;0" dur="1.5s" begin="1s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.5s" begin="1s" fill="freeze" />
+      </rect>
+      <rect x="30" y="80" width="18" height="12" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="60" strokeDashoffset="60">
+        <animate attributeName="stroke-dashoffset" values="60;0" dur="1.5s" begin="1.5s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.5s" begin="1.5s" fill="freeze" />
+      </rect>
+      <rect x="55" y="80" width="18" height="12" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1.5" strokeDasharray="60" strokeDashoffset="60">
+        <animate attributeName="stroke-dashoffset" values="60;0" dur="1.5s" begin="2s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.5s" begin="2s" fill="freeze" />
+      </rect>
+      {/* Connecting arrows */}
+      <g stroke="var(--primary)" strokeWidth="0.8" opacity="0" fill="none" markerEnd="url(#arrowhead)">
+        <line x1="42" y1="45" x2="42" y2="55"><animate attributeName="opacity" values="0;0.6" dur="0.3s" begin="2.5s" fill="freeze" /></line>
+        <line x1="78" y1="45" x2="78" y2="55"><animate attributeName="opacity" values="0;0.6" dur="0.3s" begin="2.7s" fill="freeze" /></line>
+        <line x1="42" y1="70" x2="39" y2="80"><animate attributeName="opacity" values="0;0.6" dur="0.3s" begin="2.9s" fill="freeze" /></line>
+        <line x1="78" y1="70" x2="64" y2="80"><animate attributeName="opacity" values="0;0.6" dur="0.3s" begin="3.1s" fill="freeze" /></line>
+      </g>
+    </svg>
+  );
+}
+
+function SvgWritingSoul() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Document shape */}
+      <rect x="30" y="20" width="60" height="80" rx="4" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.3" />
+      {/* Text lines being written */}
+      <g>
+        <rect x="40" y="35" width="0" height="2" rx="1" fill="var(--primary)" opacity="0.7">
+          <animate attributeName="width" values="0;40" dur="0.8s" fill="freeze" />
+        </rect>
+        <rect x="40" y="45" width="0" height="2" rx="1" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="width" values="0;30" dur="0.8s" begin="0.6s" fill="freeze" />
+        </rect>
+        <rect x="40" y="55" width="0" height="2" rx="1" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="width" values="0;35" dur="0.8s" begin="1.2s" fill="freeze" />
+        </rect>
+        <rect x="40" y="65" width="0" height="2" rx="1" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="width" values="0;25" dur="0.8s" begin="1.8s" fill="freeze" />
+        </rect>
+        <rect x="40" y="75" width="0" height="2" rx="1" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="width" values="0;38" dur="0.8s" begin="2.4s" fill="freeze" />
+        </rect>
+      </g>
+      {/* Cursor blink */}
+      <rect x="40" y="83" width="2" height="8" fill="var(--primary)">
+        <animate attributeName="opacity" values="1;0;1" dur="0.8s" repeatCount="indefinite" />
+        <animate attributeName="x" values="40;78;40" dur="6s" repeatCount="indefinite" />
+      </rect>
+      {/* Soul sparkle */}
+      <circle cx="75" cy="28" r="2" fill="var(--primary)" opacity="0">
+        <animate attributeName="opacity" values="0;0.8;0" dur="2s" begin="3s" repeatCount="indefinite" />
+        <animate attributeName="r" values="1;4;1" dur="2s" begin="3s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+function SvgGeneratingSkills() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Central skill node */}
+      <circle cx="60" cy="60" r="12" fill="var(--primary)" opacity="0.15" />
+      <circle cx="60" cy="60" r="8" fill="var(--primary)" opacity="0.3">
+        <animate attributeName="r" values="8;10;8" dur="2s" repeatCount="indefinite" />
+      </circle>
+      {/* Skill nodes spawning outward */}
+      {[0, 60, 120, 180, 240, 300].map((angle, i) => {
+        const rad = (angle * Math.PI) / 180;
+        const tx = 60 + Math.cos(rad) * 35;
+        const ty = 60 + Math.sin(rad) * 35;
+        return (
+          <g key={angle}>
+            <line x1="60" y1="60" x2={tx} y2={ty} stroke="var(--primary)" strokeWidth="1" opacity="0" strokeDasharray="4 3">
+              <animate attributeName="opacity" values="0;0.4" dur="0.5s" begin={`${i * 0.4}s`} fill="freeze" />
+            </line>
+            <circle cx={tx} cy={ty} r="0" fill="var(--primary)" opacity="0.7">
+              <animate attributeName="r" values="0;6" dur="0.6s" begin={`${i * 0.4}s`} fill="freeze" />
+            </circle>
+            <circle cx={tx} cy={ty} r="6" fill="none" stroke="var(--primary)" strokeWidth="0.8" opacity="0">
+              <animate attributeName="opacity" values="0;0.3;0" dur="2s" begin={`${i * 0.4 + 0.6}s`} repeatCount="indefinite" />
+              <animate attributeName="r" values="6;12;6" dur="2s" begin={`${i * 0.4 + 0.6}s`} repeatCount="indefinite" />
+            </circle>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function SvgConfiguringTools() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Gear 1 */}
+      <g transform="translate(45, 50)">
+        <animateTransform attributeName="transform" type="rotate" from="0 45 50" to="360 45 50" dur="6s" repeatCount="indefinite" additive="sum" />
+        <path d="M0,-18 L4,-7 L15,-7 L6,0 L10,12 L0,5 L-10,12 L-6,0 L-15,-7 L-4,-7 Z"
+          fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.6" />
+        <circle r="5" fill="var(--primary)" opacity="0.3" />
+      </g>
+      {/* Gear 2 */}
+      <g transform="translate(78, 65)">
+        <animateTransform attributeName="transform" type="rotate" from="360 78 65" to="0 78 65" dur="4s" repeatCount="indefinite" additive="sum" />
+        <path d="M0,-12 L3,-5 L10,-5 L4,0 L7,8 L0,4 L-7,8 L-4,0 L-10,-5 L-3,-5 Z"
+          fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.5" />
+        <circle r="3.5" fill="var(--primary)" opacity="0.3" />
+      </g>
+      {/* Connection sparks */}
+      <circle cx="58" cy="58" r="1.5" fill="var(--primary)">
+        <animate attributeName="opacity" values="0;1;0" dur="0.6s" repeatCount="indefinite" />
+      </circle>
+      {/* Plug symbol */}
+      <g transform="translate(60, 90)" opacity="0.4">
+        <rect x="-8" y="-3" width="16" height="6" rx="1" fill="none" stroke="var(--primary)" strokeWidth="1" />
+        <line x1="-3" y1="-6" x2="-3" y2="-3" stroke="var(--primary)" strokeWidth="1.5" />
+        <line x1="3" y1="-6" x2="3" y2="-3" stroke="var(--primary)" strokeWidth="1.5" />
+      </g>
+    </svg>
+  );
+}
+
+function SvgTriggers() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Clock face */}
+      <circle cx="60" cy="55" r="30" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.3" />
+      <circle cx="60" cy="55" r="2" fill="var(--primary)" opacity="0.6" />
+      {/* Clock hands */}
+      <line x1="60" y1="55" x2="60" y2="35" stroke="var(--primary)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6">
+        <animateTransform attributeName="transform" type="rotate" from="0 60 55" to="360 60 55" dur="8s" repeatCount="indefinite" />
+      </line>
+      <line x1="60" y1="55" x2="75" y2="55" stroke="var(--primary)" strokeWidth="1" strokeLinecap="round" opacity="0.4">
+        <animateTransform attributeName="transform" type="rotate" from="0 60 55" to="360 60 55" dur="60s" repeatCount="indefinite" />
+      </line>
+      {/* Hour markers */}
+      {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((angle) => {
+        const rad = ((angle - 90) * Math.PI) / 180;
+        return (
+          <circle key={angle} cx={60 + Math.cos(rad) * 26} cy={55 + Math.sin(rad) * 26} r="1.2" fill="var(--primary)" opacity="0.3" />
+        );
+      })}
+      {/* Lightning bolt (trigger) */}
+      <g transform="translate(88, 75)" opacity="0">
+        <animate attributeName="opacity" values="0;0.8;0" dur="2s" repeatCount="indefinite" />
+        <path d="M0,-10 L-5,2 L0,0 L-2,10 L5,-2 L0,0 Z" fill="var(--primary)" />
+      </g>
+    </svg>
+  );
+}
+
+function SvgAssembling() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Pieces coming together */}
+      <g>
+        {/* Top-left piece */}
+        <rect x="35" y="35" width="20" height="20" rx="3" fill="var(--primary)" opacity="0.3">
+          <animate attributeName="x" values="15;35" dur="1.5s" fill="freeze" />
+          <animate attributeName="y" values="15;35" dur="1.5s" fill="freeze" />
+          <animate attributeName="opacity" values="0.1;0.3" dur="1.5s" fill="freeze" />
+        </rect>
+        {/* Top-right piece */}
+        <rect x="65" y="35" width="20" height="20" rx="3" fill="var(--primary)" opacity="0.4">
+          <animate attributeName="x" values="90;65" dur="1.5s" begin="0.3s" fill="freeze" />
+          <animate attributeName="y" values="15;35" dur="1.5s" begin="0.3s" fill="freeze" />
+          <animate attributeName="opacity" values="0.1;0.4" dur="1.5s" begin="0.3s" fill="freeze" />
+        </rect>
+        {/* Bottom-left piece */}
+        <rect x="35" y="65" width="20" height="20" rx="3" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="x" values="15;35" dur="1.5s" begin="0.6s" fill="freeze" />
+          <animate attributeName="y" values="90;65" dur="1.5s" begin="0.6s" fill="freeze" />
+          <animate attributeName="opacity" values="0.1;0.5" dur="1.5s" begin="0.6s" fill="freeze" />
+        </rect>
+        {/* Bottom-right piece */}
+        <rect x="65" y="65" width="20" height="20" rx="3" fill="var(--primary)" opacity="0.6">
+          <animate attributeName="x" values="90;65" dur="1.5s" begin="0.9s" fill="freeze" />
+          <animate attributeName="y" values="90;65" dur="1.5s" begin="0.9s" fill="freeze" />
+          <animate attributeName="opacity" values="0.1;0.6" dur="1.5s" begin="0.9s" fill="freeze" />
+        </rect>
+      </g>
+      {/* Merge flash */}
+      <circle cx="60" cy="60" r="0" fill="var(--primary)" opacity="0">
+        <animate attributeName="r" values="0;30;0" dur="1s" begin="2s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.2;0" dur="1s" begin="2s" fill="freeze" />
+      </circle>
+      {/* Checkmark draws in */}
+      <path d="M48,60 L56,68 L74,50" fill="none" stroke="var(--primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+        strokeDasharray="40" strokeDashoffset="40" opacity="0">
+        <animate attributeName="stroke-dashoffset" values="40;0" dur="0.6s" begin="2.5s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.8" dur="0.3s" begin="2.5s" fill="freeze" />
+      </path>
+    </svg>
+  );
+}
+
+function SvgStillWorking() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Orbiting particles */}
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <circle key={i} cx="60" cy="60" r="3" fill="var(--primary)" opacity={0.2 + i * 0.1}>
+          <animateTransform attributeName="transform" type="rotate"
+            from={`${i * 60} 60 60`} to={`${i * 60 + 360} 60 60`}
+            dur={`${3 + i * 0.5}s`} repeatCount="indefinite" />
+          <animate attributeName="cx" values={`${60 + Math.cos((i * 60 * Math.PI) / 180) * (20 + i * 3)}`}
+            dur="0.01s" fill="freeze" />
+          <animate attributeName="cy" values={`${60 + Math.sin((i * 60 * Math.PI) / 180) * (20 + i * 3)}`}
+            dur="0.01s" fill="freeze" />
+        </circle>
+      ))}
+      {/* Center pulse */}
+      <circle cx="60" cy="60" r="6" fill="var(--primary)" opacity="0.4">
+        <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.4;0.2;0.4" dur="2s" repeatCount="indefinite" />
+      </circle>
+      {/* Outer ring breathing */}
+      <circle cx="60" cy="60" r="45" fill="none" stroke="var(--primary)" strokeWidth="0.5" opacity="0.15">
+        <animate attributeName="r" values="42;48;42" dur="4s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+// ─── Build phase config ──────────────────────────────────────────────────
+
+const BUILD_PHASES: { at: number; label: string; Svg: () => React.ReactNode }[] = [
+  { at: 0, label: "Connecting to architect agent...", Svg: SvgConnecting },
+  { at: 5, label: "Analyzing requirements...", Svg: SvgAnalyzing },
+  { at: 15, label: "Planning workspace structure...", Svg: SvgPlanning },
+  { at: 30, label: "Writing SOUL.md — agent personality...", Svg: SvgWritingSoul },
+  { at: 50, label: "Generating skill files...", Svg: SvgGeneratingSkills },
+  { at: 90, label: "Configuring tools & integrations...", Svg: SvgConfiguringTools },
+  { at: 130, label: "Setting up triggers & schedules...", Svg: SvgTriggers },
+  { at: 170, label: "Assembling skill graph...", Svg: SvgAssembling },
+  { at: 210, label: "Still working — complex agents take time...", Svg: SvgStillWorking },
+  { at: 300, label: "Almost there — architect is thorough...", Svg: SvgStillWorking },
+];
+
+// Map real event types to the matching SVG phase
+function phaseFromEvent(item: BuildActivityItem): typeof BUILD_PHASES[number] | null {
+  if (item.label.includes("SOUL")) return BUILD_PHASES[3]; // Writing SOUL.md
+  if (item.type === "skill") return BUILD_PHASES[4]; // Generating skills
+  if (item.label.includes("tool") || item.label.includes("integration")) return BUILD_PHASES[5]; // Tools
+  if (item.label.includes("trigger") || item.label.includes("cron")) return BUILD_PHASES[6]; // Triggers
+  if (item.type === "file") return BUILD_PHASES[4]; // Generic file → skills phase
+  return null;
+}
+
+function BuildActivityPanel({
+  buildActivity,
+  buildProgress,
+}: {
+  buildActivity: BuildActivityItem[];
+  buildProgress: BuildProgress | null;
+}) {
+  const elapsed = useElapsedTime(true);
+
+  // Prefer real events to drive the SVG; fall back to time-based
+  const lastEvent = buildActivity.length > 0 ? buildActivity[buildActivity.length - 1] : null;
+  const eventPhase = lastEvent ? phaseFromEvent(lastEvent) : null;
+
+  let currentPhase = BUILD_PHASES[0];
+  if (eventPhase) {
+    currentPhase = eventPhase;
+  } else {
+    for (const phase of BUILD_PHASES) {
+      if (elapsed >= phase.at) currentPhase = phase;
+    }
+  }
+
+  const { Svg } = currentPhase;
+  // Use a label from the real event when available
+  const displayLabel = lastEvent
+    ? lastEvent.type === "skill"
+      ? `Skill created: ${lastEvent.label}`
+      : lastEvent.label
+    : currentPhase.label;
+
+  return (
+    <div className="flex flex-col items-center justify-center py-8 gap-5">
+      {/* ── Animated SVG ── */}
+      <div key={currentPhase.at} className="typewriter-word">
+        <Svg />
+      </div>
+
+      {/* ── Phase label ── */}
+      <div className="flex flex-col items-center gap-1.5">
+        <p key={displayLabel} className="text-xs font-satoshi-medium text-[var(--text-secondary)] typewriter-word text-center px-4">
+          {displayLabel}
+        </p>
+        {/* Progress counter when available */}
+        {buildProgress && buildProgress.total ? (
+          <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
+            {buildProgress.completed}/{buildProgress.total} skills · {elapsed}s
+          </p>
+        ) : (
+          <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
+            {elapsed}s
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -262,15 +652,10 @@ export function LifecycleStepRenderer({
             </div>
 
             {store.buildStatus === "building" && (
-              <div className="flex flex-col items-center justify-center py-12">
-                <div className="w-12 h-12 rounded-2xl bg-[var(--primary)]/8 border border-[var(--primary)]/15 flex items-center justify-center mb-4">
-                  <Loader2 className="h-5 w-5 text-[var(--primary)] animate-spin" />
-                </div>
-                <p className="text-xs font-satoshi-medium text-[var(--text-secondary)]">
-                  Generating skills and configuration...
-                </p>
-                <ElapsedTimer active estimate="usually takes 10–30 seconds" />
-              </div>
+              <BuildActivityPanel
+                buildActivity={store.buildActivity}
+                buildProgress={store.buildProgress}
+              />
             )}
 
             {store.buildStatus === "done" && (
@@ -1185,15 +1570,23 @@ const EVAL_STATUS_CONFIG: Record<EvalTaskStatus, { icon: typeof CheckCircle2; co
 function StageTest({
   store,
   onApprove,
+  agentId,
 }: {
   store: CoPilotState & CoPilotActions;
   onApprove: () => void;
+  agentId?: string | null;
 }) {
-  const { evalTasks, evalStatus, skillGraph, agentRules, sessionId, workflow, discoveryDocuments, architecturePlan, connectedTools, runtimeInputs } = store;
+  const {
+    evalTasks, evalStatus, skillGraph, agentRules, sessionId, workflow,
+    discoveryDocuments, architecturePlan, connectedTools, runtimeInputs,
+    agentSandboxId, evalLoopState,
+  } = store;
   const abortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number; title: string } | null>(null);
   const [generating, setGenerating] = useState<"quick" | "ai" | null>(null);
   const [evalMode, setEvalMode] = useState<"mock" | "live">("mock");
+  const [runMode, setRunMode] = useState<"single" | "auto-improve">("single");
+  const [loopProgress, setLoopProgress] = useState<EvalLoopProgress | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mockContextRef = useRef<any>(null);
 
@@ -1205,6 +1598,9 @@ function StageTest({
   const totalCount = evalTasks.length;
   const allDone = totalCount > 0 && pendingCount === 0 && runningCount === 0;
   const hasFailures = failCount > 0;
+  const hasRealContainer = Boolean(agentSandboxId);
+  const isLoopRunning = evalLoopState.status === "running";
+  const hasLoopResults = evalLoopState.scores.length > 0;
 
   // Cleanup abort controller on unmount
   useEffect(() => () => { abortRef.current?.abort(); }, []);
@@ -1228,14 +1624,12 @@ function StageTest({
       if (scenarios.length > 0) {
         store.setEvalTasks(scenarios);
       } else {
-        // Fallback to deterministic if LLM returns nothing
         store.setEvalTasks(generateDeterministicScenarios({
           skillGraph: skillGraph ?? [], workflow, agentRules, discoveryDocuments, architecturePlan,
         }));
       }
       store.setEvalStatus("ready");
     } catch {
-      // Fallback to deterministic on error
       const { generateDeterministicScenarios } = await import("@/lib/openclaw/eval-scenario-generator");
       store.setEvalTasks(generateDeterministicScenarios({
         skillGraph: skillGraph ?? [], workflow, agentRules, discoveryDocuments, architecturePlan,
@@ -1253,7 +1647,6 @@ function StageTest({
     const { runEvalSuite } = await import("@/lib/openclaw/eval-runner");
     const tasksToRun = evalTasks.filter((t) => t.status === filter);
 
-    // Generate mock context on first run if in mock mode
     if (evalMode === "mock" && !mockContextRef.current) {
       const { generateDeterministicMocks } = await import("@/lib/openclaw/eval-mock-generator");
       mockContextRef.current = generateDeterministicMocks({ skillGraph: skillGraph ?? [], toolConnections: connectedTools, runtimeInputs, architecturePlan });
@@ -1266,18 +1659,83 @@ function StageTest({
       agentRules,
       mode: evalMode,
       mockContext: evalMode === "mock" ? mockContextRef.current : null,
+      agentSandboxId,
       signal: controller.signal,
       onProgress: (current, total, title) => setProgress({ current, total, title }),
     });
 
     setProgress(null);
     abortRef.current = null;
+
+    // Auto-save eval results if we have an agent ID
+    persistEvalResults();
+  };
+
+  const persistEvalResults = async () => {
+    if (!agentId) return;
+    try {
+      const { saveEvalResults } = await import("@/lib/openclaw/eval-persistence");
+      await saveEvalResults(agentId, {
+        sandboxId: agentSandboxId,
+        mode: evalMode,
+        tasks: evalTasks,
+        loopState: evalLoopState.scores.length > 0 ? evalLoopState : null,
+      });
+    } catch (err) {
+      console.warn("[Eval] Failed to persist results:", err);
+    }
+  };
+
+  const handleRunAutoImprove = async () => {
+    if (!agentSandboxId) return;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoopProgress(null);
+    store.resetEvalLoop();
+
+    const { runEvalLoop } = await import("@/lib/openclaw/eval-loop");
+
+    if (evalMode === "mock" && !mockContextRef.current) {
+      const { generateDeterministicMocks } = await import("@/lib/openclaw/eval-mock-generator");
+      mockContextRef.current = generateDeterministicMocks({ skillGraph: skillGraph ?? [], toolConnections: connectedTools, runtimeInputs, architecturePlan });
+    }
+
+    await runEvalLoop({
+      tasks: [...evalTasks],
+      evalRunnerConfig: {
+        sessionId,
+        store,
+        skillGraph: skillGraph ?? [],
+        agentRules,
+        mode: evalMode,
+        mockContext: evalMode === "mock" ? mockContextRef.current : null,
+        agentSandboxId,
+        signal: controller.signal,
+        onProgress: (current, total, title) => setProgress({ current, total, title }),
+      },
+      loopStore: {
+        ...store,
+        getEvalLoopState: () => store.evalLoopState,
+      },
+      skillGraph: skillGraph ?? [],
+      sessionId,
+      sandboxId: agentSandboxId,
+      signal: controller.signal,
+      onLoopProgress: (p) => setLoopProgress(p),
+    });
+
+    setLoopProgress(null);
+    abortRef.current = null;
+
+    persistEvalResults();
   };
 
   const handleCancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
     setProgress(null);
+    setLoopProgress(null);
   };
 
   // Empty state — generate scenarios
@@ -1292,6 +1750,9 @@ function StageTest({
         </p>
         <p className="mt-1 text-[10px] font-satoshi-regular text-[var(--text-tertiary)] text-center max-w-xs">
           Generate test scenarios based on your agent&apos;s skills and requirements.
+          {hasRealContainer
+            ? " Tests will run against your real agent container."
+            : " Connect a sandbox to test against the real agent."}
         </p>
         {generating ? (
           <div className="mt-4 flex items-center gap-2">
@@ -1343,6 +1804,8 @@ function StageTest({
               </h3>
               <p className="text-[10px] font-satoshi-regular text-[var(--text-tertiary)]">
                 {totalCount} test{totalCount !== 1 ? "s" : ""} defined
+                {hasRealContainer && " · Real agent"}
+                {!hasRealContainer && " · Simulated"}
               </p>
             </div>
           </div>
@@ -1371,59 +1834,106 @@ function StageTest({
         </div>
       </div>
 
-      {/* Mode toggle */}
-      {evalStatus !== "running" && (
+      {/* Reinforcement loop progress */}
+      {hasLoopResults && (
+        <EvalLoopIndicator loopState={evalLoopState} loopProgress={loopProgress} />
+      )}
+
+      {/* Mode toggles */}
+      {evalStatus !== "running" && !isLoopRunning && (
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-subtle)] border border-[var(--border-default)]">
-            <button
-              onClick={() => { setEvalMode("mock"); mockContextRef.current = null; }}
-              className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
-                evalMode === "mock"
-                  ? "bg-white text-[var(--primary)] shadow-sm border border-[var(--primary)]/20"
-                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              }`}
-            >
-              Mock Mode
-            </button>
-            <button
-              onClick={() => setEvalMode("live")}
-              className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
-                evalMode === "live"
-                  ? "bg-white text-amber-600 shadow-sm border border-amber-500/20"
-                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              }`}
-            >
-              Live Mode
-            </button>
+          <div className="flex items-center gap-2">
+            {/* Mock / Live toggle */}
+            <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-subtle)] border border-[var(--border-default)]">
+              <button
+                onClick={() => { setEvalMode("mock"); mockContextRef.current = null; }}
+                className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                  evalMode === "mock"
+                    ? "bg-white text-[var(--primary)] shadow-sm border border-[var(--primary)]/20"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                }`}
+              >
+                Mock
+              </button>
+              <button
+                onClick={() => setEvalMode("live")}
+                className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                  evalMode === "live"
+                    ? "bg-white text-amber-600 shadow-sm border border-amber-500/20"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                }`}
+              >
+                Live
+              </button>
+            </div>
+            {/* Single / Auto-improve toggle */}
+            {hasRealContainer && (
+              <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-subtle)] border border-[var(--border-default)]">
+                <button
+                  onClick={() => setRunMode("single")}
+                  className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                    runMode === "single"
+                      ? "bg-white text-[var(--primary)] shadow-sm border border-[var(--primary)]/20"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  Single Run
+                </button>
+                <button
+                  onClick={() => setRunMode("auto-improve")}
+                  className={`px-2.5 py-1 text-[10px] font-satoshi-medium rounded-md transition-colors ${
+                    runMode === "auto-improve"
+                      ? "bg-white text-emerald-600 shadow-sm border border-emerald-500/20"
+                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  }`}
+                >
+                  <RefreshCw className="h-2.5 w-2.5 inline mr-1" />
+                  Auto-Improve
+                </button>
+              </div>
+            )}
           </div>
           <span className="text-[9px] font-satoshi-regular text-[var(--text-tertiary)]">
-            {evalMode === "mock" ? "Using generated mock API data" : "Using real API connections"}
+            {evalMode === "mock" ? "Mock data" : "Real APIs"}
+            {runMode === "auto-improve" && hasRealContainer ? " · Reinforcement loop" : ""}
           </span>
         </div>
       )}
 
       {/* Action buttons */}
-      {pendingCount > 0 && evalStatus !== "running" && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => handleRunTasks("pending")}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-bold text-[var(--primary)] bg-[var(--primary)]/10 border border-[var(--primary)]/20 rounded-lg hover:bg-[var(--primary)]/15 transition-colors"
-          >
-            <Play className="h-3 w-3" />
-            Run All Tests
-          </button>
+      {pendingCount > 0 && evalStatus !== "running" && !isLoopRunning && (
+        <div className="flex justify-end gap-2">
+          {runMode === "auto-improve" && hasRealContainer ? (
+            <button
+              onClick={handleRunAutoImprove}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-bold text-white bg-emerald-600 rounded-lg hover:opacity-90 transition-colors"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Run & Auto-Improve
+            </button>
+          ) : (
+            <button
+              onClick={() => handleRunTasks("pending")}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-bold text-[var(--primary)] bg-[var(--primary)]/10 border border-[var(--primary)]/20 rounded-lg hover:bg-[var(--primary)]/15 transition-colors"
+            >
+              <Play className="h-3 w-3" />
+              Run All Tests
+            </button>
+          )}
         </div>
       )}
 
       {/* Running indicator with progress */}
-      {evalStatus === "running" && (
+      {(evalStatus === "running" || isLoopRunning) && (
         <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/5">
           <div className="flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 text-[var(--primary)] animate-spin" />
             <p className="text-xs font-satoshi-medium text-[var(--primary)]">
-              {progress
-                ? `Running ${progress.current}/${progress.total}: ${progress.title}`
-                : `Running evaluations... ${runningCount} in progress`}
+              {loopProgress
+                ? loopProgress.message
+                : progress
+                  ? `Running ${progress.current}/${progress.total}: ${progress.title}`
+                  : `Running evaluations... ${runningCount} in progress`}
             </p>
           </div>
           <button
@@ -1434,6 +1944,11 @@ function StageTest({
             Cancel
           </button>
         </div>
+      )}
+
+      {/* Skill mutations from reinforcement loop */}
+      {evalLoopState.mutations.length > 0 && (
+        <EvalMutationsPanel mutations={evalLoopState.mutations} />
       )}
 
       {/* Eval task list */}
@@ -1455,21 +1970,37 @@ function StageTest({
               hasFailures ? "text-amber-600" : "text-[var(--primary)]"
             }`}>
               {hasFailures
-                ? `${failCount} test${failCount !== 1 ? "s" : ""} failed. Review the results above. You can still proceed or re-run tests.`
-                : "All tests passed. Approve to proceed to deployment."}
+                ? `${failCount} test${failCount !== 1 ? "s" : ""} failed. ${
+                    hasRealContainer && runMode === "single"
+                      ? "Try Auto-Improve to iteratively fix skills."
+                      : "Review the results above."
+                  }`
+                : evalLoopState.scores.length > 0
+                  ? `All tests passed after ${evalLoopState.iteration} iteration(s). Skills have been optimized.`
+                  : "All tests passed. Approve to proceed to deployment."}
             </p>
           </div>
           <div className="flex items-center justify-between">
-            {hasFailures && (
-              <button
-                onClick={() => handleRunTasks("fail")}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
-              >
-                <RotateCcw className="h-3 w-3" />
-                Re-run Failed
-              </button>
-            )}
-            <div className="flex-1" />
+            <div className="flex items-center gap-2">
+              {hasFailures && (
+                <button
+                  onClick={() => handleRunTasks("fail")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Re-run Failed
+                </button>
+              )}
+              {hasFailures && hasRealContainer && runMode !== "auto-improve" && (
+                <button
+                  onClick={() => { setRunMode("auto-improve"); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-medium text-emerald-600 hover:text-emerald-700 transition-colors"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Try Auto-Improve
+                </button>
+              )}
+            </div>
             <button
               onClick={onApprove}
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
@@ -1484,16 +2015,160 @@ function StageTest({
   );
 }
 
+// ─── Reinforcement loop indicator ──────────────────────────────────────────
+
+function EvalLoopIndicator({
+  loopState,
+  loopProgress,
+}: {
+  loopState: EvalLoopState;
+  loopProgress: EvalLoopProgress | null;
+}) {
+  const scores = loopState.scores;
+  const latest = scores[scores.length - 1];
+  const improving = scores.length >= 2 && scores[scores.length - 1].avgScore > scores[scores.length - 2].avgScore;
+
+  return (
+    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <RefreshCw className={`h-3.5 w-3.5 text-emerald-600 ${loopState.status === "running" ? "animate-spin" : ""}`} />
+          <span className="text-xs font-satoshi-bold text-emerald-700">
+            Reinforcement Loop
+          </span>
+          {loopState.stopReason && (
+            <span className="text-[9px] font-satoshi-medium text-emerald-600 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+              {loopState.stopReason.replace(/_/g, " ")}
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] font-mono text-emerald-600">
+          Round {loopState.iteration}/{loopState.maxIterations}
+        </span>
+      </div>
+      {/* Score progression */}
+      {scores.length > 0 && (
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 flex-1">
+            {scores.map((s, i) => (
+              <div key={i} className="flex flex-col items-center gap-0.5">
+                <div
+                  className="rounded-sm bg-emerald-500"
+                  style={{
+                    width: "16px",
+                    height: `${Math.max(4, s.avgScore * 24)}px`,
+                    opacity: 0.3 + s.avgScore * 0.7,
+                  }}
+                />
+                <span className="text-[8px] font-mono text-emerald-600">
+                  {Math.round(s.passRate * 100)}%
+                </span>
+              </div>
+            ))}
+          </div>
+          {latest && (
+            <div className="text-right shrink-0">
+              <p className="text-[10px] font-satoshi-medium text-emerald-700">
+                {Math.round(latest.passRate * 100)}% passing
+              </p>
+              <p className="text-[9px] text-emerald-600 flex items-center gap-0.5 justify-end">
+                {improving ? <TrendingUp className="h-2.5 w-2.5" /> : null}
+                avg score: {latest.avgScore.toFixed(2)}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Mutations count + cost */}
+      <div className="flex items-center justify-between mt-1.5">
+        {loopState.mutations.length > 0 && (
+          <p className="text-[9px] text-emerald-600">
+            {loopState.mutations.filter((m) => m.accepted).length} mutation(s) accepted,{" "}
+            {loopState.mutations.filter((m) => !m.accepted).length} reverted
+          </p>
+        )}
+        {loopState.cost && loopState.cost.totalLlmCalls > 0 && (
+          <p className="text-[9px] text-emerald-600 font-mono">
+            {loopState.cost.totalLlmCalls} LLM calls · ~${loopState.cost.estimatedCostUsd.toFixed(2)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Skill mutations panel ─────────────────────────────────────────────────
+
+function EvalMutationsPanel({ mutations }: { mutations: SkillMutation[] }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  return (
+    <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-subtle)]/30 overflow-hidden">
+      <div className="px-3 py-2 border-b border-[var(--border-default)] flex items-center gap-2">
+        <Diff className="h-3 w-3 text-[var(--text-tertiary)]" />
+        <span className="text-[10px] font-satoshi-bold text-[var(--text-secondary)] uppercase tracking-wider">
+          Skill Mutations ({mutations.length})
+        </span>
+      </div>
+      <div className="divide-y divide-[var(--border-default)]">
+        {mutations.map((m, i) => {
+          const key = `${m.skillId}-${m.iteration}`;
+          const isExpanded = expandedId === key;
+          return (
+            <div key={i}>
+              <button
+                onClick={() => setExpandedId(isExpanded ? null : key)}
+                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-subtle)] transition-colors"
+              >
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-satoshi-medium ${
+                  m.accepted ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-red-500/10 text-red-500"
+                }`}>
+                  {m.accepted ? "kept" : "reverted"}
+                </span>
+                <span className="text-[10px] font-mono text-[var(--text-primary)]">{m.skillId}</span>
+                <span className="text-[9px] text-[var(--text-tertiary)]">round {m.iteration}</span>
+                <span className="flex-1" />
+                <ChevronRight className={`h-2.5 w-2.5 text-[var(--text-tertiary)] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+              </button>
+              {isExpanded && (
+                <div className="px-3 pb-3 space-y-2">
+                  <p className="text-[10px] text-[var(--text-secondary)]">{m.rationale}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[8px] font-satoshi-bold text-red-400 uppercase">Before</span>
+                      <pre className="text-[9px] text-[var(--text-tertiary)] bg-red-500/5 rounded-lg p-2 mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                        {m.before.slice(0, 800)}
+                      </pre>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-satoshi-bold text-[var(--success)] uppercase">After</span>
+                      <pre className="text-[9px] text-[var(--text-tertiary)] bg-[var(--success)]/5 rounded-lg p-2 mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                        {m.after.slice(0, 800)}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Eval task card ────────────────────────────────────────────────────────
 
 function EvalTaskCard({ task }: { task: EvalTask }) {
   const [expanded, setExpanded] = useState(false);
+  const [traceExpanded, setTraceExpanded] = useState(false);
   const cfg = EVAL_STATUS_CONFIG[task.status];
   const StatusIcon = cfg.icon;
   const confidencePct = task.confidence != null ? Math.round(task.confidence * 100) : null;
   const confidenceColor = task.confidence != null
     ? task.confidence >= 0.7 ? "text-[var(--success)]" : task.confidence >= 0.4 ? "text-amber-500" : "text-red-500"
     : "";
+  const hasTrace = Boolean(task.trace && task.trace.toolCalls.length > 0);
 
   return (
     <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-subtle)]/50 overflow-hidden">
@@ -1515,6 +2190,16 @@ function EvalTaskCard({ task }: { task: EvalTask }) {
             {confidencePct != null && (
               <span className={`text-[9px] font-mono ${confidenceColor}`}>
                 {confidencePct}%
+              </span>
+            )}
+            {hasTrace && (
+              <span className="text-[9px] font-satoshi-medium text-[var(--primary)] bg-[var(--primary)]/5 px-1 py-0.5 rounded">
+                {task.trace!.toolCalls.length} tool call{task.trace!.toolCalls.length !== 1 ? "s" : ""}
+              </span>
+            )}
+            {task.iteration != null && task.iteration > 1 && (
+              <span className="text-[9px] font-mono text-emerald-600">
+                r{task.iteration}
               </span>
             )}
           </div>
@@ -1564,7 +2249,103 @@ function EvalTaskCard({ task }: { task: EvalTask }) {
               </p>
             </div>
           )}
-          {task.reasons && task.reasons.length > 0 && (
+
+          {/* Execution trace (tool calls timeline) */}
+          {hasTrace && (
+            <div>
+              <button
+                onClick={() => setTraceExpanded((prev) => !prev)}
+                className="flex items-center gap-1.5 group"
+              >
+                <Terminal className="h-3 w-3 text-[var(--primary)]" />
+                <span className="text-[9px] font-satoshi-bold text-[var(--primary)] uppercase tracking-wider group-hover:underline">
+                  Execution Trace ({task.trace!.toolCalls.length} tool calls, {(task.trace!.totalDurationMs / 1000).toFixed(1)}s)
+                </span>
+                <ChevronRight className={`h-2.5 w-2.5 text-[var(--primary)] transition-transform ${traceExpanded ? "rotate-90" : ""}`} />
+              </button>
+              {traceExpanded && (
+                <div className="mt-1.5 space-y-1.5">
+                  {task.trace!.toolCalls.map((tc: ToolCallTrace, i: number) => (
+                    <div key={i} className="rounded-lg bg-[var(--card-color)] border border-[var(--border-default)] px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono font-bold text-[var(--primary)]">
+                          {tc.toolName}
+                        </span>
+                        <span className="text-[9px] font-mono text-[var(--text-tertiary)]">
+                          {tc.durationMs}ms
+                        </span>
+                      </div>
+                      {tc.input && (
+                        <p className="text-[9px] text-[var(--text-tertiary)] mt-1 font-mono truncate">
+                          → {tc.input.slice(0, 200)}
+                        </p>
+                      )}
+                      {tc.output && (
+                        <p className="text-[9px] text-[var(--text-secondary)] mt-0.5 font-mono truncate">
+                          ← {tc.output.slice(0, 200)}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  {task.trace!.errors.length > 0 && (
+                    <div className="rounded-lg bg-red-500/5 border border-red-500/20 px-3 py-2">
+                      <span className="text-[9px] font-satoshi-bold text-red-500 uppercase">Errors</span>
+                      {task.trace!.errors.map((err: string, i: number) => (
+                        <p key={i} className="text-[9px] text-red-400 mt-0.5">{err}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Trace score (LLM judge feedback) */}
+          {task.traceScore && (
+            <div>
+              <span className="text-[9px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider">
+                Judge Feedback
+              </span>
+              <p className="text-[10px] text-[var(--text-secondary)] mt-1 leading-relaxed bg-[var(--card-color)] rounded-lg px-3 py-2 border border-[var(--border-default)]">
+                {task.traceScore.feedback}
+              </p>
+              {task.traceScore.skillDiagnosis.filter((d) => d.issue).length > 0 && (
+                <div className="mt-1.5 space-y-0.5">
+                  {task.traceScore.skillDiagnosis
+                    .filter((d) => d.issue)
+                    .map((d, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <span className={`text-[8px] px-1 py-0.5 rounded font-mono ${
+                          d.verdict === "working" ? "bg-[var(--success)]/10 text-[var(--success)]"
+                            : d.verdict === "partial" ? "bg-amber-500/10 text-amber-500"
+                            : d.verdict === "broken" ? "bg-red-500/10 text-red-500"
+                            : "bg-[var(--bg-subtle)] text-[var(--text-tertiary)]"
+                        }`}>
+                          {d.verdict}
+                        </span>
+                        <span className="text-[9px] font-mono text-[var(--text-secondary)]">{d.skillId}</span>
+                        <span className="text-[9px] text-[var(--text-tertiary)]">{d.issue}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+              {task.traceScore.suggestedFixes.length > 0 && (
+                <div className="mt-1.5">
+                  <span className="text-[8px] font-satoshi-bold text-emerald-600 uppercase">Suggested Fixes</span>
+                  <ul className="mt-0.5 space-y-0.5">
+                    {task.traceScore.suggestedFixes.map((fix, i) => (
+                      <li key={i} className="text-[9px] text-emerald-600 flex items-start gap-1">
+                        <span className="shrink-0">→</span> {fix}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Legacy scoring rationale (for fallback mode) */}
+          {!task.traceScore && task.reasons && task.reasons.length > 0 && (
             <div>
               <span className="text-[9px] font-satoshi-bold text-[var(--text-tertiary)] uppercase tracking-wider">
                 Scoring Rationale
@@ -1637,9 +2418,9 @@ function StageShip({
     github: "pending",
   });
   const [githubRepo, setGithubRepo] = useState("");
-  const [githubToken, setGithubToken] = useState("");
   const [githubRepoUrl, setGithubRepoUrl] = useState<string | null>(null);
   const [githubError, setGithubError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [skipGithub, setSkipGithub] = useState(false);
   const [deploying, setDeploying] = useState(false);
 
@@ -1652,6 +2433,8 @@ function StageShip({
 
     setDeploying(true);
     setGithubError(null);
+    setSaveError(null);
+    setStepStatuses({ save: "pending", deploy: "pending", github: "pending" });
 
     // Step 1: Save agent
     setStepStatuses((prev) => ({ ...prev, save: "running" }));
@@ -1660,10 +2443,12 @@ function StageShip({
       // Trigger the page-level onComplete which handles save + deploy.
       const completed = await onComplete?.();
       if (completed === false) {
-        throw new Error("Activation failed");
+        throw new Error("Agent save or activation failed. Check the console for details.");
       }
       setStepStatuses((prev) => ({ ...prev, save: "done" }));
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Save failed";
+      setSaveError(msg);
       setStepStatuses((prev) => ({ ...prev, save: "failed" }));
       store.setDeployStatus("failed");
       setDeploying(false);
@@ -1677,7 +2462,7 @@ function StageShip({
     setStepStatuses((prev) => ({ ...prev, deploy: "done" }));
 
     // Step 3: GitHub export
-    if (skipGithub || !githubToken || !githubRepo) {
+    if (skipGithub || !githubRepo) {
       setStepStatuses((prev) => ({ ...prev, github: "skipped" }));
       store.setDeployStatus("done");
       setDeploying(false);
@@ -1725,7 +2510,6 @@ function StageShip({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          githubToken,
           repo: githubRepo,
           agentName: store.name || "Agent",
           soulContent: soulLines.join("\n"),
@@ -1871,24 +2655,27 @@ function StageShip({
                   placeholder="myorg/customer-support-agent"
                   className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
                 />
-              </div>
-              <div>
-                <label className="block text-[10px] font-satoshi-medium text-[var(--text-tertiary)] mb-1">
-                  Personal Access Token
-                </label>
-                <input
-                  type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
-                />
                 <p className="text-[9px] text-[var(--text-tertiary)] mt-1">
-                  Needs <code className="font-mono">repo</code> scope. Will create the repo if it doesn&apos;t exist.
+                  Uses local <code className="font-mono">gh</code> CLI auth. Will create the repo if it doesn&apos;t exist.
                 </p>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Save/deploy error with retry */}
+      {saveError && (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 space-y-2">
+          <p className="text-xs font-satoshi-medium text-red-500">{saveError}</p>
+          <button
+            onClick={handleDeploy}
+            disabled={isCompleting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-satoshi-bold text-white bg-red-500 rounded-lg hover:opacity-90 disabled:opacity-30 transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </button>
         </div>
       )}
 

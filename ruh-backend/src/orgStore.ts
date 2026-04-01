@@ -5,6 +5,7 @@ export interface OrgRecord {
   id: string;
   name: string;
   slug: string;
+  kind: 'developer' | 'customer';
   plan: string;
   createdAt: string;
   updatedAt: string;
@@ -15,18 +16,23 @@ function serializeRow(row: Record<string, unknown>): OrgRecord {
     id: String(row.id),
     name: String(row.name),
     slug: String(row.slug),
+    kind: String(row.kind ?? 'customer') as OrgRecord['kind'],
     plan: String(row.plan),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
 }
 
-export async function createOrg(name: string, slug: string): Promise<OrgRecord> {
+export async function createOrg(
+  name: string,
+  slug: string,
+  kind: OrgRecord['kind'] = 'customer',
+): Promise<OrgRecord> {
   return withConn(async (client) => {
     const id = uuidv4();
     const result = await client.query(
-      `INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3) RETURNING *`,
-      [id, name, slug],
+      `INSERT INTO organizations (id, name, slug, kind) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [id, name, slug, kind],
     );
     return serializeRow(result.rows[0]);
   });

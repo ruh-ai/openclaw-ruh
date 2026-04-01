@@ -346,6 +346,7 @@ describe("createCoPilotSeedFromAgent", () => {
       description: "Optimize paid search accounts",
       skillGraph: agent.skillGraph,
       selectedSkillIds: ["google-ads-audit", "budget-pacing-report"],
+      builtSkillIds: [],
       workflow: agent.workflow,
       skillGenerationStatus: "ready",
       skillGenerationError: null,
@@ -601,7 +602,7 @@ describe("evaluateCoPilotDeployReadiness", () => {
     });
   });
 
-  test("blocks deploy when required runtime inputs are still empty", () => {
+  test("allows deploy even when required runtime inputs are missing (collected at first chat)", () => {
     expect(
       evaluateCoPilotDeployReadiness({
         purposeReady: true,
@@ -618,8 +619,8 @@ describe("evaluateCoPilotDeployReadiness", () => {
         },
       }),
     ).toEqual({
-      canDeploy: false,
-      blockerMessage: "Add values for required runtime inputs: GOOGLE_ADS_CUSTOMER_ID, GOOGLE_ADS_REFRESH_TOKEN.",
+      canDeploy: true,
+      blockerMessage: null,
     });
   });
 });

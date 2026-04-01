@@ -18,7 +18,227 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 
 ## Active Work Log
 
+### TASK-2026-04-01-07: Audit and redesign the Flutter app shell and core customer UX
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `ruh_app/lib/config`, `ruh_app/lib/screens`, `ruh_app/lib/widgets`, `docs/plans`, `docs/knowledge-base`, `docs/journal/2026-04-01.md`
+- Summary: `Completed the approved customer-surface redesign pass for `ruh_app`. The desktop shell now surfaces active-org and signed-in-user context, the installed-agents home behaves like a workspace instead of a raw grid, the marketplace screens now use customer-facing trust/value language instead of implementation copy, the agent detail page leads with readiness plus the open-chat action, and Settings now leads with account/org context while keeping local-dev controls available under Advanced. The redesign is documented in [[SPEC-ruh-app-customer-surface-redesign]] and covered by focused Flutter widget tests plus `flutter analyze`.`
+- Next step: `If the app needs another UX pass, extend the same productized hierarchy into chat and mission-control surfaces so the customer runtime experience matches the upgraded shell and marketplace.`
+- Blockers: `None.`
+
+### TASK-2026-04-01-06: Fix create-page live agent mode transport
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/agents/create/agent-mode.ts`, `agent-builder-ui/app/(platform)/agents/create/agent-mode.test.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/journal/2026-04-01.md`
+- Summary: `Fixed the forge create-page live-mode regression. The root cause was frontend transport wiring: `PATCH /api/agents/:id/mode` already flipped the forge container, but `agents/create/page.tsx` still hardcoded `TabChat` to builder mode, so "Test Agent" never switched off the architect bridge. Added a focused `agent-mode` regression, introduced a tiny mode resolver, and now route the page to deployed-agent chat semantics while forge mode is `live` and back to builder semantics when returning to `building`.`
+- Next step: `If operators still report live-mode issues after this transport fix, inspect the forge sandbox's active `SOUL.md` and gateway state to confirm the sandbox itself is serving the expected agent prompt.`
+- Blockers: `None.`
+
+### TASK-2026-04-01-05: Improve Flutter login ergonomics with password visibility and remembered email
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `docs/plans/2026-04-01-ruh-app-login-convenience-design.md`, `docs/plans/2026-04-01-ruh-app-login-convenience.md`, `docs/knowledge-base/specs/SPEC-ruh-app-login-convenience.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/014-auth-system.md`, `ruh_app/lib/screens/auth/login_screen.dart`, `ruh_app/lib/services`, `ruh_app/lib/providers`, `ruh_app/test`
+- Summary: `Completed the approved Flutter login UX improvement. `ruh_app` now has a password show/hide control, an opt-in `Remember me` flow backed by a new login-preferences service, and widget/service coverage proving that only the email is stored locally while the existing access-token session persistence remains unchanged. The login card also scrolls correctly on short viewports instead of overflowing.`
+- Next step: `If the customer auth UX expands further, the next reasonable slice is polishing the login form for mobile/desktop ergonomics or deciding whether org switching should remain limited to fresh-login sessions until refresh-token persistence is introduced.`
+- Blockers: `None.`
+
+### TASK-2026-04-01-04: Provision customer runtime agents from marketplace installs
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `docs/plans/2026-04-01-marketplace-customer-runtime-install-design.md`, `docs/plans/2026-04-01-marketplace-customer-runtime-install.md`, `docs/knowledge-base/specs/SPEC-marketplace-store-parity.md`, `docs/knowledge-base/016-marketplace.md`, `ruh-backend/src`, `ruh-backend/tests`, `ruh_app/lib`, `ruh_app/test`, `docs/journal/2026-04-01.md`
+- Summary: `Completed the first real customer runtime-install slice. The backend now persists/reuses runnable published snapshots in `agent_versions`, stores per-user/customer-org installed runtime rows in `marketplace_runtime_installs`, creates a real installed `agents` row during marketplace install, exposes customer-aware `GET /api/agents` / `GET /api/agents/:id` reads for those runtimes, and provisions/configures the runtime sandbox through `POST /api/agents/:id/launch`. `ruh_app` now opens installed marketplace cards through the real agent detail flow and launches the sandbox before chat when needed.`
+- Next step: `Build the next marketplace layer from [[SPEC-marketplace-store-parity]] and [[SPEC-app-access-and-org-marketplace]]: replace this per-user runtime slice with org entitlements, admin assignment, and paid checkout while preserving the new published-snapshot + launch primitives.`
+- Blockers: `None for this slice. Remaining work is the larger entitlement/checkout product layer rather than a broken install/use handoff.`
+
+### TASK-2026-04-01-03: Connect marketplace installs to truthful customer inventory
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `ruh-backend/src/marketplaceStore.ts`, `ruh-backend/src/marketplaceRoutes.ts`, `ruh-backend/tests/unit/marketplaceStore.test.ts`, `ruh-backend/tests/integration/marketplaceCrud.test.ts`, `ruh-backend/tests/contract/marketplaceListings.test.ts`, `ruh_app/lib/models/marketplace_listing.dart`, `ruh_app/lib/services/marketplace_service.dart`, `ruh_app/lib/providers/marketplace_provider.dart`, `ruh_app/lib/screens/agents/agent_list_screen.dart`, `ruh_app/lib/screens/marketplace/marketplace_detail_screen.dart`, `ruh_app/test/services/marketplace_service_test.dart`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/journal/2026-04-01.md`
+- Summary: `Completed the legacy-install bridge that removes the current customer dead-end. `ruh-backend` now exposes `/api/marketplace/my/installed-listings`, joining marketplace installs with listing metadata, and `ruh_app` now renders the customer workspace from that installed marketplace inventory instead of builder-only `/api/agents`. The marketplace detail screen invalidates the new inventory provider after install and offers a direct handoff back into the installed-agents workspace surface.`
+- Next step: `Replace this temporary installed-listings bridge with the approved org-entitlement + assignment + launch contract from [[SPEC-app-access-and-org-marketplace]] so "use agent" becomes a real customer-safe runtime path instead of a listing-detail handoff.`
+- Blockers: `None for this bridge slice. The remaining gap is the larger product/runtime contract, not a broken install handoff.`
+
+### TASK-2026-04-01-02: Add practical multi-org switching for seeded cross-surface access
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `docs/plans/2026-04-01-multi-org-surface-switching-design.md`, `docs/plans/2026-04-01-multi-org-surface-switching-implementation.md`, `ruh-backend/src/testUserSeed.ts`, `ruh-backend/tests/integration/testUserSeed.test.ts`, `ruh-frontend/app/login/page.tsx`, `ruh-frontend/app/_components/CustomerSessionGate.tsx`, `ruh-frontend/__tests__`, `agent-builder-ui/app/api/auth.ts`, `agent-builder-ui/app/api/user.ts`, `agent-builder-ui/app/(platform)/_components/UserProfileSection.tsx`, `ruh_app/lib`, `ruh_app/test`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/009-ruh-frontend.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/journal/2026-04-01.md`
+- Summary: `Completed the practical multi-org auth slice without weakening org gating. The local seed matrix and live local DB now include `prasanjit@ruh.ai` as platform admin plus `acme-dev:owner` and `globex:admin`; `ruh-frontend` and `agent-builder-ui` now auto-switch recoverable sessions into the correct tenant during login/bootstrap using `memberships[]` + `POST /api/auth/switch-org`; the builder user dropdown now switches developer orgs explicitly; and `ruh_app` now auto-switches customer login plus exposes customer-org switching from Settings while the current session still has its refresh token from login.`
+- Next step: `If this expands beyond local QA fixtures, decide whether `ruh_app` should persist refresh tokens for post-restart org switching and whether the temporary floating customer-web switcher should move into a permanent shell/header component.`
+- Blockers: `None for this slice. Remaining work is polish and longer-lived native session ergonomics, not a missing auth contract.`
+
+### TASK-2026-04-01-01: Ship the first real marketplace catalog/detail slice
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-01`
+- Updated: `2026-04-01`
+- Areas: `TODOS.md`, `docs/plans/2026-04-01-marketplace-agent-catalog-parity.md`, `ruh_app/lib`, `ruh_app/test`, `ruh-frontend/app/marketplace`, `ruh-frontend/__tests__`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/009-ruh-frontend.md`, `docs/journal/2026-04-01.md`
+- Summary: `Completed the first implementation slice from [[SPEC-marketplace-store-parity]] using the backend marketplace endpoints that already exist today. `ruh-frontend` now has a real `/marketplace/[slug]` detail route backed by `/api/marketplace/listings/:slug`, authenticated install CTA state based on `/api/marketplace/my/installs`, and tested catalog links. `ruh_app` no longer uses the dummy store: it now ships real marketplace listing/detail models, service + provider layers for `/api/marketplace/listings`, a `/marketplace/:slug` detail route, and a live install action with focused service/widget coverage.`
+- Next step: `Start the next marketplace slice from [[SPEC-marketplace-store-parity]] and [[SPEC-app-access-and-org-marketplace]]: replace legacy per-user install CTA state with org-owned entitlement/assignment and a truthful post-install “use agent” handoff into customer-visible inventory.`
+- Blockers: `None for this slice. Remaining work is structural backend/product work, not a broken test harness.`
+
+### TASK-2026-03-31-15: Replace the builder marketplace dead-end with a real forwarder
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(platform)/marketplace/page.tsx`, `agent-builder-ui/lib/utils/marketplace-url.ts`, `agent-builder-ui/lib/utils/marketplace-url.test.ts`, `agent-builder-ui/.env.example`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/journal/2026-03-31.md`
+- Summary: `Reproduced the reported "Marketplace is not available here yet" screen and confirmed it came from the builder app's stale-bookmark placeholder route, not the actual customer marketplace. Replaced that dead-end with a small forwarding surface that points builders toward the real marketplace destination, added tested destination-resolution logic with a local-dev fallback to `http://localhost:3000/marketplace`, and documented the new optional `NEXT_PUBLIC_MARKETPLACE_URL` env for explicit wiring.`
+- Next step: `Start the first real store-parity slice from [[SPEC-marketplace-store-parity]]: make the customer marketplace itself truthful with real detail routes and CTA states instead of only fixing builder forwarding.`
+- Blockers: `The customer web marketplace on the local `ruh-frontend` dev server still needs its own verification pass; the builder fix removes the dead-end, but it does not make the customer marketplace feature-complete.`
+
+### TASK-2026-03-31-14: Research store parity for Flutter marketplace and Sarah-style agent pages
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh_app/lib`, `packages/marketplace-ui`, `ruh-backend/src`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs`
+- Summary: `Completed a repo-plus-live-reference gap analysis for store parity. The findings are now captured in [[SPEC-marketplace-store-parity]] and [[LEARNING-2026-03-31-store-marketplace-reference-contract]]: Flutter is mock-only, customer web is browse-only, the shared marketplace package is still install/uninstall based, backend marketplace data is agent-only plus per-user installs, and customer inventory still depends on builder-only `/api/agents`. The recommended path is a typed catalog plus org-entitlement, assignment, and post-purchase launch flow aligned with [[SPEC-app-access-and-org-marketplace]].`
+- Next step: `Execute [[SPEC-marketplace-store-parity]] as vertical slices, starting with real agent catalog/detail/CTA parity and a truthful customer inventory handoff instead of the current mock and legacy install flow.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-13: Fix agent-builder redirect loop around marketplace route
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `agent-builder-ui/middleware.ts`, `agent-builder-ui/lib/auth`, `agent-builder-ui/components/auth`, `agent-builder-ui/app/(platform)`, `agent-builder-ui/tests`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/journal/2026-03-31.md`
+- Summary: `Traced the reported "marketplace loop" back to a broader builder route-contract gap. The builder auth/session gate would redirect authenticated users into any `redirect_url` starting with `/`, even when the target was not a real builder route, and the workspace still contained stale route targets (`/activity`, `/settings`) with no matching pages. I fixed the loop at both layers: `session-guard.ts` now fails closed to `/agents` for invalid or self-referential auth redirect targets, and the missing builder routes now exist as explicit placeholder pages so old bookmarks or stale nav targets resolve to real pages instead of `_not-found` churn.`
+- Next step: `If another loop is reported, capture the exact target URL and compare it against the new route allowlist in `session-guard.ts` before changing middleware again.`
+- Blockers: `Playwright browser tracing was still unavailable because the local Playwright profile was locked by another process, so live verification used HTTP probes against the running builder plus the dev trace and focused route tests.`
+
 > Focus window: through Friday, March 27, 2026, maintainer runs should treat agent creation, Google Ads agent buildout, MCP-backed configuration UX, and creation-loop improvements as the only priority lane. Deployed-chat Manus-parity packages are deferred unless they directly unblock that lane.
+
+### TASK-2026-03-31-11: Prove Flutter desktop login end to end
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh_app/integration_test`, `ruh_app/pubspec.yaml`, `ruh_app/lib`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs/SPEC-app-access-and-org-marketplace.md`, `docs/journal/2026-03-31.md`
+- Summary: `Added a native `integration_test` harness for `ruh_app` and proved the live macOS desktop login path with the real seeded customer-admin credentials. The new `integration_test/login_flow_test.dart` clears any stored token, launches the app, signs in as `admin@globex.test` with `RuhTest123`, and asserts that the app leaves the login screen and reaches the authenticated shell. This replaces the earlier flaky Quartz/AppleScript window automation with deterministic local verification.`
+- Next step: `Extend the same integration-test pattern to the next customer-native slices: onboarding, org switching, and marketplace entitlement/assignment flows.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-12: Seed real local marketplace agents and published listings
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh-backend/src/demoMarketplaceSeed.ts`, `ruh-backend/scripts/seed-demo-marketplace.ts`, `ruh-backend/package.json`, `ruh-backend/tests/integration/demoMarketplaceSeed.test.ts`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/specs/SPEC-local-demo-marketplace-seeding.md`, `docs/journal/2026-03-31.md`
+- Summary: `Added a repeatable local demo marketplace seed so the catalog contains real agent-backed published listings instead of ad hoc/manual state. The new backend seed creates developer-owned `agents` rows plus published `marketplace_listings` for `Inventory Alert Bot` and `Google Ads Optimizer`, adds one review/install per listing so the catalog looks real, exposes a runnable `bun run seed:demo-marketplace` command, and proves idempotency with integration coverage. Sequential local verification confirmed that the public marketplace endpoint returns both listings and that the owning developer account sees its seeded agent and listing through the protected builder APIs.`
+- Next step: `Replace the legacy install path with customer-org purchases, Stripe checkout, and seat assignment so these seeded listings can be bought and assigned through the real marketplace flow.`
+- Blockers: `Playwright browser verification was skipped in this run because the local Playwright browser profile was already locked by another process; API-level verification was used instead.`
+
+### TASK-2026-03-31-10: Simplify seeded local QA password and reseed auth fixtures
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh-backend/src/testUserSeed.ts`, `ruh-backend/tests/integration/testUserSeed.test.ts`, `ruh-backend/scripts/seed-test-users.ts`, `ruh_app/test`, `ruh-frontend/__tests__/pages/LoginPage.test.tsx`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/specs/SPEC-local-test-user-seeding.md`, `docs/journal/2026-03-31.md`
+- Summary: `Changed the default shared local QA password from `RuhTest123!` to `RuhTest123`, added a failing-first integration test that locks the documented default password contract, reseeded the local tenant fixtures, and updated the focused Flutter/web auth tests plus current docs to stop advertising the stale credential. This keeps the seed data valid while removing the punctuation-heavy password that was causing repeated local testing confusion across shell and native-app login checks.`
+- Next step: `Use `RuhTest123` for all currently seeded local accounts. If any app still rejects the new password after reseeding, investigate that client surface specifically rather than the backend credentials.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-09: Add Flutter customer auth flow and test harness
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh_app/lib`, `ruh_app/test`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/014-auth-system.md`, `docs/journal/2026-03-31.md`
+- Summary: `Completed the Flutter customer-auth parity slice in `ruh_app`. The app now has a real `/login` screen, an auth loading route, a Riverpod auth controller that restores bearer-token sessions through `GET /api/auth/me`, fail-closed route redirects based on `appAccess.customer`, and a logout action from Settings. I also replaced the old single smoke test with a focused Flutter harness covering auth service token behavior, auth controller state transitions, redirect resolution, login form submission/errors, and app bootstrap rendering.`
+- Next step: `Use the new native auth/session baseline to start the next org lifecycle slice: self-serve customer onboarding, platform-admin-created org invites, membership acceptance, and active-org switching across `ruh-frontend` and `ruh_app`.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-08: Move marketplace listing ownership to developer-org context
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/marketplaceStore.ts`, `ruh-backend/src/marketplaceRoutes.ts`, `ruh-backend/tests/integration/agentOwnershipAccess.test.ts`, `ruh-backend/tests/integration/marketplaceCrud.test.ts`, `ruh-backend/tests/unit/marketplaceStore.test.ts`, `ruh-backend/tests/contract/marketplaceListings.test.ts`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/016-marketplace.md`, `docs/journal/2026-03-31.md`
+- Summary: `Completed the next marketplace-ownership slice. `marketplace_listings` now carries `owner_org_id`, new listing creation stamps that field from the active developer org, `/api/marketplace/my/listings` resolves through the active developer org instead of `publisher_id`, and same-org teammates can now manage a listing while other developer orgs are denied. Listing creation still remains creator-authorized at the agent layer, and install/purchase behavior is still on the legacy per-user model until org entitlements and Stripe checkout land.`
+- Next step: `Replace the legacy per-user marketplace install model with customer-org entitlements, Stripe checkout sessions/webhooks, seat inventory, and direct member assignment.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-07: Enforce creator-scoped builder agents and publish authorization
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/agentStore.ts`, `ruh-backend/src/auth/builderAccess.ts`, `ruh-backend/src/marketplaceRoutes.ts`, `ruh-backend/tests/integration/agentOwnershipAccess.test.ts`, `ruh-backend/tests/integration/agentCrud.test.ts`, `ruh-backend/tests/unit/agentCreateEndpoints.test.ts`, `ruh-backend/tests/unit/agentCredentialsApp.test.ts`, `ruh-backend/tests/unit/agentPublicReadRoutes.test.ts`, `agent-builder-ui/lib/auth/backend-fetch.ts`, `agent-builder-ui/hooks/use-agents-store.ts`, `agent-builder-ui/hooks/use-forge-sandbox.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/ReproduceDialog.tsx`, `agent-builder-ui/app/(platform)/agents/create/_config/mcp-tool-registry.ts`, `agent-builder-ui/app/(platform)/agents/[id]/deploy/page.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabSkills.tsx`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/016-marketplace.md`, `docs/journal/2026-03-31.md`
+- Summary: `Completed the first ownership-hardening slice for builder agents. Backend `/api/agents*` routes now require auth plus an active developer-org membership, list and mutate only agents created by the current developer user, stamp `created_by`/`org_id` on create, and reject marketplace listing creation when the referenced agent is not owned by the current creator. The builder frontend was then patched to use an authenticated backend fetch helper for the protected agent, forge, skill, deploy-recovery, and credential routes so the stricter backend contract does not break the UI.`
+- Next step: `Move the marketplace model from creator-scoped user listings to developer-org-owned listings and replace the legacy per-user install flow with customer-org entitlements, Stripe checkout, and seat assignment.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-06: Remove deprecated Tauri desktop app path
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `README.md`, `CLAUDE.md`, `agents.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/001-architecture.md`, `docs/knowledge-base/017-desktop-app.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs/SPEC-remove-tauri-desktop-app.md`, `docs/journal/2026-03-31.md`, `ruh-frontend/app/settings/page.tsx`, `ruh-frontend/lib`, `ruh-frontend/types`, `ruh_app/macos/Runner/MainFlutterWindow.swift`, `desktop-app/`
+- Summary: `Removed the deprecated `desktop-app/` Tauri wrapper from the repo to stop competing desktop stories. ruh-frontend no longer carries Tauri-only settings/credential bridges, repo instructions now point native-client work at `ruh_app`, and the KB retains `017-desktop-app` only as a deprecated historical note with a dedicated removal spec.`
+- Next step: `Continue native customer-app work only in `ruh_app`, and keep customer web/native parity centered on `ruh-frontend` + `ruh_app` instead of reintroducing a separate wrapper surface.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-05: Build role-gated app access and org-owned marketplace foundations
+- Status: `active`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/009-ruh-frontend.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/015-admin-panel.md`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs/SPEC-app-access-and-org-marketplace.md`, `docs/plans/2026-03-31-app-access-and-org-marketplace-design.md`, `docs/plans/2026-03-31-app-access-and-org-marketplace.md`, `ruh-backend/src`, `ruh-backend/tests`, `admin-ui`, `agent-builder-ui`, `ruh-frontend`, `ruh_app`
+- Summary: `The app-access slice is now shipped across backend, agent-builder-ui, admin-ui, ruh-frontend, and ruh_app. Backend auth derives explicit `appAccess` plus `activeMembership`, shared middleware accepts bearer or `accessToken` cookie sessions, builder fails closed to developer-org users, admin-ui fails closed to platform admins, ruh-frontend now has a real `/login` page plus customer session gate and credentialed transport, and ruh_app now mirrors the same `appAccess.customer` contract with a native login screen, bearer-token session restore via `/api/auth/me`, guarded GoRouter redirects, and logout from Settings. Live verification fixed local admin and builder auth regressions in ruh-backend (stable dev JWT fallback secrets, non-secure localhost cookies, builder CORS for `ngrok-skip-browser-warning`) and the Flutter package now has a focused auth test harness plus a clean `flutter analyze` pass. A fresh browser-persistence recheck also confirmed that builder login survives a full Chromium close/reopen and that the refresh-token path rehydrates the session even when only `refreshToken` remains.`
+- Next step: `Start the org lifecycle slice: self-serve customer onboarding, platform-admin-created orgs, invitation acceptance, active-org switching, and the same UX parity across ruh-frontend and ruh_app. Keep the local builder env on the fallback path until a real shared IdP/UI is ready.`
+- Blockers: `The current codebase still mixes legacy global roles, localStorage bearer-token fetches, and no-auth local bypasses. Marketplace is still user-install based, and ruh-frontend is still the older sandbox-management surface, so later slices will need structural changes beyond auth gating.`
+
+### TASK-2026-03-31-04: Seed local multi-tenant test users for platform QA
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `docs/knowledge-base/specs/SPEC-local-test-user-seeding.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/005-data-models.md`, `docs/plans/2026-03-31-local-test-user-seeding-design.md`, `docs/plans/2026-03-31-local-test-user-seeding.md`, `ruh-backend/src`, `ruh-backend/scripts`, `ruh-backend/tests`
+- Summary: `Completed the local QA seed-user package. The backend now has an idempotent `seed:test-users` command that creates a full account matrix for platform admin, developer orgs, customer orgs, employees, and a cross-org switcher; focused integration coverage proves the fixture shape and rerun password rotation; and the command was executed successfully against the local database with 10 users, 4 orgs, 10 memberships, and 10 local auth identities present.`
+- Next step: `Use the seeded credentials to validate admin, builder, org-admin, employee, and active-org switching flows across the platform. If the fixture needs org-level installs next, extend the seed package with marketplace entitlements instead of hand-editing DB rows.`
+- Blockers: `None.`
+
+### TASK-2026-03-31-03: Build multi-tenant auth foundations with local login fallback
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `docs/knowledge-base/specs/SPEC-multi-tenant-auth-foundation.md`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/plans/2026-03-31-multi-tenant-auth-foundation-design.md`, `docs/plans/2026-03-31-multi-tenant-auth-foundation.md`, `ruh-backend/src`, `ruh-backend/tests`, `agent-builder-ui/app/(auth)`, `agent-builder-ui/components/auth`, `agent-builder-ui/services`
+- Summary: `Completed the first multi-tenant auth slice. The backend now supports `organizations.kind`, `organization_memberships`, `auth_identities`, and session-level `active_org_id`; auth endpoints return tenant-aware session context and allow org switching; and the builder `/authenticate` page falls back to a local login/register form when no external auth provider is configured so testing can proceed without SSO.`
+- Next step: `Build the next tenant-aware slices: org invitation and active-org switching UX, developer-org ownership in builder publish flows, then customer-org entitlements and employee assignment in ruh-frontend/admin surfaces.`
+- Blockers: `Real external SSO/IdP flows and org-level agent entitlements are still pending by design; this slice only establishes the auth/session foundation and local testing path.`
+
+### TASK-2026-03-31-02: Plan the repo-wide coverage program toward near-100 reliability
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `docs/plans/2026-03-31-coverage-program-design.md`, `docs/plans/2026-03-31-coverage-program.md`, `docs/journal/2026-03-31.md`
+- Summary: `Captured the current repo coverage baseline from fresh LCOV output, documented the main blockers keeping `coverage:all` red, and wrote a multi-phase coverage program that first makes measurement trustworthy, then gets every service green, then pushes the highest-value backend, builder, and frontend modules toward 90-100% coverage without resorting to low-signal metric gaming.`
+- Next step: `Start Phase 0 by isolating Bun coverage from Playwright specs in `agent-builder-ui` and `admin-ui`, then repair the currently red backend, builder, and frontend test suites so `npm run coverage:all` becomes a trustworthy gate again.`
+- Blockers: `Current coverage commands are partially distorted by real red suites and harness issues: `ruh-backend` has broken unit/route coverage, `agent-builder-ui` and `admin-ui` load Playwright specs during Bun coverage, and `ruh-frontend` currently fails Jest's global function threshold.`
+
+### TASK-2026-03-31-01: QA the full create-agent wizard and fix regressions found live
+- Status: `blocked`
+- Owner: `Codex`
+- Started: `2026-03-31`
+- Updated: `2026-03-31`
+- Areas: `TODOS.md`, `scripts/qa-create-agent-wizard.md`, `agent-builder-ui/app/(platform)/agents/create`, `agent-builder-ui/lib/openclaw`, `agent-builder-ui/lib/openclaw/copilot-state.ts`, `agent-builder-ui/lib/openclaw/copilot-state.test.ts`, `ruh-backend`, `docs/knowledge-base/learnings/LEARNING-2026-03-31-copilot-built-skill-hydration.md`, `docs/journal/2026-03-31.md`
+- Summary: `Completed preflight, ran the live `/agents/create` walkthrough through Ship once, and fixed the co-pilot regression where Build returned full `skill_md` content but Review/Ship still showed `0/N skills built` because `builtSkillIds` never populated on the direct forge build path. The store now infers built skills from any returned `skill_md`, and targeted tests + `npx tsc --noEmit` passed. The full rerun is still open because a post-fix hot reload partially rehydrated only the draft identity, not lifecycle progress, and the follow-on plan request hit `/api/openclaw/forge-chat` with a 500.`
+- Next step: `Re-run the create-agent wizard from a clean page load without hot reload state loss, confirm Review/Ship now see the generated skills as built, and then investigate the partial rehydration + forge-chat 500 if they still reproduce.`
+- Blockers: `After the code change, Fast Refresh reset the in-memory wizard state on `/agents/create?agentId=f08ab8f6-cba6-453b-ac8d-9f62e12a1caa`. Reload restored the agent name/description but not lifecycle progress, and a follow-on `Let's Plan` attempt failed with `Forge chat error: 500 {"type":"error","error":"Internal server error"}`, preventing completion of the full 7-stage QA rerun.`
 
 ### TASK-2026-03-30-13: Fail closed when Ship activation is not actually deployable
 - Status: `completed`

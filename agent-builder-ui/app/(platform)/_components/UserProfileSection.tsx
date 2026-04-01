@@ -12,6 +12,8 @@ import { useUserStore } from "@/hooks/use-user";
 import { authApi } from "@/app/api/auth";
 import { loginRoute, settingsRoute } from "@/shared/routes";
 import {
+  Building2,
+  Check,
   ChevronDown,
   ExternalLink,
   LifeBuoy,
@@ -38,6 +40,7 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
   const { user } = useUserStore();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [switchingOrganizationId, setSwitchingOrganizationId] = useState<string | null>(null);
 
   // Derive display values from user store
   const userName = user?.fullName || "User";
@@ -48,6 +51,13 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
     .join("")
     .toUpperCase()
     .slice(0, 2);
+  const developerMemberships =
+    user?.memberships?.filter(
+      (membership) =>
+        membership.organizationKind === "developer" &&
+        membership.status === "active" &&
+        (membership.role === "owner" || membership.role === "developer")
+    ) ?? [];
 
   const handleManageAccount = () => {
     onClose?.();
@@ -71,6 +81,27 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
       router.push(loginRoute);
     } finally {
       setIsLoggingOut(false);
+      onClose?.();
+    }
+  };
+
+  const handleSwitchOrganization = async (organizationId: string) => {
+    if (!organizationId || organizationId === user?.activeOrganization?.id) {
+      return;
+    }
+
+    setSwitchingOrganizationId(organizationId);
+    try {
+      await authApi.switchOrganization(organizationId);
+      toast.success("Active organization updated");
+      router.refresh();
+    } catch (error) {
+      console.error("Organization switch error:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not switch organization"
+      );
+    } finally {
+      setSwitchingOrganizationId(null);
       onClose?.();
     }
   };
@@ -161,6 +192,43 @@ export const UserProfileSection: React.FC<UserProfileSectionProps> = ({
           </DropdownMenuItem>
 
           <DropdownMenuSeparator className="my-0" />
+
+          {developerMemberships.length > 1 ? (
+            <>
+              <div className="px-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-text-tertiary">
+                Developer Org
+              </div>
+              {developerMemberships.map((membership) => {
+                const isActive =
+                  membership.organizationId === user?.activeOrganization?.id;
+                const isSwitching =
+                  switchingOrganizationId === membership.organizationId;
+
+                return (
+                  <DropdownMenuItem
+                    key={membership.organizationId}
+                    disabled={isSwitching}
+                    onClick={() =>
+                      handleSwitchOrganization(membership.organizationId)
+                    }
+                    className="flex items-center gap-2.5 px-1.5 h-8 py-0! cursor-pointer rounded-lg hover:bg-background-muted"
+                  >
+                    {isSwitching ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-text-primary" />
+                    ) : isActive ? (
+                      <Check className="h-4 w-4 text-brand-primary" />
+                    ) : (
+                      <Building2 className="h-4 w-4 text-text-primary" />
+                    )}
+                    <span className="text-sm text-text-secondary">
+                      {membership.organizationName}
+                    </span>
+                  </DropdownMenuItem>
+                );
+              })}
+              <DropdownMenuSeparator className="my-0" />
+            </>
+          ) : null}
 
           <DropdownMenuItem
             onClick={handleHelp}

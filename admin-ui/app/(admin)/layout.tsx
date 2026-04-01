@@ -2,6 +2,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Users, Bot, Store, Activity, LogOut } from "lucide-react";
+import { AdminSessionGate } from "@/app/_components/AdminSessionGate";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -15,7 +18,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
 
   return (
-    <div className="flex h-screen">
+    <AdminSessionGate>
+      <div className="flex h-screen">
       {/* Sidebar */}
       <aside className="w-56 shrink-0 bg-[var(--card-color)] border-r border-[var(--border-default)] flex flex-col">
         <div className="px-5 py-4 border-b border-[var(--border-default)]">
@@ -44,9 +48,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </nav>
         <div className="px-3 py-3 border-t border-[var(--border-default)]">
           <button
-            onClick={() => {
-              localStorage.removeItem("accessToken");
-              window.location.href = "/login";
+            onClick={async () => {
+              try {
+                await fetch(`${API_URL}/api/auth/logout`, {
+                  method: "POST",
+                  credentials: "include",
+                });
+              } finally {
+                window.location.href = "/login";
+              }
             }}
             className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-[var(--text-tertiary)] hover:text-[var(--error)] hover:bg-[var(--error)]/5 transition-colors w-full"
           >
@@ -61,6 +71,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           {children}
         </div>
       </main>
-    </div>
+      </div>
+    </AdminSessionGate>
   );
 }

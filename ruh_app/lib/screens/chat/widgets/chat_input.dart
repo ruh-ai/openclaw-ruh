@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../../../config/responsive.dart';
 import '../../../config/theme.dart';
+import '../../../widgets/alive_animations.dart';
 
 /// Available LLM model options for the chat model selector.
 const List<_ModelOption> _modelOptions = [
@@ -28,11 +30,7 @@ class ChatInput extends StatefulWidget {
   final void Function(String text, String? model) onSend;
   final bool isStreaming;
 
-  const ChatInput({
-    super.key,
-    required this.onSend,
-    this.isStreaming = false,
-  });
+  const ChatInput({super.key, required this.onSend, this.isStreaming = false});
 
   @override
   State<ChatInput> createState() => _ChatInputState();
@@ -62,15 +60,13 @@ class _ChatInputState extends State<ChatInput> {
 
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.sizeOf(context).width > 800;
+    final isDesktop = MediaQuery.sizeOf(context).width >= Breakpoints.tablet;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(
-          top: BorderSide(color: RuhTheme.borderMuted),
-        ),
+        border: Border(top: BorderSide(color: RuhTheme.borderMuted)),
       ),
       child: SafeArea(
         top: false,
@@ -99,17 +95,19 @@ class _ChatInputState extends State<ChatInput> {
                       padding: const EdgeInsets.only(right: 4),
                       child: InkWell(
                         onTap: () => setState(() => _selectedModel = opt.id),
-                        borderRadius:
-                            BorderRadius.circular(RuhTheme.radiusSm),
+                        borderRadius: BorderRadius.circular(RuhTheme.radiusSm),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? RuhTheme.primary.withValues(alpha: 0.1)
                                 : Colors.transparent,
-                            borderRadius:
-                                BorderRadius.circular(RuhTheme.radiusSm),
+                            borderRadius: BorderRadius.circular(
+                              RuhTheme.radiusSm,
+                            ),
                             border: Border.all(
                               color: isSelected
                                   ? RuhTheme.primary.withValues(alpha: 0.3)
@@ -142,55 +140,66 @@ class _ChatInputState extends State<ChatInput> {
               children: [
                 // -- Text field --
                 Expanded(
-                  child: KeyboardListener(
-                    focusNode: FocusNode(), // wrapper for key events
-                    onKeyEvent: isDesktop
-                        ? (event) {
-                            if (event is KeyDownEvent &&
-                                event.logicalKey ==
-                                    LogicalKeyboardKey.enter &&
-                                !HardwareKeyboard.instance.isShiftPressed) {
-                              _send();
+                  child: BreathingFocus(
+                    child: KeyboardListener(
+                      focusNode: FocusNode(), // wrapper for key events
+                      onKeyEvent: isDesktop
+                          ? (event) {
+                              if (event is KeyDownEvent &&
+                                  event.logicalKey ==
+                                      LogicalKeyboardKey.enter &&
+                                  !HardwareKeyboard.instance.isShiftPressed) {
+                                _send();
+                              }
                             }
-                          }
-                        : null,
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: _focusNode,
-                      maxLines: 5,
-                      minLines: 1,
-                      textInputAction: isDesktop
-                          ? TextInputAction.none
-                          : TextInputAction.newline,
-                      enabled: !widget.isStreaming,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        hintText: widget.isStreaming
-                            ? 'Waiting for response...'
-                            : 'Message your agent...',
-                        hintStyle: TextStyle(color: RuhTheme.textTertiary),
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius:
-                              BorderRadius.circular(RuhTheme.radiusXxl),
-                          borderSide: const BorderSide(
-                              color: RuhTheme.borderDefault),
+                          : null,
+                      child: TextField(
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        maxLines: 5,
+                        minLines: 1,
+                        textInputAction: isDesktop
+                            ? TextInputAction.none
+                            : TextInputAction.newline,
+                        enabled: !widget.isStreaming,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          hintText: widget.isStreaming
+                              ? 'Waiting for response...'
+                              : 'Message your agent...',
+                          hintStyle: TextStyle(color: RuhTheme.textTertiary),
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(
+                              RuhTheme.radiusXxl,
+                            ),
+                            borderSide: const BorderSide(
+                              color: RuhTheme.borderDefault,
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(
+                              RuhTheme.radiusXxl,
+                            ),
+                            borderSide: const BorderSide(
+                              color: RuhTheme.borderDefault,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(
+                              RuhTheme.radiusXxl,
+                            ),
+                            borderSide: const BorderSide(
+                              color: RuhTheme.primary,
+                              width: 1.5,
+                            ),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
                         ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius:
-                              BorderRadius.circular(RuhTheme.radiusXxl),
-                          borderSide: const BorderSide(
-                              color: RuhTheme.borderDefault),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius:
-                              BorderRadius.circular(RuhTheme.radiusXxl),
-                          borderSide: const BorderSide(
-                              color: RuhTheme.primary, width: 1.5),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 12),
                       ),
                     ),
                   ),
@@ -233,11 +242,7 @@ class _SendButton extends StatelessWidget {
         ),
         child: IconButton(
           onPressed: onPressed,
-          icon: const Icon(
-            LucideIcons.arrowUp,
-            color: Colors.white,
-            size: 20,
-          ),
+          icon: const Icon(LucideIcons.arrowUp, color: Colors.white, size: 20),
           padding: EdgeInsets.zero,
           tooltip: 'Send',
         ),

@@ -1,17 +1,19 @@
 /**
  * POST /api/openclaw/github-export
  *
- * Exports an agent's workspace template to a GitHub repository.
- * Creates or updates the repo with SOUL.md, skills, and config files.
+ * Exports an agent's workspace template to a GitHub repository
+ * using the locally authenticated `gh` CLI instead of a user-provided PAT.
  *
- * Requires a GitHub Personal Access Token (PAT) with `repo` scope.
+ * Requires `gh` CLI installed and authenticated on the server.
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { execSync } from "child_process";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 interface GitHubExportRequest {
-  /** GitHub PAT with repo scope */
-  githubToken: string;
   /** Target repo in "owner/repo" format. Created if it doesn't exist. */
   repo: string;
   /** Agent name (used for commit message and repo description) */
@@ -34,147 +36,33 @@ interface GitHubExportResult {
   error: string | null;
 }
 
-async function githubApi(
-  path: string,
-  token: string,
-  options: RequestInit = {},
-): Promise<Response> {
-  return fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github.v3+json",
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+function run(cmd: string, cwd?: string): string {
+  return execSync(cmd, {
+    cwd,
+    encoding: "utf-8",
+    timeout: 30_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  }).trim();
 }
 
-async function ensureRepo(
-  owner: string,
-  repo: string,
-  token: string,
-  description: string,
-): Promise<{ created: boolean; error?: string }> {
-  // Check if repo exists
-  const check = await githubApi(`/repos/${owner}/${repo}`, token);
-  if (check.ok) return { created: false };
-
-  // Try to create it
-  const create = await githubApi("/user/repos", token, {
-    method: "POST",
-    body: JSON.stringify({
-      name: repo,
-      description,
-      private: true,
-      auto_init: true,
-    }),
-  });
-
-  if (create.ok || create.status === 422) {
-    // 422 = already exists (race condition), that's fine
-    return { created: create.ok };
+function runSafe(cmd: string, cwd?: string): { ok: boolean; out: string } {
+  try {
+    return { ok: true, out: run(cmd, cwd) };
+  } catch (err) {
+    const message = err instanceof Error ? (err as Error & { stderr?: string }).stderr || err.message : String(err);
+    return { ok: false, out: message };
   }
-
-  const errBody = await create.json().catch(() => ({}));
-  return {
-    created: false,
-    error: (errBody as Record<string, string>).message ?? `GitHub API returned ${create.status}`,
-  };
-}
-
-async function getDefaultBranch(
-  owner: string,
-  repo: string,
-  token: string,
-): Promise<string> {
-  const res = await githubApi(`/repos/${owner}/${repo}`, token);
-  if (!res.ok) return "main";
-  const data = (await res.json()) as { default_branch?: string };
-  return data.default_branch ?? "main";
-}
-
-async function getLatestCommitSha(
-  owner: string,
-  repo: string,
-  branch: string,
-  token: string,
-): Promise<string | null> {
-  const res = await githubApi(`/repos/${owner}/${repo}/git/ref/heads/${branch}`, token);
-  if (!res.ok) return null;
-  const data = (await res.json()) as { object?: { sha?: string } };
-  return data.object?.sha ?? null;
-}
-
-async function createTree(
-  owner: string,
-  repo: string,
-  token: string,
-  baseTreeSha: string | null,
-  files: Array<{ path: string; content: string }>,
-): Promise<string | null> {
-  const tree = files.map((f) => ({
-    path: f.path,
-    mode: "100644" as const,
-    type: "blob" as const,
-    content: f.content,
-  }));
-
-  const res = await githubApi(`/repos/${owner}/${repo}/git/trees`, token, {
-    method: "POST",
-    body: JSON.stringify({
-      base_tree: baseTreeSha,
-      tree,
-    }),
-  });
-
-  if (!res.ok) return null;
-  const data = (await res.json()) as { sha?: string };
-  return data.sha ?? null;
-}
-
-async function createCommit(
-  owner: string,
-  repo: string,
-  token: string,
-  message: string,
-  treeSha: string,
-  parentSha: string | null,
-): Promise<string | null> {
-  const body: Record<string, unknown> = { message, tree: treeSha };
-  if (parentSha) body.parents = [parentSha];
-
-  const res = await githubApi(`/repos/${owner}/${repo}/git/commits`, token, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) return null;
-  const data = (await res.json()) as { sha?: string };
-  return data.sha ?? null;
-}
-
-async function updateRef(
-  owner: string,
-  repo: string,
-  branch: string,
-  token: string,
-  sha: string,
-): Promise<boolean> {
-  const res = await githubApi(`/repos/${owner}/${repo}/git/refs/heads/${branch}`, token, {
-    method: "PATCH",
-    body: JSON.stringify({ sha }),
-  });
-  return res.ok;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportResult>> {
+  let tempDir: string | null = null;
+
   try {
     const body = (await req.json()) as GitHubExportRequest;
 
-    if (!body.githubToken || !body.repo || !body.soulContent) {
+    if (!body.repo || !body.soulContent) {
       return NextResponse.json(
-        { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: "Missing required fields: githubToken, repo, soulContent" },
+        { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: "Missing required fields: repo, soulContent" },
         { status: 400 },
       );
     }
@@ -187,31 +75,41 @@ export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportR
       );
     }
 
-    // 1. Ensure repo exists
-    const ensureResult = await ensureRepo(
-      owner,
-      repoName,
-      body.githubToken,
-      `${body.agentName} — AI agent template built with Ruh.ai`,
-    );
-    if (ensureResult.error) {
+    // Verify gh CLI is available and authenticated
+    const ghCheck = runSafe("gh auth status");
+    if (!ghCheck.ok) {
       return NextResponse.json(
-        { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: `Failed to create repo: ${ensureResult.error}` },
-        { status: 502 },
+        { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: "gh CLI is not authenticated. Run `gh auth login` first." },
+        { status: 500 },
       );
     }
 
-    // 2. Get default branch and latest commit
-    const branch = await getDefaultBranch(owner, repoName, body.githubToken);
-    const parentSha = await getLatestCommitSha(owner, repoName, branch, body.githubToken);
-
-    // If newly created repo, wait briefly for GitHub to initialize
-    if (ensureResult.created && !parentSha) {
-      await new Promise((r) => setTimeout(r, 2000));
+    // 1. Ensure repo exists (create if not)
+    const repoCheck = runSafe(`gh repo view ${owner}/${repoName} --json name`);
+    if (!repoCheck.ok) {
+      const create = runSafe(
+        `gh repo create ${owner}/${repoName} --private --description "${body.agentName} — AI agent template built with Ruh.ai" --clone=false`,
+      );
+      if (!create.ok) {
+        return NextResponse.json(
+          { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: `Failed to create repo: ${create.out}` },
+          { status: 502 },
+        );
+      }
     }
-    const finalParentSha = parentSha ?? await getLatestCommitSha(owner, repoName, branch, body.githubToken);
 
-    // 3. Build file tree
+    // 2. Clone the repo (or init if empty)
+    tempDir = mkdtempSync(join(tmpdir(), "ruh-agent-export-"));
+    const cloneResult = runSafe(`gh repo clone ${owner}/${repoName} "${tempDir}" -- --depth=1`);
+
+    if (!cloneResult.ok) {
+      // Repo might be empty (no commits yet) — init manually
+      run(`git init "${tempDir}"`);
+      run(`git remote add origin https://github.com/${owner}/${repoName}.git`, tempDir);
+      run("git checkout -b main", tempDir);
+    }
+
+    // 3. Write agent files
     const files: Array<{ path: string; content: string }> = [
       { path: "SOUL.md", content: body.soulContent },
     ];
@@ -227,7 +125,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportR
       }
     }
 
-    // Add a README
+    // Auto-generated README
     files.push({
       path: "README.md",
       content: [
@@ -249,47 +147,47 @@ export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportR
       ].join("\n"),
     });
 
-    // 4. Create tree
-    const baseTreeSha = finalParentSha
-      ? await (async () => {
-          const res = await githubApi(`/repos/${owner}/${repoName}/git/commits/${finalParentSha}`, body.githubToken);
-          if (!res.ok) return null;
-          const data = (await res.json()) as { tree?: { sha?: string } };
-          return data.tree?.sha ?? null;
-        })()
-      : null;
-
-    const treeSha = await createTree(owner, repoName, body.githubToken, baseTreeSha, files);
-    if (!treeSha) {
-      return NextResponse.json(
-        { ok: false, repoUrl: `https://github.com/${owner}/${repoName}`, commitSha: null, filesPushed: 0, error: "Failed to create git tree" },
-        { status: 502 },
-      );
+    // Write all files to the temp directory
+    for (const file of files) {
+      const fullPath = join(tempDir, file.path);
+      const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(fullPath, file.content, "utf-8");
     }
 
-    // 5. Create commit
+    // 4. Git add, commit, push
+    run("git add -A", tempDir);
+
+    const statusCheck = runSafe("git diff --cached --quiet", tempDir);
+    if (statusCheck.ok) {
+      // Nothing changed — still return success
+      return NextResponse.json({
+        ok: true,
+        repoUrl: `https://github.com/${owner}/${repoName}`,
+        commitSha: null,
+        filesPushed: 0,
+        error: null,
+      });
+    }
+
     const commitMessage = body.commitMessage ?? `ship: ${body.agentName} agent template`;
-    const commitSha = await createCommit(owner, repoName, body.githubToken, commitMessage, treeSha, finalParentSha);
-    if (!commitSha) {
+    run(`git commit -m "${commitMessage}"`, tempDir);
+
+    // Push using gh-authenticated git
+    const pushResult = runSafe("git push -u origin HEAD", tempDir);
+    if (!pushResult.ok) {
       return NextResponse.json(
-        { ok: false, repoUrl: `https://github.com/${owner}/${repoName}`, commitSha: null, filesPushed: 0, error: "Failed to create commit" },
+        { ok: false, repoUrl: `https://github.com/${owner}/${repoName}`, commitSha: null, filesPushed: files.length, error: `Push failed: ${pushResult.out}` },
         { status: 502 },
       );
     }
 
-    // 6. Update branch ref
-    const updated = await updateRef(owner, repoName, branch, body.githubToken, commitSha);
-    if (!updated) {
-      return NextResponse.json(
-        { ok: false, repoUrl: `https://github.com/${owner}/${repoName}`, commitSha, filesPushed: files.length, error: "Commit created but failed to update branch ref" },
-        { status: 502 },
-      );
-    }
+    const commitSha = runSafe("git rev-parse HEAD", tempDir);
 
     return NextResponse.json({
       ok: true,
       repoUrl: `https://github.com/${owner}/${repoName}`,
-      commitSha,
+      commitSha: commitSha.ok ? commitSha.out : null,
       filesPushed: files.length,
       error: null,
     });
@@ -299,5 +197,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportR
       { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: message },
       { status: 500 },
     );
+  } finally {
+    // Cleanup temp directory
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup
+      }
+    }
   }
 }

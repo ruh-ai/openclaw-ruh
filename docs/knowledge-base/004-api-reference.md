@@ -349,10 +349,20 @@ Known unavailable states return `409`:
 ## Agents
 
 ### `GET /api/agents`
-List persisted agents.
+List persisted agents visible in the current active-org context.
+
+Auth/ownership contract:
+- requires auth
+- with an active developer org, returns builder agents whose `created_by` matches the current user
+- with an active customer org, returns installed runtime agents whose `created_by` matches the current user inside that tenant
 
 ### `POST /api/agents`
-Create a persisted agent record.
+Create a persisted agent record for the authenticated developer user.
+
+Auth/ownership contract:
+- requires auth
+- requires an active developer-org membership
+- backend stamps `created_by` from the current user and `org_id` from the active developer org
 
 **Body:**
 ```json
@@ -433,7 +443,7 @@ Validation contract for the first shared-validation slice:
 - `toolConnections[]` currently accept only `toolId`, `name`, `description`, `status`, `authKind`, `connectorType`, and `configSummary`; the richer `researchPlan` object described in specs has not landed on the backend validator/store path yet
 
 ### `GET /api/agents/:id`
-Get one persisted agent.
+Get one persisted agent owned by the authenticated developer user.
 
 Agent payloads may also include `workspace_memory`:
 
@@ -450,7 +460,7 @@ Tool-connection read paths are metadata-only in the current slice. This route mu
 Runtime-input read paths are separate from credentials: ordinary agent reads may return saved non-secret values such as `GOOGLE_ADS_CUSTOMER_ID`, but OAuth secrets and API keys remain available only through the credential summary/write routes.
 
 ### `PATCH /api/agents/:id`
-Patch agent metadata.
+Patch agent metadata for an agent owned by the authenticated developer user.
 
 Validation contract:
 - Body must be an object containing at least one of `name`, `avatar`, `description`, `skills`, `triggerLabel`, or `status`
@@ -460,7 +470,7 @@ Validation contract:
 - `status`, when present, may only be `active` or `draft`
 
 ### `PATCH /api/agents/:id/config`
-Patch persisted config fields such as `skillGraph`, `workflow`, `agentRules`, `runtimeInputs`, `toolConnections`, `triggers`, `improvements`, `channels`, and `discoveryDocuments`.
+Patch persisted config fields such as `skillGraph`, `workflow`, `agentRules`, `runtimeInputs`, `toolConnections`, `triggers`, `improvements`, `channels`, and `discoveryDocuments` for an agent owned by the authenticated developer user.
 
 Validation contract:
 - Body must be an object containing at least one of `skillGraph`, `workflow`, `agentRules`, `runtimeInputs`, `toolConnections`, `triggers`, `improvements`, `channels`, or `discoveryDocuments`
@@ -483,6 +493,7 @@ Return saved credential summary for one persisted agent.
 ```
 
 This route is summary-only. It exists so `/tools`, `/agents/create`, and Improve Agent can reconcile safe connector state without ever reading plaintext secrets back into the browser.
+It requires auth and the same creator ownership as the main builder agent routes.
 
 ### `PUT /api/agents/:id/credentials/:toolId`
 Store one encrypted credential envelope for a saved agent tool connection.
@@ -503,6 +514,7 @@ Validation contract:
 - the route encrypts the payload before persistence and returns only `{ ok, toolId }`
 
 This route is used by the fail-closed connector handoff for saved agents and for the first post-create credential commit after a new agent receives its id.
+It requires auth and the same creator ownership as the main builder agent routes.
 
 ### `DELETE /api/agents/:id/credentials/:toolId`
 Delete one saved credential envelope for a persisted agent tool connection.
@@ -510,6 +522,7 @@ Delete one saved credential envelope for a persisted agent tool connection.
 **Response:** `{ "ok": true, "toolId": "google-ads" }`
 
 This route is paired with metadata updates so disconnect flows can remove both the secret material and the configured-state claim together.
+It requires auth and the same creator ownership as the main builder agent routes.
 
 ### `GET /api/skills`
 Read the current builder-visible skill registry.
@@ -543,11 +556,13 @@ Attach a sandbox to an existing agent.
 Validation contract:
 - `sandbox_id` is required and must be a non-empty string
 - Unknown top-level keys are rejected with `422`
+- route requires auth and creator ownership of the target agent
 
 ### `DELETE /api/agents/:id/sandbox/:sandbox_id`
 Detach a sandbox from an agent and best-effort remove the Docker container.
 
 Successful responses return the updated redacted `AgentRecord`.
+Route requires auth and creator ownership of the target agent.
 
 ### `POST /api/agents/bulk-delete`
 Delete multiple agents in one request.
@@ -563,8 +578,12 @@ Delete multiple agents in one request.
 }
 ```
 
+The route requires auth plus an active developer-org membership and only deletes ids owned by the current creator.
+
 ### `DELETE /api/agents/:id`
 Delete a persisted agent.
+
+Route requires auth and creator ownership of the target agent.
 
 ### `GET /api/agents/:id/workspace-memory`
 Get the normalized workspace-memory payload for one persisted agent.
@@ -600,9 +619,12 @@ Validation contract:
 - absolute paths, traversal, or malformed pinned paths are rejected with `422`
 
 Successful deletes now emit an `agent.delete` control-plane audit event.
+Both workspace-memory routes require auth and creator ownership of the target agent.
 
 ### `POST /api/agents/:id/forge`
 Start or reuse the per-agent forge sandbox flow.
+
+Route requires auth, an active developer-org membership, and creator ownership of the target agent.
 
 **Response:**
 - `{ "forge_sandbox_id": "...", "status": "ready", "sandbox": SandboxRecord }` when a running forge sandbox already exists
@@ -610,6 +632,8 @@ Start or reuse the per-agent forge sandbox flow.
 
 ### `GET /api/agents/:id/forge/stream/:stream_id`
 SSE stream for forge sandbox creation. Event contract matches sandbox creation (`log`, `result`, `approved`, `error`, `done`) and adds `forge_agent_id` on success events.
+
+Route requires auth, an active developer-org membership, and creator ownership of the target agent.
 
 ### `GET /api/agents/:id/forge/status`
 Return forge sandbox status for one agent.
@@ -628,6 +652,8 @@ Return forge sandbox status for one agent.
 
 ### `POST /api/agents/:id/forge/promote`
 Promote the forge sandbox to the agent's active production sandbox, clear `forge_sandbox_id`, and mark the agent `active`.
+
+Route requires auth, an active developer-org membership, and creator ownership of the target agent.
 
 ---
 
@@ -1321,8 +1347,26 @@ See [[014-auth-system]] for the full auth contract.
 | POST | `/api/auth/login` | Public | Login → tokens |
 | POST | `/api/auth/refresh` | Public (cookie) | Rotate tokens |
 | POST | `/api/auth/logout` | Required | Invalidate sessions |
+| POST | `/api/auth/switch-org` | Required | Switch the active organization for the current refresh session |
 | GET | `/api/auth/me` | Required | Current user |
 | PATCH | `/api/auth/me` | Required | Update profile |
+
+Auth responses are now tenant-aware. `register`, `login`, `refresh`, `switch-org`, and `me` may include:
+- `platformRole` — `platform_admin` or `user`
+- `memberships[]` — tenant memberships with org metadata and membership role
+- `activeMembership` — the membership matching the session's current active organization, or `null`
+- `activeOrganization` — the current session org context
+- `appAccess` — `{ admin, builder, customer }` booleans that define which first-party apps this session may enter
+
+For routes protected by backend auth middleware, callers can authenticate with either:
+- `Authorization: Bearer <access-token>`
+- the `accessToken` httpOnly cookie
+
+`POST /api/auth/register` also accepts optional local-bootstrap fields for development and testing:
+- `organizationName`
+- `organizationSlug`
+- `organizationKind`
+- `membershipRole`
 
 ---
 
@@ -1348,17 +1392,24 @@ See [[016-marketplace]] for the full marketplace contract.
 |--------|------|------|---------|
 | GET | `/api/marketplace/listings` | Public | Browse |
 | GET | `/api/marketplace/listings/:slug` | Public | Detail |
-| POST | `/api/marketplace/listings` | Developer | Create |
-| PATCH | `/api/marketplace/listings/:id` | Owner | Update |
-| POST | `/api/marketplace/listings/:id/submit` | Owner | Submit for review |
+| POST | `/api/marketplace/listings` | Developer org | Create |
+| PATCH | `/api/marketplace/listings/:id` | Owner org | Update |
+| POST | `/api/marketplace/listings/:id/submit` | Owner org | Submit for review |
 | POST | `/api/marketplace/listings/:id/review` | Admin | Approve/reject |
 | GET | `/api/marketplace/listings/:id/reviews` | Public | List reviews |
 | POST | `/api/marketplace/listings/:id/reviews` | Auth | Add review |
-| POST | `/api/marketplace/listings/:id/install` | Auth | Install |
-| DELETE | `/api/marketplace/listings/:id/install` | Auth | Uninstall |
-| GET | `/api/marketplace/my/installs` | Auth | My installs |
-| GET | `/api/marketplace/my/listings` | Developer | My listings |
+| POST | `/api/marketplace/listings/:id/install` | Customer org | Install into a personal runtime agent for the active customer org/user |
+| DELETE | `/api/marketplace/listings/:id/install` | Customer org | Remove the active customer-org/user runtime install |
+| GET | `/api/marketplace/my/installs` | Customer org | My installed listing ids in the active customer org |
+| GET | `/api/marketplace/my/installed-listings` | Customer org | Installed listing metadata plus runtime `agentId` for workspace handoff |
+| GET | `/api/marketplace/my/listings` | Developer org | Listings owned by the active developer org |
 | GET | `/api/marketplace/categories` | Public | Categories |
+
+Current ownership contract:
+- listing creation requires auth plus an active developer-org membership
+- creation still requires the current user to be the creator of the referenced agent
+- new listings are stamped with `ownerOrgId` from the active developer org
+- update/submit/my-listings resolve ownership through `ownerOrgId`, with `publisherId` as a legacy fallback for older rows
 
 ---
 
@@ -1388,3 +1439,12 @@ See [[016-marketplace]] for the full marketplace contract.
 - [[SPEC-agent-readable-system-events]] — defines the new system-event read routes and the event-emission contract for backend lifecycle/runtime history
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — documents the read-only `/api/skills` registry surface and the builder-facing skill-availability contract
 - [[SPEC-agent-webhook-trigger-runtime]] — signed inbound webhook runtime now provisions safe trigger metadata during config apply and exposes the public delivery route
+- [[SPEC-multi-tenant-auth-foundation]] — expands auth endpoints with tenant-aware session context and org switching while preserving local login for testing
+### `POST /api/agents/:id/launch`
+Provision and configure a customer runtime agent's sandbox on first open.
+
+Auth/ownership contract:
+- requires auth
+- requires an active customer-org membership
+- only launches agents whose `created_by` matches the current user inside the active customer org
+- returns the updated agent plus the provisioned `sandboxId`

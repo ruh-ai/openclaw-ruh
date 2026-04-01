@@ -594,7 +594,7 @@ export async function restartGateway(containerName: string): Promise<void> {
   await Bun.sleep(2000);
   await dockerExec(
     containerName,
-    `nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
+    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
     10_000,
   );
 }
@@ -1199,9 +1199,11 @@ export async function* createOpenclawSandbox(
 
   const gatewayAllowedOrigins = [
     'http://localhost',
+    'https://localhost',
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:80',
+    'http://localhost:8000',
   ];
   const gatewayTrustedProxies = ['127.0.0.1', '172.0.0.0/8', '10.0.0.0/8'];
   const requiredBootstrapSteps: BootstrapCommandStep[] = [
@@ -1357,7 +1359,7 @@ export async function* createOpenclawSandbox(
     yield ['log', 'Gateway token retrieved'];
   } else {
     yield await failCreate(
-      `Required bootstrap step failed (gateway.auth.token): ${truncateBootstrapDiagnostic(tokenOut)}`,
+      `Required bootstrap step failed (gateway.auth.token): ${truncateBootstrapDiagnostic(deviceTokenOut)}`,
     );
     return;
   }
@@ -1383,7 +1385,7 @@ export async function* createOpenclawSandbox(
   yield ['log', 'Starting OpenClaw gateway...'];
   await run('openclaw gateway stop 2>/dev/null || true');
   const [gatewayStartOk, gatewayStartOut] = await run(
-    `DISPLAY=:99 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
+    `DISPLAY=:99 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
   );
   if (!gatewayStartOk) {
     yield await failCreate(

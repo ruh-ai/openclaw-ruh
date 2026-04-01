@@ -4,8 +4,8 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../../config/theme.dart';
 import '../../../models/agent.dart';
-import '../../../models/sandbox.dart';
 import '../../../providers/agent_provider.dart';
+import '../../../providers/sandbox_health_provider.dart';
 
 /// Mission control dashboard showing agent status, skills, rules, and memory.
 class TabMissionControl extends ConsumerStatefulWidget {
@@ -23,41 +23,6 @@ class TabMissionControl extends ConsumerStatefulWidget {
 }
 
 class _TabMissionControlState extends ConsumerState<TabMissionControl> {
-  SandboxHealth? _health;
-  bool _healthLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadHealth();
-  }
-
-  @override
-  void didUpdateWidget(TabMissionControl oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.sandboxId != widget.sandboxId) {
-      _loadHealth();
-    }
-  }
-
-  Future<void> _loadHealth() async {
-    if (widget.sandboxId == null) return;
-
-    setState(() => _healthLoading = true);
-    try {
-      final service = ref.read(agentServiceProvider);
-      final health = await service.getSandboxHealth(widget.sandboxId!);
-      if (mounted) {
-        setState(() {
-          _health = health;
-          _healthLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _healthLoading = false);
-    }
-  }
-
   Future<void> _restartSandbox() async {
     if (widget.sandboxId == null) return;
     try {
@@ -68,12 +33,14 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
           const SnackBar(content: Text('Sandbox restart initiated')),
         );
       }
-      await _loadHealth();
+      if (widget.sandboxId != null) {
+        ref.invalidate(sandboxHealthProvider(widget.sandboxId!));
+      }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Restart failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Restart failed: $e')));
       }
     }
   }
@@ -135,53 +102,117 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
 
   // ── Gateway status cards ──
   Widget _buildStatusCards() {
-    return Row(
-      children: [
-        Expanded(
-          child: _StatusCard(
-            title: 'Health',
-            value: _healthLoading
-                ? '...'
-                : _health?.isHealthy == true
-                    ? 'Healthy'
-                    : _health?.gatewayStatus ?? 'Unknown',
-            icon: LucideIcons.heartPulse,
-            color: _health?.isHealthy == true ? RuhTheme.success : RuhTheme.warning,
+    if (widget.sandboxId == null) {
+      return const Row(
+        children: [
+          Expanded(
+            child: _StatusCard(
+              title: 'Health',
+              value: '--',
+              icon: LucideIcons.heartPulse,
+              color: RuhTheme.textTertiary,
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _StatusCard(
-            title: 'Port',
-            value: _health?.gatewayPort?.toString() ?? '--',
-            icon: LucideIcons.network,
-            color: RuhTheme.info,
+        ],
+      );
+    }
+
+    final healthAsync = ref.watch(sandboxHealthProvider(widget.sandboxId!));
+
+    return healthAsync.when(
+      data: (health) => Row(
+        children: [
+          Expanded(
+            child: _StatusCard(
+              title: 'Health',
+              value: health?.isHealthy == true
+                  ? 'Healthy'
+                  : health?.gatewayStatus ?? 'Unknown',
+              icon: LucideIcons.heartPulse,
+              color: health?.isHealthy == true
+                  ? RuhTheme.success
+                  : RuhTheme.warning,
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _StatusCard(
-            title: 'Deployed',
-            value: _health?.deployedAt != null
-                ? _formatDeployTime(_health!.deployedAt!)
-                : '--',
-            icon: LucideIcons.clock,
-            color: RuhTheme.secondary,
+          const SizedBox(width: 8),
+          Expanded(
+            child: _StatusCard(
+              title: 'Port',
+              value: health?.gatewayPort?.toString() ?? '--',
+              icon: LucideIcons.network,
+              color: RuhTheme.info,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(width: 8),
+          Expanded(
+            child: _StatusCard(
+              title: 'Deployed',
+              value: health?.deployedAt != null
+                  ? _formatDeployTime(health!.deployedAt!)
+                  : '--',
+              icon: LucideIcons.clock,
+              color: RuhTheme.secondary,
+            ),
+          ),
+        ],
+      ),
+      loading: () => const Row(
+        children: [
+          Expanded(
+            child: _StatusCard(
+              title: 'Health',
+              value: '...',
+              icon: LucideIcons.heartPulse,
+              color: RuhTheme.textTertiary,
+            ),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: _StatusCard(
+              title: 'Port',
+              value: '...',
+              icon: LucideIcons.network,
+              color: RuhTheme.textTertiary,
+            ),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: _StatusCard(
+              title: 'Deployed',
+              value: '...',
+              icon: LucideIcons.clock,
+              color: RuhTheme.textTertiary,
+            ),
+          ),
+        ],
+      ),
+      error: (error, stackTrace) => const Row(
+        children: [
+          Expanded(
+            child: _StatusCard(
+              title: 'Health',
+              value: 'Error',
+              icon: LucideIcons.heartPulse,
+              color: RuhTheme.error,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   // ── Activity cards ──
   Widget _buildActivityCards() {
     final agent = widget.agent!;
+    final health = widget.sandboxId != null
+        ? ref.watch(sandboxHealthProvider(widget.sandboxId!)).valueOrNull
+        : null;
     return Row(
       children: [
         Expanded(
           child: _StatusCard(
             title: 'Conversations',
-            value: _health?.conversationCount.toString() ?? '0',
+            value: health?.conversationCount.toString() ?? '0',
             icon: LucideIcons.messageSquare,
             color: RuhTheme.primary,
           ),
@@ -217,7 +248,9 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
             onPressed: () {
               // Push config — placeholder action
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Push config not yet implemented')),
+                const SnackBar(
+                  content: Text('Push config not yet implemented'),
+                ),
               );
             },
             icon: const Icon(LucideIcons.upload, size: 16),
@@ -263,10 +296,7 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
     }
 
     if (skills.isEmpty) {
-      return _EmptyCard(
-        message: 'No skills loaded',
-        icon: LucideIcons.wrench,
-      );
+      return _EmptyCard(message: 'No skills loaded', icon: LucideIcons.wrench);
     }
 
     return Card(
@@ -278,10 +308,7 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
           children: skills.map((skill) {
             return Chip(
               avatar: Icon(LucideIcons.zap, size: 14, color: RuhTheme.primary),
-              label: Text(
-                skill,
-                style: const TextStyle(fontSize: 13),
-              ),
+              label: Text(skill, style: const TextStyle(fontSize: 13)),
               backgroundColor: RuhTheme.accentLight,
               side: BorderSide.none,
             );
@@ -313,8 +340,11 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
                 children: [
                   const Padding(
                     padding: EdgeInsets.only(top: 4),
-                    child: Icon(LucideIcons.chevronRight,
-                        size: 14, color: RuhTheme.primary),
+                    child: Icon(
+                      LucideIcons.chevronRight,
+                      size: 14,
+                      color: RuhTheme.primary,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -349,9 +379,9 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
             // Instructions
             Text(
               'Instructions',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Container(
@@ -377,9 +407,9 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
             // Continuity summary
             Text(
               'Continuity Summary',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Container(
@@ -406,9 +436,9 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
               const SizedBox(height: 16),
               Text(
                 'Pinned Paths',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
               ...memory.pinnedPaths.map((path) {
@@ -416,8 +446,11 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Row(
                     children: [
-                      const Icon(LucideIcons.file,
-                          size: 14, color: RuhTheme.textTertiary),
+                      const Icon(
+                        LucideIcons.file,
+                        size: 14,
+                        color: RuhTheme.textTertiary,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -466,9 +499,9 @@ class _SectionTitle extends StatelessWidget {
         const SizedBox(width: 8),
         Text(
           title,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
         ),
       ],
     );

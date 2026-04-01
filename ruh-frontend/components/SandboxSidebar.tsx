@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState, useCallback } from "react";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -62,7 +63,7 @@ export default function SandboxSidebar({ selectedId, onSelect, onNew, refreshKey
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes`);
       if (res.ok) setSandboxes(await res.json());
     } finally {
       setLoading(false);
@@ -73,7 +74,7 @@ export default function SandboxSidebar({ selectedId, onSelect, onNew, refreshKey
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    const res = await fetch(`${API_URL}/api/sandboxes/${id}`, { method: "DELETE" });
+    const res = await apiFetch(`${API_URL}/api/sandboxes/${id}`, { method: "DELETE" });
     if (!res.ok) return;
     setSandboxes((prev) => prev.filter((s) => s.sandbox_id !== id));
   }

@@ -14,14 +14,7 @@ interface SessionInitializerProps {
   children: ReactNode;
 }
 
-const IS_DEV = process.env.NODE_ENV === "development";
-
 function SessionInitializerContent({ children }: SessionInitializerProps) {
-  // Bypass auth entirely in local development
-  if (IS_DEV) {
-    return <>{children}</>;
-  }
-
   return <SessionInitializerContentInner>{children}</SessionInitializerContentInner>;
 }
 
@@ -126,6 +119,11 @@ function SessionInitializerContentInner({ children }: SessionInitializerProps) {
             phoneNumber: userData.phoneNumber,
             profileImage: userData.profileImage,
             isFirstLogin: userData.isFirstLogin,
+            activeOrganization: userData.activeOrganization ?? null,
+            activeMembership: userData.activeMembership ?? null,
+            memberships: userData.memberships ?? [],
+            platformRole: userData.platformRole ?? "user",
+            appAccess: userData.appAccess ?? null,
             accessToken: currentToken || "",
           });
           setBootstrapErrorStatus(undefined);

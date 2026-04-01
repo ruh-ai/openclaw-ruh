@@ -19,7 +19,7 @@ import {
 import type { SkillAvailability } from "@/lib/skills/skill-registry";
 import { applyAcceptedImprovementsToConfig } from "@/app/(platform)/agents/create/create-session-config";
 import type { CoPilotPhase, SkillGenerationStatus } from "./copilot-state";
-import type { DiscoveryDocuments, SkillGraphNode, WorkflowDefinition } from "./types";
+import type { AgentDevStage, DiscoveryDocuments, SkillGraphNode, StageStatus, WorkflowDefinition } from "./types";
 
 export function hasPurposeMetadata(name: string, description: string): boolean {
   return name.trim().length > 0 && description.trim().length > 0;
@@ -224,12 +224,7 @@ export function evaluateCoPilotDeployReadiness({
     };
   }
 
-  if (missingRequiredRuntimeInputKeys.length > 0) {
-    return {
-      canDeploy: false,
-      blockerMessage: `Add values for required runtime inputs: ${missingRequiredRuntimeInputKeys.join(", ")}.`,
-    };
-  }
+  // Runtime inputs are collected during first-chat onboarding, not at deploy time.
 
   return {
     canDeploy: true,
@@ -242,6 +237,7 @@ interface CoPilotAgentSeed {
   description: string;
   skillGraph: NonNullable<SavedAgent["skillGraph"]>;
   selectedSkillIds: string[];
+  builtSkillIds: string[];
   workflow: SavedAgent["workflow"];
   skillGenerationStatus: SkillGenerationStatus;
   skillGenerationError: string | null;
@@ -255,6 +251,12 @@ interface CoPilotAgentSeed {
   discoveryDocuments: DiscoveryDocuments | null;
   systemName: string;
   phase: CoPilotPhase;
+  // Lifecycle overrides — set when restoring a forging agent so the UI
+  // resumes at the correct stage instead of regressing to "think".
+  devStage?: AgentDevStage;
+  thinkStatus?: StageStatus;
+  planStatus?: StageStatus;
+  buildStatus?: StageStatus;
 }
 
 export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed {
@@ -277,11 +279,31 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     })
     .filter((skill, index, all) => all.indexOf(skill) === index);
 
+  // When an agent is forging and has a skill graph, those skills were already
+  // built inside the forge sandbox. Mark them as built so a page refresh
+  // doesn't regress the deploy-readiness check to "unresolved".
+  const isForgedWithSkills = agent.status === "forging" && skillGraph.length > 0;
+  const builtSkillIds = isForgedWithSkills
+    ? skillGraph.map((node) => node.skill_id)
+    : [];
+
+  // For forging agents that already have skills, restore the lifecycle stage
+  // to "ship" so the user lands back where they were instead of regressing to "think".
+  const lifecycleOverrides: Partial<CoPilotAgentSeed> = isForgedWithSkills
+    ? {
+        devStage: "ship" as const,
+        thinkStatus: "done" as const,
+        planStatus: "done" as const,
+        buildStatus: "done" as const,
+      }
+    : {};
+
   return {
     name: agent.name,
     description: agent.description,
     skillGraph,
     selectedSkillIds,
+    builtSkillIds,
     workflow: agent.workflow ?? null,
     skillGenerationStatus: skillGraph.length > 0 ? "ready" : "idle",
     skillGenerationError: null,
@@ -295,6 +317,9 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     discoveryDocuments: agent.discoveryDocuments ?? null,
     systemName: agent.name,
     phase: skillGraph.length > 0 ? "review" : "purpose",
+    // Wire forge sandbox ID so the eval system can route to the real agent container
+    ...(agent.forgeSandboxId ? { agentSandboxId: agent.forgeSandboxId } : {}),
+    ...lifecycleOverrides,
   };
 }
 

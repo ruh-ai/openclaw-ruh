@@ -4,14 +4,7 @@ import 'api_client.dart';
 import 'logger.dart';
 
 /// The type of event received from the SSE chat stream.
-enum ChatEventType {
-  textDelta,
-  toolStart,
-  toolEnd,
-  done,
-  error,
-  status,
-}
+enum ChatEventType { textDelta, toolStart, toolEnd, done, error, status }
 
 /// A single parsed event from the chat SSE stream.
 class ChatEvent {
@@ -54,16 +47,21 @@ class ChatService {
         {'role': 'user', 'content': message},
       ],
       'stream': true,
-      if (conversationId != null) 'conversation_id': conversationId,
-      if (model != null) 'model': model,
+      ...?conversationId == null ? null : {'conversation_id': conversationId},
+      ...?model == null ? null : {'model': model},
     };
 
-    Log.i('Chat', 'Sending message to sandbox $sandboxId (conv: $conversationId, model: $model)');
+    Log.i(
+      'Chat',
+      'Sending message to sandbox $sandboxId (conv: $conversationId, model: $model)',
+    );
 
     String? currentEvent;
 
-    await for (final line
-        in _client.streamPost('/api/sandboxes/$sandboxId/chat/ws', body)) {
+    await for (final line in _client.streamPost(
+      '/api/sandboxes/$sandboxId/chat',
+      body,
+    )) {
       // SSE event type line: "event: <type>"
       if (line.startsWith('event:')) {
         currentEvent = line.substring('event:'.length).trim();
@@ -120,7 +118,8 @@ class ChatService {
         case 'error':
           yield ChatEvent(
             type: ChatEventType.error,
-            content: json['message'] as String? ??
+            content:
+                json['message'] as String? ??
                 json['error'] as String? ??
                 payload,
           );
@@ -131,13 +130,11 @@ class ChatService {
           final choices = json['choices'] as List<dynamic>?;
           if (choices != null && choices.isNotEmpty) {
             final delta =
-                (choices[0] as Map<String, dynamic>)['delta'] as Map<String, dynamic>?;
+                (choices[0] as Map<String, dynamic>)['delta']
+                    as Map<String, dynamic>?;
             final content = delta?['content'] as String?;
             if (content != null && content.isNotEmpty) {
-              yield ChatEvent(
-                type: ChatEventType.textDelta,
-                content: content,
-              );
+              yield ChatEvent(type: ChatEventType.textDelta, content: content);
             }
           }
       }

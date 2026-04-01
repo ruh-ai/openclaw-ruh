@@ -65,6 +65,40 @@ describe("resolveSessionGateDecision", () => {
     });
   });
 
+  test("falls back to agents for invalid authenticated redirect targets", () => {
+    const decision = resolveSessionGateDecision({
+      pathname: "/authenticate",
+      search: "?redirect_url=%2Fmarketplace%2Flegacy",
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      hasUser: true,
+      bootstrapStatus: "success",
+    });
+
+    expect(decision).toEqual({
+      type: "redirect",
+      href: "/agents",
+      clearUser: false,
+    });
+  });
+
+  test("fails closed when authenticated auth-page redirect points back to authenticate", () => {
+    const decision = resolveSessionGateDecision({
+      pathname: "/authenticate",
+      search: "?redirect_url=%2Fauthenticate%3Fredirect_url%3D%252Fmarketplace",
+      hasAccessToken: true,
+      hasRefreshToken: true,
+      hasUser: true,
+      bootstrapStatus: "success",
+    });
+
+    expect(decision).toEqual({
+      type: "redirect",
+      href: "/agents",
+      clearUser: false,
+    });
+  });
+
   test("fails closed when bootstrap returns an auth error on a protected route", () => {
     const decision = resolveSessionGateDecision({
       pathname: "/agents/create",

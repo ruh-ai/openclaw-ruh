@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { apiFetch, createAuthenticatedEventSource } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -42,7 +43,7 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
     updateStatus("running");
 
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/create`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
@@ -54,7 +55,9 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
       }
 
       const { stream_id } = await res.json();
-      const sse = new EventSource(`${API_URL}/api/sandboxes/stream/${stream_id}`);
+      const sse = createAuthenticatedEventSource(
+        `${API_URL}/api/sandboxes/stream/${stream_id}`
+      );
 
       sse.addEventListener("log", (ev) => {
         appendLog(JSON.parse(ev.data).message);

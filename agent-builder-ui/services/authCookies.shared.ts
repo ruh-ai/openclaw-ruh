@@ -1,12 +1,13 @@
 const cookieDomain = process.env.NEXT_PUBLIC_COOKIES_DOMAIN;
+const isDev = process.env.NODE_ENV === "development";
 
 export function buildAuthCookieOptions({ maxAge }: { maxAge: number }) {
   return {
     path: "/",
     domain: cookieDomain,
     httpOnly: false,
-    sameSite: "none" as const,
-    secure: true,
+    sameSite: isDev ? ("lax" as const) : ("none" as const),
+    secure: !isDev,
     maxAge,
   };
 }

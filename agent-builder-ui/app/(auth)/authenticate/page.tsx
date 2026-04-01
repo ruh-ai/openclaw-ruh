@@ -3,7 +3,9 @@ import type { Metadata } from "next";
 import { Logo } from "@/components/shared/Logo";
 import { ImageCarousel } from "../_components/ImageCarousel";
 import { AuthButton } from "../_components/AuthButton";
+import { LocalAuthForm } from "../_components/LocalAuthForm";
 import { generateCanonicalMetadata } from "@/lib/utils/canonical";
+import { resolveAuthMode } from "../auth-mode";
 
 // Metadata for the login page
 export const metadata: Metadata = {
@@ -14,6 +16,8 @@ export const metadata: Metadata = {
 };
 
 const LoginPage = () => {
+  const authMode = resolveAuthMode(process.env.NEXT_PUBLIC_AUTH_URL);
+
   return (
     <div className="min-h-screen flex md:flex-row">
       {/* Left Side - Login Form */}
@@ -27,15 +31,18 @@ const LoginPage = () => {
             <div className="flex flex-col justify-center gap-16">
               <div>
                 <h1 className="text-2xl font-bold mb-2 text-brand-primary-font text-center font-primary">
-                  Log In & Start Building
+                  {authMode === "external"
+                    ? "Log In & Start Building"
+                    : "Local Login For Testing"}
                 </h1>
                 <p className="text-brand-secondary-font text-sm text-center">
-                  OpenClaw Developer Platform — Build, Deploy & Manage Your AI
-                  Tools
+                  {authMode === "external"
+                    ? "OpenClaw Developer Platform — Build, Deploy & Manage Your AI Tools"
+                    : "No external auth provider is configured, so this builder is using the local fallback auth path."}
                 </p>
               </div>
               <Suspense fallback={<div>Loading...</div>}>
-                <AuthButton />
+                {authMode === "external" ? <AuthButton /> : <LocalAuthForm />}
               </Suspense>
             </div>
           </div>

@@ -79,6 +79,11 @@ When all phases are done, announce completion and output the ready signal.
 Say something like:
 > "Your agent's workspace is set up. Everything is written — soul, skills, tools, triggers. Click **Test** to try it out."
 
+Then **sync your work to the backend** so the skills are saved even if the UI disconnects:
+```bash
+source ~/.bashrc && ~/.openclaw/sync-skills.sh
+```
+
 Then output:
 ```json
 { "type": "ready_for_review", "system_name": "<agent-slug>", "message": "Workspace ready for testing." }

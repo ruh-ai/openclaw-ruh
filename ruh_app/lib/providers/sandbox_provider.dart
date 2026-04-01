@@ -10,8 +10,8 @@ final sandboxServiceProvider = Provider<SandboxService>((ref) {
 
 final sandboxListProvider =
     AsyncNotifierProvider<SandboxListNotifier, List<SandboxRecord>>(
-  SandboxListNotifier.new,
-);
+      SandboxListNotifier.new,
+    );
 
 class SandboxListNotifier extends AsyncNotifier<List<SandboxRecord>> {
   @override

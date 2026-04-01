@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
+import { apiFetch } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -220,7 +221,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/models`);
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/models`);
       const data = await res.json();
       const list: OAModel[] = data.data ?? [];
       setModels(list);
@@ -243,7 +244,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
     setMessages([]);
     setStreamingContent("");
     setMessagesLoading(true);
-    fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages?limit=50`)
+    apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages?limit=50`)
       .then((r) => r.ok ? r.json() : { messages: [], next_cursor: null, has_more: false })
       .then((page: MessagePage) => {
         setMessages(page.messages);
@@ -258,7 +259,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
     if (!conversation?.id || messagesCursor == null || messagesLoadingMore) return;
     setMessagesLoadingMore(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conversation.id}/messages?limit=50&before=${messagesCursor}`,
       );
       if (!res.ok) return;
@@ -288,7 +289,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
 
   async function ensureConversation(): Promise<Conversation> {
     if (conversation) return conversation;
-    const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations`, {
+    const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "New Conversation", model: selectedModel || "openclaw-default" }),
@@ -328,7 +329,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
       const conv = await ensureConversation();
 
       // Use the WebSocket-bridged endpoint for full agent capabilities
-      const res = await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat/ws`, {
+      const res = await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/chat/ws`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -442,7 +443,7 @@ export default function ChatPanel({ sandbox, conversation, onNewChat, onConversa
 
       if (messages.length === 0 && conv.name === "New Conversation") {
         const autoName = text.slice(0, 45) + (text.length > 45 ? "…" : "");
-        await fetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conv.id}`, {
+        await apiFetch(`${API_URL}/api/sandboxes/${sandbox.sandbox_id}/conversations/${conv.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: autoName }),

@@ -67,4 +67,37 @@ describe("AdminLogin", () => {
       expect(getByText("Signing in...")).toBeTruthy();
     });
   });
+
+  test("shows an access error when the session is not a platform admin", async () => {
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            user: { role: "developer" },
+            appAccess: { admin: false, builder: true, customer: false },
+            accessToken: "tok",
+          }),
+      } as Response)
+    );
+
+    const { default: AdminLogin } = await import("../app/(auth)/login/page");
+    const { getByText, getByPlaceholderText, container } = render(<AdminLogin />);
+
+    fireEvent.change(getByPlaceholderText("admin@ruh.ai"), {
+      target: { value: "dev@ruh.ai" },
+    });
+
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, {
+      target: { value: "SecurePass1!" },
+    });
+
+    const form = container.querySelector("form");
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(getByText("Platform admin access required")).toBeTruthy();
+    });
+  });
 });

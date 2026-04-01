@@ -130,7 +130,8 @@ class TaskState {
 
   factory TaskState.fromJson(Map<String, dynamic> json) {
     return TaskState(
-      steps: (json['steps'] as List<dynamic>?)
+      steps:
+          (json['steps'] as List<dynamic>?)
               ?.map((e) => TaskStep.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
@@ -138,9 +139,7 @@ class TaskState {
   }
 
   Map<String, dynamic> toJson() {
-    return {
-      'steps': steps.map((s) => s.toJson()).toList(),
-    };
+    return {'steps': steps.map((s) => s.toJson()).toList()};
   }
 }
 
