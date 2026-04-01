@@ -88,8 +88,18 @@ describe('agentStore.setForgeSandbox', () => {
 
 describe('agentStore.promoteForgeSandbox', () => {
   test('clears forge_sandbox_id and sets status to active', async () => {
+    let selectCallCount = 0;
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes('SELECT')) {
+        selectCallCount++;
+        // First SELECT (getAgent before UPDATE): return agent WITH forge_sandbox_id set
+        // Second SELECT (getAgent after UPDATE): return the updated state
+        if (selectCallCount === 1) {
+          return {
+            rows: [makeAgentRow({ status: 'forging', forge_sandbox_id: SANDBOX_ID, sandbox_ids: [SANDBOX_ID] })],
+            rowCount: 1,
+          };
+        }
         return {
           rows: [makeAgentRow({ status: 'active', forge_sandbox_id: null, sandbox_ids: [SANDBOX_ID] })],
           rowCount: 1,

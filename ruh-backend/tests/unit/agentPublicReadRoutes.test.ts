@@ -85,7 +85,8 @@ mock.module('../../src/auth/middleware', () => ({
       userId: 'developer-1',
       email: 'developer@test.dev',
       role: 'developer',
-      orgId: 'org-dev-1',
+      // orgId intentionally omitted: getActiveOrgKind short-circuits to null
+      // when req.user.orgId is falsy, bypassing orgStore.getOrg entirely
     };
     next();
   },
