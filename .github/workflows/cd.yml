@@ -40,7 +40,7 @@ jobs:
       # ── Backend ─────────────────────────────────────────────────────────────
       - name: Docker metadata — backend
         id: meta-backend
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.BACKEND_IMAGE }}
           tags: |
@@ -60,7 +60,7 @@ jobs:
       # ── Frontend ─────────────────────────────────────────────────────────────
       - name: Docker metadata — frontend
         id: meta-frontend
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.FRONTEND_IMAGE }}
           tags: |
