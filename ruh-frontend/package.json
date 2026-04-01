@@ -32,7 +32,7 @@
     "eslint-config-next": "16.1.7",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
-    "msw": "^2.12.13",
+    "msw": "^2.12.14",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^5",
