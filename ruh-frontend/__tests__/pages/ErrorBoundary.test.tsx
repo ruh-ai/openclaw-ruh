@@ -1,38 +1,38 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Error from '@/app/error';
+import ErrorPage from '@/app/error';
 import GlobalError from '@/app/global-error';
 
 describe('Error boundary (error.tsx)', () => {
   test('renders error message', () => {
     const error = Object.assign(new Error('Something broke'), { digest: undefined });
-    render(<Error error={error} reset={() => {}} />);
+    render(<ErrorPage error={error} reset={() => {}} />);
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
   });
 
   test('displays error digest when present', () => {
     const error = Object.assign(new Error('fail'), { digest: 'abc-123' });
-    render(<Error error={error} reset={() => {}} />);
+    render(<ErrorPage error={error} reset={() => {}} />);
     expect(screen.getByText('Error ID: abc-123')).toBeInTheDocument();
   });
 
   test('does not show error ID when no digest', () => {
     const error = Object.assign(new Error('fail'), { digest: undefined });
-    render(<Error error={error} reset={() => {}} />);
+    render(<ErrorPage error={error} reset={() => {}} />);
     expect(screen.queryByText(/Error ID/)).not.toBeInTheDocument();
   });
 
   test('calls reset when "Try Again" is clicked', async () => {
     const reset = jest.fn();
     const error = Object.assign(new Error('fail'), { digest: undefined });
-    render(<Error error={error} reset={reset} />);
+    render(<ErrorPage error={error} reset={reset} />);
     await userEvent.click(screen.getByText('Try Again'));
     expect(reset).toHaveBeenCalledTimes(1);
   });
 
   test('renders Home link', () => {
     const error = Object.assign(new Error('fail'), { digest: undefined });
-    render(<Error error={error} reset={() => {}} />);
+    render(<ErrorPage error={error} reset={() => {}} />);
     const homeLink = screen.getByText('Home');
     expect(homeLink.closest('a')).toHaveAttribute('href', '/');
   });
@@ -40,7 +40,7 @@ describe('Error boundary (error.tsx)', () => {
   test('logs error to console on mount', () => {
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const error = Object.assign(new Error('logged'), { digest: 'xyz' });
-    render(<Error error={error} reset={() => {}} />);
+    render(<ErrorPage error={error} reset={() => {}} />);
     expect(spy).toHaveBeenCalledWith(
       '[ErrorBoundary]',
       expect.objectContaining({ message: 'logged', digest: 'xyz' }),

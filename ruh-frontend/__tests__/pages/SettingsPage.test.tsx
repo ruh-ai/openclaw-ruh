@@ -7,9 +7,10 @@ describe('SettingsPage', () => {
     localStorage.clear();
   });
 
-  test('renders loading state before localStorage is read', () => {
-    const { container } = render(<SettingsPage />);
-    expect(container.textContent).toContain('Loading settings...');
+  test('renders settings form on mount', async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+    expect(screen.getByText('Application preferences')).toBeInTheDocument();
   });
 
   test('renders settings form after mount', async () => {
