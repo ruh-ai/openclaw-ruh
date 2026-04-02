@@ -4,7 +4,7 @@
   "description": "Ruh.ai — Digital employees with a soul",
   "scripts": {
     "test:all": "npm run test:backend && npm run test:agent-builder && npm run test:frontend && npm run test:admin && npm run test:marketplace",
-    "test:backend": "cd ruh-backend && bun test tests/unit/auth/ tests/unit/config.test.ts tests/unit/marketplaceStore.test.ts tests/unit/schemaMigrations.test.ts && bun test tests/contract/",
+    "test:backend": "cd ruh-backend && bun test tests/unit/ && bun test tests/contract/",
     "test:agent-builder": "cd agent-builder-ui && bun test lib/openclaw/api.test.ts && bun test lib/ hooks/ app/ services/ middleware.test.ts --path-ignore-patterns '**/api.test.ts'",
     "test:frontend": "cd ruh-frontend && npx jest --ci --passWithNoTests",
     "test:admin": "cd admin-ui && bun test",

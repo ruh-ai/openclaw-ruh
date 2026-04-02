@@ -1,11 +1,16 @@
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 
-process.env.JWT_ACCESS_SECRET = 'test-access-secret-32chars-min!!';
-process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-32chars-min!';
-process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
+// Mock getConfig so JWT secrets are stable regardless of process.env mutations
+// by other test files (e.g. startup.test.ts replaces the process.env object).
+mock.module('../../../src/config', () => ({
+  getConfig: () => ({
+    jwtAccessSecret: 'test-access-secret-32chars-min!!',
+    jwtRefreshSecret: 'test-refresh-secret-32chars-min!',
+  }),
+}));
 
-const { signAccessToken } = await import('../../../src/auth/tokens');
-const { requireAuth, optionalAuth, requireRole } = await import('../../../src/auth/middleware');
+import { signAccessToken } from '../../../src/auth/tokens';
+import { requireAuth, optionalAuth, requireRole } from '../../../src/auth/middleware';
 
 function mockReq(headers: Record<string, string> = {}): any {
   return { headers, user: undefined };
