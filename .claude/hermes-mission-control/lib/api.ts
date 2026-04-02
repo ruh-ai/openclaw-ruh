@@ -89,7 +89,7 @@ export interface QueueStats {
 
 export interface QueueHealth {
   redis: string;
-  workers: { running: boolean; workerCount: number; activeSubprocesses: number; workers: Array<{ name: string; running: boolean }> };
+  workers: { running: boolean; workerCount: number; activeSubprocesses: number; workers: Array<{ name: string; running: boolean; concurrency?: number }> };
   timestamp: string;
 }
 

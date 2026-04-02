@@ -180,7 +180,14 @@ export function ConnectToolsSidebar({
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {/* Logos */}
-          <div className="bg-[var(--background)] border border-[var(--border-default)] rounded-xl p-4 mb-6">
+          <div
+            className="warmth-hover bg-[var(--background)] border border-[var(--border-default)] rounded-xl p-4 mb-6"
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              e.currentTarget.style.setProperty("--mouse-x", `${((e.clientX - rect.left) / rect.width) * 100}%`);
+              e.currentTarget.style.setProperty("--mouse-y", `${((e.clientY - rect.top) / rect.height) * 100}%`);
+            }}
+          >
             <div className="flex items-center gap-3">
               <div className="w-8 h-8">
                 <Image src="/assets/logos/favicon.svg" alt="RUH" width={32} height={32} />
@@ -348,7 +355,7 @@ function CredentialInput({
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder}
           rows={4}
-          className="w-full px-3 py-2.5 rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-xs font-mono text-[var(--text-primary)] outline-none focus:border-[var(--primary)] transition-colors placeholder:text-[var(--text-placeholder)] resize-none"
+          className="focus-breathe w-full px-3 py-2.5 rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-xs font-mono text-[var(--text-primary)] outline-none focus:border-[var(--primary)] transition-colors placeholder:text-[var(--text-placeholder)] resize-none"
         />
       ) : (
         <div className="relative">
@@ -357,7 +364,7 @@ function CredentialInput({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={field.placeholder}
-            className="w-full h-10 px-3 pr-10 rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-sm font-mono text-[var(--text-primary)] outline-none focus:border-[var(--primary)] transition-colors placeholder:text-[var(--text-placeholder)]"
+            className="focus-breathe w-full h-10 px-3 pr-10 rounded-xl border border-[var(--border-stroke)] bg-[var(--background)] text-sm font-mono text-[var(--text-primary)] outline-none focus:border-[var(--primary)] transition-colors placeholder:text-[var(--text-placeholder)]"
           />
           {field.type === "password" && (
             <button

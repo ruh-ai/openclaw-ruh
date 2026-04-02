@@ -944,6 +944,26 @@ export function TabChat({
     );
   }, [isBuilderMode, sendChatMessage]);
 
+  // ── Auto-trigger Think stage PRD/TRD generation ────────────────────────
+  const thinkGenerationSentRef = useRef(false);
+  useEffect(() => {
+    if (
+      coPilotStore?.devStage === "think" &&
+      coPilotStore?.thinkStatus === "generating" &&
+      !coPilotStore?.discoveryDocuments &&
+      !thinkGenerationSentRef.current &&
+      !isLoading
+    ) {
+      const name = coPilotStore.name?.trim();
+      const desc = coPilotStore.description?.trim();
+      if (name && desc) {
+        thinkGenerationSentRef.current = true;
+        const thinkPrompt = `Create the PRD and TRD for ${name} based on this mission: ${desc}`;
+        sendChatMessage(thinkPrompt, { silent: true });
+      }
+    }
+  }, [coPilotStore?.devStage, coPilotStore?.thinkStatus, coPilotStore?.discoveryDocuments, coPilotStore?.name, coPilotStore?.description, isLoading, sendChatMessage]);
+
   // ── Auto-trigger plan generation when Think → Plan transition occurs ────
   const planGenerationSentRef = useRef(false);
   useEffect(() => {
@@ -965,6 +985,29 @@ export function TabChat({
       sendChatMessage(planPrompt, { silent: true });
     }
   }, [coPilotStore?.devStage, coPilotStore?.planStatus, isLoading, coPilotStore?.discoveryDocuments, sendChatMessage]);
+
+  // ── Auto-approve Plan → Build when architecture plan is ready ─────────
+  // No manual gate — the plan is shown for review but build starts automatically.
+  // Users can always go back to edit the plan from the Review stage.
+  const planAutoApprovedRef = useRef(false);
+  useEffect(() => {
+    if (
+      coPilotStore?.devStage === "plan" &&
+      coPilotStore?.planStatus === "ready" &&
+      coPilotStore?.architecturePlan &&
+      !planAutoApprovedRef.current &&
+      !isLoading
+    ) {
+      // Brief delay so the plan flashes on screen before auto-advancing
+      const timeout = setTimeout(() => {
+        if (!planAutoApprovedRef.current) {
+          planAutoApprovedRef.current = true;
+          onPlanApproved?.();
+        }
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [coPilotStore?.devStage, coPilotStore?.planStatus, coPilotStore?.architecturePlan, isLoading, onPlanApproved]);
 
   const agentLogo = "/assets/logos/favicon.svg";
   const loadingOlderHistory = false;

@@ -1,5 +1,11 @@
 import { useUserStore } from "@/hooks/use-user";
-import { getRefreshToken } from "@/services/authCookies";
+
+// Read refresh token from browser cookies (client-side safe).
+function readRefreshTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)refreshToken=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 // Singleton refresh promise to coalesce concurrent 401 retries
 let refreshInFlight: Promise<string | null> | null = null;
@@ -9,7 +15,7 @@ async function tryRefreshAccessToken(): Promise<string | null> {
 
   refreshInFlight = (async () => {
     try {
-      const refreshToken = await getRefreshToken();
+      const refreshToken = readRefreshTokenFromCookie();
       if (!refreshToken) return null;
 
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";

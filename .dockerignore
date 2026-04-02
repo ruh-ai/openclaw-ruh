@@ -7,6 +7,8 @@ backend/data/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+agent-runtime/node_modules/
+agent-runtime/.next/
 .env
 *.env
 *.log

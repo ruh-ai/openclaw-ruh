@@ -56,6 +56,7 @@ export interface AgentToolConnection {
 }
 
 export type AgentRuntimeInputSource = "architect_requirement" | "skill_requirement";
+export type AgentRuntimeInputType = "text" | "boolean" | "number" | "select";
 
 export interface AgentRuntimeInput {
   key: string;
@@ -64,6 +65,16 @@ export interface AgentRuntimeInput {
   required: boolean;
   source: AgentRuntimeInputSource;
   value: string;
+  /** Input control type — drives UI rendering (toggle, dropdown, number, text). */
+  inputType?: AgentRuntimeInputType;
+  /** Sensible default so end users can skip configuration for simple agents. */
+  defaultValue?: string;
+  /** Realistic example value shown as placeholder. */
+  example?: string;
+  /** Fixed choices for select-type inputs. */
+  options?: string[];
+  /** Category for grouping related inputs (e.g. "Authentication", "Behavior"). */
+  group?: string;
 }
 
 export type AgentTriggerKind = "manual" | "schedule" | "webhook";

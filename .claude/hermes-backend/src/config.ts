@@ -12,6 +12,7 @@ export interface HermesConfig {
   evolutionIntervalMs: number;    // evolution analysis schedule
   maintenanceIntervalMs: number;  // memory maintenance schedule
   analystIntervalMs: number;      // analyst goal sweep schedule
+  strategistIntervalMs: number;   // strategist self-assessment schedule
   projectRoot: string;            // cwd for agent subprocesses
   agentsDir: string;              // path to .claude/agents/
   claudeCliPath: string;          // path to claude binary
@@ -37,6 +38,7 @@ export function getConfig(): HermesConfig {
     evolutionIntervalMs: parseInt(process.env.EVOLUTION_INTERVAL_MS || '7200000', 10),   // 2h
     maintenanceIntervalMs: parseInt(process.env.MAINTENANCE_INTERVAL_MS || '21600000', 10), // 6h
     analystIntervalMs: parseInt(process.env.ANALYST_INTERVAL_MS || '14400000', 10),         // 4h
+    strategistIntervalMs: parseInt(process.env.STRATEGIST_INTERVAL_MS || '28800000', 10),   // 8h
     projectRoot,
     agentsDir,
     claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',

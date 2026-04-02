@@ -97,6 +97,7 @@ Agents flow: Developer builds → submits to marketplace → Admin reviews → E
 - [[LEARNING-2026-03-25-control-plane-audit-gap]] — the current auth, secret, and approval backlog still lacks a shared durable audit trail for sensitive control-plane mutations
 - [[LEARNING-2026-03-25-control-plane-rate-limit-gap]] — expensive backend and architect routes currently have no shared abuse-control boundary, so one caller can consume disproportionate Docker and gateway capacity
 - [[LEARNING-2026-03-27-agent-builder-bridge-auth-contract]] — page-route auth is not enough for `/api/openclaw`; the privileged bridge must validate the server-side builder session itself before opening the gateway
+- [[REVIEW-paperclip-openspace-architecture]] — architecture review of Paperclip + OpenSpace integration patterns, fire-and-forget hooks, shell injection risk, and Phase 2 coordinator readiness
 
 ---
 

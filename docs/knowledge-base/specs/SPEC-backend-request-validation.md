@@ -20,7 +20,7 @@
 - Introduce one reusable runtime validation layer for `req.params`, `req.query`, and `req.body`
 - Reject malformed input before store writes, cron shell command assembly, or gateway forwarding
 - Make validation failures deterministic and documented instead of depending on downstream exceptions
-- Keep the initial implementation bounded to the highest-risk write and proxy routes already identified in [[TODOS]]
+- Keep the initial implementation bounded to the highest-risk write and proxy routes already identified in `TODOS.md`
 
 ### Non-goals
 

@@ -350,6 +350,77 @@ router.post(
   }),
 );
 
+// ── POST /listings/auto-publish ─────────────────────────────────────────────
+// One-step publish: creates a listing and immediately publishes it.
+// Used by the Ship stage so deployed agents appear in the marketplace
+// without a manual review step. Only the agent creator can call this.
+
+router.post(
+  "/listings/auto-publish",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const builderContext = await requireBuilderContext(req);
+    const { agentId, title, summary, description, category, tags } = req.body;
+
+    if (!agentId || !title) {
+      throw httpError(400, "agentId and title are required");
+    }
+
+    // Check if a listing already exists for this agent
+    const existing = await marketplaceStore.getListingByAgentId(String(agentId));
+    if (existing) {
+      // If already published, return it as-is
+      if (existing.status === "published") {
+        res.json(existing);
+        return;
+      }
+      // If draft/rejected, update and publish it
+      if (existing.status === "draft" || existing.status === "rejected") {
+        await ensurePublishedListingSnapshot(existing);
+        const updated = await marketplaceStore.updateListingStatus(
+          existing.id,
+          "published",
+          req.user!.userId,
+          "Auto-published on deploy",
+        );
+        res.json(updated);
+        return;
+      }
+    }
+
+    // Verify ownership
+    const ownership = await agentStore.getAgentOwnership(String(agentId));
+    if (!ownership) {
+      throw httpError(404, "Agent not found");
+    }
+    if (ownership.createdBy !== req.user!.userId && req.user!.role !== "admin") {
+      throw httpError(403, "Only the agent creator can publish it");
+    }
+
+    // Create + publish in one step
+    const listing = await marketplaceStore.createListing({
+      agentId: String(agentId),
+      publisherId: req.user!.userId,
+      ownerOrgId: builderContext.organization.id,
+      title: String(title),
+      summary: summary ? String(summary) : "",
+      description: description ? String(description) : "",
+      category: category ? String(category) : "general",
+      tags: Array.isArray(tags) ? tags : [],
+    });
+
+    await ensurePublishedListingSnapshot(listing);
+    const published = await marketplaceStore.updateListingStatus(
+      listing.id,
+      "published",
+      req.user!.userId,
+      "Auto-published on deploy",
+    );
+
+    res.status(201).json(published);
+  }),
+);
+
 // ── GET /listings/:id/reviews ────────────────────────────────────────────────
 
 router.get(

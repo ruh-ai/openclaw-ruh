@@ -1,4 +1,4 @@
-import type { SkillGraphNode } from "@/lib/openclaw/types";
+import type { SkillGraphNode, ArchitecturePlanEnvVar } from "@/lib/openclaw/types";
 import type { AgentRuntimeInput } from "./types";
 
 const RUNTIME_INPUT_DETAILS: Record<string, { label: string; description: string }> = {
@@ -72,7 +72,7 @@ export function mergeRuntimeInputDefinitions({
     (existing ?? []).map((input) => [input.key.trim().toUpperCase(), input]),
   );
 
-  const merged = keys.map((key) => {
+  const merged: AgentRuntimeInput[] = keys.map((key) => {
     const current = existingByKey.get(key);
     const details = getRuntimeInputDetails(key);
     return {
@@ -82,24 +82,54 @@ export function mergeRuntimeInputDefinitions({
       required: current?.required ?? true,
       source: current?.source ?? "architect_requirement",
       value: current?.value ?? "",
+      // Propagate enriched metadata
+      inputType: current?.inputType,
+      defaultValue: current?.defaultValue,
+      example: current?.example,
+      options: current?.options,
+      group: current?.group,
     } satisfies AgentRuntimeInput;
   });
 
   for (const input of existing ?? []) {
     const key = input.key.trim().toUpperCase();
     if (!keys.includes(key)) {
-      merged.push({
-        ...input,
-        key,
-      });
+      merged.push({ ...input, key });
     }
   }
 
   return merged;
 }
 
+/**
+ * Enrich runtime inputs with metadata from the architecture plan's envVars.
+ * The architect provides human-readable labels, descriptions, input types,
+ * defaults, examples, and groups that the bare key-extraction misses.
+ */
+export function enrichRuntimeInputsFromPlan(
+  inputs: AgentRuntimeInput[],
+  planEnvVars: ArchitecturePlanEnvVar[] | undefined,
+): AgentRuntimeInput[] {
+  if (!planEnvVars?.length) return inputs;
+  const planByKey = new Map(planEnvVars.map((ev) => [ev.key.toUpperCase(), ev]));
+  return inputs.map((input) => {
+    const plan = planByKey.get(input.key.toUpperCase());
+    if (!plan) return input;
+    return {
+      ...input,
+      label: plan.label || input.label,
+      description: plan.description || input.description,
+      inputType: input.inputType ?? plan.inputType,
+      defaultValue: input.defaultValue ?? plan.defaultValue,
+      example: input.example ?? plan.example,
+      options: input.options ?? plan.options,
+      group: input.group ?? plan.group,
+    };
+  });
+}
+
 export function isRuntimeInputFilled(input: AgentRuntimeInput): boolean {
-  return input.value.trim().length > 0;
+  return input.value.trim().length > 0 || (input.defaultValue?.trim().length ?? 0) > 0;
 }
 
 export function hasMissingRequiredInputs(agent: {

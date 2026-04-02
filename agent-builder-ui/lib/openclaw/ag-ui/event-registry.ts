@@ -315,8 +315,29 @@ function handleClarification(response: ArchitectResponse, ctx: EventContext): Ba
 }
 
 function handleAgentResponse(response: ArchitectResponse, ctx: EventContext): BaseEvent[] {
-  const events: BaseEvent[] = [];
   const content = response.content || "I'm processing your request...";
+
+  // Failsafe: the server-side parser may fail to extract embedded structured
+  // JSON (discovery / architecture_plan) from the agent's text response,
+  // returning type: "agent_response" with the raw text in content. Try to
+  // re-parse it here so the Think/Plan stages still work.
+  const embeddedResponse = tryExtractEmbeddedResponse(content);
+  if (embeddedResponse) {
+    const fakeResponse = { ...embeddedResponse, content } as unknown as ArchitectResponse;
+    if (embeddedResponse.type === "discovery" && embeddedResponse.prd && embeddedResponse.trd) {
+      tracer.emit("builder-agent", "CUSTOM", "discovery_documents", "agent_response-failsafe");
+      return handleDiscovery(fakeResponse, ctx);
+    }
+    if (embeddedResponse.type === "architecture_plan" && embeddedResponse.architecture_plan) {
+      tracer.emit("builder-agent", "CUSTOM", "architecture_plan_ready", "agent_response-failsafe");
+      return handleArchitecturePlan(fakeResponse, ctx);
+    }
+    if (embeddedResponse.type === "ready_for_review" && embeddedResponse.skill_graph) {
+      return handleReadyForReview({ ...fakeResponse, skill_graph: embeddedResponse.skill_graph } as unknown as ArchitectResponse, ctx);
+    }
+  }
+
+  const events: BaseEvent[] = [];
 
   if (!ctx.isCopilot || !ctx.hasStreamedDeltas) {
     events.push(...textMessageEvents(ctx.messageId, content));
@@ -340,6 +361,60 @@ function handleAgentResponse(response: ArchitectResponse, ctx: EventContext): Ba
   }
 
   return events;
+}
+
+/**
+ * Try to extract a structured response (discovery, architecture_plan, ready_for_review)
+ * from raw text content. Handles code blocks and raw JSON.
+ */
+function tryExtractEmbeddedResponse(text: string): Record<string, unknown> | null {
+  // Try code block: ```ready_for_review ... ``` or ```json ... ```
+  const codeBlockMatch = text.match(/```(?:ready_for_review|discovery|architecture_plan|json)\s*\n?([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    try {
+      const parsed = JSON.parse(codeBlockMatch[1]) as Record<string, unknown>;
+      if (typeof parsed.type === "string") return parsed;
+    } catch { /* fall through */ }
+  }
+
+  // Try raw JSON with known types — use brace-counting for reliable extraction
+  const KNOWN_TYPES = ["discovery", "architecture_plan", "ready_for_review"];
+  for (const knownType of KNOWN_TYPES) {
+    const marker = `"type"`;
+    const typePattern = new RegExp(`"type"\\s*:\\s*"${knownType}"`);
+    const typeMatch = typePattern.exec(text);
+    if (!typeMatch) continue;
+
+    // Walk backwards to find the opening `{`
+    let startIdx = -1;
+    for (let i = typeMatch.index; i >= 0; i--) {
+      if (text[i] === "{") { startIdx = i; break; }
+    }
+    if (startIdx === -1) continue;
+
+    // Walk forward counting braces to find the matching `}`
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(startIdx, i + 1)) as Record<string, unknown>;
+          } catch { break; }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function handleError(response: ArchitectResponse): BaseEvent[] {

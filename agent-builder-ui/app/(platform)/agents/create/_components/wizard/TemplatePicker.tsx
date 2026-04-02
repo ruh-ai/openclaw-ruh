@@ -1,7 +1,14 @@
 "use client";
 
+import React from "react";
 import { Plus } from "lucide-react";
 import { AGENT_TEMPLATES, type AgentTemplate } from "../../_config/wizard-templates";
+
+function warmthMouseHandler(e: React.MouseEvent<HTMLElement>) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  e.currentTarget.style.setProperty("--mouse-x", `${((e.clientX - rect.left) / rect.width) * 100}%`);
+  e.currentTarget.style.setProperty("--mouse-y", `${((e.clientY - rect.top) / rect.height) * 100}%`);
+}
 
 interface TemplatePickerProps {
   selectedId: string | null;
@@ -18,7 +25,8 @@ export function TemplatePicker({ selectedId, onSelect, onBlankSlate }: TemplateP
           <button
             key={t.id}
             onClick={() => onSelect(t)}
-            className={`text-left rounded-xl border-2 p-4 transition-all cursor-pointer group ${
+            onMouseMove={warmthMouseHandler}
+            className={`warmth-hover text-left rounded-xl border-2 p-4 transition-all cursor-pointer group ${
               isSelected
                 ? "border-[var(--primary)] shadow-[0_0_0_3px_rgba(174,0,208,0.08)] bg-[var(--card-color)]"
                 : "border-[var(--border-stroke)] bg-[var(--card-color)] hover:border-[var(--border-default)]"
@@ -43,7 +51,8 @@ export function TemplatePicker({ selectedId, onSelect, onBlankSlate }: TemplateP
       {/* Blank slate card */}
       <button
         onClick={onBlankSlate}
-        className={`text-left rounded-xl border-2 border-dashed p-4 transition-all cursor-pointer group ${
+        onMouseMove={warmthMouseHandler}
+        className={`warmth-hover text-left rounded-xl border-2 border-dashed p-4 transition-all cursor-pointer group ${
           selectedId === null
             ? "border-[var(--primary)] bg-[var(--primary)]/5"
             : "border-[var(--border-stroke)] bg-[var(--card-color)] hover:border-[var(--border-default)]"

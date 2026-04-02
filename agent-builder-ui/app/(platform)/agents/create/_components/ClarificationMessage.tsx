@@ -1,7 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useCallback } from "react";
 import { ClarificationQuestion } from "@/lib/openclaw/types";
+
+function warmthMouseHandler(e: React.MouseEvent<HTMLElement>) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  e.currentTarget.style.setProperty("--mouse-x", `${((e.clientX - rect.left) / rect.width) * 100}%`);
+  e.currentTarget.style.setProperty("--mouse-y", `${((e.clientY - rect.top) / rect.height) * 100}%`);
+}
 
 interface ClarificationMessageProps {
   context?: string;
@@ -50,7 +56,8 @@ export const ClarificationMessage: React.FC<ClarificationMessageProps> = ({
                       key={opt}
                       type="button"
                       onClick={() => onSelectOption?.(opt)}
-                      className="px-2.5 py-1 rounded-full text-xs font-satoshi-regular
+                      onMouseMove={warmthMouseHandler}
+                      className="warmth-hover px-2.5 py-1 rounded-full text-xs font-satoshi-regular
                                  border border-border-default bg-white text-text-secondary
                                  hover:border-primary hover:text-primary hover:bg-primary/5
                                  transition-colors cursor-pointer"
@@ -76,7 +83,8 @@ export const ClarificationMessage: React.FC<ClarificationMessageProps> = ({
                     key={opt}
                     type="button"
                     onClick={() => onSelectOption?.(opt)}
-                    className="px-3 py-1 rounded-full text-xs font-satoshi-regular
+                    onMouseMove={warmthMouseHandler}
+                    className="warmth-hover px-3 py-1 rounded-full text-xs font-satoshi-regular
                                border border-border-default bg-white text-text-secondary
                                hover:border-primary hover:text-primary hover:bg-primary/5
                                transition-colors cursor-pointer"

@@ -58,6 +58,7 @@ function routeToAgent(description: string, requestedAgent?: string): { agentName
     { keywords: ['code review', 'review pr', 'review changes', 'convention check', 'kb compliance', 'pre-landing review', 'lint'], agent: 'reviewer' },
     { keywords: ['docker container', 'sandbox', 'openclaw gateway', 'docker exec', 'container lifecycle', 'gateway status'], agent: 'sandbox' },
     { keywords: ['analyze goal', 'decompose goal', 'plan tasks', 'break down goal', 'goal decomposition'], agent: 'analyst' },
+    { keywords: ['system assessment', 'propose goals', 'strategic review', 'codebase health', 'project priorities', 'trend detection'], agent: 'strategist' },
   ];
 
   // Also match broader terms as fallback (lower priority)
@@ -129,6 +130,10 @@ function assemblePrompt(description: string, memoryContext: string): string {
   parts.push('- Complete the task described above.');
   parts.push('- If you make code changes, ensure they compile/typecheck.');
   parts.push('- Report what you changed and any issues encountered.');
+  parts.push('- At the end of your output, include self-evolution markers:');
+  parts.push('  LEARNING: <type> | <description> — for patterns, pitfalls, or debug paths discovered');
+  parts.push('  SKILL_ACQUIRED: <description> — for new capabilities you used');
+  parts.push('  GAP: <description> — for missing knowledge or tools that blocked you');
 
   return parts.join('\n');
 }

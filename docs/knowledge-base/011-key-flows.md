@@ -280,3 +280,9 @@ For broader lifecycle drift, use `GET /api/admin/sandboxes/reconcile` with the a
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — purpose metadata now gates the builder workspace, skills resolve through the registry, and unresolved custom skills block deploy
 - [[SPEC-pre-deploy-agent-testing]] — adds the review-phase test loop that injects SOUL content into isolated `agent:test:*` builder sessions before deployment
 - [[SPEC-sandbox-runtime-reconciliation]] — defines the operator reconcile/report flow for DB-only and container-only sandbox drift
+
+## Related Learnings
+
+- [[LEARNING-2026-03-30-build-stage-architecture-plan-handoff]] — plan-to-build handoff must pass the approved architecture plan as a first-class build input
+- [[LEARNING-2026-03-31-copilot-built-skill-hydration]] — direct forge build path must derive `builtSkillIds` from `skill_md` so lifecycle UI stays truthful
+- [[LEARNING-2026-04-02-agent-create-e2e-contract]] — live `/agents/create` requires auth redirect, forge provisioning, delayed Co-Pilot handoff, and a visible `Connecting` phase before the first architect turn settles

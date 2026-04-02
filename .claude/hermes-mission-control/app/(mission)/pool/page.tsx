@@ -3,6 +3,15 @@ import { useEffect, useState, useCallback } from "react";
 import { RefreshCw, RotateCcw } from "lucide-react";
 import { api, type WorkerPoolConfig } from "@/lib/api";
 
+const QUEUE_DESCRIPTIONS: Record<string, string> = {
+  ingestion: "Validates incoming tasks, queries memory for context, routes to the best specialist agent",
+  execution: "Spawns Claude CLI subprocesses to run agent tasks. Controls how many agents run in parallel",
+  learning: "Parses agent output, extracts learnings, scores agents, detects skills, triggers evolution",
+  evolution: "Scheduled analysis: detects declining agents, triggers prompt refinements, runs maintenance",
+  factory: "Creates new specialist agent .md files when capability gaps are detected (3+ unmatched tasks)",
+  analyst: "Decomposes high-level goals into concrete, actionable tasks for specialist agents",
+};
+
 export default function WorkerPoolPage() {
   const [configs, setConfigs] = useState<WorkerPoolConfig[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -82,9 +91,9 @@ export default function WorkerPoolPage() {
                   <td className="px-5 py-4">
                     <div>
                       <p className="text-sm font-medium text-[var(--text-primary)] capitalize">{shortName}</p>
-                      {config.agentName && (
-                        <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5">Agent: {config.agentName}</p>
-                      )}
+                      <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5 max-w-[280px]">
+                        {QUEUE_DESCRIPTIONS[shortName] || config.queueName}
+                      </p>
                     </div>
                   </td>
                   <td className="px-5 py-4">

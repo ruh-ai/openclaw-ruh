@@ -107,6 +107,21 @@ async function runScheduledAnalysis(): Promise<Record<string, unknown>> {
     }
   }
 
+  // Check for self-reported gaps from agents (LEARNING markers)
+  const selfGapsResult = await query(`
+    SELECT text, agent FROM memories
+    WHERE type = 'gap' AND created_at > NOW() - INTERVAL '7 days'
+    ORDER BY created_at DESC LIMIT 10
+  `);
+  if (selfGapsResult.rows.length >= 2) {
+    const gapTexts = selfGapsResult.rows.map(r => `[${r.agent}] ${r.text}`);
+    console.log(`[hermes:evolution] ${selfGapsResult.rows.length} self-reported gaps from agents`);
+    actions.push({
+      type: 'gaps-detected',
+      description: `${selfGapsResult.rows.length} self-reported capability gaps: ${gapTexts.slice(0, 3).join('; ')}`,
+    });
+  }
+
   // Check for gaps (tasks consistently routed to hermes — lowered from 5 to 3)
   if (gaps.length >= 3) {
     const gapSummary = gaps.slice(0, 5).join('; ');
@@ -297,6 +312,27 @@ async function runMemoryMaintenance(): Promise<Record<string, unknown>> {
     stats.rows.map(r => [r.type, Number(r.cnt)]),
   );
 
+  // Curate hot memory (MEMORY.md) from cold storage
+  const { curateHotMemory } = await import('../hotMemoryCurator');
+  const hotMemoryResult = await curateHotMemory();
+  lineCount = hotMemoryResult.lines;
+
+  // Clean up stale running tasks (stuck for more than 2 hours)
+  const staleResult = await query(`
+    UPDATE task_logs
+    SET status = 'failed', error = 'Stale task — stuck running for over 2 hours, auto-cleaned by maintenance'
+    WHERE status = 'running'
+    AND created_at < NOW() - INTERVAL '2 hours'
+    RETURNING id, delegated_to
+  `);
+  const staleCleaned = staleResult.rows.length;
+  if (staleCleaned > 0) {
+    console.log(`[hermes:evolution] Cleaned ${staleCleaned} stale running tasks`);
+    for (const row of staleResult.rows) {
+      await query('UPDATE agents SET tasks_failed = tasks_failed + 1 WHERE name = $1', [row.delegated_to]);
+    }
+  }
+
   // Run skill acquisition sweep — write learned skills back to agent .md files
   const { runSkillAcquisitionSweep } = await import('../skillAcquisition');
   const skillResult = await runSkillAcquisitionSweep();
@@ -307,13 +343,28 @@ async function runMemoryMaintenance(): Promise<Record<string, unknown>> {
     [
       uuidv4(),
       'maintenance',
-      `Memory: ${lineCount} lines MEMORY.md, ${(Object.values(distribution) as number[]).reduce((a, b) => a + b, 0)} memories. Skills: ${skillResult.totalSkillsAdded} added to ${skillResult.agentsUpdated} agents.`,
-      JSON.stringify({ lineCount, distribution, pruned, skillAcquisition: skillResult }),
+      `Memory: ${lineCount} lines MEMORY.md, ${(Object.values(distribution) as number[]).reduce((a, b) => a + b, 0)} memories. Skills: ${skillResult.totalSkillsAdded} added to ${skillResult.agentsUpdated} agents.${staleCleaned > 0 ? ` Cleaned ${staleCleaned} stale tasks.` : ''}`,
+      JSON.stringify({ lineCount, distribution, pruned, skillAcquisition: skillResult, staleCleaned }),
       'scheduled',
     ],
   );
 
-  return { lineCount, distribution, pruned, skillAcquisition: skillResult };
+  return { lineCount, distribution, pruned, skillAcquisition: skillResult, staleCleaned };
+}
+
+/**
+ * Update the scheduled_tasks DB entry to track when a built-in schedule actually fires.
+ * This keeps Mission Control's Schedules page in sync with reality.
+ */
+async function trackScheduleRun(scheduleName: string): Promise<void> {
+  try {
+    await query(
+      `UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE name = $1`,
+      [scheduleName],
+    );
+  } catch {
+    // Non-critical — don't fail the job if tracking fails
+  }
 }
 
 export function createEvolutionWorker(): Worker<EvolutionJobData> {
@@ -324,17 +375,24 @@ export function createEvolutionWorker(): Worker<EvolutionJobData> {
       console.log(`[hermes:evolution] Processing: type=${type} trigger=${trigger}`);
 
       switch (type) {
-        case 'scheduled-analysis':
-          return await runScheduledAnalysis();
+        case 'scheduled-analysis': {
+          const result = await runScheduledAnalysis();
+          await trackScheduleRun('evolution-analysis');
+          return result;
+        }
 
         case 'refine-agent':
           if (!agentName) throw new Error('agentName required for refine-agent');
           return await refineAgent(agentName, failureContext);
 
-        case 'memory-maintenance':
-          return await runMemoryMaintenance();
+        case 'memory-maintenance': {
+          const result = await runMemoryMaintenance();
+          await trackScheduleRun('memory-maintenance');
+          return result;
+        }
 
         case 'performance-report': {
+          await trackScheduleRun('performance-report');
           const trends = await getAgentTrends();
           const totalTasks = await query(`SELECT COUNT(*) as cnt FROM task_logs WHERE created_at > NOW() - INTERVAL '24 hours'`);
           const report = {
@@ -354,6 +412,7 @@ export function createEvolutionWorker(): Worker<EvolutionJobData> {
         }
 
         case 'agent-health-check': {
+          await trackScheduleRun('agent-health-check');
           const config = getConfig();
           const agentFiles = fs.readdirSync(config.agentsDir).filter(f => f.endsWith('.md'));
           const health: Array<{ name: string; exists: boolean; sizeBytes: number }> = [];

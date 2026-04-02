@@ -233,6 +233,12 @@ export interface ArchitecturePlanEnvVar {
   key: string;
   description: string;
   required: boolean;
+  label?: string;
+  inputType?: "text" | "boolean" | "number" | "select";
+  defaultValue?: string;
+  example?: string;
+  options?: string[];
+  group?: string;
 }
 
 export interface SubAgentConfig {

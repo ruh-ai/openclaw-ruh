@@ -1051,6 +1051,31 @@ function CreateAgentPageContent() {
     }
   };
 
+  // Auto-publish to marketplace after saving an agent. Non-blocking — fires and
+  // forgets so Ship completion isn't delayed by marketplace API issues.
+  const autoPublishToMarketplace = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
+    try {
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/marketplace/listings/auto-publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId,
+          title: agentName,
+          summary: agentDescription,
+          description: agentDescription,
+          category: "general",
+        }),
+      });
+      if (res.ok) {
+        console.log(`[Marketplace] Agent "${agentName}" published to marketplace`);
+      } else {
+        console.warn(`[Marketplace] Auto-publish failed: ${res.status}`);
+      }
+    } catch (err) {
+      console.warn("[Marketplace] Auto-publish failed:", err);
+    }
+  }, []);
+
   const handleCoPilotComplete = useCallback(async (): Promise<boolean> => {
     setIsCompleting(true);
     const state = coPilotStore.snapshot();
@@ -1161,6 +1186,7 @@ function CreateAgentPageContent() {
         if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
         if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
         coPilotStore.reset();
+        void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
         router.push("/agents");
         return true;
       }
@@ -1208,6 +1234,7 @@ function CreateAgentPageContent() {
           }
         } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
 
+        void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
         setIsCompleting(false);
         return true;
       }
@@ -1223,6 +1250,7 @@ function CreateAgentPageContent() {
       if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
       if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
       coPilotStore.reset();
+      void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
       router.push(resolveImproveAgentCompletionHref(
         existingAgent.id,
         sandboxIds,
@@ -1313,6 +1341,7 @@ function CreateAgentPageContent() {
         }
       } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
 
+      void autoPublishToMarketplace(agentId, finalFields.name, finalFields.description);
       setIsCompleting(false);
       return true;
     }
@@ -1328,11 +1357,12 @@ function CreateAgentPageContent() {
     if (agentId) clearCoPilotLifecycleCache(agentId);
     if (agentId) clearCreateSessionCache(agentId);
     coPilotStore.reset();
+    void autoPublishToMarketplace(agentId, finalFields.name, finalFields.description);
     router.push(
       buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
     );
     return true;
-  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
+  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, autoPublishToMarketplace, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
   // ── v2 init form: shown when creating a brand-new agent ──────────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {

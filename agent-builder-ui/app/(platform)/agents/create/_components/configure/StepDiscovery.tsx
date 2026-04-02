@@ -53,15 +53,50 @@ export function StepDiscovery({
     );
   }
 
+  if (status === "idle" && !documents) {
+    return (
+      <div className="p-6 space-y-4">
+        <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/5 px-4 py-3">
+          <p className="text-sm font-satoshi-bold text-[var(--primary)]">Ready to start</p>
+          <p className="mt-1 text-xs font-satoshi-regular text-[var(--text-secondary)]">
+            Send a message in chat to generate requirements, or skip to proceed directly.
+          </p>
+        </div>
+        {!hideFooter && (
+          <div className="flex justify-end">
+            <button
+              onClick={onSkip}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] border border-[var(--border-stroke)] rounded-lg transition-colors"
+            >
+              <SkipForward className="h-3 w-3" />
+              Skip Discovery
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (status === "error" || !documents) {
     return (
       <div className="p-6 space-y-4">
         <div className="rounded-xl border border-[var(--warning)]/20 bg-[var(--warning)]/5 px-4 py-3">
           <p className="text-sm font-satoshi-bold text-[var(--warning)]">Discovery skipped</p>
           <p className="mt-1 text-xs font-satoshi-regular text-[var(--text-secondary)]">
-            The architect will generate skills based on your description. Click Next to continue.
+            The architect will generate skills based on your description.
           </p>
         </div>
+        {!hideFooter && (
+          <div className="flex justify-end">
+            <button
+              onClick={onContinue}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
+            >
+              <ChevronRight className="h-3 w-3" />
+              Continue
+            </button>
+          </div>
+        )}
       </div>
     );
   }

@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Rocket, Loader2, Check, AlertCircle } from "lucide-react";
 import { TabChat } from "@/app/(platform)/agents/[id]/chat/_components/TabChat";
 import { buildDeployConfigSummary } from "@/lib/agents/operator-config-summary";
-import { isRuntimeInputFilled, mergeRuntimeInputDefinitions } from "@/lib/agents/runtime-inputs";
+import { isRuntimeInputFilled, mergeRuntimeInputDefinitions, enrichRuntimeInputsFromPlan } from "@/lib/agents/runtime-inputs";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
   evaluateCoPilotDeployReadiness,
@@ -175,17 +175,21 @@ export function CoPilotLayout({
   }, [builtSkillIds, setSkillAvailability, skillGraph, skillRegistry]);
 
   useEffect(() => {
-    const mergedRuntimeInputs = mergeRuntimeInputDefinitions({
+    let mergedRuntimeInputs = mergeRuntimeInputDefinitions({
       existing: runtimeInputs,
       skillGraph,
       agentRules,
     });
+    // Enrich with metadata from the architecture plan (labels, defaults, types, groups)
+    if (architecturePlan?.envVars) {
+      mergedRuntimeInputs = enrichRuntimeInputsFromPlan(mergedRuntimeInputs, architecturePlan.envVars);
+    }
     const currentSignature = JSON.stringify(runtimeInputs);
     const mergedSignature = JSON.stringify(mergedRuntimeInputs);
     if (currentSignature !== mergedSignature) {
       setRuntimeInputs(mergedRuntimeInputs);
     }
-  }, [agentRules, runtimeInputs, setRuntimeInputs, skillGraph]);
+  }, [agentRules, architecturePlan, runtimeInputs, setRuntimeInputs, skillGraph]);
 
   // Keep the ref in sync so the generation effect can check it without depending on skillGraph
   useEffect(() => {

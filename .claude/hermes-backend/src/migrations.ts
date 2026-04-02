@@ -226,6 +226,15 @@ const MIGRATIONS = [
       `ALTER TABLE agents ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER DEFAULT 0`,
     ],
   },
+  {
+    id: '0007_cost_tracking',
+    statements: [
+      `ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10,6) DEFAULT 0`,
+      `ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS input_tokens INTEGER DEFAULT 0`,
+      `ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS output_tokens INTEGER DEFAULT 0`,
+      `CREATE INDEX IF NOT EXISTS idx_task_logs_cost ON task_logs(cost_usd) WHERE cost_usd > 0`,
+    ],
+  },
 ];
 
 async function applyMemoryFtsIndex(): Promise<void> {

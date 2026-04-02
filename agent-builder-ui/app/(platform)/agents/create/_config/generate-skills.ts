@@ -516,6 +516,7 @@ export async function generateSkillsFromArchitect(
     },
     {
       forgeSandboxId,
+      mode: "copilot",
     },
   );
 

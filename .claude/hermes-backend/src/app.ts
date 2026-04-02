@@ -41,6 +41,50 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'hermes-backend', timestamp: new Date().toISOString() });
 });
 
+// Deep health check — verifies all subsystems
+app.get('/health/deep', asyncHandler(async (_req, res) => {
+  const checks: Record<string, { status: string; detail?: string }> = {};
+
+  // PostgreSQL
+  try {
+    const dbResult = await query('SELECT NOW() as time, pg_database_size(current_database()) as size');
+    checks.postgres = { status: 'ok', detail: `size=${Math.round(Number(dbResult.rows[0].size) / 1024)}KB` };
+  } catch (e: any) {
+    checks.postgres = { status: 'error', detail: e.message };
+  }
+
+  // Redis (via queue health)
+  try {
+    const { getQueue, QUEUE_NAMES } = await import('./queues/definitions');
+    await getQueue(QUEUE_NAMES.INGESTION).getJobCounts();
+    checks.redis = { status: 'ok' };
+  } catch (e: any) {
+    checks.redis = { status: 'error', detail: e.message };
+  }
+
+  // Workers
+  const { getWorkerManager } = await import('./index');
+  const wm = getWorkerManager();
+  checks.workers = wm
+    ? { status: 'ok', detail: `${wm.getStatus().workerCount} workers` }
+    : { status: 'error', detail: 'Worker manager not initialized' };
+
+  // Agents
+  const agents = await agentStore.listAgents();
+  checks.agents = { status: 'ok', detail: `${agents.length} registered, ${agents.filter(a => a.status === 'active').length} active` };
+
+  // Memories
+  const memStats = await memoryStore.getMemoryStats();
+  checks.memories = { status: 'ok', detail: `${memStats.total} total` };
+
+  const allOk = Object.values(checks).every(c => c.status === 'ok');
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'healthy' : 'degraded',
+    checks,
+    timestamp: new Date().toISOString(),
+  });
+}));
+
 // ── SSE Event Stream ─────────────────────────────────────────
 app.get('/api/events/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');

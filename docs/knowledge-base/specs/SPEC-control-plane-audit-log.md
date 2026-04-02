@@ -26,7 +26,7 @@ The repo is adding stronger auth, secret handling, and approval guardrails, but 
 ### Non-goals
 
 - Replacing normal application logs, tracing, or metrics for low-risk read traffic
-- Solving full end-user identity on its own; this spec must work with partial actor context until [[TODOS]] task `TASK-2026-03-25-09` lands
+- Solving full end-user identity on its own; this spec must work with partial actor context until `TODOS.md` task `TASK-2026-03-25-09` lands
 - Capturing full request or response bodies for chat, prompts, secrets, or tool payloads
 - Shipping a full frontend audit viewer in the first pass
 
@@ -76,7 +76,7 @@ The first implementation pass must cover these action groups:
 - Channel mutations: telegram/slack config updates and pairing approvals
 - Conversation destructive actions: rename and delete when the action is operator-visible
 - Agent destructive actions: delete and future undeploy/redeploy mutations
-- Architect approval events once [[TODOS]] task `TASK-2026-03-25-14` lands: auto-allow, manual allow, deny, timeout
+- Architect approval events once `TODOS.md` task `TASK-2026-03-25-14` lands: auto-allow, manual allow, deny, timeout
 
 For each action type, the spec-selected event payload must answer:
 

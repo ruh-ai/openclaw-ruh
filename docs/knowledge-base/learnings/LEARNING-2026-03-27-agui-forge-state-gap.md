@@ -29,4 +29,4 @@ The AG-UI migration cannot truly finish while forge lifecycle state remains outs
 - [[SPEC-agui-protocol-adoption]] — canonical migration plan for replacing legacy transport/state with AG-UI
 - [[LEARNING-2026-03-26-agui-cutover-gap]] — broad AG-UI cutover still depended on legacy transport/state seams
 - [[LEARNING-2026-03-26-agui-state-snapshot-gap]] — builder metadata still needed real `StateSnapshot` / `StateDelta` adoption before more create-flow work landed on top
-- [[TASK-2026-03-27-165]] — worker-ready feature package for moving forge workspace readiness onto the AG-UI builder contract
+- `TODOS.md` task `TASK-2026-03-27-165` — worker-ready feature package for moving forge workspace readiness onto the AG-UI builder contract

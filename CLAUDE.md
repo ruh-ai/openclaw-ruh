@@ -81,6 +81,7 @@ This replaces the old shared architect sandbox. Do not implement any feature tha
 | Work on admin panel | `015-admin-panel.md` |
 | Work on marketplace | `016-marketplace.md` |
 | Work on Flutter customer app | `018-ruh-app.md` |
+| Work on Hermes orchestrator | See "Hermes — Autonomous Orchestrator" section below + `.claude/agents/hermes.md` |
 | Read a feature spec | `docs/knowledge-base/specs/` |
 
 ### Mandatory Documentation Rules
@@ -135,7 +136,10 @@ New specs should follow this structure:
 | `admin-ui` | `admin-ui/` | 3002 | Next.js 15 — admin panel (platform management, user/agent oversight, moderation) |
 | `ruh_app` | `ruh_app/` | N/A | Flutter customer app for web-equivalent org/member access across mobile and desktop targets |
 | `@ruh/marketplace-ui` | `packages/marketplace-ui/` | N/A | Shared React component library for marketplace UI |
-| `postgres` | docker/k8s | 5432 | PostgreSQL 16 |
+| `hermes-backend` | `.claude/hermes-backend/` | 8100 | TypeScript + Bun + Express + BullMQ — autonomous task queue, agent orchestration, evolution engine |
+| `hermes-mission-control` | `.claude/hermes-mission-control/` | 3333 | Next.js 15 — real-time dashboard for Hermes queue, agents, evolution |
+| `postgres` | docker/k8s | 5432 | PostgreSQL 16 (databases: `openclaw` for app, `hermes` for orchestrator) |
+| `redis` | docker | 6379 | Redis 7 — BullMQ queue backend for Hermes |
 | `nginx` | `nginx/` | 80 | Reverse proxy |
 
 ---
@@ -213,6 +217,10 @@ This repo may be maintained by recurring Codex automations in addition to intera
 11. **Customer app direction is Flutter.** `ruh_app` is the active native client path for org admins and members across mobile and desktop targets.
 
 12. **Three user tiers.** Admin (platform management via admin-ui), Developer (build+publish agents via agent-builder-ui), End User (browse+use agents via ruh-frontend or `ruh_app`).
+
+13. **Hermes is always running.** The autonomous orchestrator runs as a persistent macOS service (launchd). It manages task queues, agent evolution, and memory. Check `curl localhost:8100/health` before assuming it's down. Submit complex tasks via the queue API rather than doing everything inline. The evolution engine learns from queue results — direct Agent tool delegation bypasses that learning loop.
+
+14. **Two databases.** `openclaw` (port 5432) is the app database for ruh-backend. `hermes` (port 5432, same Postgres instance) is the orchestrator database for task logs, agent scores, memories, and evolution reports. Never mix them.
 
 ---
 
@@ -425,6 +433,185 @@ gstack is the development process used on this project. Use `/browse` from gstac
 | `/gstack-upgrade` | Upgrade gstack to latest |
 
 If gstack skills aren't working, run: `cd ~/.claude/skills/gstack && ./setup`
+
+---
+
+## Hermes — Autonomous Orchestrator
+
+Hermes is the self-evolving orchestrator that manages all agent work on this project. It runs as a persistent background service and should always be running during development.
+
+### Architecture
+
+- **Backend** (`.claude/hermes-backend/`, port 8100) — Express + BullMQ task queue, PostgreSQL persistence, SSE event stream
+- **Mission Control** (`.claude/hermes-mission-control/`, port 3333) — Next.js dashboard for monitoring queue, agents, evolution
+- **Agent definitions** (`.claude/agents/`) — 8 specialist `.md` files + hermes orchestrator
+- **Memory scripts** (`.claude/scripts/`) — ChromaDB vector search (memory-store.py, memory-query.py, memory-stats.py)
+
+### Infrastructure (always running via launchd)
+
+Hermes runs as persistent macOS services. All four components auto-restart on crash and survive reboots:
+
+| Component | How it runs | Port |
+|-----------|------------|------|
+| PostgreSQL | Docker `--restart unless-stopped` | 5432 |
+| Redis | Docker `--restart unless-stopped` (container: `hermes-redis`) | 6379 |
+| Hermes Backend | launchd `ai.ruh.hermes-backend` | 8100 |
+| Mission Control | launchd `ai.ruh.hermes-mission-control` | 3333 |
+
+**Management commands:**
+```bash
+# Check status
+curl -s http://localhost:8100/health
+curl -s http://localhost:8100/api/queue/health
+
+# Restart backend
+launchctl unload ~/Library/LaunchAgents/ai.ruh.hermes-backend.plist && launchctl load ~/Library/LaunchAgents/ai.ruh.hermes-backend.plist
+
+# Restart Mission Control
+launchctl unload ~/Library/LaunchAgents/ai.ruh.hermes-mission-control.plist && launchctl load ~/Library/LaunchAgents/ai.ruh.hermes-mission-control.plist
+
+# View logs
+tail -f /tmp/hermes-backend.log
+tail -f /tmp/hermes-mission-control.log
+
+# Full startup (if launchd not configured)
+./.claude/start-hermes.sh
+```
+
+### Workers (BullMQ queues)
+
+| Worker | Queue | Concurrency | Purpose |
+|--------|-------|-------------|---------|
+| Ingestion | `hermes-ingestion` | 5 | Validates tasks, queries cold memory, routes to best agent |
+| Execution | `hermes-execution` | 2 | Spawns `claude --agent <name>.md` subprocess, captures output |
+| Learning | `hermes-learning` | 3 | Parses results, extracts learnings, scores agents, stores in ChromaDB |
+| Evolution | `hermes-evolution` | 1 | Scheduled analysis: detects declining agents, triggers refinements |
+| Factory | `hermes-factory` | 1 | Creates new specialist agents when capability gaps are detected |
+| Analyst | `hermes-analyst` | 1 | Decomposes high-level goals into actionable task trees |
+
+### Specialist Agents
+
+| Agent | File | Domain |
+|-------|------|--------|
+| `hermes` | `.claude/agents/hermes.md` | Orchestrator — delegation, evolution, memory |
+| `backend` | `.claude/agents/backend.md` | Express, PostgreSQL, sandbox, auth, SSE |
+| `frontend` | `.claude/agents/frontend.md` | All Next.js UIs (builder, client, admin, marketplace) |
+| `flutter` | `.claude/agents/flutter.md` | ruh_app — Dart, Riverpod, Dio |
+| `test` | `.claude/agents/test.md` | Test execution, coverage, reporting |
+| `reviewer` | `.claude/agents/reviewer.md` | Code review, conventions, KB compliance |
+| `sandbox` | `.claude/agents/sandbox.md` | Docker containers, OpenClaw gateway, lifecycle |
+| `analyst` | `.claude/agents/analyst.md` | Goal decomposition, task planning |
+| `strategist` | `.claude/agents/strategist.md` | Codebase health, priority proposals |
+
+### Scheduled Autonomy
+
+These run automatically without user intervention:
+
+| Schedule | Interval | Worker |
+|----------|----------|--------|
+| Evolution analysis | Every 2h | evolution |
+| Analyst goal sweep | Every 4h | analyst |
+| Memory maintenance | Every 6h | evolution |
+| Strategist self-assessment | Every 8h | evolution |
+| Performance report | Every 24h | evolution |
+| Agent health check | Every 24h | evolution |
+
+### Three-Tier Memory
+
+1. **Hot memory** (`MEMORY.md`) — always loaded, curated, <50 lines
+2. **Cold memory** (ChromaDB) — unlimited semantic search via vector embeddings
+   ```bash
+   python3 .claude/scripts/memory-query.py "search terms" --top-k 5
+   python3 .claude/scripts/memory-store.py "text to store" --type learning --agent backend
+   python3 .claude/scripts/memory-stats.py
+   ```
+3. **Structured backend** (PostgreSQL `hermes` database) — task logs, agent scores, refinement history, queue jobs, schedules, evolution reports
+
+### API Reference (localhost:8100)
+
+**Queue & Tasks:**
+```bash
+# Submit a task (auto-routed or targeted)
+curl -X POST localhost:8100/api/queue/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"description": "task description", "agentName": "auto", "priority": 5}'
+# agentName: "auto", "backend", "frontend", "flutter", "test", "reviewer", "sandbox", "hermes"
+# priority: 1 (critical), 5 (normal), 10 (low)
+
+curl localhost:8100/api/queue/stats       # Queue statistics
+curl localhost:8100/api/queue/health      # Worker and Redis health
+```
+
+**Goals (analyst decomposes into tasks):**
+```bash
+curl -X POST localhost:8100/api/goals \
+  -H "Content-Type: application/json" \
+  -d '{"title": "goal title", "description": "details"}'
+curl localhost:8100/api/goals             # List all goals
+```
+
+**Agents:**
+```bash
+curl localhost:8100/api/agents                    # List all agents with scores
+curl localhost:8100/api/agents/backend             # Single agent detail
+curl localhost:8100/api/agents/backend/skills      # Acquired skills from task execution
+curl -X POST localhost:8100/api/agents/sync        # Re-sync .md files to DB
+```
+
+**Evolution:**
+```bash
+curl -X POST localhost:8100/api/evolution/trigger  # Force evolution analysis now
+curl localhost:8100/api/evolution/timeline?limit=30 # Event timeline
+```
+
+**Dashboard & Events:**
+```bash
+curl localhost:8100/api/dashboard/stats   # Aggregate stats for all subsystems
+curl localhost:8100/api/events/stream     # SSE stream (real-time events)
+```
+
+**Other endpoints:** `/api/memories`, `/api/tasks`, `/api/scores`, `/api/refinements`, `/api/sessions`, `/api/schedules`, `/api/pool`
+
+### Environment Variables (Hermes Backend)
+
+All have sensible defaults — no `.env` file required for local development:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgresql://openclaw:changeme@localhost:5432/hermes` | PostgreSQL connection |
+| `PORT` | `8100` | API server port |
+| `REDIS_URL` | `redis://localhost:6379` | Redis for BullMQ |
+| `ALLOWED_ORIGINS` | `http://localhost:3333` | CORS origins |
+| `WORKER_CONCURRENCY` | `2` | Max concurrent execution workers |
+| `EXECUTION_TIMEOUT_MS` | `600000` (10min) | Per-job timeout |
+| `MAX_SUBPROCESSES` | `3` | Hard cap on Claude CLI subprocesses |
+| `EVOLUTION_INTERVAL_MS` | `7200000` (2h) | Evolution analysis frequency |
+| `ANALYST_INTERVAL_MS` | `14400000` (4h) | Analyst goal sweep frequency |
+| `STRATEGIST_INTERVAL_MS` | `28800000` (8h) | Strategist assessment frequency |
+| `CLAUDE_CLI_PATH` | `claude` | Path to Claude CLI binary |
+
+### Using Hermes as an Agent
+
+When spawning Hermes via the Agent tool, use `subagent_type: "hermes"`. Hermes will:
+1. Orient (load memory, check TODOS.md, query cold memory)
+2. Decide (break task into steps, match to specialists)
+3. Delegate (spawn sub-agents or submit to queue)
+4. Verify (check results, run tests)
+5. Evolve (score agents, store learnings, trigger refinements)
+
+For complex multi-service tasks, prefer submitting via the queue API (`POST /api/queue/tasks`) so the evolution engine can learn from the results.
+
+### Common Debugging
+
+| Problem | Check |
+|---|---|
+| Hermes backend not responding | `launchctl list ai.ruh.hermes-backend` + `tail /tmp/hermes-backend.err` |
+| Workers not processing | `curl localhost:8100/api/queue/health` — check Redis connected + worker status |
+| Port 8100 already in use | `lsof -ti:8100 \| xargs kill` then restart via launchctl |
+| Redis not running | `docker start hermes-redis` |
+| Database migration issues | Check `/tmp/hermes-backend.err` — migrations auto-run on startup |
+| Agent not found | `curl -X POST localhost:8100/api/agents/sync` to re-sync from `.claude/agents/` |
+| Evolution not triggering | `curl -X POST localhost:8100/api/evolution/trigger` to force it |
 
 ---
 

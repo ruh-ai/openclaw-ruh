@@ -49,6 +49,9 @@ interface ExtractedLearning {
   taskSummary: string;
   taskType: string;           // 'code-change', 'test-run', 'review', 'analysis', 'debugging'
   qualitySignals: string[];   // things that indicate quality of output
+  selfReportedLearnings: Array<{ type: string; description: string }>;  // LEARNING: markers
+  selfReportedSkills: string[];   // SKILL_ACQUIRED: markers
+  selfReportedGaps: string[];     // GAP: markers
 }
 
 /**
@@ -63,6 +66,9 @@ function extractLearnings(output: string | null, error: string | null, success: 
     taskSummary: '',
     taskType: 'unknown',
     qualitySignals: [],
+    selfReportedLearnings: [],
+    selfReportedSkills: [],
+    selfReportedGaps: [],
   };
 
   if (!output) return learning;
@@ -137,6 +143,34 @@ function extractLearnings(output: string | null, error: string | null, success: 
   if (learning.filesEdited.length > 0) learning.qualitySignals.push(`edited ${learning.filesEdited.length} files`);
   if (learning.filesRead.length > 0) learning.qualitySignals.push(`read ${learning.filesRead.length} files`);
   if (success && learning.errorsEncountered.length === 0) learning.qualitySignals.push('clean execution');
+
+  // ── Parse self-evolution markers from agent output ──────────
+  // Agents emit structured markers: LEARNING, SKILL_ACQUIRED, GAP
+  const learningMarkers = resultText.match(/LEARNING:\s*(\w+)\s*\|\s*([^\n]+)/g);
+  if (learningMarkers) {
+    for (const m of learningMarkers) {
+      const match = m.match(/LEARNING:\s*(\w+)\s*\|\s*(.+)/);
+      if (match) {
+        learning.selfReportedLearnings.push({ type: match[1].toLowerCase(), description: match[2].trim() });
+      }
+    }
+  }
+
+  const skillMarkers = resultText.match(/SKILL_ACQUIRED:\s*([^\n]+)/g);
+  if (skillMarkers) {
+    for (const m of skillMarkers) {
+      const desc = m.replace(/^SKILL_ACQUIRED:\s*/, '').trim();
+      if (desc) learning.selfReportedSkills.push(desc);
+    }
+  }
+
+  const gapMarkers = resultText.match(/GAP:\s*([^\n]+)/g);
+  if (gapMarkers) {
+    for (const m of gapMarkers) {
+      const desc = m.replace(/^GAP:\s*/, '').trim();
+      if (desc) learning.selfReportedGaps.push(desc);
+    }
+  }
 
   // Deduplicate
   learning.filesRead = [...new Set(learning.filesRead)].slice(0, 10);
@@ -288,6 +322,43 @@ export function createLearningWorker(): Worker<LearningJobData> {
         }
       }
 
+      // ── 2b. Quality review feedback loop ───────────────────
+      // If this was a quality-review task, extract the reviewed agent name
+      // and store the quality score as feedback for that agent's evolution
+      const { description: taskDesc } = job.data;
+      if (taskDesc && taskDesc.startsWith('[quality-review]') && success) {
+        const reviewedAgentMatch = taskDesc.match(/changes made by (\w+):/);
+        if (reviewedAgentMatch) {
+          const reviewedAgent = reviewedAgentMatch[1];
+          // Extract quality score from the reviewer's output if possible
+          const qualityMatch = learning.taskSummary.match(/(\d+)\s*\/\s*10/);
+          const qualityScore = qualityMatch ? parseInt(qualityMatch[1], 10) : null;
+
+          if (qualityScore !== null) {
+            // Store a quality score for the reviewed agent (separate from pass/fail)
+            await scoreStore.createScore({
+              agentName: reviewedAgent,
+              taskId: taskLogId,
+              passed: qualityScore >= 6,
+              score: qualityScore,
+              notes: `Quality review by reviewer: ${learning.taskSummary.slice(0, 100)}`,
+            });
+
+            console.log(`[hermes:learning] Quality feedback: ${reviewedAgent} scored ${qualityScore}/10 by reviewer`);
+
+            // If quality is low, store a pitfall for the reviewed agent
+            if (qualityScore < 6) {
+              await storeMemory(
+                `Quality review flagged ${reviewedAgent}'s code: score ${qualityScore}/10. ${learning.taskSummary.slice(0, 150)}`,
+                'pitfall',
+                reviewedAgent,
+                `quality-review,${reviewedAgent},low-quality`,
+              );
+            }
+          }
+        }
+      }
+
       // ── 3. Rich memory storage ──────────────────────────────
       if (success) {
         // Store what the agent actually did (not just "completed in Xms")
@@ -339,6 +410,41 @@ export function createLearningWorker(): Worker<LearningJobData> {
           agentName,
           `${learning.taskType},${agentName},failure`,
         );
+      }
+
+      // ── 3b. Process self-reported evolution markers ────────────
+      // Agents emit LEARNING:, SKILL_ACQUIRED:, GAP: markers in their output
+
+      for (const lr of learning.selfReportedLearnings) {
+        await storeMemory(lr.description, lr.type, agentName, `${lr.type},self-reported,${agentName}`);
+        await query(
+          `INSERT INTO memories (id, text, type, agent, tags, task_context) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uuidv4(), `Self-reported ${lr.type}: ${lr.description}`, lr.type, agentName,
+           `${lr.type},self-reported`, taskLogId],
+        );
+      }
+
+      for (const skill of learning.selfReportedSkills) {
+        await storeMemory(`Skill acquired: ${skill}`, 'skill', agentName, `skill,self-reported,${agentName}`);
+        await query(
+          `INSERT INTO memories (id, text, type, agent, tags, task_context) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uuidv4(), `Skill acquired: ${skill}`, 'skill', agentName, 'skill,self-reported,acquired', taskLogId],
+        );
+        console.log(`[hermes:learning] ${agentName} self-reported skill: ${skill}`);
+        publish({ type: 'memory', action: 'created', data: { type: 'skill-acquired', agentName, skill } });
+      }
+
+      for (const gap of learning.selfReportedGaps) {
+        await storeMemory(`Capability gap: ${gap}`, 'gap', agentName, `gap,self-reported,${agentName}`);
+        await query(
+          `INSERT INTO memories (id, text, type, agent, tags, task_context) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uuidv4(), `Gap: ${gap}`, 'gap', agentName, 'gap,self-reported', taskLogId],
+        );
+        console.log(`[hermes:learning] ${agentName} reported gap: ${gap}`);
+      }
+
+      if (learning.selfReportedLearnings.length + learning.selfReportedSkills.length + learning.selfReportedGaps.length > 0) {
+        console.log(`[hermes:learning] ${agentName} self-evolution: ${learning.selfReportedLearnings.length} learnings, ${learning.selfReportedSkills.length} skills, ${learning.selfReportedGaps.length} gaps`);
       }
 
       // Store structured learning in PostgreSQL

@@ -234,3 +234,7 @@ See [[016-marketplace]] for the full marketplace contract.
 - [[SPEC-sandbox-conversation-cleanup]] — defines sandbox-owned conversation cleanup plus fail-closed direct conversation-route guards
 - [[SPEC-graceful-shutdown]] — defines the process-lifecycle contract for signal handling, request draining, SSE termination, and DB-pool shutdown
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — adds the read-only skill-registry route surface used by the gated Co-Pilot builder
+
+## Related Reviews
+
+- [[REVIEW-paperclip-openspace-architecture]] — reviews fire-and-forget Paperclip/OpenSpace hooks in `app.ts`, shell injection risk, double-provisioning race, and post-chat DB read overhead

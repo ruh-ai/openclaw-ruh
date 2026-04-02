@@ -37,3 +37,10 @@ evolutionRouter.get('/trends', asyncHandler(async (req, res) => {
   const trends = await evolutionReportStore.getAgentTrends(days);
   res.json(trends);
 }));
+
+// Manually trigger the strategist (system self-assessment → new goals)
+evolutionRouter.post('/strategist', asyncHandler(async (_req, res) => {
+  const { runStrategist } = await import('../workers/strategistWorker');
+  const result = await runStrategist();
+  res.json(result);
+}));

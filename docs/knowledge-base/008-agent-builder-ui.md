@@ -338,6 +338,7 @@ The builder is now statically light-only at the app shell. `app/layout.tsx` no l
 - [[LEARNING-2026-03-30-forging-status-draft-autosave-gap]] — forge-backed drafts keep `status: forging`, so backend metadata PATCH validation must accept that state or `/agents/create?agentId=...` autosave fails immediately
 - [[LEARNING-2026-03-26-connect-tools-catalog-contract]] — Connect Tools must use registry-backed cataloging and let researched seeds promote into real supported connector ids
 - [[LEARNING-2026-03-26-trigger-catalog-contract]] — trigger selection, suggestion, and reopen normalization should share one runtime-backed catalog helper
+- [[LEARNING-2026-04-02-agent-create-e2e-contract]] — the live forge-backed create flow takes minutes before Co-Pilot appears, and local first-turn architect runs may fall back from WebSocket to HTTP after the visible `Connecting` state
 - [[LEARNING-2026-03-26-improve-agent-copilot-contract]] — Improve Agent needs an explicit saved-agent Co-Pilot seed and a separate completion branch from new-agent deploy handoff
 - [[LEARNING-2026-03-26-architect-approval-policy]] — the bridge now denies non-allowlisted exec requests immediately and emits structured approval events instead of silently running tools
 - [[LEARNING-2026-03-25-control-plane-audit-gap]] — bridge auth, approval policy, and secret-handling work still need a shared audit trail for architect-side sensitive actions
@@ -407,3 +408,5 @@ The builder is now statically light-only at the app shell. `app/layout.tsx` no l
 - [[LEARNING-2026-03-27-guided-mode-contract-bypass]] — the old Guided mode used to bypass the saved-config/deploy contract, so `/agents/create` now retires that entry point and fails closed to Co-Pilot for new-agent creation
 - [[LEARNING-2026-03-26-agent-improvement-persistence-contract]] — builder recommendations should persist as metadata-only saved agent state so review, reopen, and deploy read one source of truth
 - [[LEARNING-2026-03-26-improve-agent-copilot-gap]] — existing-agent `Build` still enters the legacy advanced-chat shell because `/agents/create` defaults `editingAgentId` sessions to `chat`, bypassing the shipped Co-Pilot workspace entirely
+- [[LEARNING-2026-03-30-build-stage-architecture-plan-handoff]] — build-stage generation must consume the approved architecture plan artifact, not just the original purpose prompt
+- [[LEARNING-2026-03-31-copilot-built-skill-hydration]] — `setSkillGraph()` must derive `builtSkillIds` from nodes with non-empty `skill_md` so the direct forge build path stays truthful

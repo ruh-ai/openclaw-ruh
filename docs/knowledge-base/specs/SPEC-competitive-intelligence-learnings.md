@@ -715,3 +715,7 @@ ALTER TABLE agents ADD COLUMN total_spent_monthly_cents INTEGER DEFAULT 0;
 - [ ] Skill marketplace: contract test for upload/download/search
 - [ ] Skill discovery: integration test for embedding-based search relevance
 - [ ] Template export: unit test for secret scrubbing on export
+
+## Related Reviews
+
+- [[REVIEW-paperclip-openspace-architecture]] — architecture review covering OpenSpace heuristic naming, fire-and-forget hook race conditions, shell injection risk, and Phase 2 coordinator gaps

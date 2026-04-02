@@ -11,6 +11,7 @@ import { createAnalystWorker } from './analystWorker';
 import { killAllSubprocesses, activeSubprocessCount } from './subprocess';
 import * as workerPoolStore from '../stores/workerPoolStore';
 import * as goalStore from '../stores/goalStore';
+import * as scheduledTaskStore from '../stores/scheduledTaskStore';
 import { publish } from '../eventBus';
 
 export class WorkerManager {
@@ -109,6 +110,10 @@ export class WorkerManager {
     // The evolution worker's scheduled-analysis already runs; we add a separate
     // repeatable that triggers goal analysis
     this._registerAnalystSweep(config.analystIntervalMs);
+    this._registerStrategist(config.strategistIntervalMs);
+
+    // Sync built-in schedules to DB (readable from Mission Control)
+    await this._syncBuiltInSchedules(config);
 
     console.log('[hermes:workers] Scheduled jobs registered:');
     console.log(`  - Evolution analysis: every ${config.evolutionIntervalMs / 60000}min`);
@@ -116,6 +121,74 @@ export class WorkerManager {
     console.log('  - Performance report: every 24h');
     console.log('  - Agent health check: every 24h');
     console.log(`  - Analyst sweep: every ${config.analystIntervalMs / 60000}min`);
+    console.log(`  - Strategist: every ${config.strategistIntervalMs / 60000}min`);
+  }
+
+  /**
+   * Sync built-in schedules to the scheduled_tasks table so Mission Control shows them.
+   * These are display entries that reflect the real BullMQ repeatable jobs.
+   * Uses upsert by name — creates if missing, updates interval if changed.
+   */
+  private async _syncBuiltInSchedules(config: ReturnType<typeof getConfig>): Promise<void> {
+    const { query: dbQuery } = await import('../db');
+
+    const builtIn = [
+      {
+        name: 'evolution-analysis',
+        description: 'Analyze agent performance trends, detect declining agents, trigger refinements',
+        intervalMin: Math.round(config.evolutionIntervalMs / 60000),
+        agentName: 'hermes',
+      },
+      {
+        name: 'memory-maintenance',
+        description: 'Prune MEMORY.md, run skill acquisition sweep, curate hot memory, clean stale tasks',
+        intervalMin: Math.round(config.maintenanceIntervalMs / 60000),
+        agentName: 'hermes',
+      },
+      {
+        name: 'performance-report',
+        description: 'Daily report: task counts, pass rates, agent utilization across all agents',
+        intervalMin: 1440,
+        agentName: 'hermes',
+      },
+      {
+        name: 'agent-health-check',
+        description: 'Daily check: verify all agent .md files exist, prompt hashes match, no orphans',
+        intervalMin: 1440,
+        agentName: 'hermes',
+      },
+      {
+        name: 'analyst-sweep',
+        description: 'Decompose all active goals into tasks, identify gaps in acceptance criteria',
+        intervalMin: Math.round(config.analystIntervalMs / 60000),
+        agentName: 'analyst',
+      },
+      {
+        name: 'strategist-assessment',
+        description: 'Assess system health, propose new goals, follow up on completed goals',
+        intervalMin: Math.round(config.strategistIntervalMs / 60000),
+        agentName: 'strategist',
+      },
+    ];
+
+    for (const sched of builtIn) {
+      const cronExpr = sched.intervalMin >= 1440
+        ? `0 0 */${Math.round(sched.intervalMin / 1440)} * *`
+        : sched.intervalMin >= 60
+          ? `0 */${Math.round(sched.intervalMin / 60)} * * *`
+          : `*/${sched.intervalMin} * * * *`;
+
+      // Upsert: insert or update existing by name
+      const { v4: uuidv4 } = await import('uuid');
+      await dbQuery(`
+        INSERT INTO scheduled_tasks (id, name, description, cron_expression, agent_name, priority, timeout_ms, enabled)
+        VALUES ($1, $2, $3, $4, $5, 5, 600000, true)
+        ON CONFLICT (name) DO UPDATE SET
+          description = EXCLUDED.description,
+          cron_expression = EXCLUDED.cron_expression,
+          agent_name = EXCLUDED.agent_name
+      `, [uuidv4(), sched.name, sched.description, cronExpr, sched.agentName]);
+    }
   }
 
   /**
@@ -139,6 +212,9 @@ export class WorkerManager {
 
         if (goals.items.length > 0) {
           console.log(`[hermes:workers] Analyst sweep: enqueued ${goals.items.length} goals`);
+          // Track in scheduled_tasks for Mission Control visibility
+          const { query: dbQuery } = await import('../db');
+          await dbQuery(`UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE name = 'analyst-sweep'`).catch(() => {});
         }
       } catch (err) {
         console.error('[hermes:workers] Analyst sweep failed:', err);
@@ -148,6 +224,28 @@ export class WorkerManager {
     // Run first sweep after 10s, then on interval
     setTimeout(sweep, 10_000);
     setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * Run the strategist on a schedule — reviews system, creates new goals.
+   */
+  private _registerStrategist(intervalMs: number): void {
+    const run = async () => {
+      try {
+        const { runStrategist } = await import('./strategistWorker');
+        const result = await runStrategist();
+        console.log(`[hermes:workers] Strategist: "${result.assessment.slice(0, 80)}..." — ${result.goalsCreated} goals, ${result.followups} follow-ups`);
+        // Track in scheduled_tasks for Mission Control visibility
+        const { query: dbQuery } = await import('../db');
+        await dbQuery(`UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE name = 'strategist-assessment'`).catch(() => {});
+      } catch (err) {
+        console.error('[hermes:workers] Strategist failed:', err);
+      }
+    };
+
+    // First run after 30s (let everything else start first), then on interval
+    setTimeout(run, 30_000);
+    setInterval(run, intervalMs);
   }
 
   /**
