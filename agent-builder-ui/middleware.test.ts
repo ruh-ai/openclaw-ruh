@@ -34,7 +34,7 @@ describe("middleware", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
-  test("bypasses auth in local development", () => {
+  test("redirects unauthenticated requests in development too", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";
 
@@ -43,8 +43,8 @@ describe("middleware", () => {
         new NextRequest("http://builder.test/agents/create")
       );
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("location")).toBeNull();
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toContain("/authenticate");
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
     }
