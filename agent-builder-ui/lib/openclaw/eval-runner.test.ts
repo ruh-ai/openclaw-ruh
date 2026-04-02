@@ -84,10 +84,33 @@ describe("runEvalSuite", () => {
   beforeEach(() => {
     mockStore.updateEvalTask.mockClear();
     mockStore.setEvalStatus.mockClear();
-    mockSendToArchitectStreaming.mockClear();
-    mockScoreEvalResponse.mockClear();
-    mockCollectExecutionTrace.mockClear();
-    mockScoreExecutionTrace.mockClear();
+    mockSendToArchitectStreaming.mockReset();
+    mockScoreEvalResponse.mockReset();
+    mockCollectExecutionTrace.mockReset();
+    mockScoreExecutionTrace.mockReset();
+    // Restore default implementations after each test
+    mockSendToArchitectStreaming.mockImplementation(() =>
+      Promise.resolve({ type: "agent_response", content: "mock response" })
+    );
+    mockScoreEvalResponse.mockImplementation(() => ({
+      passed: true,
+      confidence: 0.9,
+      reasons: ["good"],
+    }));
+    mockCollectExecutionTrace.mockImplementation(() =>
+      Promise.resolve({
+        response: "traced response",
+        toolCalls: [{ toolName: "test-tool" }],
+      })
+    );
+    mockScoreExecutionTrace.mockImplementation(() =>
+      Promise.resolve({
+        passed: true,
+        score: 0.85,
+        feedback: "Looks good",
+        skillDiagnosis: [],
+      })
+    );
   });
 
   it("sets status to running then done", async () => {

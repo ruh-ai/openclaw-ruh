@@ -47,6 +47,14 @@ mock.module("@/lib/openclaw/copilot-state", () => ({
 
 mock.module("@/lib/openclaw/copilot-flow", () => ({
   resolveCoPilotCompletionKind: () => null,
+  buildCoPilotReviewAgentSnapshot: () => ({}),
+  buildCoPilotReviewData: () => ({}),
+  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
+  hasPurposeMetadata: () => false,
+  getSelectedUnresolvedSkillIds: () => [],
+  countSkillAvailability: () => ({ available: 0, total: 0 }),
+  resolveCoPilotToolResearchUseCase: () => "",
+  createCoPilotSeedFromAgent: () => ({}),
 }));
 
 mock.module("@/hooks/use-architect-sandbox", () => ({
@@ -59,6 +67,8 @@ mock.module("@/hooks/use-forge-sandbox", () => ({
 
 mock.module("@/lib/openclaw/agent-config", () => ({
   pushAgentConfig: mock(() => Promise.resolve({ ok: true, steps: [], webhooks: [] })),
+  buildSoulContent: () => "",
+  buildCronJobs: () => [],
 }));
 
 mock.module("@/lib/openclaw/copilot-lifecycle-cache", () => ({
@@ -86,11 +96,15 @@ mock.module("@/lib/agents/operator-config-summary", () => ({
     runtimeInputSummary: "OK",
     triggerSummary: "Manual",
   }),
+  buildReviewToolItems: () => [],
+  buildReviewTriggerItems: () => [],
+  buildReviewRuntimeInputItems: () => [],
 }));
 
 mock.module("@/lib/agents/runtime-inputs", () => ({
   mergeRuntimeInputDefinitions: () => [],
   extractRuntimeInputKeys: () => [],
+  isRuntimeInputFilled: () => false,
 }));
 
 mock.module("@/lib/agents/deploy-handoff", () => ({
@@ -100,6 +114,12 @@ mock.module("@/lib/agents/deploy-handoff", () => ({
 
 mock.module("@/lib/tools/tool-integration", () => ({
   finalizeCredentialBackedToolConnections: () => [],
+  researchToolIntegration: mock(() => Promise.resolve(null)),
+  buildToolResearchPlan: () => ({ steps: [], toolId: "", toolName: "" }),
+  buildToolResearchResultFromPlan: () => null,
+  normalizeToolResearchResponse: () => ({}),
+  buildToolResearchPrompt: () => "",
+  reconcileToolConnections: () => [],
 }));
 
 mock.module("sonner", () => ({

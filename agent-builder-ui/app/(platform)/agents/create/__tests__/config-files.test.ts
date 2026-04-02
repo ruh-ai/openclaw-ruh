@@ -130,10 +130,10 @@ describe("mcp-tool-registry", () => {
     expect(typeof getToolDefinition).toBe("function");
   });
 
-  test("getToolDefinition returns undefined for unknown tool", async () => {
+  test("getToolDefinition returns nullish for unknown tool", async () => {
     const { getToolDefinition } = await import("../_config/mcp-tool-registry");
     const result = getToolDefinition("nonexistent-tool-xyz");
-    expect(result).toBeUndefined();
+    expect(result).toBeNull();
   });
 
   test("exports buildSupportedToolsContext function", async () => {

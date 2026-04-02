@@ -59,6 +59,7 @@ mock.module("@/lib/agents/operator-config-summary", () => ({
 mock.module("@/lib/agents/runtime-inputs", () => ({
   isRuntimeInputFilled: () => false,
   mergeRuntimeInputDefinitions: () => [],
+  extractRuntimeInputKeys: () => [],
 }));
 
 mock.module("@/lib/skills/skill-registry", () => ({
@@ -78,6 +79,12 @@ mock.module("@/lib/auth/backend-fetch", () => ({
 
 mock.module("@/lib/tools/tool-integration", () => ({
   researchToolIntegration: mock(() => Promise.resolve(null)),
+  buildToolResearchPlan: () => ({ steps: [], toolId: "", toolName: "" }),
+  buildToolResearchResultFromPlan: () => null,
+  normalizeToolResearchResponse: () => ({}),
+  buildToolResearchPrompt: () => "",
+  reconcileToolConnections: () => [],
+  finalizeCredentialBackedToolConnections: () => [],
 }));
 
 mock.module("@/hooks/use-agents-store", () => ({

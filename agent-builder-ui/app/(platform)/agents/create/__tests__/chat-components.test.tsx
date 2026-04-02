@@ -69,7 +69,8 @@ describe("MessageContent", () => {
     const mod = await import("../_components/MessageContent");
     const component = mod.MessageContent || mod.default;
     expect(component).toBeDefined();
-    expect(typeof component).toBe("function");
+    // React.memo returns an object, not a plain function
+    expect(typeof component === "function" || (typeof component === "object" && component !== null)).toBe(true);
   });
 });
 

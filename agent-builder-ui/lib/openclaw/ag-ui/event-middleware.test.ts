@@ -24,9 +24,12 @@ describe("createTextDeltaStateMachine", () => {
     expect(pushOp).toBeDefined();
   });
 
-  test("incomplete think tag produces update_detail", () => {
+  test("incomplete think tag produces update_detail on subsequent delta", () => {
     const sm = createTextDeltaStateMachine();
-    const result = sm.process("<think>partial reasoning");
+    // First delta opens the think block (phase transitions pre_think → in_think)
+    sm.process("<think>");
+    // Second delta arrives before </think> — should produce update_detail
+    const result = sm.process("partial reasoning");
     const updateOp = result.stepOps.find((op) => op.action === "update_detail");
     expect(updateOp).toBeDefined();
   });

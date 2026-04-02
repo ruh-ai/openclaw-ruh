@@ -25,6 +25,12 @@ mock.module("@/lib/auth/backend-fetch", () => ({
 
 mock.module("@/lib/tools/tool-integration", () => ({
   researchToolIntegration: mock(() => Promise.resolve(null)),
+  buildToolResearchPlan: () => ({ steps: [], toolId: "", toolName: "" }),
+  buildToolResearchResultFromPlan: () => null,
+  normalizeToolResearchResponse: () => ({}),
+  buildToolResearchPrompt: () => "",
+  reconcileToolConnections: () => [],
+  finalizeCredentialBackedToolConnections: () => [],
 }));
 
 mock.module("@/lib/skills/skill-registry", () => ({
