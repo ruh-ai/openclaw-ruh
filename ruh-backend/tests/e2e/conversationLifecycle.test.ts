@@ -134,6 +134,9 @@ describe('GET /api/sandboxes/:sandbox_id/conversations', () => {
   });
 
   test('returns 400 for an invalid conversation cursor', async () => {
+    mockListConversationsPage.mockImplementationOnce(async () => {
+      throw new Error('Invalid conversation cursor');
+    });
     await request()
       .get(`/api/sandboxes/${SANDBOX_ID}/conversations?cursor=bad-cursor`)
       .expect(400);

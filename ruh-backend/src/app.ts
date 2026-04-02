@@ -19,9 +19,23 @@ import { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } from './age
 import { createLogger } from '@ruh/logger';
 import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
-import { requireAuth, requireRole } from './auth/middleware';
-import { requireActiveDeveloperOrg } from './auth/builderAccess';
-import { requireActiveCustomerOrg } from './auth/customerAccess';
+import * as _authMiddleware from './auth/middleware';
+import * as _builderAccess from './auth/builderAccess';
+import * as _customerAccess from './auth/customerAccess';
+
+// Late-binding wrappers: call through the namespace so that mock.module()
+// replacements take effect even after app.ts has already been evaluated and
+// route handlers have been registered.  Without this, named imports are
+// captured by value at route-registration time and subsequent mock.module
+// calls in test files cannot override them.
+const requireAuth: (req: Request, res: Response, next: NextFunction) => void =
+  (req, res, next) => _authMiddleware.requireAuth(req, res, next);
+const requireRole: (...roles: string[]) => (req: Request, res: Response, next: NextFunction) => void =
+  (...roles) => (req, res, next) => _authMiddleware.requireRole(...roles)(req, res, next);
+const requireActiveDeveloperOrg: typeof _builderAccess.requireActiveDeveloperOrg =
+  (...args) => _builderAccess.requireActiveDeveloperOrg(...args);
+const requireActiveCustomerOrg: typeof _customerAccess.requireActiveCustomerOrg =
+  (...args) => _customerAccess.requireActiveCustomerOrg(...args);
 import * as userStore from './userStore';
 import { withConn } from './db';
 

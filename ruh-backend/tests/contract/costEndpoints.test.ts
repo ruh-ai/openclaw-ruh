@@ -171,6 +171,7 @@ describe('POST /api/agents/:agentId/cost-events', () => {
   test('201 — returns cost_event with required shape', async () => {
     const res = await request()
       .post('/api/agents/agent-001/cost-events')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ model: 'claude-sonnet-4-6', input_tokens: 1000, output_tokens: 500, cost_cents: 0.35 });
 
     expect(res.status).toBe(201);
@@ -181,6 +182,7 @@ describe('POST /api/agents/:agentId/cost-events', () => {
   test('400 — missing model returns error', async () => {
     const res = await request()
       .post('/api/agents/agent-001/cost-events')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ input_tokens: 1000, output_tokens: 500, cost_cents: 0.35 });
 
     expect(res.status).toBe(400);
@@ -189,6 +191,7 @@ describe('POST /api/agents/:agentId/cost-events', () => {
   test('400 — non-numeric input_tokens returns error', async () => {
     const res = await request()
       .post('/api/agents/agent-001/cost-events')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ model: 'm', input_tokens: 'bad', output_tokens: 100, cost_cents: 0.1 });
 
     expect(res.status).toBe(400);
@@ -200,7 +203,8 @@ describe('POST /api/agents/:agentId/cost-events', () => {
 describe('GET /api/agents/:agentId/cost-events', () => {
   test('200 — returns items array and has_more flag', async () => {
     const res = await request()
-      .get('/api/agents/agent-001/cost-events');
+      .get('/api/agents/agent-001/cost-events')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.items)).toBe(true);
@@ -216,7 +220,8 @@ describe('GET /api/agents/:agentId/cost-events', () => {
 describe('GET /api/agents/:agentId/cost-events/summary', () => {
   test('200 — returns summary with required fields', async () => {
     const res = await request()
-      .get('/api/agents/agent-001/cost-events/summary');
+      .get('/api/agents/agent-001/cost-events/summary')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     const summary = res.body.summary as Record<string, unknown>;
@@ -233,6 +238,7 @@ describe('PUT /api/agents/:agentId/budget-policy', () => {
   test('200 — returns budget_policy with required shape', async () => {
     const res = await request()
       .put('/api/agents/agent-001/budget-policy')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ monthly_cap_cents: 10000 });
 
     expect(res.status).toBe(200);
@@ -243,6 +249,7 @@ describe('PUT /api/agents/:agentId/budget-policy', () => {
   test('400 — negative monthly_cap_cents rejected', async () => {
     const res = await request()
       .put('/api/agents/agent-001/budget-policy')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ monthly_cap_cents: -100 });
 
     expect(res.status).toBe(400);
@@ -251,6 +258,7 @@ describe('PUT /api/agents/:agentId/budget-policy', () => {
   test('400 — missing monthly_cap_cents rejected', async () => {
     const res = await request()
       .put('/api/agents/agent-001/budget-policy')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(400);
@@ -262,7 +270,8 @@ describe('PUT /api/agents/:agentId/budget-policy', () => {
 describe('GET /api/agents/:agentId/budget-policy', () => {
   test('200 — returns budget_policy with required shape', async () => {
     const res = await request()
-      .get('/api/agents/agent-001/budget-policy');
+      .get('/api/agents/agent-001/budget-policy')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     assertBudgetPolicyShape(res.body.budget_policy as Record<string, unknown>);
@@ -272,7 +281,8 @@ describe('GET /api/agents/:agentId/budget-policy', () => {
     mockGetBudgetPolicy.mockImplementationOnce(async () => null);
 
     const res = await request()
-      .get('/api/agents/agent-001/budget-policy');
+      .get('/api/agents/agent-001/budget-policy')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(404);
   });
@@ -283,7 +293,8 @@ describe('GET /api/agents/:agentId/budget-policy', () => {
 describe('GET /api/agents/:agentId/budget-status', () => {
   test('200 — returns budget_status with required fields', async () => {
     const res = await request()
-      .get('/api/agents/agent-001/budget-status');
+      .get('/api/agents/agent-001/budget-status')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     const status = res.body.budget_status as Record<string, unknown>;
@@ -301,6 +312,7 @@ describe('POST /api/agents/:agentId/execution-recordings', () => {
   test('201 — returns execution_recording with required shape', async () => {
     const res = await request()
       .post('/api/agents/agent-001/execution-recordings')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ run_id: 'run-abc', success: true });
 
     expect(res.status).toBe(201);
@@ -315,6 +327,7 @@ describe('POST /api/agents/:agentId/execution-recordings', () => {
   test('400 — missing run_id returns error', async () => {
     const res = await request()
       .post('/api/agents/agent-001/execution-recordings')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({ success: true });
 
     expect(res.status).toBe(400);
@@ -326,7 +339,8 @@ describe('POST /api/agents/:agentId/execution-recordings', () => {
 describe('GET /api/agents/:agentId/execution-recordings', () => {
   test('200 — returns items array and has_more flag', async () => {
     const res = await request()
-      .get('/api/agents/agent-001/execution-recordings');
+      .get('/api/agents/agent-001/execution-recordings')
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.items)).toBe(true);

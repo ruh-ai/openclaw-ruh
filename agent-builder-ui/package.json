@@ -13,7 +13,16 @@
     "test:unit:api": "bun test lib/openclaw/api.test.ts",
     "test:unit:store": "bun test hooks/use-openclaw-chat.test.ts",
     "test:unit:ag-ui": "bun test lib/openclaw/ag-ui/__tests__/builder-agent.test.ts lib/openclaw/ag-ui/__tests__/progressive-wizard-flow.test.ts",
-    "test:unit:core": "bun test --path-ignore-patterns 'e2e/**' --path-ignore-patterns 'test-results/**' --path-ignore-patterns 'lib/openclaw/api.test.ts' --path-ignore-patterns 'hooks/use-openclaw-chat.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/builder-agent.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/progressive-wizard-flow.test.ts'",
+    "test:unit:core": "bun run scripts/run-unit-tests.ts",
+    "test:unit:services-cookies": "bun test services/authCookies.test.ts services/authCookies.shared.test.ts",
+    "test:unit:services-helper": "bun test services/helper.test.ts",
+    "test:unit:services-axios": "bun test services/axios.test.ts",
+    "test:unit:hooks": "bun test hooks/ --path-ignore-patterns 'hooks/use-openclaw-chat.test.ts'",
+    "test:unit:eval-scorer": "bun test lib/openclaw/__tests__/eval-trace-scorer.test.ts",
+    "test:unit:eval-runner": "bun test lib/openclaw/eval-runner.test.ts",
+    "test:unit:lib": "bun test lib/ middleware.test.ts --path-ignore-patterns 'lib/openclaw/api.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/builder-agent.test.ts' --path-ignore-patterns 'lib/openclaw/ag-ui/__tests__/progressive-wizard-flow.test.ts' --path-ignore-patterns 'lib/openclaw/__tests__/eval-trace-scorer.test.ts' --path-ignore-patterns 'lib/openclaw/eval-runner.test.ts' --path-ignore-patterns 'lib/openclaw/__tests__/eval-pipeline.integration.test.ts'",
+    "test:unit:app-isolated": "bun test app/api/auth.test.ts 'app/(platform)/agents/create/_components/review/ReviewAgent.test.ts' 'app/(platform)/agents/create/_components/copilot/__tests__/lifecycle-stage-logic.test.ts' 'app/(platform)/agents/[id]/chat/_components/tab-workspace-autoswitch.test.ts'",
+    "test:unit:app": "bun run scripts/run-unit-tests.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
@@ -58,7 +67,6 @@
     "date-fns": "^4.1.0",
     "fast-json-patch": "^3.1.1",
     "js-yaml": "^4.1.1",
-    "lightningcss-linux-arm64-gnu": "^1.32.0",
     "lucide-react": "^0.538.0",
     "next": "15.2.4",
     "next-themes": "^0.4.6",
@@ -76,6 +84,9 @@
     "ws": "^8.19.0",
     "zod": "^3.24.2",
     "zustand": "^5.0.3"
+  },
+  "optionalDependencies": {
+    "lightningcss-linux-arm64-gnu": "^1.32.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

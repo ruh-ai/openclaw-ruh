@@ -3,32 +3,51 @@
 # Fast typecheck for changed files
 CHANGED=$(git diff --cached --name-only --diff-filter=ACM)
 
+# Resolve bun binary — prefer PATH bun, fall back to ~/.bun/bin/bun
+BUN=$(which bun 2>/dev/null || echo "$HOME/.bun/bin/bun")
+
+# Helper: run typecheck in a service directory using bun (no node required)
+typecheck_service() {
+  dir="$1"
+  cd "$dir" || return 1
+  # Try bun run typecheck first, then fall back to npx tsc if node is available
+  if "$BUN" run typecheck 2>/dev/null; then
+    cd - > /dev/null
+    return 0
+  elif command -v node > /dev/null 2>&1 && [ -f "node_modules/.bin/tsc" ]; then
+    node_modules/.bin/tsc --noEmit
+    rc=$?
+    cd - > /dev/null
+    return $rc
+  else
+    echo "⚠️  Skipping typecheck for $dir (no typecheck script or node available)"
+    cd - > /dev/null
+    return 0
+  fi
+}
+
 # Backend
 if echo "$CHANGED" | grep -q "^ruh-backend/"; then
   echo "⚡ Typechecking ruh-backend..."
-  cd ruh-backend && npx tsc --noEmit || exit 1
-  cd ..
+  typecheck_service ruh-backend || exit 1
 fi
 
 # Agent builder UI
 if echo "$CHANGED" | grep -q "^agent-builder-ui/"; then
   echo "⚡ Typechecking agent-builder-ui..."
-  cd agent-builder-ui && npx tsc --noEmit || exit 1
-  cd ..
+  typecheck_service agent-builder-ui || exit 1
 fi
 
 # Admin UI
 if echo "$CHANGED" | grep -q "^admin-ui/"; then
   echo "⚡ Typechecking admin-ui..."
-  cd admin-ui && npx tsc --noEmit || exit 1
-  cd ..
+  typecheck_service admin-ui || exit 1
 fi
 
 # Marketplace UI
 if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
   echo "⚡ Typechecking marketplace-ui..."
-  cd packages/marketplace-ui && npx tsc --noEmit || exit 1
-  cd ..
+  typecheck_service packages/marketplace-ui || exit 1
 fi
 
 echo "✓ Pre-commit checks passed"

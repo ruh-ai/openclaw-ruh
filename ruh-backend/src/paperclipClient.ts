@@ -62,6 +62,11 @@ const TIMEOUT_MS = 5_000;
 let _healthCache: { ok: boolean; ts: number } | null = null;
 const HEALTH_TTL_MS = 30_000;
 
+/** Reset the cached health-check result. Exported for testing only. */
+export function resetHealthCache(): void {
+  _healthCache = null;
+}
+
 function baseUrl(): string | null {
   return getConfig().paperclipApiUrl;
 }
