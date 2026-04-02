@@ -52,7 +52,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.11.6",
     "@types/supertest": "^7.2.0",
-    "@types/uuid": "^10.0.0",
+    "@types/uuid": "^11.0.0",
     "@types/ws": "^8.5.13",
     "bun-types": "latest",
     "supertest": "^7.2.2",
