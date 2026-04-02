@@ -279,17 +279,18 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     })
     .filter((skill, index, all) => all.indexOf(skill) === index);
 
-  // When an agent is forging and has a skill graph, those skills were already
+  // When an agent is forging/active and has a skill graph, those skills were already
   // built inside the forge sandbox. Mark them as built so a page refresh
   // doesn't regress the deploy-readiness check to "unresolved".
   const isForgedWithSkills = agent.status === "forging" && skillGraph.length > 0;
-  const builtSkillIds = isForgedWithSkills
+  const isActiveWithSkills = agent.status === "active" && skillGraph.length > 0;
+  const builtSkillIds = isForgedWithSkills || isActiveWithSkills
     ? skillGraph.map((node) => node.skill_id)
     : [];
 
-  // For forging agents that already have skills, restore the lifecycle stage
-  // to "ship" so the user lands back where they were instead of regressing to "think".
-  const lifecycleOverrides: Partial<CoPilotAgentSeed> = isForgedWithSkills
+  // For agents that already have skills, restore the lifecycle stage
+  // so the user lands back where they were instead of regressing to "think".
+  const lifecycleOverrides: Partial<CoPilotAgentSeed> = isForgedWithSkills || isActiveWithSkills
     ? {
         devStage: "ship" as const,
         thinkStatus: "done" as const,

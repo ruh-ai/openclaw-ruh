@@ -57,6 +57,15 @@ export interface BuildProgress {
   currentSkill: string | null;
 }
 
+// ─── Think activity feed ────────────────────────────────────────────────────
+
+export interface ThinkActivityItem {
+  id: string;
+  type: "research" | "tool" | "status" | "identity";
+  label: string;
+  timestamp: number;
+}
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 export interface CoPilotState {
@@ -107,6 +116,7 @@ export interface CoPilotState {
 
   // Think stage
   thinkStatus: StageStatus;
+  thinkActivity: ThinkActivityItem[];
 
   // Plan stage
   architecturePlan: ArchitecturePlan | null;
@@ -174,6 +184,8 @@ export interface CoPilotActions {
   advanceDevStage: () => void;
   goBackDevStage: () => void;
   setThinkStatus: (status: StageStatus) => void;
+  pushThinkActivity: (item: Omit<ThinkActivityItem, "id" | "timestamp">) => void;
+  clearThinkActivity: () => void;
   setArchitecturePlan: (plan: ArchitecturePlan) => void;
   updateArchitecturePlan: (partial: Partial<ArchitecturePlan>) => void;
   setPlanStatus: (status: StageStatus) => void;
@@ -225,6 +237,7 @@ function createInitialState(): CoPilotState {
     devStage: "think",
     maxUnlockedDevStage: "think",
     thinkStatus: "idle",
+    thinkActivity: [],
     architecturePlan: null,
     planStatus: "idle",
     buildStatus: "idle",
@@ -264,7 +277,7 @@ function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage 
 // ─── Stage-status reset map (used by goBackDevStage) ────────────────────────
 
 const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> = {
-  think: { thinkStatus: "idle" as StageStatus },
+  think: { thinkStatus: "idle" as StageStatus, thinkActivity: [] as ThinkActivityItem[] },
   plan: { planStatus: "idle" as StageStatus },
   build: { buildStatus: "idle" as StageStatus },
   test: { evalStatus: "idle" as StageStatus },
@@ -427,10 +440,34 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
 
   setRules: (rules) => set({ agentRules: rules }),
   setImprovements: (improvements) => set({ improvements }),
-  hydrateFromSeed: (seed) => set({
-    ...createInitialState(),
-    ...seed,
-    maxUnlockedDevStage: resolveMaxUnlockedDevStage(seed),
+  hydrateFromSeed: (seed) => set((prev) => {
+    const initial = createInitialState();
+    // Preserve in-flight lifecycle state that CoPilotLayout effects have
+    // already advanced past the initial value. Re-hydration (triggered by
+    // existingAgent reference changes or isRouteAgentHydrated flipping)
+    // would otherwise reset thinkStatus/planStatus back to "idle" while
+    // the architect is already generating.
+    const LIFECYCLE_KEYS: (keyof CoPilotState)[] = [
+      "thinkStatus", "planStatus", "buildStatus",
+      "discoveryStatus", "evalStatus", "deployStatus",
+    ];
+    const lifecyclePreserve: Partial<CoPilotState> = {};
+    for (const key of LIFECYCLE_KEYS) {
+      const seedVal = (seed as Record<string, unknown>)[key];
+      const prevVal = prev[key];
+      const initialVal = (initial as unknown as Record<string, unknown>)[key];
+      // If the seed would reset to the initial value but the current state
+      // has progressed past it, keep the current (advanced) state.
+      if (prevVal !== initialVal && (seedVal === undefined || seedVal === initialVal)) {
+        (lifecyclePreserve as Record<string, unknown>)[key] = prevVal;
+      }
+    }
+    return {
+      ...initial,
+      ...seed,
+      ...lifecyclePreserve,
+      maxUnlockedDevStage: resolveMaxUnlockedDevStage({ ...seed, ...lifecyclePreserve }),
+    };
   }),
 
   // ── Lifecycle actions ──────────────────────────────────────────────────────
@@ -467,6 +504,20 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   },
 
   setThinkStatus: (status) => set({ thinkStatus: status }),
+
+  pushThinkActivity: (item) =>
+    set((state) => ({
+      thinkActivity: [
+        ...state.thinkActivity,
+        {
+          ...item,
+          id: `think-${state.thinkActivity.length}-${Date.now()}`,
+          timestamp: Date.now(),
+        },
+      ],
+    })),
+
+  clearThinkActivity: () => set({ thinkActivity: [] }),
 
   setArchitecturePlan: (plan) => set({ architecturePlan: plan, planStatus: "ready" }),
 
@@ -567,6 +618,7 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       devStage: state.devStage,
       maxUnlockedDevStage: state.maxUnlockedDevStage,
       thinkStatus: state.thinkStatus,
+      thinkActivity: state.thinkActivity,
       architecturePlan: state.architecturePlan,
       planStatus: state.planStatus,
       buildStatus: state.buildStatus,

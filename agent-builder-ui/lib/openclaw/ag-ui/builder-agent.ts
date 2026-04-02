@@ -151,8 +151,14 @@ Output your response as a JSON code block:
     "envVars": [
       {
         "key": "ENV_VAR_NAME",
-        "description": "What this variable is for",
-        "required": true
+        "label": "Short Human Label",
+        "description": "What this variable does, where to find the value, why the agent needs it",
+        "required": true,
+        "inputType": "text | boolean | number | select",
+        "defaultValue": "sensible default if one exists (e.g. true, 500, local)",
+        "example": "e.g. sk-abc123... or https://api.example.com",
+        "options": ["only for select type — list valid choices"],
+        "group": "Authentication | Behavior | API Configuration"
       }
     ],
     "subAgents": [],
@@ -165,6 +171,7 @@ IMPORTANT:
 - Every skill must have a unique kebab-case ID.
 - Skills should be granular — one skill per capability (e.g., "shopify-inventory-fetch", "slack-alert-send").
 - List REAL env var names based on the TRD research (e.g., SHOPIFY_ADMIN_ACCESS_TOKEN, not GENERIC_API_KEY).
+- For EVERY env var: provide a human-readable label, a description that explains where to find the value, inputType (use "boolean" for flags, "select" for fixed choices, "number" for numeric config, "text" for everything else), defaultValue when possible, and an example value. Group related vars (e.g. "Authentication", "Behavior", "API Configuration").
 - Provide actual cron expressions from the TRD.
 - Set toolType to "mcp" for known MCP tools (github, slack, google), "api" for REST/GraphQL APIs, "cli" for command-line tools.
 - Only include sub-agents if the agent is genuinely complex enough to need delegation.
@@ -797,6 +804,14 @@ export class BuilderAgent extends AbstractAgent {
             type: EventType.STEP_STARTED,
             stepName: phase,
           } as BaseEvent);
+          // During Think phase, forward status events as think_activity
+          if (isCopilot && devStage === "think") {
+            observer.next({
+              type: EventType.CUSTOM,
+              name: "think_activity",
+              value: { type: "status", label: statusMessage || phase },
+            } as BaseEvent);
+          }
         },
         onIntermediate: isCopilot ? (update: IntermediateUpdate) => {
           // Intermediate events emit DATA only — no phase auto-advancement.
@@ -889,6 +904,25 @@ export class BuilderAgent extends AbstractAgent {
             name,
             value: data,
           } as BaseEvent);
+          // During Think phase, surface tool usage as think_activity events
+          if (isCopilot && devStage === "think") {
+            const payload = data as Record<string, unknown>;
+            if (name === "tool_start") {
+              const toolName = (payload.tool as string) || "tool";
+              observer.next({
+                type: EventType.CUSTOM,
+                name: "think_activity",
+                value: { type: "research", label: `Using ${toolName}...` },
+              } as BaseEvent);
+            } else if (name === "tool_end") {
+              const toolName = (payload.tool as string) || "tool";
+              observer.next({
+                type: EventType.CUSTOM,
+                name: "think_activity",
+                value: { type: "tool", label: `${toolName} complete` },
+              } as BaseEvent);
+            }
+          }
         },
       };
 

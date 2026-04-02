@@ -346,7 +346,7 @@ describe("createCoPilotSeedFromAgent", () => {
       description: "Optimize paid search accounts",
       skillGraph: agent.skillGraph,
       selectedSkillIds: ["google-ads-audit", "budget-pacing-report"],
-      builtSkillIds: [],
+      builtSkillIds: ["google-ads-audit", "budget-pacing-report"],
       workflow: agent.workflow,
       skillGenerationStatus: "ready",
       skillGenerationError: null,
@@ -360,6 +360,10 @@ describe("createCoPilotSeedFromAgent", () => {
       discoveryDocuments: agent.discoveryDocuments,
       systemName: "Google Ads Optimizer",
       phase: "review",
+      devStage: "ship",
+      thinkStatus: "done",
+      planStatus: "done",
+      buildStatus: "done",
     });
   });
 

@@ -60,6 +60,7 @@ interface CoPilotStoreLike {
   setBuildStatus: (status: StageStatus) => void;
   pushBuildActivity: (item: { type: "file" | "skill" | "tool"; label: string }) => void;
   setBuildProgress: (progress: { completed: number; total: number | null; currentSkill: string | null }) => void;
+  pushThinkActivity: (item: { type: "research" | "tool" | "status" | "identity"; label: string }) => void;
   devStage: AgentDevStage;
 }
 
@@ -168,6 +169,25 @@ export function consumeThinkStatus(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", "think_status");
 }
 
+export function consumeThinkActivity(value: unknown, deps: ConsumerDeps): void {
+  if (!deps.coPilotStore) {
+    pushDropWarning(deps, "think_activity", "coPilotStore is null");
+    tracer.drop("use-agent-chat", "CUSTOM", "think_activity", "coPilotStore is null");
+    return;
+  }
+  const payload = value as { type: string; label: string };
+  const currentStage = deps.coPilotStore.devStage;
+  if (currentStage && currentStage !== "think") {
+    tracer.drop("use-agent-chat", "CUSTOM", "think_activity", `ignored after stage advanced to ${currentStage}`);
+    return;
+  }
+  deps.coPilotStore.pushThinkActivity({
+    type: (payload.type as "research" | "tool" | "status" | "identity") || "status",
+    label: payload.label || "Working...",
+  });
+  tracer.apply("copilot-store", "CUSTOM", "think_activity");
+}
+
 export function consumeDiscoveryDocuments(value: unknown, deps: ConsumerDeps): void {
   if (!deps.coPilotStore) {
     pushDropWarning(deps, "discovery_documents", "coPilotStore is null");
@@ -274,6 +294,7 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.PREVIEW_SERVER_DETECTED]: consumePreviewServerDetected,
   reasoning: consumeReasoning,
   think_status: consumeThinkStatus,
+  think_activity: consumeThinkActivity,
   discovery_documents: consumeDiscoveryDocuments,
   architecture_plan_ready: consumeArchitecturePlanReady,
   [CustomEventName.WIZARD_SET_PHASE]: consumeWizardPhase,

@@ -12,6 +12,8 @@ const KNOWN_RESPONSE_TYPES = new Set([
   "deploy_complete",
   "build_complete",
   "error",
+  "discovery",
+  "architecture_plan",
 ]);
 
 export interface FinalizeGatewayResponseOptions {
@@ -55,7 +57,7 @@ export function finalizeGatewayResponse(
   }
 
   const embeddedJsonMatch = text.match(
-    /\{[\s\S]*"type"\s*:\s*"(clarification|ready_for_review|tool_recommendation|agent_response|deploy_complete|error)"[\s\S]*\}/,
+    /\{[\s\S]*"type"\s*:\s*"(clarification|ready_for_review|tool_recommendation|agent_response|deploy_complete|error|discovery|architecture_plan)"[\s\S]*\}/,
   );
   if (embeddedJsonMatch) {
     const normalizedEmbedded = tryParseJson(embeddedJsonMatch[0]);
@@ -73,7 +75,7 @@ export function finalizeGatewayResponse(
   }
 
   const typedYamlMatch = text.match(
-    /```(ready_for_review|clarification|tool_recommendation|deploy_complete|agent_response)\s*\n([\s\S]*?)```/,
+    /```(ready_for_review|clarification|tool_recommendation|deploy_complete|agent_response|discovery|architecture_plan)\s*\n([\s\S]*?)```/,
   );
   if (typedYamlMatch) {
     const typedYamlResponse = tryParseTypedYamlResponse(

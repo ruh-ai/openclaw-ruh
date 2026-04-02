@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress } from "@/lib/openclaw/copilot-state";
+import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem } from "@/lib/openclaw/copilot-state";
 import { AGENT_DEV_STAGES, type AgentDevStage } from "@/lib/openclaw/types";
 import {
   Lightbulb,
@@ -126,6 +126,305 @@ function ElapsedTimer({ active, estimate }: { active: boolean; estimate: string 
     <p className="mt-2 text-[10px] font-mono text-[var(--text-tertiary)]">
       {elapsed}s elapsed — {estimate}
     </p>
+  );
+}
+
+// ─── Think phase SVG animations ───────────────────────────────────────────
+
+function SvgReadingDescription() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Open book */}
+      <path d="M30,85 L60,75 L90,85 L90,35 L60,25 L30,35 Z" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.3" />
+      <line x1="60" y1="25" x2="60" y2="75" stroke="var(--primary)" strokeWidth="1" opacity="0.2" />
+      {/* Text lines being scanned */}
+      {[38, 45, 52, 59, 66].map((y, i) => (
+        <g key={y}>
+          <rect x="35" y={y} width="20" height="1.5" rx="0.75" fill="var(--primary)" opacity="0.15" />
+          <rect x="65" y={y} width="20" height="1.5" rx="0.75" fill="var(--primary)" opacity="0.15" />
+          {/* Highlight sweep */}
+          <rect x="35" y={y} width="20" height="1.5" rx="0.75" fill="var(--primary)" opacity="0">
+            <animate attributeName="opacity" values="0;0.6;0" dur="2.5s" begin={`${i * 0.4}s`} repeatCount="indefinite" />
+          </rect>
+          <rect x="65" y={y} width="20" height="1.5" rx="0.75" fill="var(--primary)" opacity="0">
+            <animate attributeName="opacity" values="0;0.6;0" dur="2.5s" begin={`${i * 0.4 + 0.2}s`} repeatCount="indefinite" />
+          </rect>
+        </g>
+      ))}
+      {/* Scanning eye */}
+      <ellipse cx="60" cy="18" rx="8" ry="5" fill="none" stroke="var(--primary)" strokeWidth="1.2" opacity="0.5">
+        <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2s" repeatCount="indefinite" />
+      </ellipse>
+      <circle cx="60" cy="18" r="2.5" fill="var(--primary)" opacity="0.6">
+        <animate attributeName="cx" values="57;63;57" dur="2.5s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+function SvgUnderstandingPurpose() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Central lightbulb */}
+      <path d="M52,55 Q52,35 60,30 Q68,35 68,55" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.5">
+        <animate attributeName="opacity" values="0.3;0.7;0.3" dur="3s" repeatCount="indefinite" />
+      </path>
+      <rect x="53" y="55" width="14" height="4" rx="1" fill="none" stroke="var(--primary)" strokeWidth="1" opacity="0.4" />
+      <rect x="55" y="59" width="10" height="3" rx="1" fill="none" stroke="var(--primary)" strokeWidth="1" opacity="0.3" />
+      {/* Radiating insight lines */}
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
+        const rad = ((angle - 90) * Math.PI) / 180;
+        const x1 = 60 + Math.cos(rad) * 22;
+        const y1 = 42 + Math.sin(rad) * 22;
+        const x2 = 60 + Math.cos(rad) * 32;
+        const y2 = 42 + Math.sin(rad) * 32;
+        return (
+          <line key={angle} x1={x1} y1={y1} x2={x2} y2={y2}
+            stroke="var(--primary)" strokeWidth="1" strokeLinecap="round" opacity="0">
+            <animate attributeName="opacity" values="0;0.5;0" dur="2s" begin={`${i * 0.25}s`} repeatCount="indefinite" />
+          </line>
+        );
+      })}
+      {/* Thought bubbles floating up */}
+      {[{ cx: 40, delay: 0 }, { cx: 80, delay: 1 }, { cx: 55, delay: 2 }].map(({ cx, delay }, i) => (
+        <circle key={i} cx={cx} cy="80" r="3" fill="var(--primary)" opacity="0">
+          <animate attributeName="cy" values="80;15" dur="4s" begin={`${delay}s`} repeatCount="indefinite" />
+          <animate attributeName="opacity" values="0;0.4;0" dur="4s" begin={`${delay}s`} repeatCount="indefinite" />
+          <animate attributeName="r" values="2;4;2" dur="4s" begin={`${delay}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+function SvgResearchingDomain() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Magnifying glass */}
+      <circle cx="52" cy="50" r="18" fill="none" stroke="var(--primary)" strokeWidth="2" opacity="0.4">
+        <animate attributeName="opacity" values="0.3;0.6;0.3" dur="2s" repeatCount="indefinite" />
+      </circle>
+      <line x1="65" y1="63" x2="82" y2="80" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" opacity="0.4" />
+      {/* Knowledge nodes inside lens */}
+      {[
+        { cx: 44, cy: 44 }, { cx: 60, cy: 44 }, { cx: 44, cy: 56 }, { cx: 60, cy: 56 }, { cx: 52, cy: 50 },
+      ].map(({ cx, cy }, i) => (
+        <circle key={i} cx={cx} cy={cy} r="2.5" fill="var(--primary)" opacity="0.2">
+          <animate attributeName="opacity" values="0.2;0.7;0.2" dur="1.8s" begin={`${i * 0.3}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+      {/* Connecting lines between nodes */}
+      <g stroke="var(--primary)" strokeWidth="0.6" opacity="0.15">
+        <line x1="44" y1="44" x2="60" y2="44" />
+        <line x1="44" y1="44" x2="52" y2="50" />
+        <line x1="60" y1="44" x2="52" y2="50" />
+        <line x1="44" y1="56" x2="52" y2="50" />
+        <line x1="60" y1="56" x2="52" y2="50" />
+      </g>
+      {/* Data particles flowing in from edges */}
+      {[0, 1, 2, 3].map((i) => {
+        const startX = [15, 105, 15, 105][i];
+        const startY = [25, 25, 85, 85][i];
+        return (
+          <circle key={i} cx={startX} cy={startY} r="1.5" fill="var(--primary)" opacity="0">
+            <animate attributeName="cx" values={`${startX};52`} dur="2.5s" begin={`${i * 0.6}s`} repeatCount="indefinite" />
+            <animate attributeName="cy" values={`${startY};50`} dur="2.5s" begin={`${i * 0.6}s`} repeatCount="indefinite" />
+            <animate attributeName="opacity" values="0;0.6;0" dur="2.5s" begin={`${i * 0.6}s`} repeatCount="indefinite" />
+          </circle>
+        );
+      })}
+    </svg>
+  );
+}
+
+function SvgDraftingPrd() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Document outline with "PRD" badge */}
+      <rect x="28" y="18" width="64" height="84" rx="4" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.25" />
+      {/* PRD badge */}
+      <rect x="40" y="24" width="40" height="12" rx="2" fill="var(--primary)" opacity="0.12" />
+      <text x="60" y="33" textAnchor="middle" fill="var(--primary)" fontSize="7" fontWeight="bold" opacity="0.6">PRD</text>
+      {/* Sections being filled */}
+      {[
+        { y: 44, w: 48, delay: 0 },
+        { y: 52, w: 36, delay: 0.6 },
+        { y: 60, w: 44, delay: 1.2 },
+        { y: 68, w: 40, delay: 1.8 },
+        { y: 76, w: 32, delay: 2.4 },
+        { y: 84, w: 50, delay: 3.0 },
+      ].map(({ y, w, delay }, i) => (
+        <rect key={i} x="36" y={y} width="0" height="2.5" rx="1" fill="var(--primary)" opacity="0.5">
+          <animate attributeName="width" values={`0;${w}`} dur="0.8s" begin={`${delay}s`} fill="freeze" />
+        </rect>
+      ))}
+      {/* Writing cursor */}
+      <rect x="36" y="90" width="2" height="6" fill="var(--primary)">
+        <animate attributeName="opacity" values="1;0;1" dur="0.8s" repeatCount="indefinite" />
+        <animate attributeName="x" values="36;76;36" dur="6s" repeatCount="indefinite" />
+      </rect>
+      {/* Sparkle when section completes */}
+      <circle cx="82" cy="26" r="0" fill="var(--primary)" opacity="0">
+        <animate attributeName="r" values="0;3;0" dur="1.5s" begin="1.5s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0;0.6;0" dur="1.5s" begin="1.5s" repeatCount="indefinite" />
+      </circle>
+    </svg>
+  );
+}
+
+function SvgDraftingTrd() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Document outline with "TRD" badge */}
+      <rect x="28" y="18" width="64" height="84" rx="4" fill="none" stroke="var(--primary)" strokeWidth="1.5" opacity="0.25" />
+      {/* TRD badge */}
+      <rect x="40" y="24" width="40" height="12" rx="2" fill="var(--primary)" opacity="0.12" />
+      <text x="60" y="33" textAnchor="middle" fill="var(--primary)" fontSize="7" fontWeight="bold" opacity="0.6">TRD</text>
+      {/* Architecture diagram being drawn */}
+      <rect x="36" y="44" width="20" height="12" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1" strokeDasharray="60" strokeDashoffset="60" opacity="0.6">
+        <animate attributeName="stroke-dashoffset" values="60;0" dur="1s" fill="freeze" />
+      </rect>
+      <rect x="64" y="44" width="20" height="12" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1" strokeDasharray="60" strokeDashoffset="60" opacity="0.6">
+        <animate attributeName="stroke-dashoffset" values="60;0" dur="1s" begin="0.5s" fill="freeze" />
+      </rect>
+      <line x1="56" y1="50" x2="64" y2="50" stroke="var(--primary)" strokeWidth="1" opacity="0">
+        <animate attributeName="opacity" values="0;0.5" dur="0.3s" begin="1.2s" fill="freeze" />
+      </line>
+      <rect x="50" y="64" width="20" height="12" rx="2" fill="none" stroke="var(--primary)" strokeWidth="1" strokeDasharray="60" strokeDashoffset="60" opacity="0.6">
+        <animate attributeName="stroke-dashoffset" values="60;0" dur="1s" begin="1.5s" fill="freeze" />
+      </rect>
+      {/* Arrows connecting boxes */}
+      <line x1="46" y1="56" x2="56" y2="64" stroke="var(--primary)" strokeWidth="0.8" opacity="0">
+        <animate attributeName="opacity" values="0;0.4" dur="0.3s" begin="2s" fill="freeze" />
+      </line>
+      <line x1="74" y1="56" x2="64" y2="64" stroke="var(--primary)" strokeWidth="0.8" opacity="0">
+        <animate attributeName="opacity" values="0;0.4" dur="0.3s" begin="2.2s" fill="freeze" />
+      </line>
+      {/* Code lines at bottom */}
+      {[82, 88, 94].map((y, i) => (
+        <rect key={y} x="36" y={y} width="0" height="1.5" rx="0.75" fill="var(--primary)" opacity="0.4">
+          <animate attributeName="width" values={`0;${30 + i * 8}`} dur="0.6s" begin={`${2.5 + i * 0.3}s`} fill="freeze" />
+        </rect>
+      ))}
+      {/* Gear icon spinning */}
+      <g transform="translate(84, 78)">
+        <animateTransform attributeName="transform" type="rotate" from="0 84 78" to="360 84 78" dur="4s" repeatCount="indefinite" additive="sum" />
+        <path d="M0,-7 L2,-3 L6,-3 L3,0 L4,5 L0,2 L-4,5 L-3,0 L-6,-3 L-2,-3 Z"
+          fill="none" stroke="var(--primary)" strokeWidth="0.8" opacity="0.4" />
+        <circle r="2" fill="var(--primary)" opacity="0.2" />
+      </g>
+    </svg>
+  );
+}
+
+function SvgFinalizingDocs() {
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      {/* Two documents side by side */}
+      <rect x="18" y="25" width="38" height="50" rx="3" fill="none" stroke="var(--primary)" strokeWidth="1.2" opacity="0.3">
+        <animate attributeName="opacity" values="0.2;0.5;0.2" dur="2s" repeatCount="indefinite" />
+      </rect>
+      <rect x="64" y="25" width="38" height="50" rx="3" fill="none" stroke="var(--primary)" strokeWidth="1.2" opacity="0.3">
+        <animate attributeName="opacity" values="0.2;0.5;0.2" dur="2s" begin="0.5s" repeatCount="indefinite" />
+      </rect>
+      {/* Doc labels */}
+      <text x="37" y="37" textAnchor="middle" fill="var(--primary)" fontSize="6" fontWeight="bold" opacity="0.4">PRD</text>
+      <text x="83" y="37" textAnchor="middle" fill="var(--primary)" fontSize="6" fontWeight="bold" opacity="0.4">TRD</text>
+      {/* Content lines on each doc */}
+      {[44, 50, 56, 62].map((y, i) => (
+        <g key={y}>
+          <rect x="24" y={y} width={18 + (i % 2) * 6} height="1.5" rx="0.75" fill="var(--primary)" opacity="0.2" />
+          <rect x="70" y={y} width={20 - (i % 2) * 4} height="1.5" rx="0.75" fill="var(--primary)" opacity="0.2" />
+        </g>
+      ))}
+      {/* Checkmarks appearing */}
+      <path d="M30,82 L35,87 L44,78" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        strokeDasharray="25" strokeDashoffset="25" opacity="0">
+        <animate attributeName="stroke-dashoffset" values="25;0" dur="0.6s" begin="0.5s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.7" dur="0.3s" begin="0.5s" fill="freeze" />
+      </path>
+      <path d="M76,82 L81,87 L90,78" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        strokeDasharray="25" strokeDashoffset="25" opacity="0">
+        <animate attributeName="stroke-dashoffset" values="25;0" dur="0.6s" begin="1s" fill="freeze" />
+        <animate attributeName="opacity" values="0;0.7" dur="0.3s" begin="1s" fill="freeze" />
+      </path>
+      {/* Connecting bridge between docs */}
+      <path d="M56,50 Q60,45 64,50" fill="none" stroke="var(--primary)" strokeWidth="1" strokeDasharray="3 2" opacity="0">
+        <animate attributeName="opacity" values="0;0.4;0" dur="2s" begin="1.5s" repeatCount="indefinite" />
+      </path>
+      {/* Celebration sparkles */}
+      {[{ cx: 20, cy: 22 }, { cx: 100, cy: 22 }, { cx: 60, cy: 95 }].map(({ cx, cy }, i) => (
+        <circle key={i} cx={cx} cy={cy} r="0" fill="var(--primary)" opacity="0">
+          <animate attributeName="r" values="0;3;0" dur="1.2s" begin={`${1.5 + i * 0.4}s`} repeatCount="indefinite" />
+          <animate attributeName="opacity" values="0;0.5;0" dur="1.2s" begin={`${1.5 + i * 0.4}s`} repeatCount="indefinite" />
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+const THINK_PHASES: { at: number; label: string; Svg: () => React.ReactNode }[] = [
+  { at: 0, label: "Reading your description...", Svg: SvgReadingDescription },
+  { at: 5, label: "Understanding the agent's purpose...", Svg: SvgUnderstandingPurpose },
+  { at: 15, label: "Researching domain knowledge...", Svg: SvgResearchingDomain },
+  { at: 30, label: "Drafting Product Requirements...", Svg: SvgDraftingPrd },
+  { at: 60, label: "Drafting Technical Requirements...", Svg: SvgDraftingTrd },
+  { at: 100, label: "Finalizing documents...", Svg: SvgFinalizingDocs },
+  { at: 150, label: "Still thinking — thorough analysis takes time...", Svg: SvgResearchingDomain },
+  { at: 240, label: "Almost ready — wrapping up requirements...", Svg: SvgFinalizingDocs },
+];
+
+// Map real Think events to the matching SVG phase
+function thinkPhaseFromEvent(item: ThinkActivityItem): typeof THINK_PHASES[number] | null {
+  const l = item.label.toLowerCase();
+  if (l.includes("browser") || l.includes("search") || l.includes("fetch") || l.includes("navigate")) return THINK_PHASES[2]; // Research
+  if (l.includes("terminal") || l.includes("exec") || l.includes("shell")) return THINK_PHASES[2]; // Research
+  if (l.includes("prd") || l.includes("product req")) return THINK_PHASES[3]; // Drafting PRD
+  if (l.includes("trd") || l.includes("technical req") || l.includes("architecture")) return THINK_PHASES[4]; // Drafting TRD
+  if (item.type === "research") return THINK_PHASES[2]; // Research (tool_start)
+  if (item.type === "tool") return THINK_PHASES[2]; // Research (tool_end)
+  if (item.type === "identity") return THINK_PHASES[1]; // Understanding
+  return null;
+}
+
+function ThinkActivityPanel({ thinkActivity }: { thinkActivity: ThinkActivityItem[] }) {
+  const elapsed = useElapsedTime(true);
+
+  // Prefer real events to drive the SVG; fall back to time-based
+  const lastEvent = thinkActivity.length > 0 ? thinkActivity[thinkActivity.length - 1] : null;
+  const eventPhase = lastEvent ? thinkPhaseFromEvent(lastEvent) : null;
+
+  let currentPhase = THINK_PHASES[0];
+  if (eventPhase) {
+    currentPhase = eventPhase;
+  } else {
+    for (const phase of THINK_PHASES) {
+      if (elapsed >= phase.at) currentPhase = phase;
+    }
+  }
+
+  const { Svg } = currentPhase;
+  // Use label from real event when available
+  const displayLabel = lastEvent ? lastEvent.label : currentPhase.label;
+
+  return (
+    <div className="flex flex-col items-center justify-center py-8 gap-5">
+      {/* ── Animated SVG ── */}
+      <div key={currentPhase.at} className="typewriter-word">
+        <Svg />
+      </div>
+
+      {/* ── Phase label ── */}
+      <div className="flex flex-col items-center gap-1.5">
+        <p key={displayLabel} className="text-xs font-satoshi-medium text-[var(--text-secondary)] typewriter-word text-center px-4">
+          {displayLabel}
+        </p>
+        <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
+          {elapsed}s — generating PRD &amp; TRD
+          {thinkActivity.length > 0 && ` · ${thinkActivity.length} event${thinkActivity.length !== 1 ? "s" : ""}`}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -453,6 +752,28 @@ function phaseFromEvent(item: BuildActivityItem): typeof BUILD_PHASES[number] | 
   return null;
 }
 
+// ─── Build milestones for the journey tracker ────────────────────────────
+
+const BUILD_MILESTONES = [
+  { id: "connect", label: "Connect", icon: Zap },
+  { id: "soul", label: "Soul", icon: Bot },
+  { id: "skills", label: "Skills", icon: GitBranch },
+  { id: "tools", label: "Tools", icon: Wrench },
+  { id: "triggers", label: "Triggers", icon: Clock },
+  { id: "assemble", label: "Assemble", icon: Diff },
+] as const;
+
+function milestoneIndexFromEvent(item: BuildActivityItem): number {
+  const l = item.label.toLowerCase();
+  if (l.includes("soul")) return 1;
+  if (item.type === "skill") return 2;
+  if (l.includes("tool") || l.includes("integration") || l.includes("mcp")) return 3;
+  if (l.includes("trigger") || l.includes("cron") || l.includes("schedule")) return 4;
+  if (l.includes("assemble") || l.includes("graph") || l.includes("workflow")) return 5;
+  if (item.type === "file") return 2; // generic file → skills phase
+  return 0;
+}
+
 function BuildActivityPanel({
   buildActivity,
   buildProgress,
@@ -461,11 +782,34 @@ function BuildActivityPanel({
   buildProgress: BuildProgress | null;
 }) {
   const elapsed = useElapsedTime(true);
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll activity feed
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+  }, [buildActivity.length]);
+
+  // Determine current milestone from events or time
+  const lastEvent = buildActivity.length > 0 ? buildActivity[buildActivity.length - 1] : null;
+  let activeMilestone = 0;
+  if (lastEvent) {
+    activeMilestone = milestoneIndexFromEvent(lastEvent);
+  } else {
+    // Time-based fallback
+    if (elapsed >= 130) activeMilestone = 5;
+    else if (elapsed >= 90) activeMilestone = 4;
+    else if (elapsed >= 50) activeMilestone = 3;
+    else if (elapsed >= 30) activeMilestone = 2;
+    else if (elapsed >= 10) activeMilestone = 1;
+  }
+
+  // Track max milestone reached (never regress)
+  const maxMilestoneRef = useRef(0);
+  if (activeMilestone > maxMilestoneRef.current) maxMilestoneRef.current = activeMilestone;
+  const maxReached = maxMilestoneRef.current;
 
   // Prefer real events to drive the SVG; fall back to time-based
-  const lastEvent = buildActivity.length > 0 ? buildActivity[buildActivity.length - 1] : null;
   const eventPhase = lastEvent ? phaseFromEvent(lastEvent) : null;
-
   let currentPhase = BUILD_PHASES[0];
   if (eventPhase) {
     currentPhase = eventPhase;
@@ -476,34 +820,139 @@ function BuildActivityPanel({
   }
 
   const { Svg } = currentPhase;
-  // Use a label from the real event when available
   const displayLabel = lastEvent
     ? lastEvent.type === "skill"
-      ? `Skill created: ${lastEvent.label}`
-      : lastEvent.label
+      ? `Creating skill: ${lastEvent.label}`
+      : lastEvent.type === "file"
+        ? `Writing: ${lastEvent.label}`
+        : lastEvent.label
     : currentPhase.label;
 
+  const fileCount = buildActivity.filter((e) => e.type === "file").length;
+  const skillCount = buildProgress?.completed ?? buildActivity.filter((e) => e.type === "skill").length;
+  const totalSkills = buildProgress?.total;
+
   return (
-    <div className="flex flex-col items-center justify-center py-8 gap-5">
-      {/* ── Animated SVG ── */}
-      <div key={currentPhase.at} className="typewriter-word">
-        <Svg />
+    <div className="flex flex-col h-full">
+      {/* ── Journey Milestone Bar ─────────────────────────────── */}
+      <div className="shrink-0 px-4 pt-4 pb-3">
+        <div className="flex items-center justify-between">
+          {BUILD_MILESTONES.map((ms, i) => {
+            const Icon = ms.icon;
+            const done = i < maxReached;
+            const active = i === activeMilestone;
+            return (
+              <div key={ms.id} className="flex items-center gap-0.5">
+                <div className={`flex flex-col items-center gap-1 ${
+                  active ? "scale-110" : ""
+                } transition-transform`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-colors ${
+                    done
+                      ? "bg-[var(--success)]/15 border border-[var(--success)]/30"
+                      : active
+                        ? "bg-[var(--primary)]/15 border border-[var(--primary)]/40 shadow-sm shadow-[var(--primary)]/20"
+                        : "bg-[var(--background)] border border-[var(--border-stroke)]"
+                  }`}>
+                    {done ? (
+                      <CheckCircle2 className="h-3 w-3 text-[var(--success)]" />
+                    ) : active ? (
+                      <Icon className="h-3 w-3 text-[var(--primary)] animate-pulse" />
+                    ) : (
+                      <Icon className="h-3 w-3 text-[var(--text-tertiary)]/40" />
+                    )}
+                  </div>
+                  <span className={`text-[8px] font-satoshi-medium ${
+                    done ? "text-[var(--success)]"
+                    : active ? "text-[var(--primary)]"
+                    : "text-[var(--text-tertiary)]/50"
+                  }`}>{ms.label}</span>
+                </div>
+                {i < BUILD_MILESTONES.length - 1 && (
+                  <div className={`w-4 h-px mx-0.5 mt-[-12px] ${
+                    i < maxReached ? "bg-[var(--success)]/40" : "bg-[var(--border-stroke)]"
+                  }`} />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* ── Phase label ── */}
-      <div className="flex flex-col items-center gap-1.5">
-        <p key={displayLabel} className="text-xs font-satoshi-medium text-[var(--text-secondary)] typewriter-word text-center px-4">
+      {/* ── Hero: Animation + Current Action ──────────────────── */}
+      <div className="shrink-0 flex flex-col items-center gap-2 px-4 pb-2">
+        <div key={currentPhase.at} className="typewriter-word">
+          <Svg />
+        </div>
+        <p key={displayLabel} className="text-xs font-satoshi-medium text-[var(--text-secondary)] typewriter-word text-center">
           {displayLabel}
         </p>
-        {/* Progress counter when available */}
-        {buildProgress && buildProgress.total ? (
-          <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
-            {buildProgress.completed}/{buildProgress.total} skills · {elapsed}s
-          </p>
-        ) : (
-          <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
+      </div>
+
+      {/* ── Stats Row ─────────────────────────────────────────── */}
+      <div className="shrink-0 flex items-center justify-center gap-4 px-4 py-2 border-y border-[var(--border-default)] bg-[var(--background)]/50">
+        <div className="flex items-center gap-1.5">
+          <GitBranch className="h-3 w-3 text-[var(--primary)]" />
+          <span className="text-[10px] font-mono text-[var(--text-secondary)]">
+            {skillCount}{totalSkills ? `/${totalSkills}` : ""} skills
+          </span>
+        </div>
+        <div className="w-px h-3 bg-[var(--border-stroke)]" />
+        <div className="flex items-center gap-1.5">
+          <FileText className="h-3 w-3 text-[var(--primary)]" />
+          <span className="text-[10px] font-mono text-[var(--text-secondary)]">
+            {fileCount} files
+          </span>
+        </div>
+        <div className="w-px h-3 bg-[var(--border-stroke)]" />
+        <div className="flex items-center gap-1.5">
+          <Timer className="h-3 w-3 text-[var(--text-tertiary)]" />
+          <span className="text-[10px] font-mono text-[var(--text-tertiary)]">
             {elapsed}s
-          </p>
+          </span>
+        </div>
+      </div>
+
+      {/* ── Live Activity Feed ────────────────────────────────── */}
+      <div ref={feedRef} className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
+        {buildActivity.length === 0 ? (
+          <div className="flex items-center gap-2 py-2 text-[10px] text-[var(--text-tertiary)]">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Waiting for architect to start writing files...
+          </div>
+        ) : (
+          buildActivity.map((item) => (
+            <div key={item.id} className="flex items-center gap-2 py-0.5 animate-fadeIn">
+              {item.type === "skill" ? (
+                <div className="w-4 h-4 rounded-full bg-[var(--primary)]/10 flex items-center justify-center shrink-0">
+                  <Zap className="h-2.5 w-2.5 text-[var(--primary)]" />
+                </div>
+              ) : item.type === "tool" ? (
+                <div className="w-4 h-4 rounded-full bg-[var(--warning)]/10 flex items-center justify-center shrink-0">
+                  <Wrench className="h-2.5 w-2.5 text-[var(--warning)]" />
+                </div>
+              ) : (
+                <div className="w-4 h-4 rounded-full bg-[var(--text-tertiary)]/8 flex items-center justify-center shrink-0">
+                  <FileText className="h-2.5 w-2.5 text-[var(--text-tertiary)]" />
+                </div>
+              )}
+              <span className="text-[10px] font-mono text-[var(--text-secondary)] truncate">
+                {item.type === "skill" ? `✦ ${item.label}` : item.label}
+              </span>
+              <span className="text-[9px] font-mono text-[var(--text-tertiary)]/50 shrink-0 ml-auto">
+                {Math.round((Date.now() - item.timestamp) / 1000)}s ago
+              </span>
+            </div>
+          ))
+        )}
+        {buildActivity.length > 0 && (
+          <div className="flex items-center gap-2 py-0.5">
+            <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
+            <span className="text-[10px] font-mono text-[var(--primary)]">
+              {buildProgress?.currentSkill
+                ? `Building: ${buildProgress.currentSkill}...`
+                : "Working..."}
+            </span>
+          </div>
         )}
       </div>
     </div>
@@ -757,10 +1206,14 @@ function StageThinkPlaceholder({
   store: CoPilotState & CoPilotActions;
   onDiscoveryComplete?: () => void;
 }) {
-  // Map thinkStatus to discoveryStatus for StepDiscovery compatibility.
-  // If thinkStatus is "generating", show loading. If "ready", show documents.
-  const effectiveStatus = store.thinkStatus === "generating" ? "loading" as const
-    : store.discoveryDocuments ? "ready" as const
+  // While generating, show the animated Think activity panel instead of a
+  // static "Preparing documents..." text box.
+  if (store.thinkStatus === "generating") {
+    return <ThinkActivityPanel thinkActivity={store.thinkActivity} />;
+  }
+
+  // Once documents are ready (or idle/error), delegate to StepDiscovery.
+  const effectiveStatus = store.discoveryDocuments ? "ready" as const
     : store.discoveryStatus;
 
   return (
@@ -2424,6 +2877,76 @@ function StageShip({
   const [skipGithub, setSkipGithub] = useState(false);
   const [deploying, setDeploying] = useState(false);
 
+  // GitHub PAT auth state
+  const [ghConnected, setGhConnected] = useState(false);
+  const [ghUser, setGhUser] = useState<{ login: string; name: string | null; avatar_url: string } | null>(null);
+  const [ghTokenInput, setGhTokenInput] = useState("");
+  const [ghConnecting, setGhConnecting] = useState(false);
+  const [ghAuthError, setGhAuthError] = useState<string | null>(null);
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const ghTokenRef = useRef<string | null>(null);
+  const ghUserRef = useRef<{ login: string } | null>(null);
+
+  // Load stored GitHub token on mount
+  useEffect(() => {
+    (async () => {
+      const { getStoredToken, getStoredUser, validateToken: validate } = await import("@/lib/github/github-client");
+      const token = getStoredToken();
+      const user = getStoredUser();
+      if (token && user) {
+        ghTokenRef.current = token;
+        ghUserRef.current = user;
+        setGhUser(user);
+        setGhConnected(true);
+        // Auto-generate repo name
+        const { generateRepoName } = await import("@/lib/github/github-client");
+        if (!githubRepo) {
+          setGithubRepo(`${user.login}/${generateRepoName(store.name || "agent")}`);
+        }
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleConnectGithub = async () => {
+    const token = ghTokenInput.trim();
+    if (!token) return;
+    setGhConnecting(true);
+    setGhAuthError(null);
+    try {
+      const { validateToken: validate, storeCredentials, generateRepoName } = await import("@/lib/github/github-client");
+      const user = await validate(token);
+      if (!user) {
+        setGhAuthError("Invalid token — check that it has 'repo' scope.");
+        return;
+      }
+      storeCredentials(token, user);
+      ghTokenRef.current = token;
+      ghUserRef.current = user;
+      setGhUser(user);
+      setGhConnected(true);
+      setShowTokenInput(false);
+      setGhTokenInput("");
+      if (!githubRepo) {
+        setGithubRepo(`${user.login}/${generateRepoName(store.name || "agent")}`);
+      }
+    } catch {
+      setGhAuthError("Failed to validate token.");
+    } finally {
+      setGhConnecting(false);
+    }
+  };
+
+  const handleDisconnectGithub = async () => {
+    const { clearCredentials } = await import("@/lib/github/github-client");
+    clearCredentials();
+    ghTokenRef.current = null;
+    ghUserRef.current = null;
+    setGhUser(null);
+    setGhConnected(false);
+    setGithubRepo("");
+  };
+
   const allDone = SHIP_STEPS.every(
     (s) => stepStatuses[s.id] === "done" || stepStatuses[s.id] === "skipped",
   );
@@ -2461,8 +2984,9 @@ function StageShip({
     await new Promise((r) => setTimeout(r, 2000));
     setStepStatuses((prev) => ({ ...prev, deploy: "done" }));
 
-    // Step 3: GitHub export
-    if (skipGithub || !githubRepo) {
+    // Step 3: GitHub export (uses PAT-based GitHub API client)
+    const token = ghTokenRef.current;
+    if (skipGithub || !token || !githubRepo) {
       setStepStatuses((prev) => ({ ...prev, github: "skipped" }));
       store.setDeployStatus("done");
       setDeploying(false);
@@ -2471,54 +2995,88 @@ function StageShip({
 
     setStepStatuses((prev) => ({ ...prev, github: "running" }));
     try {
-      // Build skill files from skillGraph
-      const skills: Record<string, string> = {};
+      const [owner, repoName] = githubRepo.includes("/")
+        ? [githubRepo.split("/")[0], githubRepo.split("/").slice(1).join("/")]
+        : [ghUserRef.current?.login ?? "", githubRepo];
+
+      // Build agent files for the repo
+      const files: Array<{ path: string; content: string }> = [];
+
+      // SOUL.md
+      files.push({
+        path: "SOUL.md",
+        content: [
+          `# ${store.name || "Agent"}`,
+          "",
+          store.description ? `> ${store.description}` : "",
+          "",
+          "## Rules",
+          ...store.agentRules.map((r) => `- ${r}`),
+          "",
+          "## Skills",
+          ...(store.skillGraph ?? []).map((s) => `- **${s.name}**: ${s.description ?? ""}`),
+        ].join("\n"),
+      });
+
+      // Skill files
       for (const node of store.skillGraph ?? []) {
         if (node.skill_md) {
-          skills[node.skill_id] = node.skill_md;
+          files.push({ path: `skills/${node.skill_id}/SKILL.md`, content: node.skill_md });
         }
       }
 
-      // Build SOUL.md content inline
-      const soulLines = [
-        `# ${store.name || "Agent"}`,
-        "",
-        store.description ? `> ${store.description}` : "",
-        "",
-        "## Rules",
-        ...store.agentRules.map((r) => `- ${r}`),
-        "",
-        "## Skills",
-        ...(store.skillGraph ?? []).map((s) => `- **${s.name}**: ${s.description ?? ""}`),
-      ];
-
-      // Config file
-      const configContent = JSON.stringify(
-        {
+      // Config
+      files.push({
+        path: ".openclaw/config.yml",
+        content: JSON.stringify({
           name: store.name,
           description: store.description,
           skills: (store.skillGraph ?? []).map((s) => s.skill_id),
           triggers: store.triggers.map((t) => ({ id: t.id, kind: t.kind, title: t.title })),
           channels: store.channels.map((c) => c.kind),
-          runtimeInputs: store.runtimeInputs.map((r) => ({ key: r.key, required: r.required })),
-        },
-        null,
-        2,
-      );
+          runtimeInputs: store.runtimeInputs.map((r) => ({
+            key: r.key, required: r.required, label: r.label,
+          })),
+        }, null, 2),
+      });
 
-      const res = await fetch("/api/openclaw/github-export", {
+      // README
+      files.push({
+        path: "README.md",
+        content: [
+          `# ${store.name || "Agent"}`,
+          "",
+          `> ${store.description || "AI agent built with Ruh.ai"}`,
+          "",
+          "## Structure",
+          "- `SOUL.md` — Agent personality, rules, and mission",
+          "- `skills/` — Agent skills (one directory per skill)",
+          "- `.openclaw/config.yml` — Runtime configuration",
+          "",
+          "## Deploy",
+          "```bash",
+          "openclaw deploy .",
+          "```",
+          "",
+          `Built with [Ruh.ai](https://ruh.ai)`,
+        ].join("\n"),
+      });
+
+      // Push via server-side proxy to avoid CORS issues with GitHub API
+      const pushRes = await fetch("/api/github", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          repo: githubRepo,
+          action: "push",
+          token,
+          owner,
+          repoName,
           agentName: store.name || "Agent",
-          soulContent: soulLines.join("\n"),
-          skills,
-          config: { ".openclaw/config.yml": configContent },
+          files,
         }),
       });
+      const result = await pushRes.json();
 
-      const result = await res.json();
       if (result.ok) {
         setStepStatuses((prev) => ({ ...prev, github: "done" }));
         setGithubRepoUrl(result.repoUrl);
@@ -2627,7 +3185,7 @@ function StageShip({
             <div className="flex items-center gap-2">
               <Github className="h-4 w-4 text-[var(--text-secondary)]" />
               <span className="text-xs font-satoshi-bold text-[var(--text-primary)]">
-                GitHub Template Export
+                Push to GitHub
               </span>
             </div>
             <label className="flex items-center gap-1.5 cursor-pointer">
@@ -2642,23 +3200,90 @@ function StageShip({
               </span>
             </label>
           </div>
+
           {!skipGithub && (
-            <div className="space-y-2">
-              <div>
-                <label className="block text-[10px] font-satoshi-medium text-[var(--text-tertiary)] mb-1">
-                  Repository (owner/repo)
-                </label>
-                <input
-                  type="text"
-                  value={githubRepo}
-                  onChange={(e) => setGithubRepo(e.target.value)}
-                  placeholder="myorg/customer-support-agent"
-                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
-                />
-                <p className="text-[9px] text-[var(--text-tertiary)] mt-1">
-                  Uses local <code className="font-mono">gh</code> CLI auth. Will create the repo if it doesn&apos;t exist.
-                </p>
-              </div>
+            <div className="space-y-3">
+              {/* Connected state */}
+              {ghConnected && ghUser ? (
+                <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--success)]/5 border border-[var(--success)]/20">
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={ghUser.avatar_url} alt="" className="w-5 h-5 rounded-full" />
+                    <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">
+                      {ghUser.name || ghUser.login}
+                    </span>
+                    <CheckCircle2 className="h-3 w-3 text-[var(--success)]" />
+                  </div>
+                  <button
+                    onClick={handleDisconnectGithub}
+                    className="text-[10px] font-satoshi-medium text-[var(--text-tertiary)] hover:text-red-500 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ) : showTokenInput ? (
+                /* Token input */
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={ghTokenInput}
+                      onChange={(e) => setGhTokenInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleConnectGithub()}
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleConnectGithub}
+                      disabled={ghConnecting || !ghTokenInput.trim()}
+                      className="px-3 py-1.5 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 disabled:opacity-30 transition-colors"
+                    >
+                      {ghConnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Connect"}
+                    </button>
+                  </div>
+                  <a
+                    href="https://github.com/settings/tokens/new?scopes=repo&description=Ruh.ai+Agent+Builder"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[10px] font-satoshi-medium text-[var(--primary)] hover:underline"
+                  >
+                    Generate a token with &quot;repo&quot; scope
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                  {ghAuthError && (
+                    <p className="text-[10px] font-satoshi-medium text-red-500">{ghAuthError}</p>
+                  )}
+                </div>
+              ) : (
+                /* Connect button */
+                <button
+                  onClick={() => setShowTokenInput(true)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] hover:border-[var(--primary)]/30 hover:bg-[var(--primary)]/5 transition-colors"
+                >
+                  <Github className="h-4 w-4 text-[var(--text-primary)]" />
+                  <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">Connect GitHub Account</span>
+                </button>
+              )}
+
+              {/* Repo name (shown when connected) */}
+              {ghConnected && (
+                <div>
+                  <label className="block text-[10px] font-satoshi-medium text-[var(--text-tertiary)] mb-1">
+                    Repository
+                  </label>
+                  <input
+                    type="text"
+                    value={githubRepo}
+                    onChange={(e) => setGithubRepo(e.target.value)}
+                    placeholder={`${ghUser?.login ?? "owner"}/${(store.name || "agent").toLowerCase().replace(/\s+/g, "-")}`}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
+                  />
+                  <p className="text-[9px] text-[var(--text-tertiary)] mt-1">
+                    Will create the repo if it doesn&apos;t exist. Agent files pushed to main branch.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

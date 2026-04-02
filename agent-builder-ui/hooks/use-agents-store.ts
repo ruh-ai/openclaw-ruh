@@ -226,7 +226,11 @@ export const useAgentsStore = create<AgentsStoreState>()(
             ...(agent.forgeSandboxId ? { forge_sandbox_id: agent.forgeSandboxId } : {}),
           }),
         });
-        if (!res.ok) throw new Error("Failed to save agent");
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          const msg = detail?.message || detail?.error || `Failed to save agent (${res.status})`;
+          throw new Error(res.status === 401 ? "Not authenticated — please log in first" : msg);
+        }
         const data = await res.json();
         const saved = fromBackend(data);
         set((state) => ({ agents: [saved, ...state.agents] }));
@@ -288,7 +292,11 @@ export const useAgentsStore = create<AgentsStoreState>()(
             ...(patch.forgeSandboxId ? { forge_sandbox_id: patch.forgeSandboxId } : {}),
           }),
         });
-        if (!res.ok) throw new Error("Failed to update agent");
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          const msg = detail?.message || detail?.error || `Failed to update agent (${res.status})`;
+          throw new Error(res.status === 401 ? "Not authenticated — please log in first" : msg);
+        }
         const data = await res.json();
         let updated!: SavedAgent;
         set((state) => {
@@ -357,7 +365,11 @@ export const useAgentsStore = create<AgentsStoreState>()(
             creationSession: patch.creationSession,
           }),
         });
-        if (!res.ok) throw new Error("Failed to update agent config");
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null);
+          const msg = detail?.message || detail?.error || `Failed to update agent config (${res.status})`;
+          throw new Error(res.status === 401 ? "Not authenticated — please log in first" : msg);
+        }
         const data = await res.json();
         let updated!: SavedAgent;
         set((state) => {

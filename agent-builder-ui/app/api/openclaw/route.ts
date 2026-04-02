@@ -165,14 +165,12 @@ async function resolveForgeGateway(
         },
       );
       if (restartRes.ok) {
-        console.log(`[Gateway] Restart command sent for forge sandbox ${forgeSandboxId}, waiting for gateway...`);
         // Wait a few seconds for the gateway to come up, then re-probe
         await new Promise((r) => setTimeout(r, 5000));
         const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
         if (!reProbe.ok) {
           throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
         }
-        console.log(`[Gateway] Forge sandbox ${forgeSandboxId} gateway recovered after restart`);
       } else {
         throw new Error(`Restart endpoint returned ${restartRes.status}`);
       }
@@ -312,6 +310,11 @@ export async function POST(req: NextRequest) {
                 // If the gateway accepts WS, we get tool_start/tool_end/file_written
                 // events in real time. Falls back to HTTP proxy on auth failure.
                 // Auth failures are cached so subsequent requests skip the WS probe.
+                // Clear stale WS failures for copilot mode (build stage) so tool
+                // events flow through — the HTTP fallback has no real-time events.
+                if (resolvedMode === "copilot" && _forgeWsAuthFailures.has(forge_sandbox_id)) {
+                  _forgeWsAuthFailures.delete(forge_sandbox_id);
+                }
                 if (!shouldSkipForgeWs(forge_sandbox_id)) {
                   let forgeGateway: GatewayCredentials | null = null;
                   try {
@@ -424,9 +427,19 @@ export async function POST(req: NextRequest) {
                   const scanText = fullContent.slice(lastScanIndex);
                   lastScanIndex = fullContent.length;
 
+                  // Detect skill files from workspace paths
                   for (const m of scanText.matchAll(/skills\/([a-z0-9_-]+)\/SKILL\.md/gi)) {
                     const skillId = m[1];
                     if (!emittedSkills.has(skillId)) {
+                      emittedSkills.add(skillId);
+                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
+                    }
+                  }
+
+                  // Detect skill names from conversational text (e.g., "Created skill: weather-intake")
+                  for (const m of scanText.matchAll(/(?:creat|writ|generat|built)\w*\s+(?:skill|the)\s+["`']?([a-z][a-z0-9-]+)["`']?/gi)) {
+                    const skillId = m[1].toLowerCase();
+                    if (skillId.length > 3 && !emittedSkills.has(skillId)) {
                       emittedSkills.add(skillId);
                       send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
                     }
@@ -440,9 +453,23 @@ export async function POST(req: NextRequest) {
                     }
                   }
 
+                  // Detect file writes from conversational text
+                  for (const m of scanText.matchAll(/(?:writ|creat|sav)\w+\s+["`']?([A-Z][A-Z_]+\.(?:md|yml|json|env))["`']?/gi)) {
+                    const fileName = m[1];
+                    if (!emittedFiles.has(fileName)) {
+                      emittedFiles.add(fileName);
+                      send("file_written", { path: fileName, tool: "bash" });
+                    }
+                  }
+
                   if (scanText.includes("SOUL.md") && !emittedFiles.has("SOUL.md")) {
                     emittedFiles.add("SOUL.md");
                     send("file_written", { path: "SOUL.md", tool: "bash" });
+                  }
+
+                  // Emit build_progress when we have skills
+                  if (emittedSkills.size > 0) {
+                    send("build_progress", { completed: emittedSkills.size, total: null, currentSkill: Array.from(emittedSkills).pop() });
                   }
                 };
 
@@ -503,9 +530,9 @@ export async function POST(req: NextRequest) {
                   clearInterval(progressInterval);
                 }
 
-                const rfrMatch = fullContent.match(/```ready_for_review\s*\n?([\s\S]*?)```/) ||
-                  fullContent.match(/```json\s*\n?([\s\S]*?"type"\s*:\s*"ready_for_review"[\s\S]*?)```/) ||
-                  fullContent.match(/\{[\s\S]*"type"\s*:\s*"ready_for_review"[\s\S]*\}/);
+                const rfrMatch = fullContent.match(/```(?:ready_for_review|discovery|architecture_plan)\s*\n?([\s\S]*?)```/) ||
+                  fullContent.match(/```json\s*\n?([\s\S]*?"type"\s*:\s*"(?:ready_for_review|discovery|architecture_plan)"[\s\S]*?)```/) ||
+                  fullContent.match(/\{[\s\S]*"type"\s*:\s*"(?:ready_for_review|discovery|architecture_plan)"[\s\S]*\}/);
 
                 if (rfrMatch) {
                   try {
