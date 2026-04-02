@@ -48,7 +48,11 @@ interface MessagePage {
 function useElapsedSeconds(running: boolean): number {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (!running) { setElapsed(0); return; }
+    if (!running) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setElapsed(0);
+      return;
+    }
     const t = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, [running]);

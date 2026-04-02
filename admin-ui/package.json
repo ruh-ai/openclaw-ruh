@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "bun test",
-    "test:coverage": "bun test --coverage",
+    "test": "bun test --path-ignore-patterns 'e2e/**'",
+    "test:coverage": "bun test --coverage --path-ignore-patterns 'e2e/**'",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
