@@ -2,30 +2,31 @@
  * Unit tests for src/paperclipClient.ts — mocks config and global fetch.
  */
 
-import { describe, expect, test, mock, beforeEach, afterAll } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
-// ── Mock config ──────────────────────────────────────────────────────────────
-
-let mockPaperclipUrl: string | null = null;
-
-mock.module('../../../src/config', () => ({
-  getConfig: () => ({ paperclipApiUrl: mockPaperclipUrl }),
-}));
+// ── Control paperclipApiUrl via process.env to avoid polluting config mock ───
 
 import * as paperclip from '../../../src/paperclipClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const originalFetch = globalThis.fetch;
+let savedPaperclipUrl: string | undefined;
 
 beforeEach(() => {
-  mockPaperclipUrl = null;
+  savedPaperclipUrl = process.env.PAPERCLIP_API_URL;
+  delete process.env.PAPERCLIP_API_URL;
   globalThis.fetch = mock(async () => new Response('{}', { status: 200 })) as any;
   // Reset the module's internal health cache via the exported helper
   paperclip.resetHealthCache();
 });
 
-afterAll(() => {
+afterEach(() => {
+  if (savedPaperclipUrl === undefined) {
+    delete process.env.PAPERCLIP_API_URL;
+  } else {
+    process.env.PAPERCLIP_API_URL = savedPaperclipUrl;
+  }
   globalThis.fetch = originalFetch;
 });
 
@@ -38,7 +39,7 @@ describe('paperclip.isAvailable', () => {
   });
 
   test('returns true when health check succeeds', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ status: 'ok' }), { status: 200 }),
     ) as any;
@@ -48,7 +49,7 @@ describe('paperclip.isAvailable', () => {
   });
 
   test('returns false when health check returns non-ok', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ status: 'error' }), { status: 200 }),
     ) as any;
@@ -62,7 +63,7 @@ describe('paperclip.isAvailable', () => {
 
 describe('paperclip.createCompany', () => {
   test('calls fetch with correct method/path/body', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     const mockResponse = { id: 'company-1', name: 'Test Co' };
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify(mockResponse), { status: 200 }),
@@ -78,7 +79,7 @@ describe('paperclip.createCompany', () => {
   });
 
   test('returns null on non-ok response', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response('Not Found', { status: 404 }),
     ) as any;
@@ -88,7 +89,7 @@ describe('paperclip.createCompany', () => {
   });
 
   test('returns null on fetch error', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () => { throw new Error('Network error'); }) as any;
 
     const result = await paperclip.createCompany('Test');
@@ -105,7 +106,7 @@ describe('paperclip.createCompany', () => {
 
 describe('paperclip.createWorker', () => {
   test('sends correct payload', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ id: 'agent-1' }), { status: 200 }),
     ) as any;
@@ -125,7 +126,7 @@ describe('paperclip.createWorker', () => {
 
 describe('paperclip.createIssue', () => {
   test('sends correct payload', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ id: 'issue-1', identifier: 'TST-1' }), { status: 200 }),
     ) as any;
@@ -142,7 +143,7 @@ describe('paperclip.createIssue', () => {
 
 describe('paperclip.checkoutIssue', () => {
   test('returns true on success', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ id: 'issue-1' }), { status: 200 }),
     ) as any;
@@ -152,7 +153,7 @@ describe('paperclip.checkoutIssue', () => {
   });
 
   test('returns false on failure', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response('Conflict', { status: 409 }),
     ) as any;
@@ -164,7 +165,7 @@ describe('paperclip.checkoutIssue', () => {
 
 describe('paperclip.releaseIssue', () => {
   test('returns true on success', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ id: 'issue-1' }), { status: 200 }),
     ) as any;
@@ -178,7 +179,7 @@ describe('paperclip.releaseIssue', () => {
 
 describe('paperclip.logCostEvent', () => {
   test('sends correct cost payload', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ id: 'cost-1' }), { status: 200 }),
     ) as any;
@@ -201,7 +202,7 @@ describe('paperclip.logCostEvent', () => {
 
 describe('paperclip.getDashboard', () => {
   test('returns dashboard data', async () => {
-    mockPaperclipUrl = 'http://localhost:3100';
+    process.env.PAPERCLIP_API_URL = 'http://localhost:3100';
     const dashboard = {
       agents: { active: 2, running: 1, paused: 0, error: 0 },
       tasks: { open: 5, inProgress: 2, blocked: 0, done: 10 },

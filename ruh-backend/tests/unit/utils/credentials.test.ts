@@ -2,24 +2,27 @@
  * Unit tests for src/credentials.ts — AES-256-GCM encryption/decryption.
  */
 
-import { describe, expect, test, mock, beforeEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
-// ── Mock config ──────────────────────────────────────────────────────────────
-
-let mockCredentialsKey: string | undefined = undefined;
-
-mock.module('../../../src/config', () => ({
-  getConfig: () => ({
-    agentCredentialsKey: mockCredentialsKey,
-  }),
-}));
+// ── Control agentCredentialsKey via process.env to avoid polluting config mock
 
 import { encryptCredentials, decryptCredentials } from '../../../src/credentials';
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+let savedCredentialsKey: string | undefined;
+
 beforeEach(() => {
-  mockCredentialsKey = undefined;
+  savedCredentialsKey = process.env.AGENT_CREDENTIALS_KEY;
+  delete process.env.AGENT_CREDENTIALS_KEY;
+});
+
+afterEach(() => {
+  if (savedCredentialsKey === undefined) {
+    delete process.env.AGENT_CREDENTIALS_KEY;
+  } else {
+    process.env.AGENT_CREDENTIALS_KEY = savedCredentialsKey;
+  }
 });
 
 // ── Dev mode (no key) ────────────────────────────────────────────────────────
@@ -48,7 +51,7 @@ describe('credentials — with AGENT_CREDENTIALS_KEY', () => {
   const TEST_KEY = 'a'.repeat(64);
 
   test('encrypt produces different output each time (random IV)', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = { key: 'value' };
     const blob1 = encryptCredentials(plain);
     const blob2 = encryptCredentials(plain);
@@ -57,7 +60,7 @@ describe('credentials — with AGENT_CREDENTIALS_KEY', () => {
   });
 
   test('decrypt round-trips correctly', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = { api_key: 'sk-prod-123', refresh_token: 'rt-456' };
     const blob = encryptCredentials(plain);
     const result = decryptCredentials(blob.encrypted, blob.iv);
@@ -65,7 +68,7 @@ describe('credentials — with AGENT_CREDENTIALS_KEY', () => {
   });
 
   test('encrypted output is not plaintext', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = { api_key: 'sk-visible' };
     const blob = encryptCredentials(plain);
     const raw = Buffer.from(blob.encrypted, 'base64').toString('utf-8');
@@ -73,7 +76,7 @@ describe('credentials — with AGENT_CREDENTIALS_KEY', () => {
   });
 
   test('tampered ciphertext throws', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = { key: 'value' };
     const blob = encryptCredentials(plain);
 
@@ -86,17 +89,17 @@ describe('credentials — with AGENT_CREDENTIALS_KEY', () => {
   });
 
   test('wrong key throws', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = { key: 'value' };
     const blob = encryptCredentials(plain);
 
     // Switch to different key for decryption
-    mockCredentialsKey = 'b'.repeat(64);
+    process.env.AGENT_CREDENTIALS_KEY = 'b'.repeat(64);
     expect(() => decryptCredentials(blob.encrypted, blob.iv)).toThrow();
   });
 
   test('handles empty credentials object', () => {
-    mockCredentialsKey = TEST_KEY;
+    process.env.AGENT_CREDENTIALS_KEY = TEST_KEY;
     const plain = {};
     const blob = encryptCredentials(plain);
     const result = decryptCredentials(blob.encrypted, blob.iv);

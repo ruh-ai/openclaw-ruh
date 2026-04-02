@@ -1,16 +1,12 @@
 /**
- * Unit tests for src/openspaceClient.ts — mocks config and docker.
+ * Unit tests for src/openspaceClient.ts — mocks docker only;
+ * controls openspaceMcpEnabled via process.env to avoid polluting the
+ * shared config module mock across test files.
  */
 
-import { describe, expect, test, mock, beforeEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
-// ── Mock dependencies ────────────────────────────────────────────────────────
-
-let mockEnabled = false;
-
-mock.module('../../../src/config', () => ({
-  getConfig: () => ({ openspaceMcpEnabled: mockEnabled }),
-}));
+// ── Mock docker only (not config — use env var instead) ──────────────────────
 
 const mockDockerExec = mock(async (_id: string, _cmd: string) => [true, ''] as [boolean, string]);
 
@@ -31,10 +27,21 @@ function makeExecution(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+let savedOpenspaceEnabled: string | undefined;
+
 beforeEach(() => {
-  mockEnabled = false;
+  savedOpenspaceEnabled = process.env.OPENSPACE_MCP_ENABLED;
+  process.env.OPENSPACE_MCP_ENABLED = 'false';
   mockDockerExec.mockReset();
   mockDockerExec.mockImplementation(async () => [true, '']);
+});
+
+afterEach(() => {
+  if (savedOpenspaceEnabled === undefined) {
+    delete process.env.OPENSPACE_MCP_ENABLED;
+  } else {
+    process.env.OPENSPACE_MCP_ENABLED = savedOpenspaceEnabled;
+  }
 });
 
 // ── isEnabled ────────────────────────────────────────────────────────────────
@@ -45,7 +52,7 @@ describe('isEnabled', () => {
   });
 
   test('returns true when enabled', () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     expect(isEnabled()).toBe(true);
   });
 });
@@ -59,13 +66,13 @@ describe('recordAndAnalyzeExecution', () => {
   });
 
   test('returns null when totalToolCalls is 0', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     const result = await recordAndAnalyzeExecution('sandbox-1', makeExecution({ totalToolCalls: 0 }));
     expect(result).toBeNull();
   });
 
   test('writes execution log and returns result', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async (_id: string, cmd: string) => {
       if (cmd.includes('wc -l')) return [true, '2\n'];
       return [true, ''];
@@ -78,7 +85,7 @@ describe('recordAndAnalyzeExecution', () => {
   });
 
   test('returns null when dockerExec write fails', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async (_id: string, cmd: string) => {
       if (cmd.includes('mkdir')) return [true, ''];
       if (cmd.includes('echo')) return [false, 'error'];
@@ -90,7 +97,7 @@ describe('recordAndAnalyzeExecution', () => {
   });
 
   test('handles dockerExec failure gracefully', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async () => { throw new Error('Docker failed'); });
 
     const result = await recordAndAnalyzeExecution('sandbox-1', makeExecution());
@@ -107,7 +114,7 @@ describe('listSkills', () => {
   });
 
   test('parses dockerExec output into skill names', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async () => [true, 'analyze\nreport\nbrowse\n']);
 
     const skills = await listSkills('sandbox-1');
@@ -115,7 +122,7 @@ describe('listSkills', () => {
   });
 
   test('returns empty on dockerExec failure', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async () => [false, '']);
 
     const skills = await listSkills('sandbox-1');
@@ -123,7 +130,7 @@ describe('listSkills', () => {
   });
 
   test('handles error gracefully', async () => {
-    mockEnabled = true;
+    process.env.OPENSPACE_MCP_ENABLED = 'true';
     mockDockerExec.mockImplementation(async () => { throw new Error('boom'); });
 
     const skills = await listSkills('sandbox-1');

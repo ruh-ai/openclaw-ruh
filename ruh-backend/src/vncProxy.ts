@@ -7,13 +7,25 @@
 
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { WebSocket, WebSocketServer } from 'ws';
+import * as _ws from 'ws';
 import * as store from './store';
 
 // Match: /api/sandboxes/<uuid>/vnc
 const VNC_PATH_RE = /^\/api\/sandboxes\/([^/]+)\/vnc$/;
 
-const wss = new WebSocketServer({ noServer: true });
+// Lazy getter so mock.module('ws', ...) updates take effect even after this
+// module has been loaded (e.g. when startup.ts is imported before vncProxy
+// mock is registered in tests).
+function getWss(): _ws.WebSocketServer {
+  return new (_ws as any).WebSocketServer({ noServer: true });
+}
+let _wss: _ws.WebSocketServer | null = null;
+function wss(): _ws.WebSocketServer {
+  if (!_wss) _wss = getWss();
+  return _wss;
+}
+
+type WebSocketType = _ws.WebSocket;
 
 /**
  * Handle HTTP upgrade requests for the VNC proxy path.
@@ -30,12 +42,12 @@ export function handleVncUpgrade(
 
   const sandboxId = match[1];
 
-  wss.handleUpgrade(req, socket, head, (clientWs) => {
+  wss().handleUpgrade(req, socket, head, (clientWs) => {
     proxyToContainer(clientWs, sandboxId);
   });
 }
 
-async function proxyToContainer(clientWs: WebSocket, sandboxId: string): Promise<void> {
+async function proxyToContainer(clientWs: WebSocketType, sandboxId: string): Promise<void> {
   let record: store.SandboxRecord | null;
   try {
     record = await store.getSandbox(sandboxId);
@@ -55,7 +67,8 @@ async function proxyToContainer(clientWs: WebSocket, sandboxId: string): Promise
   }
 
   const targetUrl = `ws://localhost:${record.vnc_port}`;
-  const containerWs = new WebSocket(targetUrl, {
+  const WS = (_ws as any).WebSocket ?? (_ws as any).default;
+  const containerWs: WebSocketType = new WS(targetUrl, {
     // noVNC uses binary frames
     perMessageDeflate: false,
   });
@@ -63,14 +76,14 @@ async function proxyToContainer(clientWs: WebSocket, sandboxId: string): Promise
   containerWs.on('open', () => {
     // Relay: client → container
     clientWs.on('message', (data, isBinary) => {
-      if (containerWs.readyState === WebSocket.OPEN) {
+      if (containerWs.readyState === WS.OPEN) {
         containerWs.send(data, { binary: isBinary });
       }
     });
 
     // Relay: container → client
     containerWs.on('message', (data, isBinary) => {
-      if (clientWs.readyState === WebSocket.OPEN) {
+      if (clientWs.readyState === WS.OPEN) {
         clientWs.send(data, { binary: isBinary });
       }
     });
@@ -78,25 +91,25 @@ async function proxyToContainer(clientWs: WebSocket, sandboxId: string): Promise
 
   containerWs.on('error', (err) => {
     console.error(`[vnc-proxy] Container WS error (sandbox ${sandboxId}):`, err.message);
-    if (clientWs.readyState === WebSocket.OPEN) {
+    if (clientWs.readyState === WS.OPEN) {
       clientWs.close(4502, 'Container VNC connection failed');
     }
   });
 
   containerWs.on('close', () => {
-    if (clientWs.readyState === WebSocket.OPEN) {
+    if (clientWs.readyState === WS.OPEN) {
       clientWs.close(1000, 'Container VNC closed');
     }
   });
 
   clientWs.on('close', () => {
-    if (containerWs.readyState === WebSocket.OPEN) {
+    if (containerWs.readyState === WS.OPEN) {
       containerWs.close();
     }
   });
 
   clientWs.on('error', () => {
-    if (containerWs.readyState === WebSocket.OPEN) {
+    if (containerWs.readyState === WS.OPEN) {
       containerWs.close();
     }
   });

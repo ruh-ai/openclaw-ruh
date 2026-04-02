@@ -741,3 +741,28 @@ describe('agentStore improvement metadata', () => {
     expect(updateCall?.[0]).toContain('improvements');
   });
 });
+
+// ── credential redaction ──────────────────────────────────────────────────────
+
+describe('agentStore public reads', () => {
+  test('listAgents strips stored credential envelopes from the public agent payload', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow()],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.listAgents();
+    expect(result[0]).not.toHaveProperty('agent_credentials');
+  });
+
+  test('getAgent strips stored credential envelopes from the public agent payload', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow()],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgent(AGENT_ID);
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty('agent_credentials');
+  });
+});

@@ -80,6 +80,23 @@ mock.module('../../../src/auth/tokens', () => ({
   },
 }));
 
+mock.module('../../../src/auth/middleware', () => ({
+  requireAuth: (req: any, res: any, next: any) => {
+    const auth = (req.headers?.authorization ?? '') as string;
+    if (!auth.startsWith('Bearer ')) {
+      return void res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid access token' });
+    }
+    const token = auth.slice(7);
+    if (token !== 'valid-token') {
+      return void res.status(401).json({ error: 'unauthorized', message: 'Invalid or expired access token' });
+    }
+    req.user = { userId: USER_ID, email: 'cost@test.com', role: 'developer', orgId: ORG_ID };
+    next();
+  },
+  optionalAuth: (_req: any, _res: any, next: any) => next(),
+  requireRole: () => (_req: any, _res: any, next: any) => next(),
+}));
+
 // Mock remaining app dependencies
 mock.module('../../../src/store', () => ({
   getSandbox: mock(async () => null),
@@ -94,6 +111,7 @@ mock.module('../../../src/store', () => ({
 mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -105,13 +123,29 @@ mock.module('../../../src/conversationStore', () => ({
 mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
+  getAgentForCreator: mock(async () => null),
+  getAgentForCreatorInOrg: mock(async () => null),
+  getAgentOwnership: mock(async () => null),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
-  getAgentOwnership: mock(async () => null),
+  removeSandboxFromAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  deleteAgent: mock(async () => true),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  updatePaperclipMapping: mock(async () => null),
+  getAgentBySandboxId: mock(async () => null),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
 }));
 
 mock.module('../../../src/sandboxManager', () => ({
@@ -206,6 +240,10 @@ mock.module('../../../src/agentVersionStore', () => ({
 mock.module('../../../src/marketplaceRuntime', () => ({
   buildInstalledAgentSeed: mock(() => ({})),
   buildPublishedRuntimeSnapshot: mock(() => ({})),
+  buildConfigurePayloadFromAgent: mock(() => ({})),
+  buildSoulContentFromAgent: mock(() => ''),
+  buildCronJobsFromAgent: mock(() => []),
+  buildRuntimeSkillsFromAgent: mock(() => []),
 }));
 
 const supertest = (await import('supertest')).default;

@@ -23,9 +23,41 @@ const mockStartSpan = mock(() => ({
 
 const mockGetTracer = mock(() => ({ startSpan: mockStartSpan }));
 
+const mockSpanCtxObj = {
+  traceId: '00000000000000000000000000000000',
+  spanId: '0000000000000000',
+  traceFlags: 0,
+};
+const mockNoopSpan = {
+  end: () => {},
+  setStatus: () => {},
+  setAttribute: () => {},
+  recordException: () => {},
+  spanContext: () => mockSpanCtxObj,
+  isRecording: () => false,
+  setAttributes: () => {},
+  addEvent: () => {},
+  updateName: () => {},
+};
+const mockActiveContext = {};
+
 mock.module('@opentelemetry/api', () => ({
-  trace: { getTracer: mockGetTracer },
-  SpanStatusCode: { OK: 1, ERROR: 2 },
+  trace: {
+    getTracer: mockGetTracer,
+    setSpan: (_ctx: unknown, _span: unknown) => mockActiveContext,
+    getSpan: (_ctx: unknown) => mockNoopSpan,
+    getActiveSpan: () => mockNoopSpan,
+  },
+  context: {
+    active: () => mockActiveContext,
+    with: (_ctx: unknown, fn: () => unknown) => fn(),
+    bind: (_ctx: unknown, fn: unknown) => fn,
+  },
+  propagation: {
+    extract: (_ctx: unknown, _carrier: unknown) => mockActiveContext,
+    inject: () => {},
+  },
+  SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
 }));
 
 const { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } = await import('../../../src/agentTracing');

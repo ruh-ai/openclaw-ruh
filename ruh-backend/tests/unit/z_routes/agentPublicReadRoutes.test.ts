@@ -56,6 +56,7 @@ mock.module('../../../src/store', () => ({
 mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -68,15 +69,28 @@ mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mockListAgents,
   listAgentsForCreator: mockListAgentsForCreator,
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
   getAgentForCreator: mockGetAgentForCreator,
+  getAgentForCreatorInOrg: mock(async () => null),
+  getAgentOwnership: mock(async () => null),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  deleteAgent: mock(async () => true),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
+  updatePaperclipMapping: mock(async () => null),
+  getAgentBySandboxId: mock(async () => null),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
 }));
 
 mock.module('../../../src/auth/middleware', () => ({
@@ -149,6 +163,19 @@ mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
+}));
+
+// orgStore must be mocked so getActiveOrgKind doesn't hit the real DB pool.
+// When req.user.orgId is set (from a previously-registered requireAuth mock),
+// getActiveOrgKind calls orgStore.getOrg — returning null makes it fall through
+// to the developer flow without needing a real database connection.
+mock.module('../../../src/orgStore', () => ({
+  initDb: mock(async () => {}),
+  createOrg: mock(async () => ({})),
+  getOrg: mock(async () => null),
+  listOrgs: mock(async () => []),
+  updateOrg: mock(async () => ({})),
+  deleteOrg: mock(async () => true),
 }));
 
 const { app } = await import('../../../src/app');
@@ -261,7 +288,7 @@ async function invokeRoute(method: string, path: string, req: MockReq) {
   await runNext();
   await Promise.race([
     res.done,
-    new Promise((resolve) => setTimeout(resolve, 25)),
+    new Promise((resolve) => setTimeout(resolve, 500)),
   ]);
   return res;
 }

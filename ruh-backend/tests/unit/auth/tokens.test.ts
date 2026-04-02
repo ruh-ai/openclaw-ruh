@@ -1,14 +1,5 @@
-import { describe, expect, test, mock } from 'bun:test';
-
-// Mock getConfig so JWT secrets are stable regardless of process.env mutations
-// by other test files (e.g. startup.test.ts replaces the process.env object).
-mock.module('../../../src/config', () => ({
-  getConfig: () => ({
-    jwtAccessSecret: 'test-access-secret-32chars-min!!',
-    jwtRefreshSecret: 'test-refresh-secret-32chars-min!',
-  }),
-}));
-
+import { describe, expect, test } from 'bun:test';
+// JWT secrets are set by tests/helpers/env.ts preload — no config mock needed.
 import { signAccessToken, verifyAccessToken, signRefreshToken, verifyRefreshToken } from '../../../src/auth/tokens';
 
 describe('tokens', () => {

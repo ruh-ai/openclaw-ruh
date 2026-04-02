@@ -14,8 +14,13 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { requireAuth } from './auth/middleware';
+import * as _authMiddleware from './auth/middleware';
 import { httpError } from './utils';
+
+// Late-binding wrapper so that mock.module('...auth/middleware') replacements in
+// tests take effect even after costRoutes.ts has already been evaluated.
+const requireAuth: typeof _authMiddleware.requireAuth =
+  (req, res, next) => _authMiddleware.requireAuth(req, res, next);
 import * as costStore from './costStore';
 import * as executionRecordingStore from './executionRecordingStore';
 

@@ -20,6 +20,7 @@ mock.module('../../../src/store', () => ({
 mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -31,17 +32,34 @@ mock.module('../../../src/conversationStore', () => ({
 mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: getAgentMock,
+  getAgentForCreator: mock(async () => null),
+  getAgentForCreatorInOrg: mock(async () => null),
+  getAgentOwnership: mock(async () => null),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  deleteAgent: mock(async () => true),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  updatePaperclipMapping: mock(async () => null),
+  getAgentBySandboxId: mock(async () => null),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
   getAgentCredentials: getAgentCredentialsMock,
+  getAgentCredentialSummary: mock(async () => []),
 }));
 
 mock.module('../../../src/credentials', () => ({
   decryptCredentials: decryptCredentialsMock,
+  encryptCredentials: mock((_plain: Record<string, string>) => ({ encrypted: '', iv: '' })),
 }));
 
 mock.module('../../../src/sandboxManager', () => ({
