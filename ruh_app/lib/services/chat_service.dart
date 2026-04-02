@@ -27,9 +27,9 @@ class ChatEvent {
 
 /// Service that handles streaming chat with an OpenClaw agent sandbox.
 class ChatService {
-  ChatService({ApiClient? client}) : _client = client ?? ApiClient();
+  ChatService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// Send a user [message] to the sandbox identified by [sandboxId] and yield
   /// parsed [ChatEvent]s as they arrive over SSE.
@@ -59,7 +59,7 @@ class ChatService {
     String? currentEvent;
 
     await for (final line in _client.streamPost(
-      '/api/sandboxes/$sandboxId/chat',
+      '/api/sandboxes/$sandboxId/chat/ws',
       body,
     )) {
       // SSE event type line: "event: <type>"
@@ -71,6 +71,8 @@ class ChatService {
       // SSE data line: "data: <payload>"
       if (!line.startsWith('data:')) continue;
 
+      final eventType = currentEvent;
+      currentEvent = null;
       final payload = line.substring('data:'.length).trim();
 
       // End-of-stream sentinel
@@ -91,7 +93,7 @@ class ChatService {
       if (json == null) continue;
 
       // Route based on event type
-      switch (currentEvent) {
+      switch (eventType) {
         case 'tool_start':
           yield ChatEvent(
             type: ChatEventType.toolStart,
@@ -126,6 +128,33 @@ class ChatService {
           break;
 
         default:
+          final inferredToolName =
+              json['name'] as String? ?? json['tool'] as String?;
+          if (inferredToolName != null && json.containsKey('input')) {
+            yield ChatEvent(
+              type: ChatEventType.toolStart,
+              toolName: inferredToolName,
+              toolInput: json['input']?.toString(),
+            );
+            break;
+          }
+          if (inferredToolName != null &&
+              (json.containsKey('output') || json.containsKey('result'))) {
+            yield ChatEvent(
+              type: ChatEventType.toolEnd,
+              toolName: inferredToolName,
+              content: json['output']?.toString() ?? json['result']?.toString(),
+            );
+            break;
+          }
+          if (json.containsKey('phase') || json.containsKey('message')) {
+            yield ChatEvent(
+              type: ChatEventType.status,
+              content: json['message'] as String? ?? payload,
+            );
+            break;
+          }
+
           // Default: treat as text delta (OpenAI-compatible streaming format)
           final choices = json['choices'] as List<dynamic>?;
           if (choices != null && choices.isNotEmpty) {

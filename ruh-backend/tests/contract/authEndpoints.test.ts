@@ -439,6 +439,81 @@ describe('POST /api/auth/login — response contract', () => {
     });
   });
 
+  test('scopes customer access to the active organization when mixed memberships exist', async () => {
+    orgsById.set(
+      'developer-org-id',
+      makeFakeOrg({
+        id: 'developer-org-id',
+        name: 'Developer Org',
+        slug: 'developer-org',
+        kind: 'developer',
+      }),
+    );
+    orgsById.set(
+      'customer-org-id',
+      makeFakeOrg({
+        id: 'customer-org-id',
+        name: 'Customer Org',
+        slug: 'customer-org',
+        kind: 'customer',
+      }),
+    );
+    memberships.push(
+      {
+        id: 'mem-dev',
+        orgId: 'developer-org-id',
+        userId: FAKE_USER_ID,
+        role: 'owner',
+        status: 'active',
+        organizationName: 'Developer Org',
+        organizationSlug: 'developer-org',
+        organizationKind: 'developer',
+        organizationPlan: 'free',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'mem-customer',
+        orgId: 'customer-org-id',
+        userId: FAKE_USER_ID,
+        role: 'admin',
+        status: 'active',
+        organizationName: 'Customer Org',
+        organizationSlug: 'customer-org',
+        organizationKind: 'customer',
+        organizationPlan: 'free',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    );
+    mockGetUserByEmail.mockImplementation(async () =>
+      makeFakeUser({ orgId: 'developer-org-id', role: 'admin' }),
+    );
+
+    const res = await request()
+      .post('/api/auth/login')
+      .send({ email: FAKE_EMAIL, password: 'SecurePass1!' })
+      .expect(200);
+
+    expect(res.body.activeOrganization).toEqual(
+      expect.objectContaining({
+        id: 'developer-org-id',
+        kind: 'developer',
+      }),
+    );
+    expect(res.body.activeMembership).toEqual(
+      expect.objectContaining({
+        organizationId: 'developer-org-id',
+        organizationKind: 'developer',
+      }),
+    );
+    expect(res.body.appAccess).toEqual({
+      admin: true,
+      builder: true,
+      customer: false,
+    });
+  });
+
   test('does not mark auth cookies as Secure outside production', async () => {
     mockGetUserByEmail.mockImplementation(async () => makeFakeUser());
 
@@ -564,6 +639,83 @@ describe('GET /api/auth/me — response contract', () => {
       admin: false,
       builder: false,
       customer: true,
+    });
+  });
+
+  test('does not advertise customer access from a developer-active session', async () => {
+    orgsById.set(
+      'developer-org-id',
+      makeFakeOrg({
+        id: 'developer-org-id',
+        name: 'Developer Org',
+        slug: 'developer-org',
+        kind: 'developer',
+      }),
+    );
+    orgsById.set(
+      'customer-org-id',
+      makeFakeOrg({
+        id: 'customer-org-id',
+        name: 'Customer Org',
+        slug: 'customer-org',
+        kind: 'customer',
+      }),
+    );
+    memberships.push(
+      {
+        id: 'mem-dev',
+        orgId: 'developer-org-id',
+        userId: FAKE_USER_ID,
+        role: 'owner',
+        status: 'active',
+        organizationName: 'Developer Org',
+        organizationSlug: 'developer-org',
+        organizationKind: 'developer',
+        organizationPlan: 'free',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'mem-customer',
+        orgId: 'customer-org-id',
+        userId: FAKE_USER_ID,
+        role: 'admin',
+        status: 'active',
+        organizationName: 'Customer Org',
+        organizationSlug: 'customer-org',
+        organizationKind: 'customer',
+        organizationPlan: 'free',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    );
+    mockGetUserByEmail.mockImplementation(async () =>
+      makeFakeUser({ orgId: 'developer-org-id', role: 'admin' }),
+    );
+    mockGetUserById.mockImplementation(async () =>
+      makeFakeUser({ orgId: 'developer-org-id', role: 'admin' }),
+    );
+
+    const loginRes = await request()
+      .post('/api/auth/login')
+      .send({ email: FAKE_EMAIL, password: 'SecurePass1!' })
+      .expect(200);
+
+    const res = await request()
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${loginRes.body.accessToken}`)
+      .expect(200);
+
+    expect(res.body.activeOrganization).toEqual(
+      expect.objectContaining({
+        id: 'developer-org-id',
+        kind: 'developer',
+      }),
+    );
+    expect(res.body.appAccess).toEqual({
+      admin: true,
+      builder: true,
+      customer: false,
     });
   });
 

@@ -1,12 +1,13 @@
 import '../models/agent.dart';
+import '../models/customer_agent_config.dart';
 import '../models/sandbox.dart';
 import 'api_client.dart';
 
 /// Service for agent CRUD and sandbox health operations.
 class AgentService {
-  AgentService({ApiClient? client}) : _client = client ?? ApiClient();
+  AgentService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// Fetch all agents.
   Future<List<Agent>> listAgents() async {
@@ -31,6 +32,14 @@ class AgentService {
     }
   }
 
+  /// Fetch the customer-safe runtime config snapshot for an agent.
+  Future<CustomerAgentConfig> getCustomerConfig(String id) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      '/api/agents/$id/customer-config',
+    );
+    return CustomerAgentConfig.fromJson(response.data!);
+  }
+
   /// Provision and return a customer runtime agent's launchable record.
   Future<Agent> launchAgent(String id) async {
     final response = await _client.postLongRunning<Map<String, dynamic>>(
@@ -53,6 +62,36 @@ class AgentService {
     return Agent.fromJson(response.data!);
   }
 
+  /// Update the customer-safe runtime config surface for an agent.
+  Future<CustomerAgentConfig> updateCustomerConfig(
+    String id, {
+    String? name,
+    String? description,
+    List<String>? agentRules,
+    List<RuntimeInputValueUpdate>? runtimeInputValues,
+  }) async {
+    final body = <String, dynamic>{};
+    if (name != null) {
+      body['name'] = name;
+    }
+    if (description != null) {
+      body['description'] = description;
+    }
+    if (agentRules != null) {
+      body['agentRules'] = agentRules;
+    }
+    if (runtimeInputValues != null) {
+      body['runtimeInputValues'] =
+          runtimeInputValues.map((item) => item.toJson()).toList();
+    }
+
+    final response = await _client.patch<Map<String, dynamic>>(
+      '/api/agents/$id/customer-config',
+      data: body,
+    );
+    return CustomerAgentConfig.fromJson(response.data!);
+  }
+
   /// Delete an agent by [id].
   Future<void> deleteAgent(String id) async {
     await _client.delete('/api/agents/$id');
@@ -67,14 +106,15 @@ class AgentService {
   }
 
   /// Update the workspace memory for an agent.
-  Future<void> updateWorkspaceMemory(
+  Future<WorkspaceMemory> updateWorkspaceMemory(
     String agentId,
     WorkspaceMemory memory,
   ) async {
-    await _client.patch(
+    final response = await _client.patch<Map<String, dynamic>>(
       '/api/agents/$agentId/workspace-memory',
       data: memory.toJson(),
     );
+    return WorkspaceMemory.fromJson(response.data!);
   }
 
   /// Get health status for a sandbox.

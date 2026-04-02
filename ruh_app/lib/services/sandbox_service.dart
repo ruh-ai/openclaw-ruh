@@ -59,8 +59,19 @@ class SandboxService {
     final data = response.data;
     if (data == null) return [];
 
-    final files = data['files'] as List<dynamic>? ?? [];
-    return files.map((e) => e.toString()).toList();
+    final items =
+        data['items'] as List<dynamic>? ??
+        data['files'] as List<dynamic>? ??
+        [];
+    return items
+        .map((entry) {
+          if (entry is Map<String, dynamic>) {
+            return entry['path'] as String? ?? entry['name'] as String? ?? '';
+          }
+          return entry.toString();
+        })
+        .where((path) => path.isNotEmpty)
+        .toList();
   }
 
   /// Read a single file from the sandbox workspace by [path].

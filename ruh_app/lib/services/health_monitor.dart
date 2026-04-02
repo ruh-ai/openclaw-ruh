@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../models/sandbox.dart';
 import 'api_client.dart';
 import 'logger.dart';
 import 'notification_service.dart';
@@ -15,9 +16,9 @@ import 'notification_service.dart';
 /// monitor.stop();
 /// ```
 class HealthMonitor {
-  HealthMonitor({ApiClient? client}) : _client = client ?? ApiClient();
+  HealthMonitor({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
   Timer? _timer;
 
   /// Tracks the last known health state per sandbox.
@@ -74,7 +75,9 @@ class HealthMonitor {
       );
       final data = response.data;
       final status = data?['status'] as String? ?? 'unknown';
-      final isHealthy = status == 'running' || status == 'healthy';
+      final isHealthy = data == null
+          ? false
+          : SandboxHealth.fromJson(data).isHealthy;
 
       _lastHealthState[sandboxId] = isHealthy;
 

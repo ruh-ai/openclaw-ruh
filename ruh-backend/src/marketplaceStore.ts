@@ -230,6 +230,18 @@ export async function getListingById(
   });
 }
 
+export async function getListingByAgentId(
+  agentId: string,
+): Promise<ListingRecord | null> {
+  return withConn(async (client) => {
+    const result = await client.query(
+      "SELECT * FROM marketplace_listings WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [agentId],
+    );
+    return result.rows[0] ? serializeListingRow(result.rows[0]) : null;
+  });
+}
+
 export async function getListingBySlug(
   slug: string,
 ): Promise<ListingRecord | null> {

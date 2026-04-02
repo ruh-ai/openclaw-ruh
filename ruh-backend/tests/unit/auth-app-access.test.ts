@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 
-import { deriveAppAccess } from '../../src/auth/appAccess';
+import {
+  deriveAppAccess,
+  deriveSessionAppAccess,
+} from '../../src/auth/appAccess';
 
 function membership(overrides: {
   kind: 'developer' | 'customer';
@@ -117,6 +120,47 @@ describe('deriveAppAccess', () => {
         memberships: [
           membership({ kind: 'customer', role: 'developer' }),
         ],
+      }),
+    ).toEqual({
+      admin: false,
+      builder: false,
+      customer: false,
+    });
+  });
+});
+
+describe('deriveSessionAppAccess', () => {
+  test('uses only the active developer membership for session-scoped access', () => {
+    expect(
+      deriveSessionAppAccess({
+        platformRole: 'platform_admin',
+        activeMembership: membership({ kind: 'developer', role: 'owner' }),
+      }),
+    ).toEqual({
+      admin: true,
+      builder: true,
+      customer: false,
+    });
+  });
+
+  test('does not advertise customer access when the active membership is developer', () => {
+    expect(
+      deriveSessionAppAccess({
+        platformRole: 'user',
+        activeMembership: membership({ kind: 'developer', role: 'owner' }),
+      }),
+    ).toEqual({
+      admin: false,
+      builder: true,
+      customer: false,
+    });
+  });
+
+  test('fails closed when there is no active membership', () => {
+    expect(
+      deriveSessionAppAccess({
+        platformRole: 'user',
+        activeMembership: null,
       }),
     ).toEqual({
       admin: false,

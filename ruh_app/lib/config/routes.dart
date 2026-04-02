@@ -7,7 +7,6 @@ import '../config/responsive.dart';
 import '../config/theme.dart';
 import '../models/auth_session.dart';
 import '../providers/auth_provider.dart';
-import '../screens/agents/agent_detail_screen.dart';
 import '../screens/agents/agent_list_screen.dart';
 import '../screens/auth/auth_loading_screen.dart';
 import '../screens/auth/login_screen.dart';
@@ -74,7 +73,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final agentId = state.pathParameters['agentId']!;
               return CustomTransitionPage(
                 key: state.pageKey,
-                child: AgentDetailScreen(agentId: agentId),
+                child: ChatScreen(
+                  agentId: agentId,
+                  initialComputerTab: 'config',
+                ),
                 transitionsBuilder: _slideTransition,
               );
             },

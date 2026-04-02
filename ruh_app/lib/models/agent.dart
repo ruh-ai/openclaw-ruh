@@ -159,11 +159,14 @@ class AgentToolConnection {
 
   factory AgentToolConnection.fromJson(Map<String, dynamic> json) {
     return AgentToolConnection(
-      toolId: json['tool_id'] as String? ?? '',
+      toolId: json['tool_id'] as String? ?? json['toolId'] as String? ?? '',
       name: json['name'] as String? ?? '',
       description: json['description'] as String? ?? '',
       status: json['status'] as String? ?? 'available',
-      connectorType: json['connector_type'] as String? ?? 'api',
+      connectorType:
+          json['connector_type'] as String? ??
+          json['connectorType'] as String? ??
+          'api',
     );
   }
 }
@@ -227,30 +230,41 @@ class WorkspaceMemory {
   final String instructions;
   final String continuitySummary;
   final List<String> pinnedPaths;
+  final DateTime? updatedAt;
 
   const WorkspaceMemory({
     this.instructions = '',
     this.continuitySummary = '',
     this.pinnedPaths = const [],
+    this.updatedAt,
   });
 
   factory WorkspaceMemory.fromJson(Map<String, dynamic> json) {
     return WorkspaceMemory(
       instructions: json['instructions'] as String? ?? '',
-      continuitySummary: json['continuity_summary'] as String? ?? '',
+      continuitySummary:
+          json['continuity_summary'] as String? ??
+          json['continuitySummary'] as String? ??
+          '',
       pinnedPaths:
-          (json['pinned_paths'] as List<dynamic>?)
+          ((json['pinned_paths'] as List<dynamic>?) ??
+                  (json['pinnedPaths'] as List<dynamic>?))
               ?.map((e) => e.toString())
               .toList() ??
           const [],
+      updatedAt: json['updated_at'] is String
+          ? DateTime.tryParse(json['updated_at'] as String)
+          : json['updatedAt'] is String
+          ? DateTime.tryParse(json['updatedAt'] as String)
+          : null,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
       'instructions': instructions,
-      'continuity_summary': continuitySummary,
-      'pinned_paths': pinnedPaths,
+      'continuitySummary': continuitySummary,
+      'pinnedPaths': pinnedPaths,
     };
   }
 }

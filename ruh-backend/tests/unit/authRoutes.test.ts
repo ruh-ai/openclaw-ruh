@@ -622,6 +622,37 @@ describe('GET /api/auth/me', () => {
     expect(res.body.appAccess).toBeDefined();
   });
 
+  test('uses the bearer token org when no refresh cookie is present', async () => {
+    const customerOrgId = 'org-customer-999';
+    mockVerifyAccessToken.mockReturnValue({
+      userId: USER_ID,
+      email: 'test@example.com',
+      role: 'developer',
+      orgId: customerOrgId,
+    });
+    mockGetUserById.mockResolvedValue(makeUser({ orgId: ORG_ID }));
+    mockListMembershipsForUser.mockResolvedValue([
+      makeMembership({ organizationStatus: 'active' }),
+      makeMembership({
+        orgId: customerOrgId,
+        organizationName: 'Customer Org',
+        organizationSlug: 'customer-org',
+        organizationKind: 'customer',
+        organizationStatus: 'active',
+        role: 'admin',
+      }),
+    ]);
+
+    const res = await request()
+      .get('/api/auth/me')
+      .set('Authorization', 'Bearer mock-access-token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.activeOrganization.id).toBe(customerOrgId);
+    expect(res.body.activeOrganization.kind).toBe('customer');
+    expect(res.body.appAccess.customer).toBe(true);
+  });
+
   test('returns platformRole platform_admin for admin users', async () => {
     mockGetUserById.mockResolvedValue(makeUser({ role: 'admin' }));
     mockListMembershipsForUser.mockResolvedValue([]);

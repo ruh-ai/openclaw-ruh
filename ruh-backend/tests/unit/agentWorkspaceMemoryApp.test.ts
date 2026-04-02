@@ -79,6 +79,16 @@ mock.module('../../src/agentStore', () => ({
   updateAgentWorkspaceMemory: mockUpdateAgentWorkspaceMemory,
 }));
 
+mock.module('../../src/orgStore', () => ({
+  getOrg: mock(async () => ({
+    id: 'org-test-001',
+    name: 'Test Dev Org',
+    slug: 'test-dev-org',
+    kind: 'developer',
+    status: 'active',
+  })),
+}));
+
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),

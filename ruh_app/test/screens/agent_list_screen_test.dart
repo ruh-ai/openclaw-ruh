@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:ruh_app/models/agent.dart';
 import 'package:ruh_app/models/marketplace_listing.dart';
+import 'package:ruh_app/providers/agent_provider.dart';
 import 'package:ruh_app/providers/marketplace_provider.dart';
 import 'package:ruh_app/screens/agents/agent_list_screen.dart';
+import 'package:ruh_app/services/agent_service.dart';
 import 'package:ruh_app/services/marketplace_service.dart';
 
 class FakeMarketplaceService extends MarketplaceService {
@@ -14,6 +18,19 @@ class FakeMarketplaceService extends MarketplaceService {
   @override
   Future<List<InstalledMarketplaceListing>> listInstalledListings() async {
     return installedListings;
+  }
+}
+
+class FakeAgentService extends AgentService {
+  FakeAgentService({required this.launchResult});
+
+  final Agent launchResult;
+  String? launchedAgentId;
+
+  @override
+  Future<Agent> launchAgent(String id) async {
+    launchedAgentId = id;
+    return launchResult;
   }
 }
 
@@ -80,7 +97,76 @@ void main() {
       expect(find.text('1 ready to open'), findsOneWidget);
       expect(find.text('Sarah Assistant'), findsOneWidget);
       expect(find.text('Installed from Marketplace'), findsOneWidget);
-      expect(find.text('Open agent'), findsOneWidget);
+      expect(find.text('Open chat'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'tapping open chat launches the runtime and navigates directly to chat',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final agentService = FakeAgentService(
+        launchResult: Agent(
+          id: 'agent-runtime-sarah',
+          name: 'Sarah Assistant',
+          description: 'Warm executive assistant.',
+          status: 'active',
+          sandboxIds: const ['sandbox-1'],
+          createdAt: DateTime.parse('2026-04-02T10:00:00.000Z'),
+          updatedAt: DateTime.parse('2026-04-02T10:00:00.000Z'),
+        ),
+      );
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => const AgentListScreen(),
+          ),
+          GoRoute(
+            path: '/chat/:agentId',
+            builder: (context, state) => Text(
+              'Chat ${state.pathParameters['agentId']}',
+            ),
+          ),
+          GoRoute(
+            path: '/agents/:agentId',
+            builder: (context, state) => Text(
+              'Compat ${state.pathParameters['agentId']}',
+            ),
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            marketplaceServiceProvider.overrideWithValue(
+              FakeMarketplaceService(
+                installedListings: [buildInstalledListing()],
+              ),
+            ),
+            agentServiceProvider.overrideWithValue(agentService),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.text('Open chat'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(agentService.launchedAgentId, 'agent-runtime-sarah');
+      expect(find.text('Chat agent-runtime-sarah'), findsOneWidget);
     },
   );
 

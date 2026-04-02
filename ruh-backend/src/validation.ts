@@ -219,7 +219,11 @@ function readOptionalRuntimeInputs(input: ObjectShape, field: string) {
   return value.map((item, index) => {
     const entry = expectStrictObject(item, {
       fieldName: `${field}[${index}]`,
-      allowedKeys: ['key', 'label', 'description', 'required', 'source', 'value'],
+      allowedKeys: [
+        'key', 'label', 'description', 'required', 'source', 'value',
+        // Enriched metadata for type-aware setup page UX
+        'inputType', 'defaultValue', 'example', 'options', 'group',
+      ],
     });
 
     const required = entry.required;
@@ -234,6 +238,34 @@ function readOptionalRuntimeInputs(input: ObjectShape, field: string) {
       required: required !== false,
       source: readOptionalEnum(entry, 'source', ['architect_requirement', 'skill_requirement'] as const)
         ?? (() => { throw httpError(400, `${field}[${index}].source is required`); })(),
+      value: readOptionalString(entry, 'value', { maxLength: 4000 }) ?? '',
+      // Enriched metadata — all optional, backward-compatible
+      ...(typeof entry.inputType === 'string' ? { inputType: entry.inputType } : {}),
+      ...(typeof entry.defaultValue === 'string' ? { defaultValue: entry.defaultValue } : {}),
+      ...(typeof entry.example === 'string' ? { example: entry.example } : {}),
+      ...(Array.isArray(entry.options) ? { options: entry.options.filter((o: unknown): o is string => typeof o === 'string') } : {}),
+      ...(typeof entry.group === 'string' ? { group: entry.group } : {}),
+    };
+  });
+}
+
+function readOptionalRuntimeInputValues(input: ObjectShape, field: string) {
+  const value = input[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw httpError(422, `${field} must be an array`);
+  }
+
+  return value.map((item, index) => {
+    const entry = expectStrictObject(item, {
+      fieldName: `${field}[${index}]`,
+      allowedKeys: ['key', 'value'],
+    });
+
+    return {
+      key: readRequiredString(entry, 'key', { maxLength: 120 }),
       value: readOptionalString(entry, 'value', { maxLength: 4000 }) ?? '',
     };
   });
@@ -855,6 +887,42 @@ export function validateAgentMetadataPatchBody(body: unknown) {
     status,
     channels,
     forge_sandbox_id,
+  };
+}
+
+export function validateCustomerAgentConfigPatchBody(body: unknown) {
+  const input = expectStrictObject(body, {
+    fieldName: 'body',
+    allowedKeys: ['name', 'description', 'agentRules', 'runtimeInputValues'],
+  });
+
+  const name = input.name === undefined
+    ? undefined
+    : readRequiredString(input, 'name', { maxLength: 120 });
+  const description = readOptionalString(input, 'description', { maxLength: 4000 });
+  const agentRules = readOptionalStringArray(input, 'agentRules', {
+    maxItems: 100,
+    itemMaxLength: 4000,
+  });
+  const runtimeInputValues = readOptionalRuntimeInputValues(
+    input,
+    'runtimeInputValues',
+  );
+
+  if (
+    name === undefined &&
+    description === undefined &&
+    agentRules === undefined &&
+    runtimeInputValues === undefined
+  ) {
+    throw httpError(400, 'At least one config field is required');
+  }
+
+  return {
+    name,
+    description,
+    agentRules,
+    runtimeInputValues,
   };
 }
 

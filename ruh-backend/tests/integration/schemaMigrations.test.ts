@@ -73,6 +73,38 @@ describeIfDb('schema migrations (real DB)', () => {
       'created_at',
       'updated_at',
     ]);
+
+    const billingTables = await pool.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name IN (
+          'billing_customers',
+          'billing_subscriptions',
+          'billing_invoices',
+          'org_entitlements',
+          'org_entitlement_overrides',
+          'billing_events'
+        )
+      ORDER BY table_name ASC
+    `);
+    expect(billingTables.rows.map((row) => row.table_name)).toEqual([
+      'billing_customers',
+      'billing_events',
+      'billing_invoices',
+      'billing_subscriptions',
+      'org_entitlement_overrides',
+      'org_entitlements',
+    ]);
+
+    const entitlementColumns = await pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'org_entitlements'
+      ORDER BY ordinal_position
+    `);
+    expect(entitlementColumns.rows.map((row) => row.column_name)).toContain('billing_status');
+    expect(entitlementColumns.rows.map((row) => row.column_name)).toContain('entitlement_status');
   });
 
   test('worker cost tracking tables use text agent references', async () => {

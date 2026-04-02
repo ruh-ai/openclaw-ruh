@@ -84,5 +84,31 @@ void main() {
 
       expect(fallbackStore.values, isEmpty);
     });
+
+    test(
+      'keeps tokens available in memory for the current session when persistence is unavailable',
+      () async {
+        final secureStore = FakeSecureStore()
+          ..writeError = Exception('keychain write failed')
+          ..readError = Exception('keychain read failed')
+          ..deleteError = Exception('keychain delete failed');
+        final store = AccessTokenStore(
+          secureStore: secureStore,
+          allowInsecureFallback: false,
+        );
+
+        await store.write('access-789');
+        await store.writeRefreshToken('refresh-789');
+
+        expect(await store.read(), 'access-789');
+        expect(await store.readRefreshToken(), 'refresh-789');
+
+        await store.clear();
+        await store.clearRefreshToken();
+
+        expect(await store.read(), isNull);
+        expect(await store.readRefreshToken(), isNull);
+      },
+    );
   });
 }

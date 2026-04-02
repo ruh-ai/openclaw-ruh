@@ -10,7 +10,10 @@ import { v4 as uuidv4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import { hashPassword, verifyPassword } from './auth/passwords';
 import { signAccessToken } from './auth/tokens';
-import { deriveAppAccess, type ActiveMembershipContext } from './auth/appAccess';
+import {
+  deriveSessionAppAccess,
+  type ActiveMembershipContext,
+} from './auth/appAccess';
 import { requireAuth } from './auth/middleware';
 import { httpError } from './utils';
 import { createLogger, createModuleLogger } from '@ruh/logger';
@@ -140,6 +143,7 @@ function toMembershipResponse(membership: OrganizationMembershipRecord) {
     organizationSlug: membership.organizationSlug,
     organizationKind: membership.organizationKind,
     organizationPlan: membership.organizationPlan,
+    organizationStatus: membership.organizationStatus,
     role: membership.role,
     status: membership.status,
   };
@@ -156,6 +160,7 @@ function toActiveOrganization(record: OrgRecord | OrganizationMembershipRecord |
       slug: record.organizationSlug,
       kind: record.organizationKind,
       plan: record.organizationPlan,
+      status: record.organizationStatus,
     };
   }
   return {
@@ -164,6 +169,7 @@ function toActiveOrganization(record: OrgRecord | OrganizationMembershipRecord |
     slug: record.slug,
     kind: record.kind,
     plan: record.plan,
+    status: record.status,
   };
 }
 
@@ -189,6 +195,7 @@ async function listEffectiveMemberships(user: userStore.UserRecord): Promise<Org
     organizationSlug: org.slug,
     organizationKind: org.kind,
     organizationPlan: org.plan,
+    organizationStatus: org.status,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   }];
@@ -203,7 +210,7 @@ async function buildAuthContext(
   activeMembership: ActiveMembershipContext | null;
   activeOrgId: string | null;
   platformRole: 'platform_admin' | 'user';
-  appAccess: ReturnType<typeof deriveAppAccess>;
+  appAccess: ReturnType<typeof deriveSessionAppAccess>;
 }> {
   const memberships = await listEffectiveMemberships(user);
   const activeMembership =
@@ -223,9 +230,9 @@ async function buildAuthContext(
     activeMembership: activeMembershipResponse,
     activeOrgId: activeMembership?.orgId ?? null,
     platformRole,
-    appAccess: deriveAppAccess({
+    appAccess: deriveSessionAppAccess({
       platformRole,
-      memberships: memberships.map(toMembershipResponse),
+      activeMembership: activeMembershipResponse,
     }),
   };
 }
@@ -464,7 +471,7 @@ router.post('/logout', requireAuth, asyncHandler(async (req, res) => {
 
 // ── Switch active organization ───────────────────────────────────────────────
 
-router.post('/switch-org', requireAuth, asyncHandler(async (req, res) => {
+router.post('/switch-org', asyncHandler(async (req, res) => {
   const organizationId = trimOptionalString(req.body.organizationId);
   if (!organizationId) {
     throw httpError(400, 'organizationId is required');
@@ -476,13 +483,13 @@ router.post('/switch-org', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const session = await sessionStore.getSessionByRefreshToken(rawToken);
-  if (!session || session.userId !== req.user!.userId) {
+  if (!session) {
     throw httpError(401, 'Invalid refresh token');
   }
 
-  const user = await userStore.getUserById(req.user!.userId);
-  if (!user) {
-    throw httpError(404, 'User not found');
+  const user = await userStore.getUserById(session.userId);
+  if (!user || user.status !== 'active') {
+    throw httpError(401, 'Account not found or inactive');
   }
 
   const membership = await organizationMembershipStore.getMembershipForUserOrg(user.id, organizationId);
@@ -509,7 +516,10 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   const session = req.cookies?.refreshToken
     ? await sessionStore.getSessionByRefreshToken(req.cookies.refreshToken)
     : null;
-  const context = await buildAuthContext(user, session?.activeOrgId ?? null);
+  const context = await buildAuthContext(
+    user,
+    session?.activeOrgId ?? req.user!.orgId ?? null,
+  );
 
   res.json({
     id: user.id,

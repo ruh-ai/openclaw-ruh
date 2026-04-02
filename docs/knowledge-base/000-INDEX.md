@@ -85,8 +85,12 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-multi-tenant-auth-foundation]] — Multi-tenant auth foundation: org memberships, active-org sessions, and local login fallback ahead of SSO
 - [[SPEC-app-access-and-org-marketplace]] — Shared app-access contract, org-owned marketplace flow, Stripe checkout, and seat-based member assignment program
 - [[SPEC-marketplace-store-parity]] — Research-backed rollout for store.ruh.ai-style catalog/detail/use parity across web and Flutter without abandoning org-owned entitlements
+- [[SPEC-admin-billing-control-plane]] — Stripe-backed billing support console, Ruh entitlements, and customer-org billing operations in admin-ui
 - [[SPEC-ruh-app-customer-surface-redesign]] — Redesigns the Flutter customer shell, workspace, marketplace, and detail surfaces around customer trust and clearer hierarchy
+- [[SPEC-ruh-app-chat-first-agent-config]] — Makes Flutter agent launch chat-first and adds a first-class Agent Config tab with customer-safe runtime editing
+- [[SPEC-ruh-app-runtime-recovery]] — Makes Flutter chat/runtime surfaces honest about sandbox health and gives operators direct recovery actions where failures happen
 - [[SPEC-ruh-app-login-convenience]] — Flutter login page adds password visibility and remembered email without storing raw passwords
+- [[SPEC-admin-control-plane]] — Expands `admin-ui` into a real super-admin control plane for overview, orgs, runtime, audit, marketplace, and system visibility
 - [[SPEC-local-test-user-seeding]] — Idempotent backend seed command for local QA users across platform, developer-org, customer-org, and cross-org roles
 - [[SPEC-local-demo-marketplace-seeding]] — Idempotent local demo seed for real agent-backed published marketplace listings
 - [[SPEC-remove-tauri-desktop-app]] — Removes the deprecated Tauri wrapper and makes `ruh_app` the only native client path
@@ -197,8 +201,10 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand the multi-tenant auth foundation | [[SPEC-multi-tenant-auth-foundation]] + [[014-auth-system]] + [[005-data-models]] |
 | Understand the app-access, marketplace, checkout, and seat-assignment program | [[SPEC-app-access-and-org-marketplace]] + [[014-auth-system]] + [[016-marketplace]] |
 | Understand the store.ruh.ai marketplace parity rollout | [[SPEC-marketplace-store-parity]] + [[016-marketplace]] + [[018-ruh-app]] |
+| Understand the admin billing-control-plane architecture | [[SPEC-admin-billing-control-plane]] + [[015-admin-panel]] + [[016-marketplace]] |
 | Understand the Flutter customer-surface redesign | [[SPEC-ruh-app-customer-surface-redesign]] + [[018-ruh-app]] + [[016-marketplace]] |
 | Understand Flutter login convenience behavior | [[SPEC-ruh-app-login-convenience]] + [[018-ruh-app]] + [[014-auth-system]] |
+| Understand the super-admin control plane expansion | [[SPEC-admin-control-plane]] + [[015-admin-panel]] + [[004-api-reference]] |
 | Seed local QA accounts for auth and tenant testing | [[SPEC-local-test-user-seeding]] + [[014-auth-system]] |
 | Seed real local marketplace demo listings | [[SPEC-local-demo-marketplace-seeding]] + [[016-marketplace]] + [[SPEC-local-test-user-seeding]] |
 | Work on authentication | [[014-auth-system]] |
@@ -251,7 +257,7 @@ draft → approved → implemented → deprecated
 
 ### Adding a new KB note
 
-1. Create the note in `docs/knowledge-base/` with a breadcrumb header: `[[000-INDEX|← Index]] | [[prev]] | [[next →]]`
+1. Create the note in `docs/knowledge-base/` with a breadcrumb header: `[[000-INDEX|← Index]] | [[related-note]] | [[related-note]]`
 2. Add at least 2 outgoing `[[wikilinks]]` to related notes
 3. Add the note to this INDEX (in the appropriate section). `LEARNING-*` notes are the exception; link them from affected notes and the daily journal instead.
 4. Add backlinks from related notes to the new note

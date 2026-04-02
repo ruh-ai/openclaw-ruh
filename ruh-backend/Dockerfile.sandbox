@@ -16,7 +16,7 @@
 FROM node:22-bookworm AS runtime-builder
 WORKDIR /build
 COPY agent-runtime/package.json agent-runtime/package-lock.json* ./
-RUN npm ci --ignore-scripts 2>/dev/null || npm install
+RUN npm ci 2>/dev/null || npm install
 COPY agent-runtime/ ./
 # Enable standalone output for the build
 RUN echo '/** @type {import("next").NextConfig} */\nmodule.exports = { output: "standalone", async headers() { return [{ source: "/(.*)", headers: [{ key: "X-Frame-Options", value: "ALLOWALL" }, { key: "Content-Security-Policy", value: "frame-ancestors *" }] }]; } };' > next.config.js \

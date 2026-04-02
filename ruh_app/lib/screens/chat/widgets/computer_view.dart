@@ -5,6 +5,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../../config/theme.dart';
 import '../../../providers/chat_provider.dart';
+import 'agent_config_panel.dart';
 import 'browser_panel.dart';
 import 'code_panel.dart';
 import 'terminal_panel.dart';
@@ -24,8 +25,9 @@ class _ComputerTab {
 
 const _tabs = [
   _ComputerTab(id: 'terminal', label: 'Terminal', icon: LucideIcons.terminal),
-  _ComputerTab(id: 'code', label: 'Code', icon: LucideIcons.fileCode),
+  _ComputerTab(id: 'files', label: 'Files', icon: LucideIcons.folderOpen),
   _ComputerTab(id: 'browser', label: 'Browser', icon: LucideIcons.globe),
+  _ComputerTab(id: 'config', label: 'Agent Config', icon: LucideIcons.sliders),
 ];
 
 /// Tool name to tab auto-switch mapping.
@@ -37,11 +39,11 @@ const _toolTabMapping = {
   'shell': 'terminal',
   'terminal': 'terminal',
   // Code tools
-  'file_write': 'code',
-  'write_file': 'code',
-  'create_file': 'code',
-  'code_editor': 'code',
-  'file_read': 'code',
+  'file_write': 'files',
+  'write_file': 'files',
+  'create_file': 'files',
+  'code_editor': 'files',
+  'file_read': 'files',
   // Browser tools
   'browser_navigate': 'browser',
   'browser_click': 'browser',
@@ -59,15 +61,19 @@ const _toolTabMapping = {
 /// - Manual tab click overrides auto-switch for 5 seconds
 /// - Progress dots: green=done, pulsing purple=active, gray=pending
 class ComputerView extends StatefulWidget {
+  final String agentId;
   final String sandboxId;
   final ChatState chatState;
+  final String initialTab;
   final bool isFullscreen;
   final VoidCallback? onToggleFullscreen;
 
   const ComputerView({
     super.key,
+    required this.agentId,
     required this.sandboxId,
     required this.chatState,
+    this.initialTab = 'terminal',
     this.isFullscreen = false,
     this.onToggleFullscreen,
   });
@@ -77,13 +83,28 @@ class ComputerView extends StatefulWidget {
 }
 
 class _ComputerViewState extends State<ComputerView> {
-  String _activeTab = 'terminal';
+  late String _activeTab;
   DateTime? _lastManualSwitch;
   Timer? _autoSwitchTimer;
 
   @override
+  void initState() {
+    super.initState();
+    _activeTab = widget.initialTab;
+    if (widget.initialTab != 'terminal') {
+      _lastManualSwitch = DateTime.now();
+    }
+  }
+
+  @override
   void didUpdateWidget(ComputerView old) {
     super.didUpdateWidget(old);
+    if (old.initialTab != widget.initialTab && widget.initialTab != _activeTab) {
+      _activeTab = widget.initialTab;
+      if (widget.initialTab != 'terminal') {
+        _lastManualSwitch = DateTime.now();
+      }
+    }
     final tool = widget.chatState.activeToolName;
     if (tool != null && tool != old.chatState.activeToolName) {
       final targetTab = _toolTabMapping[tool];
@@ -240,9 +261,9 @@ class _ComputerViewState extends State<ComputerView> {
           key: const ValueKey('terminal'),
           commands: widget.chatState.terminalCommands,
         );
-      case 'code':
+      case 'files':
         return CodePanel(
-          key: const ValueKey('code'),
+          key: const ValueKey('files'),
           sandboxId: widget.sandboxId,
         );
       case 'browser':
@@ -251,6 +272,12 @@ class _ComputerViewState extends State<ComputerView> {
           sandboxId: widget.sandboxId,
           browserState: widget.chatState.browserState,
           isAgentActive: widget.chatState.isStreaming,
+        );
+      case 'config':
+        return AgentConfigPanel(
+          key: const ValueKey('config'),
+          agentId: widget.agentId,
+          sandboxId: widget.sandboxId,
         );
       default:
         return const SizedBox.shrink();

@@ -18,6 +18,136 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 
 ## Active Work Log
 
+### TASK-2026-04-02-13: Repair Flutter bearer session continuity
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/services/access_token_store.dart`, `ruh_app/lib/services/auth_service.dart`, `ruh_app/integration_test/login_flow_test.dart`, `ruh_app/test/services/access_token_store_test.dart`, `ruh_app/test/services/auth_service_test.dart`, `ruh-backend/src/authRoutes.ts`, `ruh-backend/tests/unit/authRoutes.test.ts`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-flutter-bearer-session-continuity.md`, `docs/journal/2026-04-02.md`
+- Summary: `Repaired the native bearer-session continuity path. `ruh_app` now keeps access + refresh tokens cached in-process so the first authenticated request after login or refresh does not depend on storage readback, restored sessions surface the stored refresh token back into `AuthSession`, backend `/api/auth/me` preserves active-org truth for bearer-token clients by falling back to the access token's `orgId`, and the live macOS login integration test now reflects the current customer shell.`
+- Next step: `User-facing follow-up: retry the Flutter app login against the updated build; if any auth issue remains, capture the exact screen/error after `Workspace` load rather than the old login failure path.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-12: Restructure admin organization detail page into tabbed workspace
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `DESIGN.md`, `admin-ui/app/(admin)/organizations/[id]/page.tsx`, `docs/knowledge-base/015-admin-panel.md`, `docs/journal/2026-04-02.md`
+- Summary: `Rebuilt the organization detail screen at `/organizations/:id` as a tabbed operator workspace instead of one continuous stack. The page now keeps org context and top metrics visible, then separates operations into Overview, People, Assets, Runtime, and Audit tabs while preserving the existing org actions and linking Billing into its own dedicated console.`
+- Next step: `If this workspace needs another depth pass, add tab-level URL state and smaller subfilters inside People and Assets instead of letting the page flatten again.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-11: Add Flutter runtime trust and recovery UX
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/providers/sandbox_health_provider.dart`, `ruh_app/lib/screens/chat/chat_screen.dart`, `ruh_app/lib/screens/chat/tabs/tab_mission_control.dart`, `ruh_app/lib/screens/chat/widgets/runtime_status_banner.dart`, `ruh_app/lib/screens/chat/widgets/browser_panel.dart`, `ruh_app/lib/screens/chat/widgets/code_panel.dart`, `ruh_app/test/providers/sandbox_health_provider_test.dart`, `ruh_app/test/widgets/runtime_status_banner_test.dart`, `ruh_app/test/widgets/code_panel_test.dart`, `ruh_app/test/widgets/browser_panel_test.dart`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs/SPEC-ruh-app-runtime-recovery.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-runtime-health-trust-surface.md`, `docs/plans/2026-04-02-ruh-app-runtime-recovery-design.md`, `docs/plans/2026-04-02-ruh-app-runtime-recovery.md`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the first Flutter runtime trust-and-recovery slice without expanding the backend contract. Sandbox health is now polled centrally from `sandboxHealthProvider`, the chat header shows real runtime state instead of unconditional `Online`, degraded or unreachable runtime states render an in-chat recovery banner with refresh/retry/restart actions, Browser and Files tabs now expose manual refresh affordances, and Mission Control’s placeholder quick action was replaced with a real runtime-status refresh action.`
+- Next step: `Product follow-up: add stale/offline-cache indicators for chat history, add auto-refresh heuristics for Files after file tools run, and decide whether Browser needs a richer connection/status model beyond screenshot polling.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-10: Implement admin billing control plane slice 1
+- Status: `active`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/billingStore.ts`, `ruh-backend/src/billing`, `ruh-backend/src/app.ts`, `ruh-backend/tests`, `admin-ui/app/(admin)/layout.tsx`, `admin-ui/app/(admin)/billing/page.tsx`, `admin-ui/app/(admin)/organizations/[id]/billing/page.tsx`, `docs/knowledge-base`, `docs/journal/2026-04-02.md`
+- Summary: `Implemented the first working admin billing-control-plane slice. Backend now has billing mirror tables, billing store primitives, entitlement access resolution, organization billing detail routes, fleet billing ops, and admin support actions for customer linkage, mirrored subscriptions/invoices, and entitlement pause/resume/temporary-access operations. Admin UI now exposes a branded fleet Billing page plus an organization-specific billing console at `/organizations/:id/billing`.`
+- Next step: `Add route/UI tests for the new billing surfaces, get permission to run targeted verification, and then start the next backend slice: Stripe sync/webhook ingestion plus entitlement-aware customer access gating.`
+- Blockers: `Tests and verification are planned, but repo workflow still requires explicit permission before running them.`
+
+### TASK-2026-04-02-09: Design admin billing control plane for customer-org operations
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/plans`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/015-admin-panel.md`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/specs`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the billing-control-plane planning pass. Added [[SPEC-admin-billing-control-plane]], the supporting design doc, KB backlinks/index updates, and a first-slice implementation plan covering the billing schema, store layer, Stripe sync/webhooks, admin billing routes, bounded support actions, and the first org billing tab in admin-ui. The approved operating model is Stripe as financial truth plus Ruh entitlements as product-access truth.`
+- Next step: `Choose the execution mode for implementation, then start with the first slice from `docs/plans/2026-04-02-admin-billing-control-plane.md`: schema, billing store, Stripe sync/webhooks, admin billing routes, and the org billing tab.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-08: Make Flutter agent open flow chat-first and add customer config tab
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/config/routes.dart`, `ruh_app/lib/models/agent.dart`, `ruh_app/lib/models/customer_agent_config.dart`, `ruh_app/lib/screens/agents/agent_list_screen.dart`, `ruh_app/lib/screens/chat/chat_screen.dart`, `ruh_app/lib/screens/chat/widgets/computer_view.dart`, `ruh_app/lib/screens/chat/widgets/agent_config_panel.dart`, `ruh_app/lib/services/agent_service.dart`, `ruh_app/test`, `ruh-backend/src/app.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/customerAgentConfigApp.test.ts`, `ruh-backend/tests/unit/agentWorkspaceMemoryApp.test.ts`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/specs/SPEC-ruh-app-chat-first-agent-config.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-customer-safe-agent-config-seam.md`, `docs/plans/2026-04-02-ruh-app-chat-first-agent-config-design.md`, `docs/plans/2026-04-02-ruh-app-chat-first-agent-config.md`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the Flutter chat-first runtime package. Installed workspace cards now launch the agent runtime and navigate straight to `/chat/:id`; `/agents/:id` is kept only as a compatibility entry into chat with the new `Agent Config` tab preselected; and `ComputerView` now exposes Terminal, Files, Browser, and Agent Config in one runtime workspace. The backend now provides customer-safe `GET/PATCH /api/agents/:id/customer-config` for editable runtime fields (`name`, `description`, `agentRules`, runtime input values), while workspace-memory reads/writes resolve through the active org context so the same config panel can update reusable instructions safely from both developer and customer surfaces without widening builder-only config routes.`
+- Next step: `Product polish only: add dirty-state/unsaved-change affordances in `AgentConfigPanel`, then decide whether any additional config fields should become customer-editable through a new explicit contract rather than reusing builder authoring routes.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-07: Deepen admin organization operations and management workflows
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/orgStore.ts`, `ruh-backend/src/organizationMembershipStore.ts`, `ruh-backend/src/sessionStore.ts`, `ruh-backend/src/auth`, `ruh-backend/src/schemaMigrations.ts`, `admin-ui/app/(admin)/organizations`, `admin-ui/app/(admin)/_components`, `admin-ui/lib`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/015-admin-panel.md`, `docs/knowledge-base/specs`
+- Summary: `Completed the next org-ops slice for the super-admin panel. Admins can now create organizations from `/organizations`, use quick suspend/reactivate/archive actions from the inventory view, open `/organizations/:id` for the full org console, manage memberships with last-owner protection, revoke org-pinned refresh sessions, reset session context, and govern org lifecycle/status in a way that actually affects builder/customer app access. Browser verification covered org creation, org-detail save, live-session creation via `/api/auth/switch-org`, session revocation, and suspend/reactivate behavior on a disposable org.`
+- Next step: `If org operations need another depth pass, add org-to-org asset transfer flows (agent/listing ownership reassignment), customer-org billing visibility, and org-scoped impersonation/read-only support tooling.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-06: Repair Flutter runtime chat, terminal, browser, and workspace contracts
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/tests`, `ruh_app/lib`, `ruh_app/test`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`
+- Summary: `Completed the runtime contract repair for the Flutter customer chat surface. The backend sandbox status route now probes the real gateway `/health` endpoint, browser status/screenshot routes self-heal the Xvfb/x11vnc/websockify stack before failing, and `/api/sandboxes/:id/chat/ws` now replays structured tool events from the latest OpenClaw session transcript when the operator WebSocket omits live tool frames. On the Flutter side, the browser panel now fetches raw screenshot bytes instead of JSON-decoding image responses, `WorkspaceService` and `CodePanel` stay aligned with the backend `items` payload, and health polling now keys off `gateway_reachable` through `SandboxHealth` instead of stale string heuristics. Live verification against the seeded customer sandbox now shows healthy status, active browser connection, real JPEG screenshots, and tool start/end SSE frames for terminal activity.`
+- Next step: `Product follow-up, not a blocker: improve the customer chat UX beyond contract repair by adding reliable file auto-refresh, richer task/browser history, and a supported browser-target scaffold instead of the current debug-only Flutter web inspection path.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-05: Trace agent-builder creation flow and capture E2E event contract
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `docs/knowledge-base`, `agent-builder-ui`, `ruh-backend/Dockerfile.sandbox`, `.dockerignore`, `ruh-backend/tests/unit/sandboxDockerfile.test.ts`
+- Summary: `Completed a live Playwright trace of the local `/agents/create` flow with the seeded developer fixture and saved the resulting browser/network milestone contract in [[LEARNING-2026-04-02-agent-create-e2e-contract]]. The pass also surfaced a real sandbox-runtime regression: `agent-runtime` native deps were built with install scripts disabled and then overwritten by host `agent-runtime/node_modules` / `.next` artifacts copied into the Docker context. Fixed both constraints, added regression coverage, rebuilt `ruh-sandbox:latest`, and reverified that the live create flow reaches Co-Pilot without the dashboard startup warning.`
+- Next step: `If local architect turns still stall after provisioning, investigate the separate forge WebSocket device-identity auth fallback in `agent-builder-ui/app/api/openclaw/route.ts`; the create-flow runtime contract itself is now documented and the sandbox image/runtime issue is fixed.`
+- Blockers: `None for the create-flow trace. Residual follow-up only: local forge WebSocket auth still falls back to HTTP on the first architect turn.`
+
+### TASK-2026-04-02-04: Fix Flutter customer auth contract for mixed-org sessions
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/auth`, `ruh-backend/tests`, `ruh_app`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/018-ruh-app.md`
+- Summary: `Fixed the remaining Flutter customer-auth bug by correcting the backend auth contract. `ruh-backend` now derives `appAccess` for `/api/auth/login`, `/api/auth/me`, and `/api/auth/switch-org` from the active membership/session org instead of the full membership union. That prevents mixed developer+customer accounts like `prasanjit@ruh.ai` from mounting the customer workspace under a developer-active session and then failing on `/api/marketplace/my/installed-listings` with `403 Customer access requires an active customer organization`. Added unit + contract regressions, updated the journal/KB, and verified the login/switch-org/backend flow directly.`
+- Next step: `If another customer surface reports “authenticated but not authorized,” compare `activeOrganization.kind` and `appAccess.customer` in `/api/auth/me` before changing UI state logic.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-03: Fix Flutter browser startup overlay layout regression
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `ruh_app/lib`, `ruh_app/test`
+- Summary: `Confirmed the browser-targeted failures were split across app code and backend config. The web debug path could hit a startup `_RenderTheater` assertion when the debug-only `DebugOverlay` wrapped the router output, so web runs now skip that overlay. The real browser login error was backend CORS: `ruh-backend` only allowed the React/admin ports, so Flutter web dev origins (`4000`/`4001`) failed auth/bootstrap until those localhost origins were added to the backend env defaults. The KB now documents that browser runs are debug-only because `ruh_app` still has no checked-in `web/` scaffold, and the new Playwright smoke script verifies the Chrome-served login route mounts a Flutter view without startup errors.`
+- Next step: `If browser support becomes a real product target, add a proper `ruh_app/web/` scaffold plus a supported browser E2E path instead of relying on debug-only `flutter run -d chrome` workflows.`
+- Blockers: `Profile/release web builds and Flutter integration tests on web remain unsupported for this app until a real `web/` target is added.`
+
+### TASK-2026-04-02-02: Verify local Flutter app launch and seeded operator login
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `ruh_app`, `ruh-backend`
+- Summary: `Brought Docker back up, restarted local Postgres, reseeded the QA account matrix, verified that `prasanjit@ruh.ai` authenticates with the shared local password, started `ruh-backend` on :8000, served `ruh_app` on the web target, and launched the macOS Flutter app for direct inspection.`
+- Next step: `If the user reports UI/runtime issues while inspecting the running app, debug the native login/authenticated-shell flow first; the repo's existing macOS integration login test still fails with a Flutter test-binder error after launch even though the direct auth API works.`
+- Blockers: `No environment blocker remains. Residual issue: `flutter test integration_test/login_flow_test.dart -d macos` currently fails with an unhandled Flutter test-binder error after the app reaches the authenticated shell.`
+
+### TASK-2026-04-02-01: Build a real admin control plane for platform and business operations
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/plans`, `docs/knowledge-base`, `docs/journal/2026-04-02.md`, `ruh-backend/src/app.ts`, `admin-ui/app`, `admin-ui/lib`
+- Summary: `Completed the first real admin control-plane slice. `ruh-backend` now exposes richer admin reads for overview, organizations, runtime, marketplace, users, agents, and JWT-accessible audit/runtime operations. `admin-ui` now ships a denser super-admin shell with Overview, People, Organizations, Agents, Runtime, Audit, Marketplace, and System pages. Browser verification covered login, page navigation, org/agent/marketplace filtering, user-status mutation, runtime repair, audit filtering, and mobile navigation visibility.`
+- Next step: `Build drilldowns and action depth on top of this control-plane foundation: org details, agent detail drawers, request-id audit correlation, runtime restart/retrofit actions, marketplace moderation writes, and billing/plan visibility.`
+- Blockers: `None.`
+
 ### TASK-2026-04-01-07: Audit and redesign the Flutter app shell and core customer UX
 - Status: `completed`
 - Owner: `Codex`

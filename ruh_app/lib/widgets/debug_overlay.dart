@@ -59,6 +59,7 @@ class _DebugOverlayState extends State<DebugOverlay> {
     if (!kDebugMode) return widget.child;
 
     return Stack(
+      fit: StackFit.expand,
       children: [
         widget.child,
 

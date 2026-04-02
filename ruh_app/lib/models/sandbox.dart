@@ -86,26 +86,45 @@ class SandboxRecord {
 /// Health status of a sandbox.
 class SandboxHealth {
   final bool isRunning;
+  final bool gatewayReachable;
   final String? gatewayStatus;
+  final String? driftState;
   final int? gatewayPort;
   final DateTime? deployedAt;
   final int conversationCount;
 
   const SandboxHealth({
     required this.isRunning,
+    this.gatewayReachable = false,
     this.gatewayStatus,
+    this.driftState,
     this.gatewayPort,
     this.deployedAt,
     this.conversationCount = 0,
   });
 
   factory SandboxHealth.fromJson(Map<String, dynamic> json) {
+    final running =
+        json['container_running'] as bool? ??
+        json['is_running'] as bool? ??
+        false;
+    final reachable =
+        json['gateway_reachable'] as bool? ??
+        (json['gateway_status'] == 'healthy');
+    final driftState = json['drift_state'] as String?;
+    final fallbackStatus = reachable
+        ? 'healthy'
+        : (driftState?.replaceAll('_', ' ') ?? 'unreachable');
     return SandboxHealth(
-      isRunning: json['is_running'] as bool? ?? false,
-      gatewayStatus: json['gateway_status'] as String?,
+      isRunning: running,
+      gatewayReachable: reachable,
+      gatewayStatus: json['gateway_status'] as String? ?? fallbackStatus,
+      driftState: driftState,
       gatewayPort: (json['gateway_port'] as num?)?.toInt(),
       deployedAt: json['deployed_at'] != null
           ? DateTime.tryParse(json['deployed_at'] as String)
+          : json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'] as String)
           : null,
       conversationCount: (json['conversation_count'] as num?)?.toInt() ?? 0,
     );
@@ -115,5 +134,5 @@ class SandboxHealth {
   bool get running => isRunning;
 
   /// Whether the gateway is responding normally.
-  bool get isHealthy => gatewayStatus == 'healthy';
+  bool get isHealthy => gatewayReachable;
 }
