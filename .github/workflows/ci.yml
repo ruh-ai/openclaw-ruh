@@ -33,6 +33,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install @ruh/logger dependencies
+        # @ruh/logger is a file: workspace dep. bun install in ruh-backend/ links
+        # the package but does NOT install its own deps (e.g. pino). Install them
+        # so TypeScript can resolve imports inside packages/logger/src/index.ts.
+        working-directory: packages/logger
+        run: bun install --frozen-lockfile
+
       - name: Type check
         run: bun run typecheck
 
