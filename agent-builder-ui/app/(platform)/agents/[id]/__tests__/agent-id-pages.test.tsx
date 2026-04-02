@@ -54,6 +54,8 @@ mock.module("@/hooks/use-agents-store", () => ({
 
 mock.module("@/lib/openclaw/agent-config", () => ({
   pushAgentConfig: mock(() => Promise.resolve({ ok: true, steps: [], webhooks: [] })),
+  buildSoulContent: () => "",
+  buildCronJobs: () => [],
 }));
 
 mock.module("@/lib/auth/backend-fetch", () => ({
@@ -77,11 +79,16 @@ mock.module("@/lib/agents/operator-config-summary", () => ({
 mock.module("@/lib/agents/deploy-handoff", () => ({
   shouldAutoStartCreateDeploy: () => false,
   buildReflectHref: (id: string) => `/agents/${id}/reflect`,
+  buildCreateDeployHref: () => "/agents/test/deploy",
+  resolveImproveAgentCompletionHref: () => "/agents/test/deploy",
 }));
 
 mock.module("@/lib/agents/runtime-inputs", () => ({
   hasMissingRequiredInputs: () => false,
   mergeRuntimeInputDefinitions: () => [],
+  extractRuntimeInputKeys: () => [],
+  isRuntimeInputFilled: () => false,
+  getRuntimeInputDetails: () => ({ label: "", description: "" }),
 }));
 
 // --- Tests ---

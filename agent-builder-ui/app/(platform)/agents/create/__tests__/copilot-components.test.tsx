@@ -54,12 +54,17 @@ mock.module("@/lib/agents/operator-config-summary", () => ({
     runtimeInputSummary: "OK",
     triggerSummary: "Manual",
   }),
+  buildReviewToolItems: () => [],
+  buildReviewTriggerItems: () => [],
+  buildReviewRuntimeInputItems: () => [],
 }));
 
 mock.module("@/lib/agents/runtime-inputs", () => ({
   isRuntimeInputFilled: () => false,
   mergeRuntimeInputDefinitions: () => [],
   extractRuntimeInputKeys: () => [],
+  hasMissingRequiredInputs: () => false,
+  getRuntimeInputDetails: () => ({ label: "", description: "" }),
 }));
 
 mock.module("@/lib/skills/skill-registry", () => ({

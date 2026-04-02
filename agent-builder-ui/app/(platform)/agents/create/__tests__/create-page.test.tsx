@@ -105,6 +105,8 @@ mock.module("@/lib/agents/runtime-inputs", () => ({
   mergeRuntimeInputDefinitions: () => [],
   extractRuntimeInputKeys: () => [],
   isRuntimeInputFilled: () => false,
+  hasMissingRequiredInputs: () => false,
+  getRuntimeInputDetails: () => ({ label: "", description: "" }),
 }));
 
 mock.module("@/lib/agents/deploy-handoff", () => ({

@@ -37,6 +37,10 @@ mock.module("@/lib/openclaw/shared-codex", () => ({
 
 mock.module("@/lib/agents/runtime-inputs", () => ({
   hasMissingRequiredInputs: () => false,
+  mergeRuntimeInputDefinitions: () => [],
+  extractRuntimeInputKeys: () => [],
+  isRuntimeInputFilled: () => false,
+  getRuntimeInputDetails: () => ({ label: "", description: "" }),
 }));
 
 mock.module("@/components/ui/button", () => ({

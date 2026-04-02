@@ -13,6 +13,13 @@ mock.module("@/lib/auth/app-access", () => ({
 }));
 
 mock.module("@/app/api/auth", () => ({
+  authApi: {
+    login: mock(async () => ({})),
+    register: mock(async () => ({})),
+    logout: mock(async () => {}),
+    generateAccessToken: mock(async () => ({})),
+    switchOrganization: mock(async () => ({})),
+  },
   switchBuilderOrganizationRequest: mock(async () => ({})),
 }));
 

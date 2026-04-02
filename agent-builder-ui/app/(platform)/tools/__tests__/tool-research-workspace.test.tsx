@@ -32,6 +32,12 @@ mock.module("@/lib/tools/tool-integration", () => ({
       alternatives: [],
     }),
   ),
+  buildToolResearchPlan: () => ({ steps: [], toolId: "", toolName: "" }),
+  buildToolResearchResultFromPlan: () => null,
+  normalizeToolResearchResponse: () => ({}),
+  buildToolResearchPrompt: () => "",
+  reconcileToolConnections: () => [],
+  finalizeCredentialBackedToolConnections: () => [],
 }));
 
 mock.module("@/lib/auth/backend-fetch", () => ({

@@ -22,7 +22,9 @@ mock.module("@/hooks/use-agents-store", () => ({
 }));
 
 mock.module("@/lib/openclaw/agent-config", () => ({
-  pushAgentConfig: mock(() => Promise.resolve()),
+  pushAgentConfig: mock(() => Promise.resolve({ ok: true, steps: [], webhooks: [] })),
+  buildSoulContent: () => "",
+  buildCronJobs: () => [],
 }));
 
 mock.module("@/lib/openclaw/workspace-memory", () => ({

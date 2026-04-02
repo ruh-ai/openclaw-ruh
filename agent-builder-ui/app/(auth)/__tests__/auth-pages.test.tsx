@@ -36,7 +36,10 @@ mock.module("@/app/api/auth", () => ({
     login: mock(() => Promise.resolve()),
     register: mock(() => Promise.resolve()),
     logout: mock(() => Promise.resolve()),
+    generateAccessToken: mock(() => Promise.resolve()),
+    switchOrganization: mock(() => Promise.resolve()),
   },
+  switchBuilderOrganizationRequest: mock(() => Promise.resolve()),
 }));
 
 mock.module("sonner", () => ({

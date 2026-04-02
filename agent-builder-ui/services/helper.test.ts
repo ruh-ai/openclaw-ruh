@@ -17,6 +17,7 @@ mock.module("./authCookies", () => ({
 
 mock.module("@/shared/routes", () => ({
   loginRoute: "/authenticate",
+  getAccessTokenRoute: "/api/auth/refresh",
 }));
 
 const { clearUserStoreAndLogout, clearUserStore, getAuthApi } =
