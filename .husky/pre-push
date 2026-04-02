@@ -6,7 +6,7 @@ CHANGED=$(git diff HEAD @{push} --name-only 2>/dev/null || git diff HEAD~1 --nam
 if echo "$CHANGED" | grep -q "^ruh-backend/"; then
   echo "🧪 Running ruh-backend tests..."
   cd ruh-backend
-  bun test tests/unit/ || exit 1
+  bun run test:unit || exit 1
   cd ..
 fi
 
