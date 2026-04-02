@@ -6,6 +6,7 @@
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import { request } from '../helpers/app';
+import { signAccessToken } from '../../src/auth/tokens';
 import {
   makeAgentRecord,
   makeSandboxRecord,
@@ -13,6 +14,10 @@ import {
   SANDBOX_ID,
   FORGE_SANDBOX_ID,
 } from '../helpers/fixtures';
+
+function devToken() {
+  return signAccessToken({ userId: 'usr-dev-001', email: 'dev@test.dev', role: 'developer', orgId: 'org-001' });
+}
 
 // ── Mock store ────────────────────────────────────────────────────────────────
 
@@ -78,6 +83,8 @@ const mockGetAgentCredentialSummary = mock(async () => []);
 
 mock.module('../../src/agentStore', () => ({
   getAgent: mockGetAgent,
+  getAgentForCreator: mockGetAgent,
+  getAgentForCreatorInOrg: mockGetAgent,
   listAgents: mockListAgents,
   saveAgent: mockSaveAgent,
   updateAgent: mockUpdateAgent,
@@ -94,6 +101,13 @@ mock.module('../../src/agentStore', () => ({
   deleteAgentCredential: mockDeleteAgentCredential,
   getAgentCredentials: mockGetAgentCredentials,
   getAgentCredentialSummary: mockGetAgentCredentialSummary,
+}));
+
+mock.module('../../src/orgStore', () => ({
+  getOrg: mock(async () => ({ id: 'org-001', name: 'Test Org', kind: 'developer', created_at: new Date().toISOString() })),
+  listOrgs: mock(async () => []),
+  createOrg: mock(async () => ({})),
+  initDb: mock(async () => {}),
 }));
 
 // ── Mock conversationStore ────────────────────────────────────────────────────
@@ -168,6 +182,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge`)
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(200);
@@ -182,6 +197,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge`)
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(200);
@@ -194,6 +210,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post('/api/agents/nonexistent/forge')
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(404);
@@ -210,7 +227,9 @@ describe('GET /api/agents/:id/forge/status', () => {
     );
     mockDockerContainerRunning.mockImplementation(async () => true);
 
-    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`);
+    const res = await request()
+      .get(`/api/agents/${AGENT_ID}/forge/status`)
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(true);
@@ -223,7 +242,9 @@ describe('GET /api/agents/:id/forge/status', () => {
       makeAgentRecord({ forge_sandbox_id: null })
     );
 
-    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`);
+    const res = await request()
+      .get(`/api/agents/${AGENT_ID}/forge/status`)
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(false);
@@ -239,7 +260,9 @@ describe('GET /api/agents/:id/forge/status', () => {
     );
     mockDockerContainerRunning.mockImplementation(async () => false);
 
-    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`);
+    const res = await request()
+      .get(`/api/agents/${AGENT_ID}/forge/status`)
+      .set('Authorization', `Bearer ${devToken()}`);
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(false);
@@ -255,6 +278,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(200);
@@ -270,6 +294,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(res.status).toBe(400);
@@ -282,6 +307,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
+      .set('Authorization', `Bearer ${devToken()}`)
       .send({});
 
     expect(mockWriteAuditEvent).toHaveBeenCalled();
