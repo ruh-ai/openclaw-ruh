@@ -10,8 +10,6 @@ import * as organizationMembershipStore from '../../../src/organizationMembershi
 import { hashPassword } from '../../../src/auth/passwords';
 import { withConn } from '../../../src/db';
 
-process.env.NODE_ENV = 'development';
-
 let requestFn: typeof import('../../helpers/app').request;
 
 const PASSWORD = 'SecurePass1!';

@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { withConn } from '../../../src/db';
 import { setupTestDb, teardownTestDb, truncateAll } from '../../helpers/db';
 
-process.env.NODE_ENV = 'development';
 
 beforeAll(async () => {
   await setupTestDb();

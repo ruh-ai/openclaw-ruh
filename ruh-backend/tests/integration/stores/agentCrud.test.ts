@@ -6,7 +6,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { setupTestDb, teardownTestDb, truncateAll } from '../../helpers/db';
 
-process.env.NODE_ENV = 'development';
 
 let requestFn: typeof import('../../helpers/app').request;
 const PASSWORD = 'SecurePass1!';
