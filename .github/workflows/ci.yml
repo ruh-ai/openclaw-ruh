@@ -57,7 +57,6 @@ jobs:
         working-directory: ruh-backend
 
     env:
-      NODE_ENV: test
       ALLOWED_ORIGINS: http://localhost:3000
       DATABASE_URL: postgres://localhost/openclaw_test
 
@@ -99,7 +98,6 @@ jobs:
         working-directory: ruh-backend
 
     env:
-      NODE_ENV: test
       ALLOWED_ORIGINS: http://localhost:3000
       DATABASE_URL: postgres://localhost/openclaw_test
 
@@ -130,7 +128,6 @@ jobs:
         working-directory: ruh-backend
 
     env:
-      NODE_ENV: test
       ALLOWED_ORIGINS: http://localhost:3000
       DATABASE_URL: postgres://localhost/openclaw_test
 
@@ -161,7 +158,6 @@ jobs:
         working-directory: ruh-backend
 
     env:
-      NODE_ENV: test
       ALLOWED_ORIGINS: http://localhost:3000
       DATABASE_URL: postgres://localhost/openclaw_test
 
