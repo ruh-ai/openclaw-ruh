@@ -3,7 +3,6 @@
  * shapes. These tests validate the API contract, not business logic.
  */
 
-process.env.NODE_ENV = "development";
 process.env.JWT_ACCESS_SECRET =
   process.env.JWT_ACCESS_SECRET || "test-access-secret";
 process.env.JWT_REFRESH_SECRET =

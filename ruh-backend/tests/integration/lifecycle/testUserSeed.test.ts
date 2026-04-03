@@ -3,7 +3,6 @@ import { verifyPassword } from '../../../src/auth/passwords';
 import { withConn } from '../../../src/db';
 import { truncateAll, setupTestDb, teardownTestDb } from '../../helpers/db';
 
-process.env.NODE_ENV = 'development';
 
 beforeAll(async () => {
   await setupTestDb();
