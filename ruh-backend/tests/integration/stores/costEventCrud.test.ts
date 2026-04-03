@@ -47,7 +47,7 @@ describe('Cost Event CRUD (integration)', () => {
     const agent = await createTestAgent();
     const event = await costStore.createCostEvent({
       agent_id: agent.id,
-      worker_id: 'worker-1',
+      worker_id: '11111111-1111-1111-1111-111111111111',
       task_id: 'task-1',
       run_id: 'run-1',
       model: 'claude-3',
@@ -56,7 +56,7 @@ describe('Cost Event CRUD (integration)', () => {
       cost_cents: 1.2,
     });
 
-    expect(event.worker_id).toBe('worker-1');
+    expect(event.worker_id).toBe('11111111-1111-1111-1111-111111111111');
     expect(event.task_id).toBe('task-1');
     expect(event.run_id).toBe('run-1');
   });
@@ -214,12 +214,12 @@ describe('Budget Policy (integration)', () => {
     });
     await costStore.upsertBudgetPolicy({
       agent_id: agent.id,
-      worker_id: 'worker-1',
+      worker_id: '11111111-1111-1111-1111-111111111111',
       monthly_cap_cents: 3000,
     });
 
     const agentPolicy = await costStore.getBudgetPolicy(agent.id);
-    const workerPolicy = await costStore.getBudgetPolicy(agent.id, 'worker-1');
+    const workerPolicy = await costStore.getBudgetPolicy(agent.id, '11111111-1111-1111-1111-111111111111');
 
     expect(agentPolicy!.monthly_cap_cents).toBe(10000);
     expect(workerPolicy!.monthly_cap_cents).toBe(3000);
