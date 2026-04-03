@@ -581,7 +581,8 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./ruh-backend
+          context: .
+          file: ./ruh-backend/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -594,3 +595,64 @@ jobs:
           build-args: NEXT_PUBLIC_API_URL=
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FLUTTER APP
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # ── 17. Flutter unit tests ────────────────────────────────────────────────
+  flutter-test:
+    name: ruh_app · Flutter unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ruh_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.32.x"
+          channel: "stable"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run unit tests
+        run: flutter test --no-pub
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-test-results
+          path: ruh_app/test/
+
+  # ── 18. Flutter build check ───────────────────────────────────────────────
+  flutter-build:
+    name: ruh_app · Flutter build (APK debug)
+    runs-on: ubuntu-latest
+    needs: [flutter-test]
+    defaults:
+      run:
+        working-directory: ruh_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.32.x"
+          channel: "stable"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK (debug)
+        run: flutter build apk --debug --dart-define=API_BASE_URL=https://api.ruh.ai
