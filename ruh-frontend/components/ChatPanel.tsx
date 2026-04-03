@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { memo, useEffect, useRef, useState, useCallback } from "react";
 import type { SandboxRecord } from "./SandboxSidebar";
 import { apiFetch } from "@/lib/api/client";
 
@@ -106,7 +106,7 @@ function ThinkingIndicator({ statusMessage, elapsed }: { statusMessage: string; 
 
 // ── ToolCallBubble ────────────────────────────────────────────────────────────
 
-function ToolCallBubble({ tc, streaming = false }: { tc: ToolCall; streaming?: boolean }) {
+const ToolCallBubble = memo(function ToolCallBubble({ tc, streaming = false }: { tc: ToolCall; streaming?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   let prettyArgs = tc.args;
   try { prettyArgs = JSON.stringify(JSON.parse(tc.args), null, 2); } catch { /* partial */ }
@@ -126,15 +126,15 @@ function ToolCallBubble({ tc, streaming = false }: { tc: ToolCall; streaming?: b
       </div>
     </div>
   );
-}
+});
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
 
-function MessageBubble({ msg, sandboxName }: { msg: ChatMessage; sandboxName: string }) {
+const MessageBubble = memo(function MessageBubble({ msg, sandboxName }: { msg: ChatMessage; sandboxName: string }) {
   const isUser = msg.role === "user";
   return (
     <>
-      {msg.tool_calls?.map((tc, i) => <ToolCallBubble key={i} tc={tc} />)}
+      {msg.tool_calls?.map((tc) => <ToolCallBubble key={tc.id} tc={tc} />)}
       {msg.content && (
         isUser ? (
           <div className="flex justify-end">
@@ -155,7 +155,7 @@ function MessageBubble({ msg, sandboxName }: { msg: ChatMessage; sandboxName: st
       )}
     </>
   );
-}
+});
 
 // ── ContextMessages ───────────────────────────────────────────────────────────
 

@@ -11,10 +11,12 @@ let pool: Pool | null = null;
 
 export function initPool(dsn = getConfig(process.env, { requireDatabaseUrl: true }).databaseUrl): void {
   const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+  const poolMin = Number(process.env.DB_POOL_MIN) || (isDev ? 2 : 5);
+  const poolMax = Number(process.env.DB_POOL_MAX) || (isDev ? 10 : 20);
   pool = new Pool({
     connectionString: dsn,
-    min: 2,
-    max: 10,
+    min: poolMin,
+    max: poolMax,
     // Enforce TLS in production. Dev uses local Docker Postgres without SSL.
     ...(isDev ? {} : { ssl: { rejectUnauthorized: true } }),
   });

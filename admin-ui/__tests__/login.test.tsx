@@ -97,7 +97,7 @@ describe("AdminLogin", () => {
     fireEvent.submit(form!);
 
     await waitFor(() => {
-      expect(getByText("Platform admin access required")).toBeTruthy();
+      expect(getByText("Login failed")).toBeTruthy();
     });
   });
 });

@@ -54,13 +54,15 @@ export default function SettingsPage() {
 
       <div className="mt-6 space-y-4">
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Backend URL</label>
+          <label htmlFor="backend-url" className="block text-xs font-medium text-gray-600 mb-1">Backend URL</label>
           <div className="flex gap-2">
             <input
-              type="text"
+              id="backend-url"
+              type="url"
               value={settings.backend_url}
               onChange={e => setSettings({ ...settings, backend_url: e.target.value })}
               className="flex-1 px-3 py-2 text-sm border rounded-lg outline-none focus:border-purple-500"
+              placeholder="http://localhost:8000"
             />
             <button
               onClick={handleTestConnection}
@@ -75,8 +77,11 @@ export default function SettingsPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <label className="text-xs font-medium text-gray-600">Auto-connect on startup</label>
+          <label htmlFor="auto-connect" className="text-xs font-medium text-gray-600">Auto-connect on startup</label>
           <button
+            id="auto-connect"
+            role="switch"
+            aria-checked={settings.auto_connect}
             onClick={() => setSettings({ ...settings, auto_connect: !settings.auto_connect })}
             className={`w-10 h-5 rounded-full transition-colors ${settings.auto_connect ? "bg-purple-600" : "bg-gray-300"}`}
           >
@@ -85,8 +90,9 @@ export default function SettingsPage() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Theme</label>
+          <label htmlFor="theme-select" className="block text-xs font-medium text-gray-600 mb-1">Theme</label>
           <select
+            id="theme-select"
             value={settings.theme}
             onChange={e => setSettings({ ...settings, theme: e.target.value })}
             className="w-full px-3 py-2 text-sm border rounded-lg"

@@ -12,6 +12,17 @@ import {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function isSafeRedirectPath(path: string): boolean {
+  if (!path || !path.startsWith("/")) return false;
+  if (path.startsWith("//") || path.startsWith("/\\")) return false;
+  try {
+    const parsed = new URL(path, "http://localhost");
+    return parsed.host === "localhost";
+  } catch {
+    return false;
+  }
+}
+
 interface CustomerSessionResponse {
   id: string;
   email: string;
@@ -46,8 +57,9 @@ export function CustomerSessionGate({
   >(null);
   const isLoginRoute = pathname?.startsWith("/login");
   const redirectUrl = useMemo(() => {
+    const safePath = isSafeRedirectPath(pathname || "/") ? (pathname || "/") : "/";
     const params = new URLSearchParams();
-    params.set("redirect_url", pathname || "/");
+    params.set("redirect_url", safePath);
     return `/login?${params.toString()}`;
   }, [pathname]);
   const customerMemberships = useMemo(

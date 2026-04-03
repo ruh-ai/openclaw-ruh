@@ -4,6 +4,8 @@ import { Shield, User, Code } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+type UserRole = "admin" | "developer" | "end_user";
+
 interface UserRecord {
   id: string;
   email: string;
@@ -24,43 +26,84 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState("");
   const [search, setSearch] = useState("");
 
   const fetchUsers = () => {
     setLoading(true);
+    setError(null);
     const params = new URLSearchParams();
     if (roleFilter) params.set("role", roleFilter);
     if (search) params.set("search", search);
     fetch(`${API_URL}/api/admin/users?${params}`, {
       credentials: "include",
     })
-      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(r => {
+        if (!r.ok) throw new Error(`Failed to fetch users (${r.status})`);
+        return r.json();
+      })
       .then(data => { setUsers(data.items); setTotal(data.total); })
-      .catch(() => {})
+      .catch((err) => { setError(err instanceof Error ? err.message : "Failed to load users"); })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { fetchUsers(); }, [roleFilter, search]);
 
-  const updateRole = async (userId: string, role: string) => {
-    await fetch(`${API_URL}/api/admin/users/${userId}`, {
-      method: "PATCH",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role }),
-    });
-    fetchUsers();
+  const updateRole = async (userId: string, newRole: string, currentRole: string) => {
+    const user = users.find(u => u.id === userId);
+    const label = user?.displayName || user?.email || userId;
+
+    if (newRole === "admin") {
+      const confirmed = window.confirm(
+        `Promote "${label}" to admin? This grants full platform management access.`
+      );
+      if (!confirmed) return;
+    } else if (currentRole === "admin") {
+      const confirmed = window.confirm(
+        `Demote "${label}" from admin to ${newRole}? They will lose platform management access.`
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: newRole }),
+      });
+      if (!res.ok) throw new Error(`Failed to update role (${res.status})`);
+      fetchUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update role");
+    }
   };
 
   const toggleStatus = async (userId: string, currentStatus: string) => {
-    await fetch(`${API_URL}/api/admin/users/${userId}`, {
-      method: "PATCH",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: currentStatus === "active" ? "suspended" : "active" }),
-    });
-    fetchUsers();
+    const user = users.find(u => u.id === userId);
+    const label = user?.displayName || user?.email || userId;
+    const newStatus = currentStatus === "active" ? "suspended" : "active";
+
+    if (newStatus === "suspended") {
+      const confirmed = window.confirm(
+        `Suspend "${label}"? They will lose access to the platform.`
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/api/admin/users/${userId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (!res.ok) throw new Error(`Failed to update status (${res.status})`);
+      fetchUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update status");
+    }
   };
 
   return (
@@ -72,11 +115,19 @@ export default function UsersPage() {
         </div>
       </div>
 
+      {error && (
+        <div className="mt-3 px-3 py-2 text-xs text-[var(--error)] bg-[var(--error)]/10 rounded-lg border border-[var(--error)]/20 flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-2 font-bold hover:opacity-70">x</button>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex items-center gap-3 mt-4">
         <input
-          type="text"
+          type="search"
           placeholder="Search by email or name..."
+          aria-label="Search users by email or name"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="px-3 py-1.5 text-xs border border-[var(--border-default)] rounded-lg bg-[var(--card-color)] outline-none focus:border-[var(--primary)] w-64"
@@ -84,6 +135,7 @@ export default function UsersPage() {
         <select
           value={roleFilter}
           onChange={e => setRoleFilter(e.target.value)}
+          aria-label="Filter by role"
           className="px-3 py-1.5 text-xs border border-[var(--border-default)] rounded-lg bg-[var(--card-color)] outline-none"
         >
           <option value="">All roles</option>
@@ -133,7 +185,8 @@ export default function UsersPage() {
                   <td className="px-4 py-3 text-right">
                     <select
                       value={user.role}
-                      onChange={e => updateRole(user.id, e.target.value)}
+                      onChange={e => updateRole(user.id, e.target.value, user.role)}
+                      aria-label={`Change role for ${user.displayName || user.email}`}
                       className="px-2 py-1 text-[10px] border border-[var(--border-default)] rounded bg-[var(--bg-default)] mr-2"
                     >
                       <option value="admin">Admin</option>
@@ -142,6 +195,7 @@ export default function UsersPage() {
                     </select>
                     <button
                       onClick={() => toggleStatus(user.id, user.status)}
+                      aria-label={`${user.status === "active" ? "Suspend" : "Activate"} ${user.displayName || user.email}`}
                       className={`px-2 py-1 text-[10px] rounded font-medium ${
                         user.status === "active"
                           ? "text-[var(--error)] bg-[var(--error)]/10 hover:bg-[var(--error)]/20"

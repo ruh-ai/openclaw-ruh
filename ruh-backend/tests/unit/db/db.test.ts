@@ -53,6 +53,9 @@ const db = await import('../../../src/db');
 describe('db connection helper', () => {
   beforeEach(() => {
     process.env.DATABASE_URL = 'postgres://openclaw:changeme@localhost:5432/openclaw';
+    process.env.NODE_ENV = 'development';
+    delete process.env.DB_POOL_MIN;
+    delete process.env.DB_POOL_MAX;
     state.poolConfigs = [];
     state.client = null;
   });
@@ -73,7 +76,6 @@ describe('db connection helper', () => {
         connectionString: 'postgres://openclaw:changeme@localhost:5432/openclaw',
         min: 2,
         max: 10,
-        ssl: { rejectUnauthorized: true },
       },
     ]);
     expect(client.calls).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);

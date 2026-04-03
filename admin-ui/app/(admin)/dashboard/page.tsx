@@ -30,21 +30,36 @@ function StatsCard({ label, value, icon: Icon, color }: { label: string; value: 
 export default function DashboardPage() {
   const [stats, setStats] = useState<PlatformStats>({ totalUsers: 0, totalAgents: 0, activeSandboxes: 0, marketplaceListings: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchStats = () => {
+    setLoading(true);
+    setError(null);
     fetch(`${API_URL}/api/admin/stats`, {
       credentials: "include",
     })
-      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(r => {
+        if (!r.ok) throw new Error(`Failed to load stats (${r.status})`);
+        return r.json();
+      })
       .then(setStats)
-      .catch(() => {})
+      .catch((err) => { setError(err instanceof Error ? err.message : "Failed to load dashboard"); })
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { fetchStats(); }, []);
 
   return (
     <div>
       <h1 className="text-lg font-bold text-[var(--text-primary)]">Dashboard</h1>
       <p className="text-xs text-[var(--text-tertiary)] mt-0.5">Platform overview and health</p>
+
+      {error && (
+        <div className="mt-4 px-3 py-2 text-xs text-[var(--error)] bg-[var(--error)]/10 rounded-lg border border-[var(--error)]/20 flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={fetchStats} className="ml-2 font-medium underline hover:opacity-70">Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-4 gap-4 mt-6">
         <StatsCard label="Total Users" value={stats.totalUsers} icon={Users} color="bg-[var(--primary)]/10 text-[var(--primary)]" />

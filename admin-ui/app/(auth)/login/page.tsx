@@ -26,17 +26,14 @@ export default function AdminLogin() {
         body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Login failed");
-      assertAdminAppAccess({
-        appAccess: data.appAccess ?? {
-          admin: data.user.role === "admin",
-          builder: false,
-          customer: false,
-        },
-      });
+      if (!res.ok) throw new Error("Login failed");
+      if (!data.appAccess) {
+        throw new Error("Login failed");
+      }
+      assertAdminAppAccess({ appAccess: data.appAccess });
       router.push("/dashboard");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+    } catch {
+      setError("Login failed");
     } finally {
       setLoading(false);
     }

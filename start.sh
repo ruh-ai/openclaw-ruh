@@ -48,13 +48,23 @@ echo "==> Starting agent-builder-ui on http://localhost:3000 ..."
 yarn dev &
 BUILDER_PID=$!
 
+# ── Admin UI ─────────────────────────────────────────────────────────────────
+echo "==> Installing admin-ui dependencies..."
+cd "$ROOT/admin-ui"
+npm install --silent
+
+echo "==> Starting admin-ui on http://localhost:3002 ..."
+npm run dev &
+ADMIN_PID=$!
+
 echo ""
 echo "================================================================"
 echo "  Backend          : http://localhost:8000"
 echo "  Agent Builder UI : http://localhost:3000"
 echo "  Frontend         : http://localhost:3001"
+echo "  Admin UI         : http://localhost:3002"
 echo "================================================================"
 echo "Press Ctrl+C to stop all servers."
 
-trap "kill $BACKEND_PID $FRONTEND_PID $BUILDER_PID 2>/dev/null; exit 0" INT TERM
+trap "kill $BACKEND_PID $FRONTEND_PID $BUILDER_PID $ADMIN_PID 2>/dev/null; exit 0" INT TERM
 wait

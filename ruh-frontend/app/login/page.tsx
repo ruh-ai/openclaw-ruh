@@ -26,10 +26,23 @@ interface CustomerLoginSession {
   message?: string;
 }
 
+function isSafeRedirectUrl(url: string): boolean {
+  if (!url || !url.startsWith("/")) return false;
+  // Block protocol-relative URLs (//evil.com) and backslash tricks
+  if (url.startsWith("//") || url.startsWith("/\\")) return false;
+  try {
+    const parsed = new URL(url, "http://localhost");
+    return parsed.host === "localhost";
+  } catch {
+    return false;
+  }
+}
+
 export default function CustomerLogin() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectUrl = searchParams.get("redirect_url") || "/";
+  const rawRedirect = searchParams.get("redirect_url") || "/";
+  const redirectUrl = isSafeRedirectUrl(rawRedirect) ? rawRedirect : "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

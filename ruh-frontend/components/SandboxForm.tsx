@@ -5,6 +5,14 @@ import { apiFetch, createAuthenticatedEventSource } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+function safeJsonParse<T = unknown>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 interface FormState {
   sandbox_name: string;
 }
@@ -60,7 +68,8 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
       );
 
       sse.addEventListener("log", (ev) => {
-        appendLog(JSON.parse(ev.data).message);
+        const parsed = safeJsonParse<{ message?: string }>(ev.data, {});
+        appendLog(parsed.message ?? ev.data);
       });
 
       sse.addEventListener("result", () => {
@@ -68,7 +77,8 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
       });
 
       sse.addEventListener("approved", (ev) => {
-        appendLog(`Device approved: ${JSON.parse(ev.data).message}`);
+        const parsed = safeJsonParse<{ message?: string }>(ev.data, {});
+        appendLog(`Device approved: ${parsed.message ?? ""}`);
       });
 
       sse.addEventListener("done", () => {
@@ -78,7 +88,8 @@ export default function SandboxForm({ onCreated, onCancel }: Props) {
 
       sse.addEventListener("error", (ev) => {
         const d = (ev as MessageEvent).data;
-        setErrorMsg(d ? JSON.parse(d).message : "Connection lost");
+        const parsed = d ? safeJsonParse<{ message?: string }>(d, {}) : {};
+        setErrorMsg(parsed.message ?? "Connection lost");
         updateStatus("error");
         sse.close();
       });

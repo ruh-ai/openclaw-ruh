@@ -7,6 +7,17 @@ import { assertAdminAppAccess } from "@/lib/auth/app-access";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function isSafeRedirectPath(path: string): boolean {
+  if (!path || !path.startsWith("/")) return false;
+  if (path.startsWith("//") || path.startsWith("/\\")) return false;
+  try {
+    const parsed = new URL(path, "http://localhost");
+    return parsed.host === "localhost";
+  } catch {
+    return false;
+  }
+}
+
 interface AdminSessionResponse {
   id: string;
   email: string;
@@ -28,8 +39,9 @@ export function AdminSessionGate({
   const pathname = usePathname();
   const [status, setStatus] = useState<"loading" | "ready">("loading");
   const redirectUrl = useMemo(() => {
+    const safePath = isSafeRedirectPath(pathname || "/dashboard") ? (pathname || "/dashboard") : "/dashboard";
     const params = new URLSearchParams();
-    params.set("redirect_url", pathname || "/dashboard");
+    params.set("redirect_url", safePath);
     return `/login?${params.toString()}`;
   }, [pathname]);
 
