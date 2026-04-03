@@ -581,7 +581,8 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./ruh-backend
+          context: .
+          file: ./ruh-backend/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
