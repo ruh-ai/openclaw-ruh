@@ -9,6 +9,7 @@
 #   /api/*          → backend:8000
 #   /builder/*      → agent-builder-ui:3000
 #   /admin/*        → admin-ui:3002
+#   /app/*          → ruh-app:3003  (Flutter web)
 #   /*              → ruh-frontend:3001  (default)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,20 @@ services:
       backend:
         condition: service_healthy
 
+  # ── Ruh App / Flutter Web ───────────────────────────────────────────────────
+  ruh-app:
+    build:
+      context: ./ruh_app
+      dockerfile: Dockerfile
+      args:
+        API_BASE_URL: ${FLUTTER_API_URL:-}
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
   # ── Nginx reverse proxy ────────────────────────────────────────────────────
   nginx:
     build:
@@ -128,6 +143,7 @@ services:
       - frontend
       - agent-builder-ui
       - admin-ui
+      - ruh-app
 
 volumes:
   postgres_data:

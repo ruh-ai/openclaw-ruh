@@ -49,9 +49,9 @@ class PreviewPort {
 
 /// Service for interacting with sandbox workspace files and preview ports.
 class WorkspaceService {
-  WorkspaceService({ApiClient? client}) : _client = client ?? ApiClient();
+  WorkspaceService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
   static const String _tag = 'WorkspaceService';
 
   /// List files in the sandbox workspace.

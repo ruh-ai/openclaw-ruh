@@ -4,9 +4,9 @@ import 'api_client.dart';
 
 /// Service for agent CRUD and sandbox health operations.
 class AgentService {
-  AgentService({ApiClient? client}) : _client = client ?? ApiClient();
+  AgentService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// Fetch all agents.
   Future<List<Agent>> listAgents() async {
