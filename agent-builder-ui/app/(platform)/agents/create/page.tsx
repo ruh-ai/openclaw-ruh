@@ -36,6 +36,7 @@ import {
   type CreateSessionConfigState,
 } from "./create-session-config";
 import {
+  canPersistReviewOrLaterForgeStage,
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
@@ -242,11 +243,15 @@ function CreateAgentPageContent() {
 
   // v2: each agent gets its own container — resolve its forge sandbox.
   // When a forge sandbox is provisioned, NEVER fall back to the shared architect.
-  const { sandbox: forgeSandbox, error: forgeSandboxError } = useForgeSandbox(
+  const { sandbox: forgeSandbox, loading: forgeSandboxLoading, error: forgeSandboxError } = useForgeSandbox(
     workingAgent?.forgeSandboxId ? workingAgent.id : null
   );
   const hasForgeAgent = Boolean(workingAgent?.forgeSandboxId);
   const effectiveSandbox = hasForgeAgent ? forgeSandbox : architectSandbox;
+  // True while the forge sandbox is expected but not yet available — either
+  // the hook is mid-fetch, the agent record hasn't hydrated yet, or the
+  // sandbox API hasn't returned a ready sandbox.
+  const forgeSandboxPending = hasForgeAgent && !forgeSandbox;
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
@@ -320,14 +325,20 @@ function CreateAgentPageContent() {
     let cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
     let cachedBuilder = cachedSession?.builder ?? null;
 
-    // Discard stale caches: if the agent is active with skills but the cached
-    // session is stuck at an early stage, the cache is from a broken/interrupted
-    // session. Let createCoPilotSeedFromAgent infer the correct lifecycle.
+    // Discard stale caches in two cases:
+    // 1. Agent is active with skills but cache is stuck at an early stage
+    // 2. Agent has no forge sandbox (container never provisioned) — nothing to resume
     if (cachedCoPilot && existingAgent) {
       const cachedStage = cachedCoPilot.devStage;
       const agentHasSkills = (existingAgent.skillGraph ?? []).length > 0 || (existingAgent.skills ?? []).length > 0;
-      const cacheIsStale = agentHasSkills && existingAgent.status === "active"
-        && (!cachedStage || cachedStage === "think" || cachedStage === "plan");
+      const cacheIsStale = (
+        // Case 1: active agent with stale early-stage cache
+        (agentHasSkills && existingAgent.status === "active"
+          && (!cachedStage || cachedStage === "think" || cachedStage === "plan"))
+        // Case 2: forging agent with no sandbox — cache is from a broken session
+        || (existingAgent.status === "forging" && !existingAgent.forgeSandboxId
+          && cachedStage && cachedStage !== "think")
+      );
       if (cacheIsStale) {
         cachedCoPilot = null;
         cachedBuilder = null;
@@ -339,6 +350,10 @@ function CreateAgentPageContent() {
     }
 
     const applyRecoveredSession = (agentForResume: SavedAgent | null) => {
+      // Hard reset the copilot store first to prevent previous agent's lifecycle
+      // state from bleeding through during SPA navigation.
+      coPilotStore.reset();
+
       if (agentForResume) {
         initializeFromAgent(agentForResume);
       } else {
@@ -607,9 +622,7 @@ function CreateAgentPageContent() {
         coPilot: snapshot,
         builder: builderState,
       });
-      if (snapshot.devStage !== "think") {
-        saveCoPilotLifecycleToCache(agentId, snapshot);
-      }
+      saveCoPilotLifecycleToCache(agentId, snapshot);
     }, 300);
 
     return () => window.clearTimeout(timeout);
@@ -646,6 +659,41 @@ function CreateAgentPageContent() {
 
     return () => window.clearTimeout(timeout);
   });
+
+  // Persist forge_stage to backend immediately on every stage transition.
+  // This is the source of truth for where the creation process is — used by
+  // reconciliation and new-tab restore. Not debounced because stage transitions
+  // are infrequent and critical to persist.
+  const lastSavedForgeStageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
+    if (!agentId || !hasRestoredSession) return;
+
+    const currentStage = coPilotStore.devStage;
+    const skillGraphCount =
+      builderState.skillGraph?.length
+      ?? workingAgent?.skillGraph?.length
+      ?? 0;
+    if (!canPersistReviewOrLaterForgeStage(currentStage, skillGraphCount)) {
+      return;
+    }
+    if (lastSavedForgeStageRef.current === currentStage) return;
+    lastSavedForgeStageRef.current = currentStage;
+
+    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: currentStage }),
+    }).catch(() => { /* best-effort — creationSession is the backup */ });
+  }, [
+    coPilotStore.devStage,
+    editingAgentId,
+    effectiveAgentId,
+    builderState.draftAgentId,
+    builderState.skillGraph,
+    workingAgent?.skillGraph,
+    hasRestoredSession,
+  ]);
 
   const syntheticAgent: SavedAgent = useMemo(() => {
     const effectiveImprovements = builderState.improvements.length > 0 ? builderState.improvements : (workingAgent?.improvements ?? []);
@@ -1076,6 +1124,20 @@ function CreateAgentPageContent() {
     }
   }, []);
 
+  // Mark the creation lifecycle as complete and publish to marketplace.
+  // Called at every successful Ship completion path.
+  const finalizeShipCompletion = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
+    // Mark forge_stage as "complete" — this is the source of truth for reconciliation.
+    // The endpoint also promotes agent status to "active".
+    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: "complete" }),
+    }).catch(() => { /* best-effort */ });
+
+    void autoPublishToMarketplace(agentId, agentName, agentDescription);
+  }, [autoPublishToMarketplace]);
+
   const handleCoPilotComplete = useCallback(async (): Promise<boolean> => {
     setIsCompleting(true);
     const state = coPilotStore.snapshot();
@@ -1122,14 +1184,21 @@ function CreateAgentPageContent() {
       });
 
       const sandboxIds = savedAgent.sandboxIds ?? [];
-      if (sandboxIds.length > 0) {
+      // Skip the hot-push-and-redirect path for forge agents — they are handled
+      // by the forge-sandbox block below which stays on the page so the Ship
+      // stage UI can orchestrate its multi-step flow (save → deploy → github).
+      const forgeSandbox = savedAgent.forgeSandboxId ?? existingAgent.forgeSandboxId;
+      const nonForgeSandboxIds = forgeSandbox
+        ? sandboxIds.filter((sid) => sid !== forgeSandbox)
+        : sandboxIds;
+      if (nonForgeSandboxIds.length > 0) {
         setHotPushStatus("pushing");
-        setHotPushCount(sandboxIds.length);
+        setHotPushCount(nonForgeSandboxIds.length);
         setHotPushSummary("");
         setHotPushRetryTarget(null);
         try {
           const results = await Promise.all(
-            sandboxIds.map(async (sid) => ({
+            nonForgeSandboxIds.map(async (sid) => ({
               sandboxId: sid,
               result: await pushAgentConfig(sid, savedAgent),
             })),
@@ -1155,7 +1224,7 @@ function CreateAgentPageContent() {
           if (err instanceof Error && err.message.includes("failed")) throw err;
           setHotPushStatus("error");
           setHotPushSummary("Config push failed before all running instances could be updated");
-          setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds });
+          setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds: nonForgeSandboxIds });
           setIsCompleting(false);
           throw new Error("Config push failed before all running instances could be updated");
         }
@@ -1186,7 +1255,7 @@ function CreateAgentPageContent() {
         if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
         if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
         coPilotStore.reset();
-        void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
+        void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
         router.push("/agents");
         return true;
       }
@@ -1234,7 +1303,7 @@ function CreateAgentPageContent() {
           }
         } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
 
-        void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
+        void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
         setIsCompleting(false);
         return true;
       }
@@ -1250,7 +1319,7 @@ function CreateAgentPageContent() {
       if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
       if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
       coPilotStore.reset();
-      void autoPublishToMarketplace(existingAgent.id, finalFields.name, finalFields.description);
+      void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
       router.push(resolveImproveAgentCompletionHref(
         existingAgent.id,
         sandboxIds,
@@ -1341,7 +1410,7 @@ function CreateAgentPageContent() {
         }
       } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
 
-      void autoPublishToMarketplace(agentId, finalFields.name, finalFields.description);
+      void finalizeShipCompletion(agentId, finalFields.name, finalFields.description);
       setIsCompleting(false);
       return true;
     }
@@ -1357,12 +1426,12 @@ function CreateAgentPageContent() {
     if (agentId) clearCoPilotLifecycleCache(agentId);
     if (agentId) clearCreateSessionCache(agentId);
     coPilotStore.reset();
-    void autoPublishToMarketplace(agentId, finalFields.name, finalFields.description);
+    void finalizeShipCompletion(agentId, finalFields.name, finalFields.description);
     router.push(
       buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
     );
     return true;
-  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, autoPublishToMarketplace, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
+  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, finalizeShipCompletion, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
   // ── v2 init form: shown when creating a brand-new agent ──────────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {
@@ -1421,6 +1490,26 @@ function CreateAgentPageContent() {
           {showDevMockBar && (
             <DevMockBar coPilotStore={coPilotStore} />
           )}
+          {forgeSandboxPending ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-center">
+                {forgeSandboxLoading ? (
+                  <>
+                    <div className="w-6 h-6 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      Connecting to agent sandbox...
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      {forgeSandboxError ?? "Agent sandbox is not ready yet. It may still be provisioning."}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
           <CoPilotLayout
             existingAgent={workingAgent}
             builderState={builderState}
@@ -1431,6 +1520,7 @@ function CreateAgentPageContent() {
             onCancel={() => router.push("/agents")}
             activeSandbox={effectiveSandbox}
           />
+          )}
         </div>
       </div>
     );
@@ -1668,6 +1758,26 @@ function CreateAgentPageContent() {
 
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div key={modeTransitionKey} className="flex-1 flex flex-col overflow-hidden min-h-0 stage-enter">
+          {forgeSandboxPending ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-center">
+                {forgeSandboxLoading ? (
+                  <>
+                    <div className="w-6 h-6 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      Connecting to agent sandbox...
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      {forgeSandboxError ?? "Agent sandbox is not ready yet. It may still be provisioning."}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
           <TabChat
             mode={resolveCreatePageChatMode(agentMode)}
             disableBuilderAutosave={isCompleting}
@@ -1679,6 +1789,7 @@ function CreateAgentPageContent() {
             onBuilderStateChange={handleBuilderStateChange}
             onReadyForReview={() => setView("review")}
           />
+          )}
         </div>
         {showWorkspace && workingAgent?.forgeSandboxId && (
           <WorkspacePanel
