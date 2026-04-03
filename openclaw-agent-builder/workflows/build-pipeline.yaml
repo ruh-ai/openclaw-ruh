@@ -1,0 +1,85 @@
+name: build-pipeline
+description: "Master pipeline: requirement analysis -> skill discovery -> generation -> testing -> deployment"
+version: "1.0.0"
+
+steps:
+  - id: analyze
+    agent: architect
+    action: analyze_requirements
+    input: "${trigger.requirements}"
+    output: skill_graph
+    timeout_ms: 120000
+
+  - id: discover
+    agent: architect
+    action: search_existing_skills
+    input: "${analyze.skill_graph}"
+    output: discovery_results
+    wait_for: [analyze]
+    timeout_ms: 60000
+
+  - id: approval_gate
+    type: human_approval
+    message: "Review the proposed skill graph."
+    input: "${discover.discovery_results}"
+    wait_for: [discover]
+
+  - id: generate
+    agent: builder
+    action: generate_system
+    input:
+      skill_graph: "${approval_gate.approved_graph}"
+      requirements: "${trigger.requirements}"
+    output: generated_workspace
+    wait_for: [approval_gate]
+    timeout_ms: 300000
+
+  - id: test
+    agent: tester
+    action: validate_system
+    input:
+      workspace_path: "${generate.generated_workspace.path}"
+    output: test_results
+    wait_for: [generate]
+    timeout_ms: 600000
+
+  - id: test_gate
+    type: condition
+    condition: "${test.test_results.all_passed == true}"
+    on_true: deploy
+    on_false: fix_and_retry
+    wait_for: [test]
+
+  - id: fix_and_retry
+    agent: builder
+    action: fix_issues
+    input:
+      failures: "${test.test_results.phases}"
+    timeout_ms: 300000
+    next: retest
+
+  - id: retest
+    agent: tester
+    action: validate_system
+    input:
+      workspace_path: "${fix_and_retry.fixed_workspace.path}"
+    wait_for: [fix_and_retry]
+    timeout_ms: 600000
+
+  - id: deploy
+    agent: deployer
+    action: deploy_system
+    input:
+      workspace_path: "${generate.generated_workspace.path}"
+      requirements: "${trigger.requirements}"
+    output: deployment_result
+    wait_for: [test_gate]
+    timeout_ms: 600000
+
+  - id: notify
+    agent: architect
+    action: report_completion
+    input:
+      deployment: "${deploy.deployment_result}"
+    wait_for: [deploy]
+    timeout_ms: 30000

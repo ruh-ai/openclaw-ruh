@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.1",
+    "lastTouchedAt": "2026-03-17T16:32:20.251Z"
+  },
+  "auth": {
+    "profiles": {
+      "openai-codex:default": {
+        "provider": "openai-codex",
+        "mode": "oauth"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/anthropic/claude-sonnet-4.5"
+      },
+      "models": {
+        "openrouter/anthropic/claude-sonnet-4-6": {},
+        "openrouter/anthropic/claude-sonnet-4.5": {}
+      },
+      "workspace": "/home/daytona/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    },
+    "list": [
+      {
+        "id": "main"
+      },
+      {
+        "id": "architect",
+        "name": "architect",
+        "workspace": "/home/daytona/.openclaw/workspace-architect",
+        "agentDir": "/home/daytona/.openclaw/agents/architect/agent",
+        "model": "openrouter/anthropic/claude-sonnet-4.5"
+      }
+    ]
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "<REDACTED_SET_VIA_ENV>"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  }
+}

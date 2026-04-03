@@ -25,9 +25,13 @@ const BUN = process.execPath;
 // Excluded directories
 const EXCLUDED_DIRS = new Set(['node_modules', 'e2e', '.next', 'test-results', 'playwright-report']);
 
-// Excluded files (integration/e2e tests that require real infrastructure)
+// Excluded files (integration/e2e tests that require real infrastructure,
+// or Jest-only tests that use @testing-library/react and cannot run under bun)
 const EXCLUDED_FILES = new Set([
   'lib/openclaw/__tests__/eval-pipeline.integration.test.ts',
+  '__tests__/components/Button.test.tsx',
+  '__tests__/components/ChatInput.test.tsx',
+  '__tests__/components/DeveloperSidebar.test.tsx',
 ]);
 
 function collectTestFiles(dir: string): string[] {
