@@ -23,8 +23,16 @@ fi
 
 if echo "$CHANGED" | grep -q "^ruh-frontend/"; then
   echo "🧪 Running ruh-frontend tests..."
-  cd ruh-frontend && node_modules/.bin/jest --ci --passWithNoTests || exit 1
-  cd ..
+  # Resolve node — prefer PATH node, fall back to common nvm/homebrew locations
+  NODE=$(which node 2>/dev/null \
+    || ls "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1 \
+    || echo "")
+  if [ -z "$NODE" ]; then
+    echo "⚠️  node not found — skipping ruh-frontend tests"
+  else
+    cd ruh-frontend && "$NODE" node_modules/.bin/jest --ci --passWithNoTests || exit 1
+    cd ..
+  fi
 fi
 
 if echo "$CHANGED" | grep -q "^admin-ui/"; then
