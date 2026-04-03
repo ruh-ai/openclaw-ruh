@@ -433,35 +433,35 @@ class _SidebarItemState extends State<_SidebarItem> {
                   : Colors.transparent,
             ),
           ),
-	          child: Row(
-	            children: [
-	              Icon(
-	                widget.isSelected
-	                    ? widget.destination.activeIcon
+          child: Row(
+            children: [
+              Icon(
+                widget.isSelected
+                    ? widget.destination.activeIcon
                     : widget.destination.icon,
                 size: IconSizes.lg,
                 color: widget.isSelected
                     ? RuhTheme.primary
                     : RuhTheme.textSecondary,
-	              ),
-	              const SizedBox(width: 12),
-	              Expanded(
-	                child: Text(
-	                  widget.destination.label,
-	                  maxLines: 1,
-	                  overflow: TextOverflow.ellipsis,
-	                  style: theme.textTheme.bodyMedium?.copyWith(
-	                    fontWeight: widget.isSelected
-	                        ? FontWeight.w600
-	                        : FontWeight.normal,
-	                    color: widget.isSelected
-	                        ? RuhTheme.primary
-	                        : RuhTheme.textSecondary,
-	                  ),
-	                ),
-	              ),
-	            ],
-	          ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  widget.destination.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: widget.isSelected
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                    color: widget.isSelected
+                        ? RuhTheme.primary
+                        : RuhTheme.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
