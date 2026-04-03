@@ -6,6 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { setupTestDb, teardownTestDb, truncateAll } from '../../helpers/db';
 import * as agentVersionStore from '../../../src/agentVersionStore';
 import * as agentStore from '../../../src/agentStore';
+import * as userStore from '../../../src/userStore';
+import { hashPassword } from '../../../src/auth/passwords';
 
 beforeAll(async () => {
   await setupTestDb();
@@ -19,12 +21,18 @@ afterAll(async () => {
   await teardownTestDb();
 });
 
+async function createTestUser() {
+  const hash = await hashPassword('TestPass1!');
+  return userStore.createUser('test@example.com', hash, 'Test User', 'developer');
+}
+
 async function createTestAgent() {
   return agentStore.saveAgent({ name: 'Versioned Agent', avatar: '📦' });
 }
 
 describe('Agent Version CRUD (integration)', () => {
   test('create and retrieve agent version', async () => {
+    const user = await createTestUser();
     const agent = await createTestAgent();
     const snapshot = { systemName: 'Versioned Agent', skills: ['exec'], config: { model: 'gpt-4' } };
 
@@ -33,7 +41,7 @@ describe('Agent Version CRUD (integration)', () => {
       version: '1.0.0',
       changelog: 'Initial release',
       snapshot,
-      createdBy: 'user-123',
+      createdBy: user.id,
     });
 
     expect(version.id).toBeTruthy();
@@ -43,7 +51,7 @@ describe('Agent Version CRUD (integration)', () => {
     const fetched = await agentVersionStore.getAgentVersionByVersion(agent.id, '1.0.0');
     expect(fetched).not.toBeNull();
     expect(fetched!.changelog).toBe('Initial release');
-    expect(fetched!.createdBy).toBe('user-123');
+    expect(fetched!.createdBy).toBe(user.id);
   });
 
   test('returns null for nonexistent version', async () => {
@@ -53,20 +61,21 @@ describe('Agent Version CRUD (integration)', () => {
   });
 
   test('multiple versions per agent', async () => {
+    const user = await createTestUser();
     const agent = await createTestAgent();
 
     await agentVersionStore.createAgentVersion({
       agentId: agent.id,
       version: '1.0.0',
       snapshot: { v: 1 },
-      createdBy: 'user-1',
+      createdBy: user.id,
     });
     await agentVersionStore.createAgentVersion({
       agentId: agent.id,
       version: '1.1.0',
       changelog: 'Bug fixes',
       snapshot: { v: 2 },
-      createdBy: 'user-1',
+      createdBy: user.id,
     });
 
     const v1 = await agentVersionStore.getAgentVersionByVersion(agent.id, '1.0.0');
@@ -78,6 +87,7 @@ describe('Agent Version CRUD (integration)', () => {
   });
 
   test('complex nested snapshot JSON fidelity', async () => {
+    const user = await createTestUser();
     const agent = await createTestAgent();
     const complexSnapshot = {
       systemName: 'Complex',
@@ -97,7 +107,7 @@ describe('Agent Version CRUD (integration)', () => {
       agentId: agent.id,
       version: '2.0.0',
       snapshot: complexSnapshot,
-      createdBy: 'user-1',
+      createdBy: user.id,
     });
 
     const fetched = await agentVersionStore.getAgentVersionByVersion(agent.id, '2.0.0');

@@ -207,7 +207,6 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: test
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openclaw_test
       ALLOWED_ORIGINS: http://localhost:3000
 
@@ -254,7 +253,6 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: test
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openclaw_smoke
       ALLOWED_ORIGINS: http://localhost:3000
 
