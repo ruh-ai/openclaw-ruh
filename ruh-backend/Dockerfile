@@ -2,8 +2,12 @@ FROM oven/bun:1 AS base
 
 WORKDIR /app
 
-# Install dependencies (bun.lockb copied for reproducible installs)
-COPY ruh-backend/package.json ruh-backend/bun.lock* ./
+# Copy workspace packages needed by ruh-backend (build context = repo root)
+COPY packages/logger ./packages/logger
+COPY ruh-backend/package.json ruh-backend/bun.lock ./ruh-backend/
+
+WORKDIR /app/ruh-backend
+
 RUN bun install --frozen-lockfile
 
 # Copy source

@@ -33,16 +33,17 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── TypeScript/Bun backend ────────────────────────────────────────────────
+  # ── TypeScript/Bun backend ─────────────────────────────────────────────────
   backend:
     build:
-      context: ./ruh-backend
-      dockerfile: Dockerfile
+      context: .
+      file: ./ruh-backend/Dockerfile
     env_file:
       - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
       PORT: "8000"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:3000,http://localhost:3002}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
@@ -58,13 +59,16 @@ services:
       retries: 3
       start_period: 15s
 
-  # ── Agent Builder UI (Next.js 15) ─────────────────────────────────────────
+  # ── Agent Builder UI (Next.js 15) ──────────────────────────────────────────
   agent-builder-ui:
     build:
       context: ./agent-builder-ui
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
+        OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+        OPENCLAW_GATEWAY_ORIGIN: ${OPENCLAW_GATEWAY_ORIGIN:-https://clawagentbuilder.ruh.ai}
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -75,13 +79,13 @@ services:
       backend:
         condition: service_healthy
 
-  # ── Ruh Frontend / Client App (Next.js 16) ────────────────────────────────
+  # ── Ruh Frontend / Client App (Next.js 16) ─────────────────────────────────
   frontend:
     build:
       context: ./ruh-frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
     environment:
       NODE_ENV: production
       PORT: "3001"
@@ -92,13 +96,13 @@ services:
       backend:
         condition: service_healthy
 
-  # ── Admin UI (Next.js 15) ─────────────────────────────────────────────────
+  # ── Admin UI (Next.js 15) ──────────────────────────────────────────────────
   admin-ui:
     build:
       context: ./admin-ui
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
     environment:
       NODE_ENV: production
       PORT: "3002"
