@@ -58,9 +58,20 @@ interface CoPilotStoreLike {
   setArchitecturePlan: (plan: ArchitecturePlan) => void;
   setPlanStatus: (status: StageStatus) => void;
   setBuildStatus: (status: StageStatus) => void;
-  pushBuildActivity: (item: { type: "file" | "skill" | "tool"; label: string }) => void;
+  pushBuildActivity: (item: { type: "file" | "skill" | "tool" | "task"; label: string }) => void;
   setBuildProgress: (progress: { completed: number; total: number | null; currentSkill: string | null }) => void;
   pushThinkActivity: (item: { type: "research" | "tool" | "status" | "identity"; label: string }) => void;
+  updateBuildManifestTask: (taskId: string, update: Record<string, unknown>) => void;
+  // Think v4 sub-step tracking
+  setThinkStep: (step: string) => void;
+  pushResearchFinding: (finding: { title: string; summary: string; source?: string }) => void;
+  setResearchBriefPath: (path: string | null) => void;
+  setPrdPath: (path: string | null) => void;
+  setTrdPath: (path: string | null) => void;
+  // Plan v4 incremental tracking
+  setPlanStep: (step: string) => void;
+  pushPlanActivity: (item: { type: string; label: string; count: number }) => void;
+  updateArchitecturePlanSection: (section: string, data: unknown) => void;
   devStage: AgentDevStage;
 }
 
@@ -109,13 +120,13 @@ export function consumeSkillGraphReady(value: unknown, deps: ConsumerDeps): void
   ]);
   deps.setLiveResponse("");
   deps.readyForReviewFiredRef.current = true;
-  // Advance to review when skill graph arrives — regardless of current stage.
-  // The architect may return a complete ready_for_review in one shot (skipping
-  // individual think/plan/build stages), so we advance from any pre-review stage.
+  // Advance to review only when the active lifecycle is already in Build.
+  // Existing agents can emit or hydrate skill graphs before a fresh improvement
+  // build has actually run; treating those as a completed build short-circuits
+  // the real build trigger.
   if (deps.coPilotStore) {
     const stage = deps.coPilotStore.devStage;
-    const preReviewStages = ["think", "plan", "build"];
-    if (preReviewStages.includes(stage)) {
+    if (stage === "build") {
       deps.coPilotStore.setBuildStatus("done");
       deps.coPilotStore.setDevStage("review");
     }
@@ -284,6 +295,156 @@ function consumeWorkspaceChanged(value: unknown, deps: ConsumerDeps): void {
   deps.setWorkspaceFilesTick((prev) => prev + 1);
 }
 
+function consumeBuildTaskUpdated(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.BUILD_TASK_UPDATED);
+  if (!deps.coPilotStore) return;
+  const payload = value as { taskId?: string; specialist?: string; status?: string; files?: string[]; error?: string };
+  if (!payload.taskId) return;
+  deps.coPilotStore.updateBuildManifestTask(payload.taskId, {
+    status: payload.status,
+    files: payload.files,
+    error: payload.error,
+  });
+  const label = payload.specialist
+    ? `${payload.specialist}: ${payload.status}`
+    : `Task ${payload.taskId}: ${payload.status}`;
+  deps.coPilotStore.pushBuildActivity({ type: "task", label });
+}
+
+// ─── Think v4 event consumers ──────────────────────────────────────────────
+
+function consumeThinkStep(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.THINK_STEP);
+  if (!deps.coPilotStore) return;
+  const payload = value as { step?: string; status?: string };
+  if (!payload.step) return;
+  deps.coPilotStore.setThinkStep(payload.step);
+  const statusLabel = payload.status === "complete" ? "completed" : "started";
+  deps.coPilotStore.pushThinkActivity({
+    type: "status",
+    label: `${payload.step} ${statusLabel}`,
+  });
+}
+
+function consumeThinkResearchFinding(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.THINK_RESEARCH_FINDING);
+  if (!deps.coPilotStore) return;
+  const payload = value as { title?: string; summary?: string; source?: string };
+  if (!payload.title || !payload.summary) return;
+  deps.coPilotStore.pushResearchFinding({
+    title: payload.title,
+    summary: payload.summary,
+    source: payload.source,
+  });
+  deps.coPilotStore.pushThinkActivity({
+    type: "research",
+    label: payload.title,
+  });
+}
+
+function consumeThinkDocumentReady(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.THINK_DOCUMENT_READY);
+  if (!deps.coPilotStore) return;
+  const payload = value as { docType?: string; path?: string };
+  if (!payload.docType || !payload.path) return;
+
+  switch (payload.docType) {
+    case "research_brief":
+      deps.coPilotStore.setResearchBriefPath(payload.path);
+      break;
+    case "prd":
+      deps.coPilotStore.setPrdPath(payload.path);
+      break;
+    case "trd":
+      deps.coPilotStore.setTrdPath(payload.path);
+      break;
+  }
+
+  deps.coPilotStore.pushThinkActivity({
+    type: "status",
+    label: `${payload.docType} written to workspace`,
+  });
+
+  // Auto-complete: when all three documents are written, mark Think as ready
+  // We check the store state after updating — need to use a microtask
+  // to let Zustand commit the current set() before reading back.
+  queueMicrotask(() => {
+    if (!deps.coPilotStore) return;
+    const store = deps.coPilotStore as unknown as {
+      researchBriefPath: string | null;
+      prdPath: string | null;
+      trdPath: string | null;
+      thinkStatus: string;
+    };
+    if (store.researchBriefPath && store.prdPath && store.trdPath && store.thinkStatus !== "ready") {
+      deps.coPilotStore.setThinkStep("complete");
+      deps.coPilotStore.setThinkStatus("ready" as StageStatus);
+    }
+  });
+}
+
+// ─── Plan v4 event consumers ───────────────────────────────────────────────
+
+function consumePlanSection(
+  value: unknown,
+  deps: ConsumerDeps,
+  eventName: string,
+  section: string,
+  dataKey: string,
+  stepName: string,
+): void {
+  tracer.apply("copilot-store", "CUSTOM", eventName);
+  if (!deps.coPilotStore) return;
+  const payload = value as Record<string, unknown>;
+  const data = payload[dataKey];
+  if (!data) return;
+
+  deps.coPilotStore.updateArchitecturePlanSection(section, data);
+  deps.coPilotStore.setPlanStep(stepName);
+  const count = Array.isArray(data) ? data.length : (data as { tables?: unknown[] }).tables?.length ?? 1;
+  deps.coPilotStore.pushPlanActivity({
+    type: section as "skills",
+    label: `${section}: ${count} item${count !== 1 ? "s" : ""} defined`,
+    count,
+  });
+}
+
+function consumePlanSkills(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_SKILLS, "skills", "skills", "skills");
+}
+
+function consumePlanWorkflow(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_WORKFLOW, "workflow", "workflow", "workflow");
+}
+
+function consumePlanDataSchema(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_DATA_SCHEMA, "dataSchema", "dataSchema", "data");
+}
+
+function consumePlanApiEndpoints(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_API_ENDPOINTS, "apiEndpoints", "apiEndpoints", "api");
+}
+
+function consumePlanDashboardPages(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_DASHBOARD_PAGES, "dashboardPages", "dashboardPages", "dashboard");
+}
+
+function consumePlanEnvVars(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_ENV_VARS, "envVars", "envVars", "envvars");
+}
+
+function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE);
+  if (!deps.coPilotStore) return;
+  deps.coPilotStore.setPlanStep("complete");
+  deps.coPilotStore.setPlanStatus("ready" as StageStatus);
+  deps.coPilotStore.pushPlanActivity({
+    type: "complete",
+    label: "Architecture plan complete",
+    count: 0,
+  });
+}
+
 // ─── Consumer registry ──────────────────────────────────────────────────────
 
 // Consumers that receive (value, deps)
@@ -302,6 +463,17 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.SKILL_CREATED]: consumeSkillCreated,
   [CustomEventName.BUILD_PROGRESS]: consumeBuildProgress,
   [CustomEventName.WORKSPACE_CHANGED]: consumeWorkspaceChanged,
+  [CustomEventName.BUILD_TASK_UPDATED]: consumeBuildTaskUpdated,
+  [CustomEventName.THINK_STEP]: consumeThinkStep,
+  [CustomEventName.THINK_RESEARCH_FINDING]: consumeThinkResearchFinding,
+  [CustomEventName.THINK_DOCUMENT_READY]: consumeThinkDocumentReady,
+  [CustomEventName.PLAN_SKILLS]: consumePlanSkills,
+  [CustomEventName.PLAN_WORKFLOW]: consumePlanWorkflow,
+  [CustomEventName.PLAN_DATA_SCHEMA]: consumePlanDataSchema,
+  [CustomEventName.PLAN_API_ENDPOINTS]: consumePlanApiEndpoints,
+  [CustomEventName.PLAN_DASHBOARD_PAGES]: consumePlanDashboardPages,
+  [CustomEventName.PLAN_ENV_VARS]: consumePlanEnvVars,
+  [CustomEventName.PLAN_COMPLETE]: consumePlanComplete,
 };
 
 // Wizard events that go through commitBuilderMetadata (need the event name)

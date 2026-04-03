@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   AgentDevStage,
   ArchitecturePlan,
+  BuildManifestTask,
   BuildReport,
   DiscoveryDocuments,
   DiscoveryQuestion,
@@ -18,6 +19,7 @@ import type {
   EvalTask,
   SkillGraphNode,
   StageStatus,
+  ValidationReport,
   WorkflowDefinition,
 } from "./types";
 import { AGENT_DEV_STAGES } from "./types";
@@ -46,7 +48,7 @@ export const PHASE_ORDER: CoPilotPhase[] = ["purpose", "discovery", "skills", "t
 
 export interface BuildActivityItem {
   id: string;
-  type: "file" | "skill" | "tool";
+  type: "file" | "skill" | "tool" | "task";
   label: string;
   timestamp: number;
 }
@@ -63,6 +65,30 @@ export interface ThinkActivityItem {
   id: string;
   type: "research" | "tool" | "status" | "identity";
   label: string;
+  timestamp: number;
+}
+
+// ─── Think research findings ───────────────────────────────────────────────
+
+export type ThinkSubStep = "idle" | "research" | "prd" | "trd" | "complete";
+
+export interface ThinkResearchFinding {
+  id: string;
+  title: string;
+  summary: string;
+  source?: string;
+  timestamp: number;
+}
+
+// ─── Plan activity feed ────────────────────────────────────────────────────
+
+export type PlanSubStep = "idle" | "skills" | "workflow" | "data" | "api" | "dashboard" | "envvars" | "complete";
+
+export interface PlanActivityItem {
+  id: string;
+  type: "skills" | "workflow" | "data_schema" | "api_endpoints" | "dashboard_pages" | "env_vars" | "complete";
+  label: string;
+  count: number;
   timestamp: number;
 }
 
@@ -117,15 +143,42 @@ export interface CoPilotState {
   // Think stage
   thinkStatus: StageStatus;
   thinkActivity: ThinkActivityItem[];
+  /** Whether the user explicitly moved into think generation. */
+  userTriggeredThink: boolean;
+  thinkRunId: string | null;
+  lastDispatchedThinkRunId: string | null;
+  /** Current Think sub-step (v4 multi-step research). */
+  thinkStep: ThinkSubStep;
+  /** Research findings discovered during Think phase. */
+  researchFindings: ThinkResearchFinding[];
+  /** Workspace path for the research brief, set when written. */
+  researchBriefPath: string | null;
+  /** Workspace path for the PRD, set when written. */
+  prdPath: string | null;
+  /** Workspace path for the TRD, set when written. */
+  trdPath: string | null;
 
   // Plan stage
   architecturePlan: ArchitecturePlan | null;
   planStatus: StageStatus;
+  /** Whether the user approved Think completion to request a plan. */
+  userTriggeredPlan: boolean;
+  planRunId: string | null;
+  lastDispatchedPlanRunId: string | null;
+  /** Current Plan sub-step (v4 incremental plan building). */
+  planStep: PlanSubStep;
+  /** Plan activity feed showing which sections have been decided. */
+  planActivity: PlanActivityItem[];
 
   // Build stage
   buildStatus: StageStatus;
   buildActivity: BuildActivityItem[];
   buildProgress: BuildProgress | null;
+  /** When true, build fans out skill generation to parallel workers. */
+  parallelBuildEnabled: boolean;
+  /** Whether the user approved plan generation to start a build. */
+  userTriggeredBuild: boolean;
+  buildRunId: string | null;
 
   // Test stage
   evalTasks: EvalTask[];
@@ -137,6 +190,12 @@ export interface CoPilotState {
 
   // Ship stage
   deployStatus: StageStatus;
+
+  // Build manifest (v3 pipeline)
+  buildManifest: import("./types").BuildManifest | null;
+
+  // Build validation
+  buildValidation: ValidationReport | null;
 
   // Reflect stage
   buildReport: BuildReport | null;
@@ -184,12 +243,28 @@ export interface CoPilotActions {
   advanceDevStage: () => void;
   goBackDevStage: () => void;
   setThinkStatus: (status: StageStatus) => void;
+  setUserTriggeredThink: (triggered: boolean) => void;
+  markThinkRunDispatched: (runId: string | null) => void;
   pushThinkActivity: (item: Omit<ThinkActivityItem, "id" | "timestamp">) => void;
   clearThinkActivity: () => void;
+  setThinkStep: (step: ThinkSubStep | string) => void;
+  pushResearchFinding: (finding: Omit<ThinkResearchFinding, "id" | "timestamp">) => void;
+  clearResearchFindings: () => void;
+  setResearchBriefPath: (path: string | null) => void;
+  setPrdPath: (path: string | null) => void;
+  setTrdPath: (path: string | null) => void;
   setArchitecturePlan: (plan: ArchitecturePlan) => void;
   updateArchitecturePlan: (partial: Partial<ArchitecturePlan>) => void;
   setPlanStatus: (status: StageStatus) => void;
+  setUserTriggeredPlan: (triggered: boolean) => void;
+  markPlanRunDispatched: (runId: string | null) => void;
+  setPlanStep: (step: PlanSubStep | string) => void;
+  pushPlanActivity: (item: { type: PlanActivityItem["type"] | string; label: string; count: number }) => void;
+  clearPlanActivity: () => void;
+  updateArchitecturePlanSection: (section: string, data: unknown) => void;
   setBuildStatus: (status: StageStatus) => void;
+  setUserTriggeredBuild: (triggered: boolean) => void;
+  setParallelBuildEnabled: (enabled: boolean) => void;
   pushBuildActivity: (item: Omit<BuildActivityItem, "id" | "timestamp">) => void;
   setBuildProgress: (progress: BuildProgress) => void;
   clearBuildActivity: () => void;
@@ -200,6 +275,9 @@ export interface CoPilotActions {
   setEvalLoopState: (state: Partial<EvalLoopState>) => void;
   resetEvalLoop: () => void;
   setDeployStatus: (status: StageStatus) => void;
+  setBuildManifest: (manifest: import("./types").BuildManifest | null) => void;
+  updateBuildManifestTask: (taskId: string, update: Partial<BuildManifestTask>) => void;
+  setBuildValidation: (report: ValidationReport | null) => void;
   setBuildReport: (report: BuildReport) => void;
 
   reset: () => void;
@@ -236,13 +314,29 @@ function createInitialState(): CoPilotState {
     // Lifecycle
     devStage: "think",
     maxUnlockedDevStage: "think",
-    thinkStatus: "idle",
-    thinkActivity: [],
-    architecturePlan: null,
-    planStatus: "idle",
-    buildStatus: "idle",
-    buildActivity: [],
-    buildProgress: null,
+      thinkStatus: "idle",
+      thinkActivity: [],
+      userTriggeredThink: false,
+      thinkRunId: null,
+      lastDispatchedThinkRunId: null,
+      thinkStep: "idle",
+      researchFindings: [],
+      researchBriefPath: null,
+      prdPath: null,
+      trdPath: null,
+      architecturePlan: null,
+      planStatus: "idle",
+      userTriggeredPlan: false,
+      planRunId: null,
+      lastDispatchedPlanRunId: null,
+      planStep: "idle",
+      planActivity: [],
+      buildStatus: "idle",
+      buildActivity: [],
+      buildProgress: null,
+      userTriggeredBuild: false,
+      buildRunId: null,
+      parallelBuildEnabled: false,
     evalTasks: [],
     evalStatus: "idle",
     agentSandboxId: null,
@@ -254,6 +348,8 @@ function createInitialState(): CoPilotState {
       status: "idle",
     },
     deployStatus: "idle",
+    buildManifest: null,
+    buildValidation: null,
     buildReport: null,
   };
 }
@@ -277,9 +373,42 @@ function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage 
 // ─── Stage-status reset map (used by goBackDevStage) ────────────────────────
 
 const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> = {
-  think: { thinkStatus: "idle" as StageStatus, thinkActivity: [] as ThinkActivityItem[] },
-  plan: { planStatus: "idle" as StageStatus },
-  build: { buildStatus: "idle" as StageStatus },
+  think: {
+    thinkStatus: "idle" as StageStatus,
+    thinkActivity: [] as ThinkActivityItem[],
+    userTriggeredThink: false,
+    thinkRunId: null,
+    lastDispatchedThinkRunId: null,
+    thinkStep: "idle" as ThinkSubStep,
+    researchFindings: [] as ThinkResearchFinding[],
+    researchBriefPath: null as string | null,
+    prdPath: null as string | null,
+    trdPath: null as string | null,
+    userTriggeredPlan: false,
+    planRunId: null,
+    lastDispatchedPlanRunId: null,
+    userTriggeredBuild: false,
+    buildRunId: null,
+  },
+  plan: {
+    planStatus: "idle" as StageStatus,
+    userTriggeredPlan: false,
+    planRunId: null,
+    lastDispatchedPlanRunId: null,
+    planStep: "idle" as PlanSubStep,
+    planActivity: [] as PlanActivityItem[],
+    userTriggeredBuild: false,
+    buildRunId: null,
+  },
+  build: {
+    buildStatus: "idle" as StageStatus,
+    buildActivity: [] as BuildActivityItem[],
+    buildProgress: null as BuildProgress | null,
+    userTriggeredBuild: false,
+    buildRunId: null,
+    agentSandboxId: null as string | null,
+    buildValidation: null as ValidationReport | null,
+  },
   test: { evalStatus: "idle" as StageStatus },
   ship: { deployStatus: "idle" as StageStatus },
 };
@@ -442,26 +571,37 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   setImprovements: (improvements) => set({ improvements }),
   hydrateFromSeed: (seed) => set((prev) => {
     const initial = createInitialState();
-    // Preserve in-flight lifecycle state that CoPilotLayout effects have
-    // already advanced past the initial value. Re-hydration (triggered by
-    // existingAgent reference changes or isRouteAgentHydrated flipping)
-    // would otherwise reset thinkStatus/planStatus back to "idle" while
-    // the architect is already generating.
+
+    // Only preserve in-flight lifecycle state when re-hydrating the SAME agent
+    // (e.g. existingAgent reference change or isRouteAgentHydrated flipping).
+    // When switching to a different agent, the previous agent's lifecycle must
+    // NOT bleed through — otherwise Agent B inherits Agent A's "done" statuses.
+    const isSameAgent =
+      seed.name !== undefined &&
+      seed.name === prev.name &&
+      seed.description !== undefined &&
+      seed.description === prev.description;
+
     const LIFECYCLE_KEYS: (keyof CoPilotState)[] = [
-      "thinkStatus", "planStatus", "buildStatus",
+      "thinkStatus", "userTriggeredThink", "planStatus", "userTriggeredPlan", "buildStatus", "userTriggeredBuild",
+      "thinkRunId", "lastDispatchedThinkRunId", "planRunId", "lastDispatchedPlanRunId", "buildRunId",
       "discoveryStatus", "evalStatus", "deployStatus",
     ];
     const lifecyclePreserve: Partial<CoPilotState> = {};
-    for (const key of LIFECYCLE_KEYS) {
-      const seedVal = (seed as Record<string, unknown>)[key];
-      const prevVal = prev[key];
-      const initialVal = (initial as unknown as Record<string, unknown>)[key];
-      // If the seed would reset to the initial value but the current state
-      // has progressed past it, keep the current (advanced) state.
-      if (prevVal !== initialVal && (seedVal === undefined || seedVal === initialVal)) {
-        (lifecyclePreserve as Record<string, unknown>)[key] = prevVal;
+
+    if (isSameAgent) {
+      for (const key of LIFECYCLE_KEYS) {
+        const seedVal = (seed as Record<string, unknown>)[key];
+        const prevVal = prev[key];
+        const initialVal = (initial as unknown as Record<string, unknown>)[key];
+        // If the seed would reset to the initial value but the current state
+        // has progressed past it, keep the current (advanced) state.
+        if (prevVal !== initialVal && (seedVal === undefined || seedVal === initialVal)) {
+          (lifecyclePreserve as Record<string, unknown>)[key] = prevVal;
+        }
       }
     }
+
     return {
       ...initial,
       ...seed,
@@ -504,6 +644,14 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   },
 
   setThinkStatus: (status) => set({ thinkStatus: status }),
+  setUserTriggeredThink: (triggered) =>
+    set((state) => ({
+      userTriggeredThink: triggered,
+      thinkRunId: triggered ? (state.thinkRunId ?? uuidv4()) : null,
+      lastDispatchedThinkRunId: triggered ? null : state.lastDispatchedThinkRunId,
+    })),
+
+  markThinkRunDispatched: (runId) => set({ lastDispatchedThinkRunId: runId ?? null }),
 
   pushThinkActivity: (item) =>
     set((state) => ({
@@ -519,6 +667,26 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
 
   clearThinkActivity: () => set({ thinkActivity: [] }),
 
+  setThinkStep: (step) => set({ thinkStep: step as ThinkSubStep }),
+
+  pushResearchFinding: (finding) =>
+    set((state) => ({
+      researchFindings: [
+        ...state.researchFindings,
+        {
+          ...finding,
+          id: `rf-${state.researchFindings.length}-${Date.now()}`,
+          timestamp: Date.now(),
+        },
+      ],
+    })),
+
+  clearResearchFindings: () => set({ researchFindings: [] }),
+
+  setResearchBriefPath: (path) => set({ researchBriefPath: path }),
+  setPrdPath: (path) => set({ prdPath: path }),
+  setTrdPath: (path) => set({ trdPath: path }),
+
   setArchitecturePlan: (plan) => set({ architecturePlan: plan, planStatus: "ready" }),
 
   updateArchitecturePlan: (partial) =>
@@ -529,6 +697,39 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     })),
 
   setPlanStatus: (status) => set({ planStatus: status }),
+  setUserTriggeredPlan: (triggered) =>
+    set((state) => ({
+      userTriggeredPlan: triggered,
+      planRunId: triggered ? (state.planRunId ?? uuidv4()) : null,
+      lastDispatchedPlanRunId: triggered ? null : state.lastDispatchedPlanRunId,
+    })),
+
+  markPlanRunDispatched: (runId) => set({ lastDispatchedPlanRunId: runId ?? null }),
+
+  setPlanStep: (step) => set({ planStep: step as PlanSubStep }),
+
+  pushPlanActivity: (item) =>
+    set((state) => ({
+      planActivity: [
+        ...state.planActivity,
+        {
+          type: item.type as PlanActivityItem["type"],
+          label: item.label,
+          count: item.count,
+          id: `pa-${state.planActivity.length}-${Date.now()}`,
+          timestamp: Date.now(),
+        },
+      ],
+    })),
+
+  clearPlanActivity: () => set({ planActivity: [] }),
+
+  updateArchitecturePlanSection: (section, data) =>
+    set((state) => ({
+      architecturePlan: state.architecturePlan
+        ? { ...state.architecturePlan, [section]: data }
+        : null,
+    })),
 
   setBuildStatus: (status) =>
     set(
@@ -536,6 +737,13 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
         ? { buildStatus: status, buildActivity: [], buildProgress: null }
         : { buildStatus: status },
     ),
+  setUserTriggeredBuild: (triggered) =>
+    set((state) => ({
+      userTriggeredBuild: triggered,
+      buildRunId: triggered ? (state.buildRunId ?? uuidv4()) : null,
+    })),
+
+  setParallelBuildEnabled: (enabled) => set({ parallelBuildEnabled: enabled }),
 
   pushBuildActivity: (item) =>
     set((state) => ({
@@ -584,6 +792,23 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
 
   setDeployStatus: (status) => set({ deployStatus: status }),
 
+  setBuildManifest: (manifest) => set({ buildManifest: manifest }),
+
+  updateBuildManifestTask: (taskId, update) =>
+    set((state) => {
+      if (!state.buildManifest) return {};
+      return {
+        buildManifest: {
+          ...state.buildManifest,
+          tasks: state.buildManifest.tasks.map((t) =>
+            t.id === taskId ? { ...t, ...update } : t,
+          ),
+        },
+      };
+    }),
+
+  setBuildValidation: (report) => set({ buildValidation: report }),
+
   setBuildReport: (report) => set({ buildReport: report }),
 
   reset: () => set(createInitialState()),
@@ -619,16 +844,34 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       maxUnlockedDevStage: state.maxUnlockedDevStage,
       thinkStatus: state.thinkStatus,
       thinkActivity: state.thinkActivity,
+      userTriggeredThink: state.userTriggeredThink,
+      thinkRunId: state.thinkRunId,
+      lastDispatchedThinkRunId: state.lastDispatchedThinkRunId,
+      thinkStep: state.thinkStep,
+      researchFindings: state.researchFindings,
+      researchBriefPath: state.researchBriefPath,
+      prdPath: state.prdPath,
+      trdPath: state.trdPath,
       architecturePlan: state.architecturePlan,
       planStatus: state.planStatus,
+      userTriggeredPlan: state.userTriggeredPlan,
+      planRunId: state.planRunId,
+      lastDispatchedPlanRunId: state.lastDispatchedPlanRunId,
+      planStep: state.planStep,
+      planActivity: state.planActivity,
       buildStatus: state.buildStatus,
+      userTriggeredBuild: state.userTriggeredBuild,
+      buildRunId: state.buildRunId,
       buildActivity: state.buildActivity,
       buildProgress: state.buildProgress,
+      parallelBuildEnabled: state.parallelBuildEnabled,
       evalTasks: state.evalTasks,
       evalStatus: state.evalStatus,
       agentSandboxId: state.agentSandboxId,
       evalLoopState: state.evalLoopState,
       deployStatus: state.deployStatus,
+      buildManifest: state.buildManifest,
+      buildValidation: state.buildValidation,
       buildReport: state.buildReport,
     };
   },

@@ -294,6 +294,17 @@ export function buildWizardStateContext(state: {
     `Phase: ${state.phase}`,
   ];
 
+  // For Plan stage, include workspace paths instead of full document content.
+  // The Plan instruction tells the architect to read files from workspace.
+  if (state.devStage === "plan") {
+    parts.push(`[WORKSPACE CONTEXT]`);
+    parts.push(`Read these files from the workspace before generating the plan:`);
+    parts.push(`- .openclaw/discovery/PRD.md`);
+    parts.push(`- .openclaw/discovery/TRD.md`);
+    parts.push(`- .openclaw/discovery/research-brief.md`);
+    parts.push(`[/WORKSPACE CONTEXT]`);
+  }
+
   if (state.name) parts.push(`Name: "${state.name}"`);
   if (state.systemName) parts.push(`System Name: ${state.systemName}`);
   if (state.description) parts.push(`Description: "${state.description}"`);

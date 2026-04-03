@@ -725,15 +725,15 @@ describe("BuilderAgent", () => {
     }));
   });
 
-  test("sends BUILDER_SYSTEM_INSTRUCTION on build-stage messages even after the first message", async () => {
-    const { BUILDER_SYSTEM_INSTRUCTION } = await import("../builder-agent");
+  test("sends REFINE_SYSTEM_INSTRUCTION on build-stage messages (v4: build uses orchestrator, chat uses refine)", async () => {
+    const { REFINE_SYSTEM_INSTRUCTION } = await import("../builder-agent");
 
     // First call: think stage (consumes isFirstMessage)
     mockSendToArchitectStreaming.mockResolvedValueOnce({
       type: "agent_response",
       content: "Thinking about your agent...",
     });
-    // Second call: build stage (should still include BUILDER_SYSTEM_INSTRUCTION)
+    // Second call: build stage — should use REFINE instruction (build is orchestrator-driven)
     mockSendToArchitectStreaming.mockResolvedValueOnce({
       type: "agent_response",
       content: "Building your agent...",
@@ -754,7 +754,7 @@ describe("BuilderAgent", () => {
       }).subscribe({ complete: () => { subscription.unsubscribe(); resolve(); }, error: reject });
     });
 
-    // Run 2: build stage — should include BUILDER_SYSTEM_INSTRUCTION
+    // Run 2: build stage — chat during build uses REFINE_SYSTEM_INSTRUCTION
     await new Promise<void>((resolve, reject) => {
       const subscription = agent.run({
         threadId: "thread-1",
@@ -768,9 +768,9 @@ describe("BuilderAgent", () => {
     });
 
     expect(mockSendToArchitectStreaming).toHaveBeenCalledTimes(2);
-    // The second call's message (arg index 1) should contain the builder system instruction
+    // The second call's message (arg index 1) should contain the refine instruction
     const secondCallMessage = mockSendToArchitectStreaming.mock.calls[1]?.[1] as string;
-    expect(secondCallMessage).toContain(BUILDER_SYSTEM_INSTRUCTION);
+    expect(secondCallMessage).toContain(REFINE_SYSTEM_INSTRUCTION);
   });
 
   test("emits skill-graph-ready before closing a streamed copilot review summary", async () => {
@@ -831,14 +831,10 @@ describe("BuilderAgent", () => {
   });
 });
 
-describe("BUILDER_SYSTEM_INSTRUCTION", () => {
-  test("instructs the architect to use ready_for_review code block format", async () => {
-    const { BUILDER_SYSTEM_INSTRUCTION } = await import("../builder-agent");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("ready_for_review");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("skill_graph");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("system_name");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("agent_metadata");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("skill_id");
-    expect(BUILDER_SYSTEM_INSTRUCTION).toContain("depends_on");
+describe("REFINE_SYSTEM_INSTRUCTION", () => {
+  test("is used for build/review/test/ship/reflect stages", async () => {
+    const { REFINE_SYSTEM_INSTRUCTION } = await import("../builder-agent");
+    expect(REFINE_SYSTEM_INSTRUCTION).toContain("REFINE mode");
+    expect(REFINE_SYSTEM_INSTRUCTION).toContain("current agent");
   });
 });
