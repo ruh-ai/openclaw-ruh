@@ -6,6 +6,9 @@ CHANGED=$(git diff HEAD @{push} --name-only 2>/dev/null || git diff HEAD~1 --nam
 # Resolve bun binary — prefer PATH bun, fall back to ~/.bun/bin/bun
 BUN=$(which bun 2>/dev/null || echo "$HOME/.bun/bin/bun")
 
+# Resolve npx — prefer PATH npx, fall back to node_modules/.bin/npx
+NPX=$(which npx 2>/dev/null || echo "./node_modules/.bin/npx")
+
 if echo "$CHANGED" | grep -q "^ruh-backend/"; then
   echo "🧪 Running ruh-backend tests..."
   cd ruh-backend
@@ -22,7 +25,7 @@ fi
 
 if echo "$CHANGED" | grep -q "^ruh-frontend/"; then
   echo "🧪 Running ruh-frontend tests..."
-  cd ruh-frontend && npx jest --ci --passWithNoTests || exit 1
+  cd ruh-frontend && "$NPX" jest --ci --passWithNoTests || exit 1
   cd ..
 fi
 
