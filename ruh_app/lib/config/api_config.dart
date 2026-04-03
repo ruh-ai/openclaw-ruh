@@ -7,8 +7,9 @@ class ApiConfig {
   ApiConfig._();
 
   /// Backend base URL. Defaults to localhost:8000 for local development.
-  /// Override at build time via --dart-define=API_BASE_URL=<url>.
-  static const String baseUrl = String.fromEnvironment(
+  /// Override at build time via --dart-define=API_BASE_URL=<url>,
+  /// or at runtime via the Settings screen.
+  static String baseUrl = const String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://localhost:8000',
   );

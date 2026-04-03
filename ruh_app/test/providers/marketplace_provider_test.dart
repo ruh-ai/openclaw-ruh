@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ruh_app/models/marketplace_listing.dart';
 import 'package:ruh_app/providers/marketplace_provider.dart';
-import 'package:ruh_app/services/marketplace_service.dart';
 
 import '../test_support/fakes.dart';
 

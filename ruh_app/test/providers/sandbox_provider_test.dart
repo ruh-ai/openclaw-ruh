@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ruh_app/providers/sandbox_provider.dart';
-import 'package:ruh_app/services/sandbox_service.dart';
 
 import '../test_support/fakes.dart';
 

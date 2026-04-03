@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ruh_app/models/agent.dart';
-import 'package:ruh_app/models/sandbox.dart';
 import 'package:ruh_app/services/agent_service.dart';
 
 import '../test_support/fake_backend_client.dart';

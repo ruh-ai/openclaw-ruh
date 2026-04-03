@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ruh_app/providers/agent_provider.dart';
-import 'package:ruh_app/services/agent_service.dart';
 
 import '../test_support/fakes.dart';
 
