@@ -10,50 +10,65 @@
  * Usage: bun run scripts/run-coverage.ts
  */
 
-import { mkdirSync, copyFileSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
 
 const BUN = process.execPath; // same bun binary that invoked this script
 
-const GROUPS = [
+// Groups run as directories (one bun process per group)
+const PURE_GROUPS = [
   'tests/unit/stores',
   'tests/unit/clients',
   'tests/unit/auth',
   'tests/unit/db',
   'tests/unit/utils',
-  'tests/unit/z_routes',
 ];
+
+// z_routes: each file gets its own process to prevent mock.module contamination
+const Z_ROUTES_DIR = 'tests/unit/z_routes';
+const Z_ROUTES_FILES = readdirSync(Z_ROUTES_DIR)
+  .filter((f) => f.endsWith('.test.ts'))
+  .sort()
+  .map((f) => join(Z_ROUTES_DIR, f));
 
 const coverageDir = 'coverage';
 mkdirSync(coverageDir, { recursive: true });
 
 const snapshots: string[] = [];
+let snapshotIdx = 0;
 
-for (let i = 0; i < GROUPS.length; i++) {
-  const group = GROUPS[i];
-  console.log(`\n[coverage-runner] Running ${group} ...`);
-
+function runWithCoverage(args: string[], label: string): void {
+  console.log(`\n[coverage-runner] Running ${label} ...`);
   const result = spawnSync(
     BUN,
-    ['test', group, '--coverage', '--coverage-reporter=lcov', `--coverage-dir=${coverageDir}`],
+    ['test', ...args, '--coverage', '--coverage-reporter=lcov', `--coverage-dir=${coverageDir}`],
     { stdio: 'inherit', encoding: 'utf8' },
   );
-
   if (result.status !== 0) {
-    console.error(`[coverage-runner] Tests failed for group: ${group}`);
+    console.error(`[coverage-runner] Tests failed for: ${label}`);
     process.exit(result.status ?? 1);
   }
-
   const lcovPath = join(coverageDir, 'lcov.info');
   if (existsSync(lcovPath)) {
-    const snapshot = join(coverageDir, `lcov.${i}.info`);
+    const snapshot = join(coverageDir, `lcov.${snapshotIdx}.info`);
     copyFileSync(lcovPath, snapshot);
     snapshots.push(snapshot);
     console.log(`[coverage-runner] Saved snapshot: ${snapshot}`);
+    snapshotIdx++;
   } else {
-    console.warn(`[coverage-runner] No lcov.info produced for group: ${group}`);
+    console.warn(`[coverage-runner] No lcov.info produced for: ${label}`);
   }
+}
+
+// Run pure groups
+for (const group of PURE_GROUPS) {
+  runWithCoverage([group], group);
+}
+
+// Run each z_routes file in isolation
+for (const file of Z_ROUTES_FILES) {
+  runWithCoverage([file], file);
 }
 
 // Concatenate all snapshots into a single lcov.info for check-coverage.ts

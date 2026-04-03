@@ -53,6 +53,7 @@ const db = await import('../../../src/db');
 describe('db connection helper', () => {
   beforeEach(() => {
     process.env.DATABASE_URL = 'postgres://openclaw:changeme@localhost:5432/openclaw';
+    process.env.DATABASE_SSL = 'true';
     state.poolConfigs = [];
     state.client = null;
   });

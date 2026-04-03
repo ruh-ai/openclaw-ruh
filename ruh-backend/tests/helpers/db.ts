@@ -49,7 +49,7 @@ export async function truncateAll(): Promise<void> {
         DELETE FROM execution_recordings;
         DELETE FROM cost_events;
         DELETE FROM budget_policies;
-        DELETE FROM webhook_deliveries;
+        DELETE FROM webhook_delivery_dedupes;
         DELETE FROM auth_identities;
         DELETE FROM organization_memberships;
         DELETE FROM marketplace_runtime_installs;

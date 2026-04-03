@@ -1,0 +1,48 @@
+name: "${SYSTEM_NAME}-workflow"
+description: "Generated workflow for ${SYSTEM_DESCRIPTION}"
+version: "1.0.0"
+
+steps:
+  - id: provision
+    action: provision_schema
+    skill: data-ingestion-openclaw
+    input:
+      organisation_id: "${env.DATA_INGESTION_ORG_ID}"
+      agent_id: "${env.DATA_INGESTION_AGENT_ID}"
+    run_once: true
+    timeout_ms: 30000
+
+  - id: ingest
+    action: trigger_ingestion
+    skill: data-ingestion-openclaw
+    input:
+      connector_type: "${CONNECTOR_TYPE}"
+      connector_id: "${CONNECTOR_ID}"
+      organisation_id: "${env.DATA_INGESTION_ORG_ID}"
+      agent_id: "${env.DATA_INGESTION_AGENT_ID}"
+      entities: ${ENTITIES}
+    wait_for: [provision]
+    timeout_ms: 60000
+
+  - id: poll_ingestion
+    action: poll_job_status
+    skill: data-ingestion-openclaw
+    input:
+      job_id: "${ingest.job_id}"
+    wait_for: [ingest]
+    timeout_ms: 300000
+    poll_interval_ms: 5000
+
+  ${PROCESSING_STEPS}
+
+  - id: write_results
+    action: batch_write
+    skill: data-ingestion-openclaw
+    input:
+      organisation_id: "${env.DATA_INGESTION_ORG_ID}"
+      agent_id: "${env.DATA_INGESTION_AGENT_ID}"
+      run_id: "${run_id}"
+      items: "${aggregated_results}"
+      atomic: true
+    wait_for: [${LAST_PROCESSING_STEP}]
+    timeout_ms: 60000

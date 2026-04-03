@@ -1,0 +1,36 @@
+{
+  "name": "${SYSTEM_NAME}",
+  "version": "1.0.0",
+  "agents": {
+    "defaults": {
+      "model": "${DEFAULT_MODEL}"
+    },
+    "list": [
+      ${AGENT_DEFINITIONS}
+    ]
+  },
+  "tools": {
+    "agentToAgent": {
+      "enabled": ${MULTI_AGENT_ENABLED},
+      "allow": [${AGENT_IDS}]
+    }
+  },
+  "skills": {
+    "entries": {
+      "data-ingestion-openclaw": {
+        "enabled": true,
+        "env": {
+          "DATA_INGESTION_BASE_URL": "${DATA_INGESTION_BASE_URL}",
+          "DATA_INGESTION_ORG_ID": "${DATA_INGESTION_ORG_ID}",
+          "DATA_INGESTION_AGENT_ID": "${DATA_INGESTION_AGENT_ID}",
+          "DATA_INGESTION_TOKEN": "${DATA_INGESTION_TOKEN}"
+        }
+      }
+      ${ADDITIONAL_SKILL_ENTRIES}
+    }
+  },
+  "heartbeat": {
+    "enabled": ${HEARTBEAT_ENABLED},
+    "intervalMinutes": ${HEARTBEAT_INTERVAL}
+  }
+}

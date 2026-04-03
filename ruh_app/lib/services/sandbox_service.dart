@@ -3,9 +3,9 @@ import 'api_client.dart';
 
 /// Service for managing sandboxes (agent containers) via the REST backend.
 class SandboxService {
-  SandboxService({ApiClient? client}) : _client = client ?? ApiClient();
+  SandboxService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// Fetch all sandboxes for the authenticated user.
   Future<List<SandboxRecord>> listSandboxes() async {

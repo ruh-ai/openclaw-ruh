@@ -35,9 +35,9 @@ class ForgeEvent {
 /// 1. POST /api/agents/create  -> returns agent_id + stream_id
 /// 2. GET  /api/agents/{agentId}/forge/stream/{streamId}  -> SSE progress
 class ForgeService {
-  ForgeService({ApiClient? client}) : _client = client ?? ApiClient();
+  ForgeService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   static const String _tag = 'ForgeService';
 

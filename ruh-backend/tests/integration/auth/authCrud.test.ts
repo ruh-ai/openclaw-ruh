@@ -11,8 +11,6 @@ import * as orgStore from '../../../src/orgStore';
 import { hashPassword, verifyPassword } from '../../../src/auth/passwords';
 import { withConn } from '../../../src/db';
 
-process.env.NODE_ENV = 'development';
-
 let requestFn: typeof import('../../helpers/app').request;
 
 beforeAll(async () => {

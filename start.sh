@@ -29,16 +29,32 @@ echo "==> Installing frontend dependencies..."
 cd "$ROOT/ruh-frontend"
 npm install --silent
 
-echo "==> Starting frontend on http://localhost:3000 ..."
+echo "==> Starting frontend on http://localhost:3001 ..."
 npm run dev &
 FRONTEND_PID=$!
 
+# ── Agent Builder UI ───────────────────────────────────────────────────────
+echo "==> Installing agent-builder-ui dependencies..."
+cd "$ROOT/agent-builder-ui"
+
+if ! command -v yarn &>/dev/null; then
+  echo "    yarn not found — enabling corepack..."
+  corepack enable
+fi
+
+yarn install --immutable 2>/dev/null || yarn install
+
+echo "==> Starting agent-builder-ui on http://localhost:3000 ..."
+yarn dev &
+BUILDER_PID=$!
+
 echo ""
 echo "================================================================"
-echo "  Backend  : http://localhost:8000"
-echo "  Frontend : http://localhost:3000"
+echo "  Backend          : http://localhost:8000"
+echo "  Agent Builder UI : http://localhost:3000"
+echo "  Frontend         : http://localhost:3001"
 echo "================================================================"
-echo "Press Ctrl+C to stop both servers."
+echo "Press Ctrl+C to stop all servers."
 
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit 0" INT TERM
+trap "kill $BACKEND_PID $FRONTEND_PID $BUILDER_PID 2>/dev/null; exit 0" INT TERM
 wait

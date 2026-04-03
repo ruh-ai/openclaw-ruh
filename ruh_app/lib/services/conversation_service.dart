@@ -3,9 +3,9 @@ import 'api_client.dart';
 
 /// Service for managing conversations and messages within a sandbox.
 class ConversationService {
-  ConversationService({ApiClient? client}) : _client = client ?? ApiClient();
+  ConversationService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// List conversations for the given [sandboxId].
   Future<List<Conversation>> listConversations(

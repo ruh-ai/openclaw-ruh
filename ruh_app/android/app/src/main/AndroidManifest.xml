@@ -1,4 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Network access for API communication -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Notifications for agent events -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keep SSE connections alive -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
     <application
         android:label="Ruh"
         android:name="${applicationName}"

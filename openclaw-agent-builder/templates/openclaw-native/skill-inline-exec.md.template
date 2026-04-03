@@ -1,0 +1,28 @@
+---
+name: {{SKILL_ID}}
+version: 1.0.0
+description: "{{SKILL_DESCRIPTION}}"
+user-invocable: false
+metadata:
+  openclaw:
+    requires:
+      bins: {{REQUIRED_BINS}}
+      env: {{REQUIRED_ENV_VARS}}
+    primaryEnv: {{PRIMARY_ENV_VAR}}
+---
+
+# {{SKILL_NAME}}
+
+{{SKILL_LONG_DESCRIPTION}}
+
+## Usage
+
+{{EXEC_COMMANDS}}
+
+## Expected Output
+
+{{EXPECTED_OUTPUT}}
+
+## Error Handling
+
+{{ERROR_HANDLING}}

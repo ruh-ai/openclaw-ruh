@@ -11,6 +11,7 @@
 #   Agent Builder UI: http://localhost:3000
 #   Ruh Frontend:     http://localhost:3001
 #   Admin UI:         http://localhost:3002
+#   Ruh App (Flutter): http://localhost:3003
 #   PostgreSQL:       localhost:5432
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -115,12 +116,30 @@ services:
     depends_on:
       - backend
 
+  # ── Ruh App / Flutter Web (dev server) ─────────────────────────────────────
+  ruh-app:
+    image: ghcr.io/cirruslabs/flutter:3.32.0
+    working_dir: /app
+    command: sh -c "flutter pub get && flutter run -d web-server --web-port=3003 --web-hostname=0.0.0.0"
+    environment:
+      API_BASE_URL: "http://localhost:8000"
+    ports:
+      - "3003:3003"
+    volumes:
+      - ./ruh_app:/app
+      - flutter_pub_cache:/root/.pub-cache
+    networks:
+      - internal
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
   backend_node_modules:
   builder_node_modules:
   frontend_node_modules:
   admin_node_modules:
+  flutter_pub_cache:
 
 networks:
   internal:

@@ -1,0 +1,16 @@
+{
+  "name": "{{JOB_NAME}}",
+  "enabled": true,
+  "schedule": {
+    "kind": "cron",
+    "expr": "{{CRON_EXPRESSION}}",
+    "tz": "{{TIMEZONE}}"
+  },
+  "sessionTarget": "isolated",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "{{TRIGGER_MESSAGE}}",
+    "model": "{{MODEL}}",
+    "timeoutSeconds": {{TIMEOUT_SECONDS}}
+  }
+}

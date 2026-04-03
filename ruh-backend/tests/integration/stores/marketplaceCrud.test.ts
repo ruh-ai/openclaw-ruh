@@ -17,7 +17,6 @@ import * as marketplaceStore from "../../../src/marketplaceStore";
 import { hashPassword } from "../../../src/auth/passwords";
 import { withConn } from "../../../src/db";
 
-process.env.NODE_ENV = "development";
 
 let publisherId: string;
 let agentId: string;
