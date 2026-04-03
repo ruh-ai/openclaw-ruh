@@ -2,7 +2,8 @@ FROM oven/bun:1 AS base
 
 WORKDIR /app
 
-# Copy workspace packages needed by ruh-backend (build context = repo root)
+# Copy the workspace packages needed by ruh-backend
+# Build context is the repo root so ../packages/logger resolves correctly
 COPY packages/logger ./packages/logger
 COPY ruh-backend/package.json ruh-backend/bun.lock ./ruh-backend/
 

@@ -62,12 +62,12 @@ describe('Execution Recording CRUD (integration)', () => {
     const agent = await createTestAgent();
     const recording = await executionStore.createExecutionRecording({
       agent_id: agent.id,
-      worker_id: 'worker-1',
+      worker_id: '11111111-1111-1111-1111-111111111111',
       task_id: 'task-1',
       run_id: 'run-002',
     });
 
-    expect(recording.worker_id).toBe('worker-1');
+    expect(recording.worker_id).toBe('11111111-1111-1111-1111-111111111111');
     expect(recording.task_id).toBe('task-1');
   });
 
