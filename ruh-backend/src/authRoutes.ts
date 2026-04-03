@@ -57,6 +57,7 @@ const authRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { detail: 'Too many requests. Please try again later.' },
+  skip: () => process.env.NODE_ENV === 'test',
 });
 
 const registerRateLimiter = rateLimit({
@@ -65,6 +66,7 @@ const registerRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { detail: 'Too many registration attempts. Please try again later.' },
+  skip: () => process.env.NODE_ENV === 'test',
 });
 
 // Rate limiting applied per-route below (register gets stricter limits)

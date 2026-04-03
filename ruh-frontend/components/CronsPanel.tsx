@@ -626,7 +626,7 @@ export default function CronsPanel({ sandbox }: { sandbox: SandboxRecord }) {
                 </div>
 
                 {job.payload?.text && (
-                  <p className="text-xs text-gray-400 italic truncate">"{job.payload.text}"</p>
+                  <p className="text-xs text-gray-400 italic truncate">&quot;{job.payload.text}&quot;</p>
                 )}
 
                 {job.state?.error && (

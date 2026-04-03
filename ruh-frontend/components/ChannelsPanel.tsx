@@ -283,7 +283,7 @@ function PairingSection({
         <div>
           <p className="text-xs font-medium text-gray-700">Device Pairing</p>
           <p className="text-[10px] text-gray-400 mt-0.5">
-            Approve users who receive "access not configured" when messaging the bot
+            Approve users who receive &quot;access not configured&quot; when messaging the bot
           </p>
         </div>
         <button
