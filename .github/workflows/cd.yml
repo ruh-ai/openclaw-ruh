@@ -12,6 +12,7 @@ env:
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ghcr.io/${{ github.repository }}/backend
   FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/frontend
+  RUH_APP_IMAGE: ghcr.io/${{ github.repository }}/ruh-app
 
 jobs:
   build-push:
@@ -24,6 +25,7 @@ jobs:
     outputs:
       backend-tag: ${{ steps.meta-backend.outputs.version }}
       frontend-tag: ${{ steps.meta-frontend.outputs.version }}
+      ruh-app-tag: ${{ steps.meta-ruh-app.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +77,27 @@ jobs:
           build-args: NEXT_PUBLIC_API_URL=
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Ruh App (Flutter Web) ──────────────────────────────────────────────
+      - name: Docker metadata — ruh-app
+        id: meta-ruh-app
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.RUH_APP_IMAGE }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push ruh-app
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ruh_app
+          push: true
+          build-args: API_BASE_URL=
+          tags: ${{ steps.meta-ruh-app.outputs.tags }}
+          labels: ${{ steps.meta-ruh-app.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

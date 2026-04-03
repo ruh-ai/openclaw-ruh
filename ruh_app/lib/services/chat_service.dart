@@ -27,9 +27,9 @@ class ChatEvent {
 
 /// Service that handles streaming chat with an OpenClaw agent sandbox.
 class ChatService {
-  ChatService({ApiClient? client}) : _client = client ?? ApiClient();
+  ChatService({BackendClient? client}) : _client = client ?? ApiClient();
 
-  final ApiClient _client;
+  final BackendClient _client;
 
   /// Send a user [message] to the sandbox identified by [sandboxId] and yield
   /// parsed [ChatEvent]s as they arrive over SSE.
