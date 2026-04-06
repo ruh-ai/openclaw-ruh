@@ -12,7 +12,13 @@ mock.module("@/hooks/use-user", () => ({
 }));
 
 mock.module("./authCookies", () => ({
+  // Provide all exports from authCookies.ts so the module registry stays
+  // consistent regardless of which mock.module call ran most recently.
   clearAuthCookies: mockClearAuthCookies,
+  getAccessToken: async () => null,
+  getRefreshToken: async () => null,
+  checkAccessToken: async () => false,
+  setAuthCookies: async () => {},
 }));
 
 mock.module("@/shared/routes", () => ({

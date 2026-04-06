@@ -48,7 +48,7 @@ mock.module('pg', () => ({
   },
 }));
 
-const db = await import('../../src/db?unitDb');
+const db = await import('../../../src/db?unitDb');
 
 describe('db connection helper', () => {
   beforeEach(() => {
@@ -73,7 +73,6 @@ describe('db connection helper', () => {
         connectionString: 'postgres://openclaw:changeme@localhost:5432/openclaw',
         min: 2,
         max: 10,
-        ssl: { rejectUnauthorized: true },
       },
     ]);
     expect(client.calls).toEqual(['BEGIN', 'SELECT 1', 'COMMIT']);

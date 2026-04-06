@@ -14,7 +14,7 @@ const {
   normalizePathSegment,
   parseManagedSandboxContainerList,
   shellQuote,
-} = await import('../../src/docker?unitDocker');
+} = await import('../../../src/docker?unitDocker');
 
 const originalSpawn = Bun.spawn;
 

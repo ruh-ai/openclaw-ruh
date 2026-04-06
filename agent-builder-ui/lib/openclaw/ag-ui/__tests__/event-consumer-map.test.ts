@@ -266,6 +266,10 @@ describe("consumeArchitecturePlanReady", () => {
     envVars: [],
     subAgents: [],
     missionControl: null,
+    dataSchema: null,
+    apiEndpoints: [],
+    dashboardPages: [],
+    vectorCollections: [],
   };
 
   test("calls setArchitecturePlan + setPlanStatus + setDevStage", () => {

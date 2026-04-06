@@ -478,15 +478,14 @@ describe("POST /api/openclaw forge requirement", () => {
     expect(extractEventPayloads(body, "status")).toEqual([
       expect.objectContaining({
         phase: "error",
-        message: "Agent workspace is not ready yet",
+        message: "No forge sandbox is available for this agent",
       }),
     ]);
     expect(extractResultEvent(body)).toEqual(
       expect.objectContaining({
         type: "error",
-        error: "forge_sandbox_not_ready",
+        error: "forge_sandbox_required",
         request_id: "req-no-forge",
-        content: expect.stringContaining("retired shared architect gateway"),
       }),
     );
     expect(scenario.authFetches).toEqual([

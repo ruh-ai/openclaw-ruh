@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { signAccessToken } from '../../src/auth/tokens';
+import { signAccessToken } from '../../../src/auth/tokens';
 
 const agentPayload = {
   id: 'agent-1',
@@ -44,7 +44,7 @@ const mockGetAgentForCreator = mock(async () => agentPayload);
 const mockListAgents = mock(async () => [agentPayload]);
 const mockListAgentsForCreator = mock(async () => [agentPayload]);
 
-mock.module('../../src/store', () => ({
+mock.module('../../../src/store', () => ({
   getSandbox: mock(async () => null),
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -54,7 +54,7 @@ mock.module('../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../src/conversationStore', () => ({
+mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -66,7 +66,7 @@ mock.module('../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../src/agentStore', () => ({
+mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mockListAgents,
   listAgentsForCreator: mockListAgentsForCreator,
@@ -92,7 +92,7 @@ mock.module('../../src/agentStore', () => ({
   getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../src/auth/builderAccess', () => ({
+mock.module('../../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
     organization: {
@@ -105,7 +105,7 @@ mock.module('../../src/auth/builderAccess', () => ({
   })),
 }));
 
-mock.module('../../src/sandboxManager', () => ({
+mock.module('../../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
@@ -123,7 +123,7 @@ mock.module('express-rate-limit', () => ({
   default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-mock.module('../../src/channelManager', () => ({
+mock.module('../../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -132,7 +132,7 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => {
+mock.module('../../../src/backendReadiness', () => {
   let ready = true;
   let reason: string | null = null;
   return {
@@ -148,7 +148,7 @@ mock.module('../../src/backendReadiness', () => {
   };
 });
 
-mock.module('../../src/docker', () => ({
+mock.module('../../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: () => '',
   buildCronRunCommand: () => '',
@@ -163,13 +163,13 @@ mock.module('../../src/docker', () => ({
   parseManagedSandboxContainerList: mock(() => []),
 }));
 
-mock.module('../../src/auditStore', () => ({
+mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-const { app } = await import('../../src/app.ts?unitAgentPublicReadRoutes');
+const { app } = await import('../../../src/app.ts?unitAgentPublicReadRoutes');
 
 function developerAuthHeader() {
   return `Bearer ${signAccessToken({

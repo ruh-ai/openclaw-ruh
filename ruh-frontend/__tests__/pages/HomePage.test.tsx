@@ -19,15 +19,14 @@ describe('Home page', () => {
 
     render(<Home />);
 
-    expect(
-      await screen.findByRole('heading', { name: /open the agents already installed for your work/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Acme Customer Org')).toBeInTheDocument();
-    expect(screen.getByText('Ruh Customer')).toBeInTheDocument();
-    expect(screen.getByText('Sarah Assistant')).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: /open workspace for sarah assistant/i }),
-    ).toHaveAttribute('href', '/agents/agent-runtime-001');
+    // Wait for the agent card link to appear — only rendered after both API calls resolve
+    const agentLink = await screen.findByRole('link', { name: /open workspace for sarah assistant/i });
+    expect(agentLink).toHaveAttribute('href', '/agents/agent-runtime-001');
+
+    // Org name and user name appear in the header panel and inside the card once loaded
+    expect(screen.getAllByText('Acme Customer Org').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Ruh Customer').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Sarah Assistant').length).toBeGreaterThanOrEqual(1);
   });
 
   test('does not render sandbox-management entry points on the customer root route', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { findSkill, listSkills, publishSkill, registryStats } from '../../src/skillRegistry';
+import { findSkill, listSkills, publishSkill, registryStats } from '../../../src/skillRegistry';
 
 describe('skillRegistry', () => {
   test('starts empty — no seed skills', () => {

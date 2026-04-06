@@ -13,6 +13,7 @@ function makeMembership(overrides: Partial<ActiveMembershipContext> = {}): Activ
     organizationSlug: 'test-org',
     organizationKind: 'developer',
     organizationPlan: 'pro',
+    organizationStatus: 'active',
     role: 'owner',
     status: 'active',
     ...overrides,

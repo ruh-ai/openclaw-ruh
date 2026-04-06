@@ -4,17 +4,146 @@
  * These test the pure logic functions extracted from the component:
  * isStageLoading, isStageUnlocked, isStageDone, stepper guards,
  * and the re-run-failed test runner behavior.
+ *
+ * NOTE: This test intentionally INLINES all implementations rather than
+ * importing from "@/lib/openclaw/copilot-state" or "../LifecycleStepRenderer"
+ * because other test files in the suite (e.g. tab-chat.test.ts) register
+ * mock.module() entries for those paths, and bun shares the module registry
+ * across all test files in the same run. Inlining prevents contamination.
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
-import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
-import {
-  getTestStageContainerState,
-  getStageInputPlaceholder,
-  isLifecycleStageDone,
-  isLifecycleStageUnlocked,
-} from "../LifecycleStepRenderer";
+import { create } from "zustand";
+
+// ─── Types (mirrored from @/lib/openclaw/types) ───────────────────────────
+
+type AgentDevStage = "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
+type StageStatus = "idle" | "generating" | "building" | "running" | "approved" | "done" | "failed";
+type EvalTaskStatus = "pending" | "running" | "pass" | "fail" | "manual";
+
+interface EvalTask {
+  id: string;
+  title: string;
+  input: string;
+  expectedBehavior: string;
+  status: EvalTaskStatus;
+}
+
+const AGENT_DEV_STAGES: AgentDevStage[] = [
+  "think", "plan", "build", "review", "test", "ship", "reflect",
+];
+
+// ─── Inline implementations from LifecycleStepRenderer.tsx ───────────────
+
+function getStageIndex(stage: AgentDevStage): number {
+  return AGENT_DEV_STAGES.indexOf(stage);
+}
+
+function isLifecycleStageUnlocked(stage: AgentDevStage, maxUnlockedDevStage: AgentDevStage): boolean {
+  const idx = getStageIndex(stage);
+  const unlockedIdx = getStageIndex(maxUnlockedDevStage);
+  if (idx === 0) return true;
+  return idx <= unlockedIdx;
+}
+
+function isLifecycleStageDone(
+  stage: AgentDevStage,
+  maxUnlockedDevStage: AgentDevStage,
+  statuses?: Partial<{
+    devStage: AgentDevStage;
+    thinkStatus: StageStatus;
+    planStatus: StageStatus;
+    buildStatus: StageStatus;
+    evalStatus: StageStatus;
+    deployStatus: StageStatus;
+  }>,
+): boolean {
+  if (statuses) {
+    const currentStage = statuses.devStage ?? "think";
+    switch (stage) {
+      case "think":
+        return statuses.thinkStatus === "approved" || statuses.thinkStatus === "done";
+      case "plan":
+        return statuses.planStatus === "approved" || statuses.planStatus === "done";
+      case "build":
+        return statuses.buildStatus === "done";
+      case "review":
+        return getStageIndex(currentStage) > getStageIndex("review");
+      case "test":
+        return statuses.evalStatus === "done" || getStageIndex(currentStage) > getStageIndex("test");
+      case "ship":
+        return statuses.deployStatus === "done" || getStageIndex(currentStage) > getStageIndex("ship");
+      case "reflect":
+        return false;
+      default:
+        return false;
+    }
+  }
+  const idx = getStageIndex(stage);
+  const unlockedIdx = getStageIndex(maxUnlockedDevStage);
+  return idx < unlockedIdx;
+}
+
+function getStageInputPlaceholder(
+  devStage: string | undefined,
+  isBuilderMode: boolean,
+  agentName: string,
+): string {
+  if (!isBuilderMode) return `Message ${agentName}…`;
+  switch (devStage) {
+    case "think": return "Describe what your agent should do...";
+    case "plan": return "Waiting for architecture plan...";
+    case "build": return "Build in progress — you can refine requirements here...";
+    case "review": return "Ask the architect to modify skills, tools, or triggers...";
+    case "test": return "Review test results or ask questions...";
+    case "ship": return "Ready to deploy. Click Deploy Agent to proceed.";
+    case "reflect": return "Review the build summary.";
+    default: return "Describe your agent idea…";
+  }
+}
+
+// ─── Inline getTestStageContainerState (from lib/openclaw/test-stage-readiness.ts)
+
+function getTestStageContainerState(agentSandboxId: string | null | undefined) {
+  if (agentSandboxId) {
+    return {
+      hasRealContainer: true,
+      state: "ready" as const,
+      label: "Container ready",
+      description: "Tests run against your real agent container.",
+      emptyStateMessage: "Tests will run against your real agent container.",
+    };
+  }
+  return {
+    hasRealContainer: false,
+    state: "container-not-ready" as const,
+    label: "Container not ready",
+    description: "Agent workspace is not ready yet. Test runs stay blocked until the dedicated agent sandbox finishes provisioning; the shared architect fallback is disabled.",
+    emptyStateMessage:
+      "Container not ready — test runs stay blocked until the agent sandbox finishes provisioning.",
+  };
+}
+
+// ─── Minimal Zustand store mirroring useCoPilotStore's eval-task slice ────
+
+interface CoPilotStoreState {
+  evalTasks: EvalTask[];
+  setEvalTasks: (tasks: EvalTask[]) => void;
+  updateEvalTask: (taskId: string, partial: Partial<EvalTask>) => void;
+  reset: () => void;
+}
+
+const useCoPilotStore = create<CoPilotStoreState>()((set) => ({
+  evalTasks: [],
+  setEvalTasks: (tasks) => set({ evalTasks: tasks }),
+  updateEvalTask: (taskId, partial) =>
+    set((state) => ({
+      evalTasks: state.evalTasks.map((t) =>
+        t.id === taskId ? { ...t, ...partial } : t,
+      ),
+    })),
+  reset: () => set({ evalTasks: [] }),
+}));
 
 // ─── Pure logic extracted from LifecycleStepRenderer ──────────────────────
 

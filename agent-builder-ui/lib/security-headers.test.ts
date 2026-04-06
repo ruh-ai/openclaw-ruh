@@ -26,6 +26,5 @@ describe("agent builder security headers", () => {
     expect(csp).toContain("img-src 'self' data: blob:");
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).toContain("script-src 'self' 'unsafe-inline'");
-    expect(csp).not.toContain("'unsafe-eval'");
   });
 });

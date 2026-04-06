@@ -33,6 +33,7 @@ function makeOrg(overrides: Record<string, unknown> = {}) {
     slug: 'dev-org',
     kind: 'developer' as const,
     plan: 'pro',
+    status: 'active' as const,
     createdAt: '2025-01-01',
     updatedAt: '2025-01-01',
     ...overrides,

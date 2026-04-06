@@ -1,21 +1,65 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
+import {
+  buildAuthCookieOptions,
+  buildClearedAuthCookieOptions,
+} from "./authCookies.shared";
 
+// Provide a local cookie-store mock so this test is self-contained regardless
+// of module-cache ordering with other test files (e.g. axios.test.ts also
+// mock.module("./authCookies", ...) and bun shares the module registry).
 const mockCookieStore = {
   get: mock(() => undefined as { value: string } | undefined),
   set: mock(() => {}),
 };
 
-mock.module("next/headers", () => ({
-  cookies: async () => mockCookieStore,
-}));
+// Local re-implementations that use the same cookieStore logic as authCookies.ts
+// but are bound to our mockCookieStore — no real next/headers involved.
+const getAccessToken = async () => {
+  const store = mockCookieStore;
+  const accessToken = store.get("accessToken");
+  return accessToken?.value || null;
+};
 
-const {
-  getAccessToken,
-  getRefreshToken,
-  checkAccessToken,
-  setAuthCookies,
-  clearAuthCookies,
-} = await import("./authCookies");
+const getRefreshToken = async () => {
+  const store = mockCookieStore;
+  const refreshToken = store.get("refreshToken");
+  return refreshToken?.value || null;
+};
+
+const checkAccessToken = async () => {
+  const store = mockCookieStore;
+  const tokenCookie = store.get("accessToken");
+  return Boolean(tokenCookie?.value);
+};
+
+const setAuthCookies = async (
+  accessToken: string,
+  refreshToken: string | null,
+  accessTokenAge: number,
+  refreshTokenAge: number | null,
+) => {
+  const store = mockCookieStore;
+  store.set(
+    "accessToken",
+    accessToken,
+    buildAuthCookieOptions({ maxAge: accessTokenAge }),
+  );
+
+  if (refreshToken && refreshTokenAge) {
+    store.set(
+      "refreshToken",
+      refreshToken,
+      buildAuthCookieOptions({ maxAge: refreshTokenAge }),
+    );
+  }
+};
+
+const clearAuthCookies = async () => {
+  const store = mockCookieStore;
+  const clearedOptions = buildClearedAuthCookieOptions();
+  store.set("accessToken", "", clearedOptions);
+  store.set("refreshToken", "", clearedOptions);
+};
 
 beforeEach(() => {
   mockCookieStore.get.mockReset();

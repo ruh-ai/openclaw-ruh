@@ -24,7 +24,7 @@ const execQueue:  ExecResult[]  = [];
 let defaultSpawn: SpawnResult = [0, ''];
 let defaultExec:  ExecResult  = [true, ''];
 
-mock.module('../../src/docker', () => ({
+mock.module('../../../src/docker', () => ({
   getContainerName: (id: string) => `openclaw-${id}`,
 
   dockerSpawn: async (args: string[]): Promise<SpawnResult> => {
@@ -88,7 +88,7 @@ mock.module('../../src/docker', () => ({
 // Skip real sleeps (polling loops in createOpenclawSandbox)
 spyOn(Bun, 'sleep').mockImplementation(async () => {});
 
-const sandboxManagerModule = await import('../../src/sandboxManager?unitSandboxManager');
+const sandboxManagerModule = await import('../../../src/sandboxManager?unitSandboxManager');
 const { getContainerName, createOpenclawSandbox, reconfigureSandboxLlm } = sandboxManagerModule;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
