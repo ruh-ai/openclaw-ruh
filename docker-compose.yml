@@ -1,3 +1,18 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# openclaw-ruh — Production Docker Compose
+#
+# Usage:
+#   cp .env.example .env   # fill in LLM keys + secrets
+#   docker compose up -d
+#
+# Services exposed via nginx on port 80:
+#   /api/*          → backend:8000
+#   /builder/*      → agent-builder-ui:3000
+#   /admin/*        → admin-ui:3002
+#   /app/*          → ruh-app:3003  (Flutter web)
+#   /*              → ruh-frontend:3001  (default)
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
@@ -19,13 +34,19 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── TypeScript/Bun backend ────────────────────────────────────────────────
+  # ── TypeScript/Bun backend ─────────────────────────────────────────────────
   backend:
     build:
-      context: ./ruh-backend
-      dockerfile: Dockerfile
+      context: .
+      file: ./ruh-backend/Dockerfile
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
+      PORT: "8000"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:3000,http://localhost:3002}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     networks:
       - internal
@@ -39,13 +60,19 @@ services:
       retries: 3
       start_period: 15s
 
-  # ── Next.js frontend ───────────────────────────────────────────────────────
-  frontend:
+  # ── Agent Builder UI (Next.js 15) ──────────────────────────────────────────
+  agent-builder-ui:
     build:
-      context: ./ruh-frontend
+      context: ./agent-builder-ui
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
+        OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+        OPENCLAW_GATEWAY_ORIGIN: ${OPENCLAW_GATEWAY_ORIGIN:-https://clawagentbuilder.ruh.ai}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
     restart: unless-stopped
     networks:
       - internal
@@ -53,13 +80,47 @@ services:
       backend:
         condition: service_healthy
 
-  # ── Agent Builder UI ───────────────────────────────────────────────────────
-  agent-builder-ui:
+  # ── Ruh Frontend / Client App (Next.js 16) ─────────────────────────────────
+  frontend:
     build:
-      context: ./agent-builder-ui
+      context: ./ruh-frontend
       dockerfile: Dockerfile
-    env_file:
-      - .env
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Admin UI (Next.js 15) ──────────────────────────────────────────────────
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── Ruh App / Flutter Web ───────────────────────────────────────────────────
+  ruh-app:
+    build:
+      context: ./ruh_app
+      dockerfile: Dockerfile
+      args:
+        API_BASE_URL: ${FLUTTER_API_URL:-}
     restart: unless-stopped
     networks:
       - internal
@@ -81,6 +142,8 @@ services:
       - backend
       - frontend
       - agent-builder-ui
+      - admin-ui
+      - ruh-app
 
 volumes:
   postgres_data:

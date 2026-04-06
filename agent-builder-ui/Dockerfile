@@ -3,43 +3,27 @@ FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-RUN corepack enable
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
 
-COPY agent-builder-ui/package.json agent-builder-ui/yarn.lock agent-builder-ui/.yarnrc.yml ./
-COPY agent-builder-ui/.yarn .yarn
-RUN yarn install --immutable
-
-# ── Stage 2: Build ────────────────────────────────────────────────────────────
+# ── Stage 2: Build ─────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-RUN corepack enable
+COPY package.json package-lock.json* ./
+RUN npm ci
 
-COPY agent-builder-ui/package.json agent-builder-ui/yarn.lock agent-builder-ui/.yarnrc.yml ./
-COPY agent-builder-ui/.yarn .yarn
-RUN yarn install --immutable
-
-COPY agent-builder-ui/ .
+COPY . .
 
 ARG NEXT_PUBLIC_API_URL=""
-ARG NEXT_PUBLIC_AUTH_URL=""
-ARG NEXT_PUBLIC_APP_URL=""
-ARG NEXT_PUBLIC_COOKIES_DOMAIN=""
-ARG OPENCLAW_GATEWAY_URL=""
-ARG OPENCLAW_GATEWAY_TOKEN=""
-
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_AUTH_URL=$NEXT_PUBLIC_AUTH_URL
-ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
-ENV NEXT_PUBLIC_COOKIES_DOMAIN=$NEXT_PUBLIC_COOKIES_DOMAIN
-ENV OPENCLAW_GATEWAY_URL=$OPENCLAW_GATEWAY_URL
-ENV OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_GATEWAY_TOKEN
+
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN yarn build
+RUN npm run build
 
-# ── Stage 3: Production runner ────────────────────────────────────────────────
+# ── Stage 3: Production runner ─────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 
 WORKDIR /app

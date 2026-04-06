@@ -55,6 +55,27 @@ dev_dependencies:
   riverpod_generator: ^2.6.3
   build_runner: ^2.4.14
   drift_dev: ^2.22.1
+  flutter_launcher_icons: ^0.14.3
+  flutter_native_splash: ^2.4.5
 
 flutter:
   uses-material-design: true
+
+# App icon generation — run: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  macos: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+
+# Splash screen — run: dart run flutter_native_splash:create
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: "assets/icon/app_icon.png"
+  android_12:
+    color: "#FFFFFF"
+    image: "assets/icon/app_icon.png"
+  ios: true
+  android: true

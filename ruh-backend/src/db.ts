@@ -10,13 +10,13 @@ import { getConfig } from './config';
 let pool: Pool | null = null;
 
 export function initPool(dsn = getConfig(process.env, { requireDatabaseUrl: true }).databaseUrl): void {
-  const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+  const useSSL = process.env.DATABASE_SSL === 'true';
   pool = new Pool({
     connectionString: dsn,
     min: 2,
     max: 10,
-    // Enforce TLS in production. Dev uses local Docker Postgres without SSL.
-    ...(isDev ? {} : { ssl: { rejectUnauthorized: true } }),
+    // Opt-in SSL via DATABASE_SSL=true. Never enabled in CI or local dev.
+    ...(useSSL ? { ssl: { rejectUnauthorized: true } } : {}),
   });
 }
 

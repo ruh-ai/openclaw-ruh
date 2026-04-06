@@ -3,48 +3,47 @@
 # Run unit tests for services with changed files
 CHANGED=$(git diff HEAD @{push} --name-only 2>/dev/null || git diff HEAD~1 --name-only)
 
+# Resolve bun binary — prefer PATH bun, fall back to ~/.bun/bin/bun
+BUN=$(which bun 2>/dev/null || echo "$HOME/.bun/bin/bun")
+
+
 if echo "$CHANGED" | grep -q "^ruh-backend/"; then
   echo "🧪 Running ruh-backend tests..."
   cd ruh-backend
-  FAIL=0
-  for f in tests/unit/*.test.ts; do
-    bun test "$f" || FAIL=1
-  done
-  [ $FAIL -eq 0 ] || exit 1
+  "$BUN" run test:unit || exit 1
   cd ..
 fi
 
 if echo "$CHANGED" | grep -q "^agent-builder-ui/"; then
   echo "🧪 Running agent-builder-ui tests..."
   cd agent-builder-ui
-  FAIL=0
-  for f in $(find lib/ hooks/ app/ services/ -path '*/node_modules' -prune -o -name '*.integration.test.*' -prune -o \( -name '*.test.ts' -o -name '*.test.tsx' \) -print 2>/dev/null) middleware.test.ts; do
-    [ -f "$f" ] && { bun test "$f" || FAIL=1; }
-  done
-  [ $FAIL -eq 0 ] || exit 1
+  "$BUN" run test:unit || exit 1
   cd ..
 fi
 
 if echo "$CHANGED" | grep -q "^ruh-frontend/"; then
   echo "🧪 Running ruh-frontend tests..."
-  cd ruh-frontend && npx jest --ci --passWithNoTests || exit 1
-  cd ..
+  # Resolve node — prefer PATH node, fall back to common nvm/homebrew locations
+  NODE=$(which node 2>/dev/null \
+    || ls "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1 \
+    || echo "")
+  if [ -z "$NODE" ]; then
+    echo "⚠️  node not found — skipping ruh-frontend tests"
+  else
+    cd ruh-frontend && "$NODE" node_modules/.bin/jest --ci --passWithNoTests || exit 1
+    cd ..
+  fi
 fi
 
 if echo "$CHANGED" | grep -q "^admin-ui/"; then
   echo "🧪 Running admin-ui tests..."
-  cd admin-ui
-  FAIL=0
-  for f in $(find . -path ./node_modules -prune -o \( -name '*.test.ts' -o -name '*.test.tsx' \) -print 2>/dev/null); do
-    bun test "$f" || FAIL=1
-  done
-  [ $FAIL -eq 0 ] || exit 1
+  cd admin-ui && "$BUN" run test || exit 1
   cd ..
 fi
 
 if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
   echo "🧪 Running marketplace-ui tests..."
-  cd packages/marketplace-ui && bun test || exit 1
+  cd packages/marketplace-ui && "$BUN" test || exit 1
   cd ..
 fi
 

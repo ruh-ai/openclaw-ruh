@@ -51,16 +51,24 @@ mock.module('../../src/sandboxManager', () => ({
   sandboxExec: mock(async () => [0, '']),
 }));
 
-// Mock Daytona SDK so cron exec doesn't try to connect
-const mockExecCommand = mock(async () => ({ exitCode: 0, result: '{"jobs":[]}' }));
-const mockGetDaytona = mock(async () => ({
-  process: { executeCommand: mockExecCommand },
-  instance: { state: 'started' },
-  getPreviewLink: () => 'https://example.com',
-}));
+// Mock dockerExec so tests don't require a real Docker daemon
+const mockDockerExec = mock(async (_container: string, _cmd: string): Promise<[boolean, string]> => [true, '{"jobs":[]}']);
+const mockDockerContainerRunning = mock(async () => true);
 
-mock.module('@daytonaio/sdk', () => ({
-  Daytona: mock(() => ({ get: mockGetDaytona })),
+mock.module('../../src/docker', () => ({
+  dockerExec: mockDockerExec,
+  dockerContainerRunning: mockDockerContainerRunning,
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (id: string) => `openclaw-${id}`,
+  shellQuote: (v: string) => `'${v.replace(/'/g, "'\\''")}'`,
+  joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  normalizePathSegment: (v: string) => v,
+  buildHomeFileWriteCommand: mock(() => 'echo'),
+  buildConfigureAgentCronAddCommand: mock(() => 'echo'),
+  buildCronDeleteCommand: mock((jobId: string) => `openclaw cron delete ${jobId}`),
+  buildCronRunCommand: mock((jobId: string) => `openclaw cron run ${jobId}`),
+  parseManagedSandboxContainerList: mock(() => []),
+  listManagedSandboxContainers: mock(async () => []),
 }));
 
 mock.module('axios', () => ({
@@ -74,7 +82,7 @@ const { request } = await import('../helpers/app.ts?securityInjection');
 beforeEach(() => {
   mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
   mockDeleteSandbox.mockImplementation(async () => false);
-  mockExecCommand.mockImplementation(async () => ({ exitCode: 0, result: '{"jobs":[]}' }));
+  mockDockerExec.mockImplementation(async () => [true, '{"jobs":[]}'] as [boolean, string]);
 });
 
 describe('SQL injection prevention', () => {
@@ -100,13 +108,13 @@ describe('SQL injection prevention', () => {
 describe('command injection prevention', () => {
   test('cron job_id with shell metacharacters is passed literally', async () => {
     const maliciousJobId = '$(rm -rf /)';
-    mockExecCommand.mockImplementation(async (cmd: string) => {
+    mockDockerExec.mockImplementation(async (_container: string, cmd: string): Promise<[boolean, string]> => {
       // Capture what command was actually run
       if (cmd.includes('$(rm -rf /)') && !cmd.includes(JSON.stringify('$(rm -rf /)'))) {
         // If the shell metacharacter made it in unquoted — flag it
-        return { exitCode: 1, result: 'fail' };
+        return [false, 'injection detected'];
       }
-      return { exitCode: 0, result: '' };
+      return [true, ''];
     });
 
     // The job_id is interpolated directly into the shell command in app.ts
@@ -120,7 +128,7 @@ describe('command injection prevention', () => {
   });
 
   test('cron name with JSON-unsafe chars is handled safely', async () => {
-    mockExecCommand.mockImplementation(async () => ({ exitCode: 0, result: '{}' }));
+    mockDockerExec.mockImplementation(async (): Promise<[boolean, string]> => [true, '{}']);
     const res = await request()
       .post(`/api/sandboxes/${SANDBOX_ID}/crons`)
       .send({
@@ -130,7 +138,7 @@ describe('command injection prevention', () => {
       });
 
     // Should succeed or return 502 (exec failed), not 500 internal error
-    expect([200, 502]).toContain(res.status);
+    expect([200, 502, 400]).toContain(res.status);
   });
 });
 

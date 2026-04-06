@@ -1,11 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-
-// Set env vars before importing config-dependent modules
-process.env.JWT_ACCESS_SECRET = 'test-access-secret-32chars-min!!';
-process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-32chars-min!';
-process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
-
-const { signAccessToken, verifyAccessToken, signRefreshToken, verifyRefreshToken } = await import('../../../src/auth/tokens');
+// JWT secrets are set by tests/helpers/env.ts preload — no config mock needed.
+import { signAccessToken, verifyAccessToken, signRefreshToken, verifyRefreshToken } from '../../../src/auth/tokens';
 
 describe('tokens', () => {
   test('signAccessToken returns a JWT string', () => {

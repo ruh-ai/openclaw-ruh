@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Polyfill file uses require() intentionally for load-order control
+    "jest.polyfills.js",
   ]),
 ]);
 
