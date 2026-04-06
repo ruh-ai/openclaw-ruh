@@ -5,7 +5,6 @@
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import { Readable } from 'node:stream';
-import { request } from '../helpers/app';
 import {
   makeConversationRecord,
   makeSandboxRecord,
@@ -64,7 +63,11 @@ mock.module('../../src/docker', () => ({
   buildHomeFileWriteCommand: (relativePath: string, content: string) =>
     `mkdir -p $HOME && printf %s '${content}' > $HOME/${relativePath}`,
   dockerContainerRunning: mockDockerContainerRunning,
+  dockerExec: mock(async () => [true, '']),
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: Array<string | number>) => args.map(String).join(' '),
+  listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
 }));
 
@@ -84,12 +87,15 @@ const mockGetMessages = mock(async () => []);
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mockGetConversation,
+  getConversationForSandbox: mockGetConversation,
   listConversations: mockListConversations,
   createConversation: mockCreateConversation,
   appendMessages: mockAppendMessages,
   renameConversation: mockRenameConversation,
   deleteConversation: mockDeleteConversation,
   getMessages: mockGetMessages,
+  listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
+  getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
   initDb: mock(async () => {}),
 }));
 
@@ -110,15 +116,21 @@ const mockRetrofitSandboxToSharedCodex = mock(async () => ({
   authSource: 'Codex CLI auth',
   logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
 }));
-const mockDockerExec = mock(async () => [true, '']);
+const mockDockerExec = mock(async () => [true, 'true']);
+const mockEnsureInteractiveRuntimeServices = mock(async () => {});
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  PREVIEW_PORTS: [],
   reconfigureSandboxLlm: mockReconfigureSandboxLlm,
   retrofitSandboxToSharedCodex: mockRetrofitSandboxToSharedCodex,
   dockerExec: mockDockerExec,
+  ensureInteractiveRuntimeServices: mockEnsureInteractiveRuntimeServices,
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 // ── Mock axios ────────────────────────────────────────────────────────────────
@@ -134,11 +146,13 @@ mock.module('axios', () => ({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+const { request } = await import('../helpers/app.ts?e2eChatProxy');
+
 beforeEach(() => {
-  mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
   mockAxiosGet.mockReset();
-  mockAxiosGet.mockImplementation(async () => ({ status: 200, data: { models: [] } }));
   mockAxiosPost.mockReset();
+  mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
+  mockAxiosGet.mockImplementation(async () => ({ status: 200, data: { models: [] } }));
   mockAxiosPost.mockImplementation(async () => ({ status: 200, data: MOCK_CHAT_RESPONSE }));
   mockGetConversation.mockImplementation(async () => null);
   mockUpdateSandboxSharedCodex.mockImplementation(async () => {});
@@ -168,8 +182,10 @@ beforeEach(() => {
     logs: ['Config updated', 'Gateway restarted'],
     configured: { apiKey: 'sk-12***cdef' },
   }));
+  mockEnsureInteractiveRuntimeServices.mockReset();
+  mockEnsureInteractiveRuntimeServices.mockImplementation(async () => {});
   mockDockerExec.mockReset();
-  mockDockerExec.mockImplementation(async () => [true, '']);
+  mockDockerExec.mockImplementation(async () => [true, 'true']);
   mockRetrofitSandboxToSharedCodex.mockImplementation(async () => ({
     ok: true,
     sandboxId: SANDBOX_ID,
@@ -271,15 +287,17 @@ describe('GET /api/sandboxes/:sandbox_id/models', () => {
 
 describe('GET /api/sandboxes/:sandbox_id/status', () => {
   test('returns status from gateway when available', async () => {
-    const statusData = { status: 'running', models: 3 };
+    const statusData = { ok: true, status: 'live', models: 3 };
     mockAxiosGet.mockImplementation(async () => ({ status: 200, data: statusData }));
 
     const res = await request()
       .get(`/api/sandboxes/${SANDBOX_ID}/status`)
       .expect(200);
 
-    expect(res.body.status).toBe('running');
+    expect(mockAxiosGet.mock.calls.at(-1)?.[0]).toBe('http://127.0.0.1:18789/health');
+    expect(res.body.status).toBe('live');
     expect(res.body.container_running).toBe(true);
+    expect(res.body.gateway_reachable).toBe(true);
     expect(res.body.approved).toBe(false);
   });
 
@@ -294,6 +312,59 @@ describe('GET /api/sandboxes/:sandbox_id/status', () => {
     expect(res.body.sandbox_id).toBe(SANDBOX_ID);
     expect(res.body.gateway_port).toBe(18789);
     expect(res.body.container_running).toBe(false);
+  });
+});
+
+describe('browser runtime routes', () => {
+  test('restarts interactive services and retries the screenshot capture once', async () => {
+    mockGetSandbox.mockImplementation(async () =>
+      makeSandboxRecord({ vnc_port: 49959 }),
+    );
+    mockDockerExec
+      .mockImplementationOnce(async () => [false, ''])
+      .mockImplementationOnce(async () => [
+        true,
+        Buffer.from('real-jpeg').toString('base64'),
+      ]);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/browser/screenshot`)
+      .buffer(true)
+      .parse((stream, callback) => {
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        stream.on('end', () => callback(null, Buffer.concat(chunks)));
+        stream.on('error', callback);
+      })
+      .expect(200);
+
+    expect(mockEnsureInteractiveRuntimeServices).toHaveBeenCalledWith(
+      `openclaw-${SANDBOX_ID}`,
+    );
+    expect(res.headers['content-type']).toContain('image/jpeg');
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect((res.body as Buffer).toString()).toBe('real-jpeg');
+  });
+
+  test('repairs the browser bridge before reporting browser status', async () => {
+    mockGetSandbox.mockImplementation(async () =>
+      makeSandboxRecord({ vnc_port: 49959 }),
+    );
+    mockDockerExec
+      .mockImplementationOnce(async () => [false, ''])
+      .mockImplementationOnce(async () => [true, '1234']);
+
+    const res = await request()
+      .get(`/api/sandboxes/${SANDBOX_ID}/browser/status`)
+      .expect(200);
+
+    expect(mockEnsureInteractiveRuntimeServices).toHaveBeenCalledWith(
+      `openclaw-${SANDBOX_ID}`,
+    );
+    expect(res.body).toEqual({
+      active: true,
+      vnc_port: 49959,
+    });
   });
 });
 
@@ -546,8 +617,7 @@ describe('POST /api/sandboxes/:sandbox_id/chat', () => {
       return { status: 200, data: MOCK_CHAT_RESPONSE };
     });
 
-    // Must be a valid UUID for the validateUuid check to pass
-    const convId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const convId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     await request()
       .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
       .send({
@@ -560,15 +630,17 @@ describe('POST /api/sandboxes/:sandbox_id/chat', () => {
 
   test('rejects conversation_id from a different sandbox before contacting the gateway', async () => {
     mockGetConversation.mockImplementation(async () => (
-      makeConversationRecord({ sandbox_id: 'different-sandbox-id' })
+      makeConversationRecord({
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        sandbox_id: 'different-sandbox-id',
+      })
     ));
 
-    // Must be a valid UUID for the validateUuid check to pass (rejection happens after UUID validation)
     await request()
       .post(`/api/sandboxes/${SANDBOX_ID}/chat`)
       .send({
         messages: [{ role: 'user', content: 'Hello' }],
-        conversation_id: 'c0c0c0c0-c0c0-c0c0-c0c0-c0c0c0c0c0c0',
+        conversation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       })
       .expect(404);
 
@@ -631,8 +703,7 @@ describe('POST /api/sandboxes/:sandbox_id/chat', () => {
       });
 
     expect(res.status).toBe(500);
-    // The error middleware returns generic 'Internal server error' for 5xx to avoid leaking internals
-    expect(res.body.detail).toBeTruthy();
+    expect(String(res.body.detail ?? '')).toContain('Internal');
   });
 
   test('persists the streamed exchange once the assistant stream completes', async () => {

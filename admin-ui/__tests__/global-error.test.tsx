@@ -1,60 +1,67 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
 import { render, fireEvent } from "@testing-library/react";
+import GlobalError from "../app/global-error";
 
-describe("GlobalError", () => {
-  test("renders Application Error heading", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {});
+describe("GlobalError page", () => {
+  const consoleError = console.error;
+
+  beforeEach(() => {
+    console.error = mock(() => {});
+  });
+
+  afterAll(() => {
+    console.error = consoleError;
+  });
+
+  test("renders Application Error heading", () => {
+    const error = new Error("critical");
     const reset = mock(() => {});
     const { getByText } = render(<GlobalError error={error} reset={reset} />);
     expect(getByText("Application Error")).toBeTruthy();
   });
 
-  test("renders critical error description", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {});
+  test("renders recovery instructions", () => {
+    const error = new Error("critical");
     const reset = mock(() => {});
     const { getByText } = render(<GlobalError error={error} reset={reset} />);
-    expect(
-      getByText("A critical error occurred. Please try refreshing the page.")
-    ).toBeTruthy();
+    expect(getByText(/critical error occurred/i)).toBeTruthy();
   });
 
-  test("renders Refresh button that calls reset", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {});
+  test("displays error digest when present", () => {
+    const error = Object.assign(new Error("fail"), { digest: "xyz789" });
     const reset = mock(() => {});
     const { getByText } = render(<GlobalError error={error} reset={reset} />);
-    const button = getByText("Refresh");
-    expect(button).toBeTruthy();
-    fireEvent.click(button);
+    expect(getByText(/xyz789/)).toBeTruthy();
+  });
+
+  test("hides error digest when absent", () => {
+    const error = new Error("fail");
+    const reset = mock(() => {});
+    const { queryByText } = render(<GlobalError error={error} reset={reset} />);
+    expect(queryByText(/Error ID:/)).toBeNull();
+  });
+
+  test("calls reset when Refresh is clicked", () => {
+    const error = new Error("fail");
+    const reset = mock(() => {});
+    const { getByText } = render(<GlobalError error={error} reset={reset} />);
+    fireEvent.click(getByText("Refresh"));
     expect(reset).toHaveBeenCalledTimes(1);
   });
 
-  test("displays digest when present", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {
-      digest: "xyz789",
-    });
+  test("logs error details on render", () => {
+    const error = Object.assign(new Error("boom"), { digest: "d2" });
     const reset = mock(() => {});
-    const { getByText } = render(<GlobalError error={error} reset={reset} />);
-    expect(getByText("Error ID: xyz789")).toBeTruthy();
+    render(<GlobalError error={error} reset={reset} />);
+    expect(console.error).toHaveBeenCalled();
   });
 
-  test("does not display digest when absent", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {});
+  test("renders the full page structure", () => {
+    const error = new Error("fail");
     const reset = mock(() => {});
     const { container } = render(<GlobalError error={error} reset={reset} />);
-    expect(container.textContent).not.toContain("Error ID:");
-  });
-
-  test("renders the component structure", async () => {
-    const { default: GlobalError } = await import("../app/global-error");
-    const error = Object.assign(new Error("Critical failure"), {});
-    const reset = mock(() => {});
-    const { container } = render(<GlobalError error={error} reset={reset} />);
-    // The component wraps content in a full-page layout
+    // GlobalError renders its own html/body but testing-library flattens them;
+    // verify the main content wrapper is present
     expect(container.textContent).toContain("Application Error");
   });
 });

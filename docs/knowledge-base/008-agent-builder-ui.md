@@ -34,7 +34,7 @@ app/
         _components/              — Chat UI + configure + review sub-flows
         _config/agentChatSteps.ts — Step config for creation wizard
   api/
-    openclaw/route.ts             — WebSocket bridge to OpenClaw gateway (SSE out)
+    openclaw/route.ts             — Forge-backed bridge to the agent's own OpenClaw gateway (SSE out; fails closed without `forge_sandbox_id`)
     auth.ts                       — Auth helpers
     user.ts                       — User endpoint
 middleware.ts                     — Auth middleware for page-route gating (`/authenticate` stays public)
@@ -43,6 +43,20 @@ middleware.ts                     — Auth middleware for page-route gating (`/a
 ---
 
 ## Agent Creation Flow
+
+### v4 Harness Architecture (Think/Plan/Build)
+
+The agent creation lifecycle follows a 7-stage state machine: `think` → `plan` → `build` → `review` → `test` → `ship` → `reflect`. The full lifecycle reference is in [[SPEC-agent-creation-lifecycle]]. The first three stages use a redesigned harness per [[SPEC-agent-creation-v3-build-pipeline]]:
+
+**Think** (`THINK_SYSTEM_INSTRUCTION` in `builder-agent.ts`): Multi-step research agent. Three sub-steps: research → PRD → TRD. The architect uses browser/terminal tools to research the domain, emits `<think_step>`, `<think_research_finding>`, `<think_document_ready>` markers in streamed text, and writes files to `.openclaw/discovery/` in the workspace. The `ThinkActivityPanel` in `LifecycleStepRenderer.tsx` shows a data-driven milestone bar (driven by `thinkStep` state) and research finding cards. Falls back to one-shot JSON if markers fail.
+
+**Plan** (`PLAN_SYSTEM_INSTRUCTION`): Structural architect. Reads PRD/TRD from workspace, produces structural decisions (skills, workflow, data schema, API endpoints, dashboard pages, env vars) without generating file content (no inline `skillMd` or `soulContent`). Emits `<plan_skills>`, `<plan_workflow>`, `<plan_data_schema>`, `<plan_api_endpoints>`, `<plan_dashboard_pages>`, `<plan_env_vars>`, `<plan_complete>` markers. Writes `architecture.json` + `PLAN.md` to `.openclaw/plan/`. Falls back to JSON blob if markers fail.
+
+**Build** (`build-orchestrator.ts`): Single v4 orchestrator path (v1 sequential and v2 parallel removed). Execution order: scaffold (deterministic, no LLM) → identity → database → backend+skills (parallel) → dashboard. Manifest write-through for live progress. Post-build validation (`build-validator.ts`) checks plan coverage and file existence. `retryFailedTasks()` for targeted retries. Specialist prompts in `specialist-prompts.ts`.
+
+**Workspace persistence**: Think/Plan outputs survive page refresh. `CoPilotLayout.tsx` rehydrates from workspace on mount via `readWorkspaceFile()`. File layout: `.openclaw/discovery/{research-brief,PRD,TRD}.md`, `.openclaw/plan/{architecture.json,PLAN.md,build-manifest.json}`, `.openclaw/build/validation-report.json`.
+
+**Event pipeline**: Markers in streamed text → `extractThinkMarkers()`/`extractPlanMarkers()` in `builder-agent.ts` → AG-UI custom events → `event-consumer-map.ts` consumers → `copilot-state.ts` Zustand store → UI re-renders. Key state fields: `thinkStep`, `researchFindings[]`, `planStep`, `planActivity[]`, `buildManifest`, `buildValidation`.
 
 3 phases rendered in `agents/create/`:
 
@@ -55,6 +69,7 @@ The live new-agent mode contract is now intentionally narrower: `/agents/create`
 The Co-Pilot path is now purpose-gated per [[SPEC-agent-builder-gated-skill-tool-flow]]. Until both `name` and `description` are filled and the architect has produced a real skill graph, only the `Config` tab and the `purpose` phase stay interactive. Once the graph exists, the skills step shows each generated skill as `native`, `registry_match`, `needs_build`, or `custom_built`, offers an inline `Build Custom Skill` path for missing registry entries, and blocks deploy until every selected required skill is resolved. The embedded Ship-stage `Save & Activate` CTA now reuses that same readiness contract instead of bypassing it, so missing required runtime inputs fail closed before any activation request is sent.
 
 The same Co-Pilot chat now treats AG-UI builder metadata as the live safe draft source. `useAgentChat()` reduces `skill_graph_ready` plus the builder wizard custom events into canonical metadata, debounces `saveAgentDraft()` through the backend-backed agent store, and surfaces `Saving draft…`, `Draft saved`, or `Draft save failed` in the workspace chrome before the operator ever reaches Review. In copilot-mode `ready_for_review` streams, `BuilderAgent` now emits `skill_graph_ready` and wizard metadata before the delayed `TEXT_MESSAGE_END`, which keeps the review handoff metadata authoritative while the transcript reducer work from [[SPEC-agui-protocol-adoption]] is still in flight and avoids a duplicate assistant review-summary turn. The final deploy path reuses `draftAgentId` so the saved draft is promoted to `active` instead of creating a duplicate agent, and only safe metadata is autosaved in this slice. Forge-backed autosave now keeps the persisted `forging` status truthful as well: the metadata PATCH contract accepts `forging`, so resumed `/agents/create?agentId=...` drafts do not fail autosave just because the agent is still in its forge lifecycle. The same metadata layer now also persists `improvements[]` per [[SPEC-agent-improvement-persistence]], letting Review accept or dismiss a Google Ads recommendation and keeping that decision visible after save, Improve Agent reopen, and on the deploy page without reading chat history. Per [[SPEC-architect-structured-config-handoff]], that metadata path now also preserves explicit architect-emitted `tool_connections` and `triggers` objects instead of reducing everything back to keyword hints before draft save and reopen. Approved discovery documents now persist through the saved-agent contract as well per [[SPEC-agent-discovery-doc-persistence]], so the edited PRD/TRD pair survives draft autosave, final save, reopen, and Improve Agent review instead of disappearing with the transient Co-Pilot store. Route entry now also follows [[SPEC-agent-create-session-resume]]: `/agents/create?agentId=...` fetches the backend agent record on mount and merges it with a safe local create-session cache, so refreshes recover forge linkage plus in-progress non-secret builder state instead of reopening blank.
+That resume path now also fails closed when lifecycle markers outrun persisted build data. If a forging agent reopens with `forge_stage=review` or later but still has no persisted `skillGraph`, the create flow no longer paints Think/Plan/Build as completed from that optimistic stage marker alone. The page also stops writing `review` or later back to `forge_stage` until build artifacts exist, which prevents a fast refresh from reopening on a green stepper backed by an empty build record. [[LEARNING-2026-04-03-builder-forge-stage-truthfulness]] documents the root cause.
 The lifecycle stepper now also follows [[SPEC-create-flow-lifecycle-navigation]]. The Co-Pilot store keeps both the currently viewed stage (`devStage`) and the furthest stage already reached (`maxUnlockedDevStage`), so a refresh-resumed Review draft can safely jump back to Build, Plan, or Think for inspection without losing access to Review. The footer `Back` button remains the destructive rewind path: it resets the previous stage back to `idle` and intentionally caps forward progress there.
 The plan-to-build handoff is now stricter as well. When the operator clicks `Approve & Start Build`, the build helper forwards the approved PRD/TRD plus the full `architecturePlan` back into the architect request and explicitly requires `skill_graph.nodes[].skill_md` in the `ready_for_review` payload. That keeps Build aligned with the reviewed plan instead of re-inferring a detached skill list and gives draft autosave/deploy a durable custom-skill artifact to persist.
 The same AG-UI layer now keeps reasoning-step lifecycle truthful as well. `event-consumer-map.ts` custom `reasoning` events and the standard `REASONING_*` events in `useAgentChat()` share one mutable thinking-step id through `reasoning-step.ts`, so the live reasoning list and `TaskProgressFooter` stop animating as soon as reasoning ends instead of leaving the builder stuck on a perpetual `Thinking` state.
@@ -176,7 +191,7 @@ Zustand store with `persist` middleware (stored in `localStorage` as `openclaw-c
 
 ## Gateway Bridge: `/api/openclaw/route.ts`
 
-**What it does:** Bridges the Next.js frontend to the OpenClaw WebSocket gateway. Inputs from client via HTTP POST, outputs SSE stream.
+**What it does:** Bridges the Next.js frontend to the agent's forge sandbox gateway. Inputs from client via HTTP POST, outputs SSE stream.
 
 **Environment variables:**
 - `OPENCLAW_GATEWAY_URL` — WebSocket URL of the gateway
@@ -188,7 +203,11 @@ Zustand store with `persist` middleware (stored in `localStorage` as `openclaw-c
 
 `OPENCLAW_GATEWAY_TOKEN` is still required even when the architect gateway itself was bootstrapped with shared Codex/OpenClaw OAuth. Shared Codex auth affects the gateway's downstream model calls inside the sandbox; it does not replace bridge-to-gateway authentication.
 
-`/api/openclaw` is now an authenticated BFF boundary per [[SPEC-agent-builder-bridge-auth]]. Before any WebSocket handshake or retry loop starts, the route validates the current builder session against the backend `GET /users/me` contract using the access-token cookie and rejects mismatched browser `Origin` headers. Those auth failures return structured JSON (`unauthorized`, `forbidden_origin`, `auth_unavailable`) instead of the SSE gateway stream so the client can treat session expiry separately from gateway outages. In repo-only local development, the bridge now mirrors the existing page-auth bypass narrowly: when `NODE_ENV=development`, the request origin is localhost-only, and the configured backend URL is also localhost-only, the route skips backend `/users/me` validation so the shared bridge can run against the local backend without a production auth service.
+`/api/openclaw` is now an authenticated BFF boundary per [[SPEC-agent-builder-bridge-auth]]. Before any WebSocket handshake or retry loop starts, the route validates the current builder session against the backend `GET /users/me` contract using the access-token cookie and rejects mismatched browser `Origin` headers. Those auth failures return structured JSON (`unauthorized`, `forbidden_origin`, `auth_unavailable`) instead of the SSE gateway stream so the client can treat session expiry separately from gateway outages. In repo-only local development, the bridge now mirrors the existing page-auth bypass narrowly: when `NODE_ENV=development`, the request origin is localhost-only, and the configured backend URL is also localhost-only, the route skips backend `/users/me` validation so forge-backed builder chat can run against the local backend without a production auth service.
+
+Per [[SPEC-openclaw-bridge-forge-required]], the retired shared architect fallback is no longer part of the route contract. Requests that omit `forge_sandbox_id` now fail closed with a typed SSE error (`forge_sandbox_not_ready`) and an explicit `Agent workspace is not ready yet` status instead of opening or retrying the legacy shared `OPENCLAW_GATEWAY_URL` WebSocket.
+
+The same forge-only rule now applies inside the create-flow Test stage per [[SPEC-real-agent-evaluation]]. `runEvalSuite()` and `runSkillTest()` no longer call `sendToArchitectStreaming()` when `agentSandboxId` is missing; they leave evaluations blocked behind an explicit `Container not ready` state until the dedicated agent sandbox exists.
 
 For testability, the route now keeps session validation, approval classification, and final payload parsing in focused helper seams: `lib/openclaw/bridge-auth.ts`, `lib/openclaw/approval-policy.ts`, and `lib/openclaw/gateway-response.ts`. That keeps `app/api/openclaw/route.ts` focused on WebSocket/SSE orchestration while Bun unit tests cover auth failures, approval decisions, and parser edge cases without booting the full bridge route.
 
@@ -200,7 +219,7 @@ When that gateway is retrofitted to shared Codex, the retrofit must also clear a
 3. Server responds `{ ok: true }` → send `chat.send { sessionKey, message, idempotencyKey: request_id }`
 4. Collect streamed `agent` events + wait for `chat { state: "final" }`
 
-The shared architect bridge now emits the same bounded `intermediate` SSE contract as `forge-chat`: as assistant text grows it can surface `identity`, `skill_discovered`, `tool_hint`, `trigger_hint`, and `channel_hint` frames before the terminal `ready_for_review` payload. `sendToArchitectStreaming()` forwards those frames and `BuilderAgent` projects them into progressive Co-Pilot wizard updates, so staged builder movement is now a shared-route contract rather than a forge-only fallback behavior. The scanner lives in `lib/openclaw/intermediate-updates.ts` and is reused across both architect routes to keep the producer logic aligned.
+The forge-backed bridge now emits the same bounded `intermediate` SSE contract as `forge-chat`: as assistant text grows it can surface `identity`, `skill_discovered`, `tool_hint`, `trigger_hint`, and `channel_hint` frames before the terminal `ready_for_review` payload. `sendToArchitectStreaming()` forwards those frames and `BuilderAgent` projects them into progressive Co-Pilot wizard updates, so staged builder movement is part of the primary forge route rather than a shared-bridge special case. The scanner lives in `lib/openclaw/intermediate-updates.ts` and is reused across the builder bridge paths to keep the producer logic aligned.
 
 **Response format normalization** (in `finalizeResponse()`):
 Tries in order:
@@ -227,6 +246,7 @@ HTTP client that calls `/api/openclaw`, consumes SSE, returns `ArchitectResponse
 
 ### Builder Test Contract
 `agent-builder-ui/package.json` now exposes a first-class unit-test contract: `npm test` fans out into isolated Bun buckets (`test:unit:api`, `test:unit:store`, `test:unit:ag-ui`, `test:unit:core`) instead of relying on one giant `bun test` invocation. That split matters because Bun `mock.module(...)` state is process-global in this package, so suites that mock shared modules like `@/lib/openclaw/api` leak into each other when run in one process. Production `typecheck` also excludes `*.test.ts` plus `e2e/**` from the build-time TS program, and Playwright specs that hit non-dev platform routes must seed builder auth cookies plus mock `GET /users/me` before navigation because the auth gate now fails closed outside local development.
+Playwright coverage for the live new-agent path must also enter through the forge init screen. A truthful `/agents/create` browser test now submits the `name` / `description` form, waits for the URL rewrite to `/agents/create?agentId=...`, then asserts the post-provision Co-Pilot shell. Specs that jump straight from blank `/agents/create` into chat, review, or mode-toggle assertions are modeling the retired pre-forge entry contract instead of the current builder flow. See [[LEARNING-2026-04-02-agent-create-e2e-contract]].
 
 ### `lib/openclaw/types.ts`
 All TypeScript interfaces for the architect protocol. See [[005-data-models]].
@@ -338,6 +358,7 @@ The builder is now statically light-only at the app shell. `app/layout.tsx` no l
 - [[LEARNING-2026-03-30-forging-status-draft-autosave-gap]] — forge-backed drafts keep `status: forging`, so backend metadata PATCH validation must accept that state or `/agents/create?agentId=...` autosave fails immediately
 - [[LEARNING-2026-03-26-connect-tools-catalog-contract]] — Connect Tools must use registry-backed cataloging and let researched seeds promote into real supported connector ids
 - [[LEARNING-2026-03-26-trigger-catalog-contract]] — trigger selection, suggestion, and reopen normalization should share one runtime-backed catalog helper
+- [[LEARNING-2026-04-02-agent-create-e2e-contract]] — the live forge-backed create flow takes minutes before Co-Pilot appears, and local first-turn architect runs may fall back from WebSocket to HTTP after the visible `Connecting` state
 - [[LEARNING-2026-03-26-improve-agent-copilot-contract]] — Improve Agent needs an explicit saved-agent Co-Pilot seed and a separate completion branch from new-agent deploy handoff
 - [[LEARNING-2026-03-26-architect-approval-policy]] — the bridge now denies non-allowlisted exec requests immediately and emits structured approval events instead of silently running tools
 - [[LEARNING-2026-03-25-control-plane-audit-gap]] — bridge auth, approval policy, and secret-handling work still need a shared audit trail for architect-side sensitive actions
@@ -407,3 +428,7 @@ The builder is now statically light-only at the app shell. `app/layout.tsx` no l
 - [[LEARNING-2026-03-27-guided-mode-contract-bypass]] — the old Guided mode used to bypass the saved-config/deploy contract, so `/agents/create` now retires that entry point and fails closed to Co-Pilot for new-agent creation
 - [[LEARNING-2026-03-26-agent-improvement-persistence-contract]] — builder recommendations should persist as metadata-only saved agent state so review, reopen, and deploy read one source of truth
 - [[LEARNING-2026-03-26-improve-agent-copilot-gap]] — existing-agent `Build` still enters the legacy advanced-chat shell because `/agents/create` defaults `editingAgentId` sessions to `chat`, bypassing the shipped Co-Pilot workspace entirely
+- [[LEARNING-2026-03-30-build-stage-architecture-plan-handoff]] — build-stage generation must consume the approved architecture plan artifact, not just the original purpose prompt
+- [[LEARNING-2026-03-31-copilot-built-skill-hydration]] — `setSkillGraph()` must derive `builtSkillIds` from nodes with non-empty `skill_md` so the direct forge build path stays truthful
+- [[SPEC-agent-creation-v3-build-pipeline]] — Workspace-first build pipeline replacing the single-prompt markdown-only build with specialist sub-agents producing real code
+- [[SPEC-agent-as-project]] — Agent-as-project lifecycle: persistent repo, branch-based improvements, PR-driven reviews

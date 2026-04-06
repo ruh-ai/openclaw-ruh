@@ -203,6 +203,18 @@ describe("handleAgentResponse", () => {
     expect(fields).toBeTruthy();
     expect((fields as Record<string, unknown>).value).toMatchObject({ name: "my-bot" });
   });
+
+  test("parses embedded architecture_plan in content and routes to plan handler", () => {
+    const response = {
+      type: "agent_response",
+      content: "Working on it...\n```json\n{\"type\":\"architecture_plan\",\"system_name\":\"builder-agent\",\"architecture_plan\":{\"skills\":[],\"workflow\":{\"steps\":[]},\"integrations\":[],\"triggers\":[],\"channels\":[],\"envVars\":[],\"subAgents\":[],\"missionControl\":null},\"content\":\"Plan ready\"}\n```",
+    } as unknown as ArchitectResponse;
+
+    const events = handleAgentResponse(response, baseContext);
+
+    expect(findEvent(events, "architecture_plan_ready")).toBeTruthy();
+    expect(findEvent(events, CustomEventName.WIZARD_SET_PHASE)).toBeUndefined();
+  });
 });
 
 // ─── handleError ────────────────────────────────────────────────────────────

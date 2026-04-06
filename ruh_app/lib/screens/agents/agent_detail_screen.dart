@@ -89,19 +89,26 @@ class _AgentDetailScreenState extends ConsumerState<AgentDetailScreen> {
     final agent = _agent;
     if (agent == null || _isLaunching) return;
 
+    // Gate: check for missing required inputs before launching
+    if (agent.hasMissingRequiredInputs) {
+      context.push('/agents/${agent.id}/setup', extra: agent);
+      return;
+    }
+
     setState(() => _isLaunching = true);
     try {
-      final launchableAgent = agent.sandboxIds.isNotEmpty
-          ? agent
-          : await ref.read(agentServiceProvider).launchAgent(agent.id);
+      final launchableAgent = await ref
+          .read(agentServiceProvider)
+          .launchAgent(agent.id);
       if (!mounted) return;
 
       setState(() {
         _agent = launchableAgent;
       });
       ref.read(selectedAgentProvider.notifier).state = launchableAgent;
-      ref.read(activeSandboxIdProvider.notifier).state =
-          launchableAgent.sandboxIds.isNotEmpty
+      ref
+          .read(activeSandboxIdProvider.notifier)
+          .state = launchableAgent.sandboxIds.isNotEmpty
           ? launchableAgent.sandboxIds.first
           : null;
       context.push('/chat/${launchableAgent.id}');
@@ -232,11 +239,7 @@ class _AgentDetailScreenState extends ConsumerState<AgentDetailScreen> {
                                 ),
                           const SizedBox(width: 8),
                           Text(
-                            _isLaunching
-                                ? (agent.sandboxIds.isEmpty
-                                      ? 'Launching...'
-                                      : 'Opening...')
-                                : 'Open chat',
+                            _isLaunching ? 'Preparing runtime...' : 'Open chat',
                             style: theme.textTheme.labelLarge?.copyWith(
                               color: Colors.white,
                               fontWeight: FontWeight.w600,

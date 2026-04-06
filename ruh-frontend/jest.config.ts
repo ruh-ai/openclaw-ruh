@@ -5,6 +5,7 @@ const createJestConfig = nextJest({ dir: './' });
 
 const config: Config = {
   coverageProvider: 'v8',
+  coverageDirectory: '<rootDir>/coverage',
   testEnvironment: 'jsdom',
   setupFiles: ['<rootDir>/jest.polyfills.js'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
@@ -23,10 +24,10 @@ const config: Config = {
   ],
   coverageThreshold: {
     global: {
-      lines: 60,
-      functions: 60,
+      lines: 70,
+      functions: 70,
       branches: 50,
-      statements: 60,
+      statements: 70,
     },
   },
 };

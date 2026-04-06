@@ -478,6 +478,80 @@ Validation contract:
 - `agentRules`, when present, must be an array of trimmed strings
 - `runtimeInputs`, `toolConnections`, `triggers`, `improvements`, `channels`, and `discoveryDocuments`, when present, must match the structured metadata schema used by the builder Configure step
 
+Customer/runtime surfaces should not use this route. The safe mutation seam for installed runtime agents is `PATCH /api/agents/:id/customer-config`, which intentionally exposes only a smaller runtime-operable field set. See [[SPEC-ruh-app-chat-first-agent-config]] and [[LEARNING-2026-04-02-customer-safe-agent-config-seam]].
+
+### `GET /api/agents/:id/customer-config`
+Return the customer-safe runtime config snapshot for one installed/runtime agent under the caller's active customer org.
+
+**Response:**
+```json
+{
+  "agent": {
+    "id": "agent-123",
+    "name": "Google Ads Manager",
+    "avatar": null,
+    "description": "Optimizes ad spend and reporting.",
+    "status": "active",
+    "sandboxIds": ["sandbox-123"],
+    "createdAt": "2026-04-02T08:00:00.000Z",
+    "updatedAt": "2026-04-02T09:00:00.000Z"
+  },
+  "skills": ["Google Ads", "Reporting"],
+  "agentRules": ["Always explain optimizations plainly"],
+  "runtimeInputs": [
+    {
+      "key": "GOOGLE_ADS_CUSTOMER_ID",
+      "label": "Customer ID",
+      "description": "Primary Google Ads account identifier",
+      "required": true,
+      "source": "architect_requirement",
+      "value": "123-456-7890"
+    }
+  ],
+  "toolConnections": [],
+  "triggers": [],
+  "channels": [],
+  "workspaceMemory": {
+    "instructions": "Use the latest spend report first.",
+    "continuitySummary": "Waiting on April spend targets.",
+    "pinnedPaths": ["reports/april.md"],
+    "updatedAt": "2026-04-02T08:00:00.000Z"
+  },
+  "creationSession": {
+    "summary": "Created from the Google Ads template"
+  }
+}
+```
+
+This route is read-only and returns a redacted runtime snapshot suitable for the Flutter customer app's `Agent Config` tab. Tool/trigger/channel metadata is readable for context, but secrets and builder-only authoring structures remain unavailable.
+
+### `PATCH /api/agents/:id/customer-config`
+Patch the customer-safe editable runtime fields for one installed/runtime agent under the caller's active customer org.
+
+**Body:**
+```json
+{
+  "name": "Revenue Copilot",
+  "description": "Keeps spend efficient and summaries tighter.",
+  "agentRules": ["Always tie optimizations back to ROI"],
+  "runtimeInputValues": [
+    {
+      "key": "GOOGLE_ADS_CUSTOMER_ID",
+      "value": "123-456-7890"
+    }
+  ]
+}
+```
+
+Validation contract:
+- body must be an object containing at least one of `name`, `description`, `agentRules`, or `runtimeInputValues`
+- unknown top-level keys are rejected with `422`
+- `name` and `description`, when present, must be trimmed strings
+- `agentRules`, when present, must be an array of trimmed strings
+- `runtimeInputValues`, when present, must be an array of `{ key, value }` updates and only rewrites the `value` field on existing runtime inputs
+
+This route intentionally excludes builder-owned fields such as `skillGraph`, `workflow`, tool-authoring metadata, or trigger/channel mutation. It exists so customer runtime surfaces can tune an installed agent without widening `PATCH /api/agents/:id` or `PATCH /api/agents/:id/config`.
+
 ### `GET /api/agents/:id/credentials`
 Return saved credential summary for one persisted agent.
 
@@ -619,7 +693,11 @@ Validation contract:
 - absolute paths, traversal, or malformed pinned paths are rejected with `422`
 
 Successful deletes now emit an `agent.delete` control-plane audit event.
-Both workspace-memory routes require auth and creator ownership of the target agent.
+Both workspace-memory routes require auth plus active-context ownership of the target agent:
+- developer-active sessions may read/write creator-owned builder agents
+- customer-active sessions may read/write customer-owned installed runtime agents
+
+The route is shared because workspace memory is a runtime concept rather than a builder-authoring concept. Customer surfaces should pair it with `GET/PATCH /api/agents/:id/customer-config` instead of the builder-only config patch routes. See [[018-ruh-app]] and [[LEARNING-2026-04-02-customer-safe-agent-config-seam]].
 
 ### `POST /api/agents/:id/forge`
 Start or reuse the per-agent forge sandbox flow.
@@ -901,12 +979,14 @@ Errors:
 Successful retrofits now emit a `sandbox.retrofit_shared_codex` audit event and are queryable via the admin audit API below.
 
 ### `GET /api/admin/audit-events`
-Query recent control-plane audit rows. Admin token required.
+Query recent control-plane audit rows. Supports either a JWT-admin session or the backend `OPENCLAW_ADMIN_TOKEN`.
 
 **Headers:**
 ```http
 Authorization: Bearer <OPENCLAW_ADMIN_TOKEN>
 ```
+
+JWT-backed `admin-ui` requests can also call this route with the normal `accessToken` cookie.
 
 **Query params:**
 - `action_type`
@@ -1037,7 +1117,7 @@ Returns sandbox runtime status with explicit drift classification.
 - `container_state: string | null`
 - `container_status: string | null`
 
-`container_running` comes from Docker runtime inspection of `openclaw-<sandbox_id>`, not from PostgreSQL row presence alone. When the gateway responds successfully, its payload is merged into the same response so callers can distinguish a healthy running sandbox from `gateway_unreachable` or `db_only` drift instead of receiving a plain DB fallback.
+`container_running` comes from Docker runtime inspection of `openclaw-<sandbox_id>`, not from PostgreSQL row presence alone. When the gateway responds successfully, its `/health` payload is merged into the same response so callers can distinguish a healthy running sandbox from `gateway_unreachable` or `db_only` drift instead of receiving a plain DB fallback.
 
 ## Related Specs
 
@@ -1125,6 +1205,7 @@ Behavior:
 - sends one `chat.send` request using the sandbox conversation session key when `conversation_id` is provided
 - prefixes the concatenated user content with the same session-workspace rule used by the HTTP chat proxy
 - auto-allows `exec.approval.requested` frames and converts them into structured SSE tool events
+- if the live operator socket does not emit tool frames for the current run, replays `toolCall` / `toolResult` data from the latest OpenClaw session transcript for that same `sessionKey` before sending `[DONE]`
 
 SSE events emitted by this route:
 - `event: status` with `{ phase, message? }`
@@ -1140,7 +1221,7 @@ Persistence behavior:
 - when `conversation_id` is present, the backend appends the latest user turn plus the final assistant text on lifecycle `phase: "end"`
 - if persistence fails after content has already streamed, the route emits `event: persistence_error` before `[DONE]`
 
-This route is specialized for the current `ruh-frontend` chat UI and is not a drop-in OpenAI chat-completions proxy.
+This route is specialized for the current `ruh-frontend` and `ruh_app` chat UIs and is not a drop-in OpenAI chat-completions proxy.
 
 ## Browser / Preview
 
@@ -1163,13 +1244,14 @@ Return whether the optional X11/VNC browser stack is active for a sandbox.
 }
 ```
 
-The backend checks both persisted `vnc_port` metadata and `pgrep -f x11vnc` inside the container.
+The backend checks both persisted `vnc_port` metadata and `pgrep -f x11vnc` inside the container. If the bridge is missing, it retries once after re-running the interactive-runtime service bootstrap (`Xvfb`, `x11vnc`, `websockify`) before returning `active: false`.
 
 ### `GET /api/sandboxes/:sandbox_id/browser/screenshot`
 Return the current X11 framebuffer snapshot.
 
 Behavior:
 - captures `DISPLAY=:99` as JPEG when the browser display exists
+- retries once after re-running the interactive browser services if the first capture fails
 - returns a 1x1 transparent PNG fallback when display capture is unavailable
 - sets `Cache-Control: no-store`
 
@@ -1376,11 +1458,32 @@ See [[015-admin-panel]] for the full admin panel contract.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
+| GET | `/api/admin/overview` | Admin | Control-plane overview payload |
 | GET | `/api/admin/stats` | Admin | Platform stats |
+| GET | `/api/admin/organizations` | Admin | Organization summaries |
+| POST | `/api/admin/organizations` | Admin | Create an org with optional seeded membership for an existing user |
+| GET | `/api/admin/organizations/:id` | Admin | Organization-console payload (summary, members, assets, sessions, audit) |
+| PATCH | `/api/admin/organizations/:id` | Admin | Update org core fields (`name`, `slug`, `plan`, `status`) |
+| POST | `/api/admin/organizations/:id/members` | Admin | Add or upsert an org membership |
+| PATCH | `/api/admin/organizations/:id/members/:membershipId` | Admin | Update org membership role/status |
+| DELETE | `/api/admin/organizations/:id/members/:membershipId` | Admin | Remove an org membership |
+| POST | `/api/admin/organizations/:id/session-context/reset` | Admin | Clear `active_org_id` for sessions currently pointed at the org |
+| DELETE | `/api/admin/organizations/:id/sessions` | Admin | Revoke every refresh session currently pinned to the org |
+| DELETE | `/api/admin/organizations/:id/sessions/:sessionId` | Admin | Revoke one specific refresh session pinned to the org |
+| DELETE | `/api/admin/organizations/:id` | Admin | Delete an archived, empty org |
 | GET | `/api/admin/users` | Admin | User list |
 | PATCH | `/api/admin/users/:id` | Admin | Update user |
 | DELETE | `/api/admin/users/:id` | Admin | Delete user |
-| GET | `/api/admin/agents` | Admin | All agents |
+| GET | `/api/admin/agents` | Admin | All agents with creator/org/runtime context |
+| GET | `/api/admin/runtime` | Admin | Sandbox runtime + reconciliation view for the admin panel |
+| GET | `/api/admin/audit-events` | Admin token or admin session | Filterable audit event feed |
+| GET | `/api/admin/marketplace` | Admin | Marketplace summary, recent listings, and top installs |
+| POST | `/api/admin/sandboxes/:sandbox_id/reconcile/repair` | Admin token or admin session | Safe runtime repair action for reconciliation drift |
+
+Organization admin contract notes:
+- org `status` is now a control-plane field (`active`, `suspended`, `archived`)
+- org-detail payloads include org-pinned refresh sessions so admin-ui can revoke tenant access directly
+- membership writes fail closed on the last active owner: the backend rejects demotion, suspension, or removal when no other active owner remains
 
 ---
 
@@ -1440,6 +1543,9 @@ Current ownership contract:
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — documents the read-only `/api/skills` registry surface and the builder-facing skill-availability contract
 - [[SPEC-agent-webhook-trigger-runtime]] — signed inbound webhook runtime now provisions safe trigger metadata during config apply and exposes the public delivery route
 - [[SPEC-multi-tenant-auth-foundation]] — expands auth endpoints with tenant-aware session context and org switching while preserving local login for testing
+- [[SPEC-admin-control-plane]] — documents the admin overview, organization, runtime, audit, marketplace, and system API expansion
+- [[SPEC-admin-billing-control-plane]] — extends admin APIs toward customer-org billing mirrors, entitlement reads, Stripe sync, and support actions
+- [[SPEC-ruh-app-chat-first-agent-config]] — adds the customer-safe agent-config read/write contract used by the Flutter runtime config tab instead of widening builder-only patch routes
 ### `POST /api/agents/:id/launch`
 Provision and configure a customer runtime agent's sandbox on first open.
 
@@ -1448,3 +1554,34 @@ Auth/ownership contract:
 - requires an active customer-org membership
 - only launches agents whose `created_by` matches the current user inside the active customer org
 - returns the updated agent plus the provisioned `sandboxId`
+
+## Admin billing routes (2026-04-02)
+
+Related: [[SPEC-admin-billing-control-plane]], [[015-admin-panel]], [[005-data-models]]
+
+- `GET /api/admin/billing/ops`
+  - Returns the fleet-level billing queue for customer orgs.
+  - Includes summary counts, per-org billing risk rows, and recent billing events.
+- `GET /api/admin/organizations/:id/billing`
+  - Returns the organization billing console payload.
+  - Includes org identity, billing customer linkage, mirrored subscriptions, mirrored invoices, entitlements, override state, billing events, and computed attention items.
+- `POST /api/admin/organizations/:id/billing/customer`
+  - Upserts the billing-customer linkage for an organization.
+- `POST /api/admin/organizations/:id/billing/subscriptions`
+  - Upserts a mirrored subscription record for admin operations.
+- `POST /api/admin/organizations/:id/billing/invoices`
+  - Upserts a mirrored invoice record for admin operations.
+- `POST /api/admin/organizations/:id/billing/entitlements`
+  - Creates or upserts an org entitlement.
+- `PATCH /api/admin/organizations/:id/billing/entitlements/:entitlementId`
+  - Updates the billing/access state of an existing entitlement.
+- `POST /api/admin/organizations/:id/billing/entitlements/:entitlementId/pause`
+  - Creates a blocking `manual_suspend` override.
+- `POST /api/admin/organizations/:id/billing/entitlements/:entitlementId/resume`
+  - Deactivates blocking overrides and creates a `manual_resume` override.
+- `POST /api/admin/organizations/:id/billing/entitlements/:entitlementId/grant-temporary-access`
+  - Creates a time-bounded `temporary_access` override.
+- `POST /api/admin/organizations/:id/billing/entitlements/:entitlementId/overrides`
+  - Creates a generic entitlement override for admin support workflows.
+
+All billing admin routes are `requireAuth` + `requireRole('admin')` and emit both audit events and billing-event records.

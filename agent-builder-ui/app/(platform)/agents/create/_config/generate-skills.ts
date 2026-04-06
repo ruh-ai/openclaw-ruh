@@ -14,6 +14,10 @@ import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import type {
   ArchitectResponse,
   ArchitecturePlan,
+  ArchitecturePlanSkill,
+  ArchitecturePlanIntegration,
+  ArchitecturePlanTrigger,
+  ArchitecturePlanEnvVar,
   DiscoveryDocuments,
   DiscoveryQuestion,
   SkillGraphNode,
@@ -149,9 +153,36 @@ You have shell access. The workspace lives at: ~/.openclaw/workspace/
 
 Write each file using shell commands. This is required — the files ARE the agent.
 
+For AGENTS.md (write this FIRST — the agent manifest):
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace && cat > ~/.openclaw/workspace/AGENTS.md << 'ENDAGENTS'
+# <Agent Name>
+> <One-line description>
+
+## Skills
+| Skill | Description | Env Vars |
+|-------|-------------|----------|
+| <skill-id> | <what it does> | <required vars> |
+
+## Tools
+| Tool | Type | Purpose |
+|------|------|---------|
+| <tool-id> | mcp/api/cli | <what it connects to> |
+
+## Triggers
+| Trigger | Schedule | Description |
+|---------|----------|-------------|
+| <name> | <cron or webhook> | <when it fires> |
+
+## Workflow
+1. <step>: <skill-id>
+2. <step>: <skill-id>
+ENDAGENTS
+\`\`\`
+
 For SOUL.md:
 \`\`\`bash
-mkdir -p ~/.openclaw/workspace && cat > ~/.openclaw/workspace/SOUL.md << 'ENDSOUL'
+cat > ~/.openclaw/workspace/SOUL.md << 'ENDSOUL'
 # Agent Name
 ...personality, purpose, behaviour rules, workflow...
 ENDSOUL
@@ -221,9 +252,12 @@ ENDTRIGGER
 ## Rules
 
 - DO NOT ask clarification questions — use the provided context.
+- Write AGENTS.md FIRST as the agent manifest, then SOUL.md, then skills, tools, and triggers.
 - Write files FIRST, then return the JSON. The files are the agent.
 - Every skill in the JSON must correspond to a SKILL.md file you wrote.
 - Write real, specific skill content — not placeholder text.
+- BUILD every skill from scratch for THIS agent. Do NOT copy generic skills from any registry or template.
+- A skill registry exists as a searchable reference for inspiration, but every agent must have its own purpose-built skills tailored to its specific use case and requirements.
 
 ${capabilities}
 ${discoverySection}
@@ -489,6 +523,10 @@ export async function generateSkillsFromArchitect(
   architecturePlan?: ArchitecturePlan,
   forgeSandboxId?: string,
 ): Promise<GeneratedSkills> {
+  if (!forgeSandboxId) {
+    throw new Error("Agent sandbox is not available. The agent container must be provisioned and running before build can start.");
+  }
+
   const sessionId = uuidv4();
   const prompt = buildSkillGenerationPrompt(
     agentName,
@@ -500,9 +538,8 @@ export async function generateSkillsFromArchitect(
 
   callbacks?.onStatus?.("Connecting to architect agent...");
 
-  // All paths now use WebSocket via sendToArchitectStreaming.
-  // When forgeSandboxId is set, the route handler connects to the forge
-  // container's gateway via WebSocket — full tool execution support.
+  // sendToArchitectStreaming automatically tries the WS proxy when forgeSandboxId
+  // is present, giving real-time tool events. Falls back to HTTP SSE if WS fails.
   const response = await sendToArchitectStreaming(
     sessionId,
     prompt,
@@ -510,12 +547,16 @@ export async function generateSkillsFromArchitect(
       onStatus: (_phase, message) => {
         callbacks?.onStatus?.(message);
       },
+      onDelta: (text) => {
+        callbacks?.onStatus?.(`Building... ${text.slice(0, 60)}`);
+      },
       onCustomEvent: (name, data) => {
         callbacks?.onCustomEvent?.(name, data);
       },
     },
     {
       forgeSandboxId,
+      mode: "copilot",
     },
   );
 
@@ -669,4 +710,421 @@ export function buildSkillMarkdown(node: SkillGraphNode): string {
   lines.push("");
 
   return lines.join("\n");
+}
+
+// ─── Parallel Build Infrastructure ──────────────────────────────────────────
+
+// ── Concurrency limiter (no external dependency) ────────────────────────────
+
+function createConcurrencyLimiter(concurrency: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        active++;
+        fn()
+          .then(resolve, reject)
+          .finally(() => {
+            active--;
+            if (queue.length > 0) queue.shift()!();
+          });
+      };
+      if (active < concurrency) run();
+      else queue.push(run);
+    });
+  };
+}
+
+// ── Focused prompt: SOUL.md only ────────────────────────────────────────────
+
+export function buildSoulPrompt(
+  agentName: string,
+  agentDescription: string,
+  discoveryDocuments?: DiscoveryDocuments,
+  architecturePlan?: ArchitecturePlan,
+): string {
+  let personalityContext = "";
+  if (discoveryDocuments) {
+    const targetUsers = discoveryDocuments.prd.sections.find((s) => s.heading === "Target Users");
+    const capabilities = discoveryDocuments.prd.sections.find((s) => s.heading === "Core Capabilities");
+    if (targetUsers) personalityContext += `\nTarget Users: ${targetUsers.content}`;
+    if (capabilities) personalityContext += `\nCore Capabilities: ${capabilities.content}`;
+  }
+
+  const skillNames = architecturePlan?.skills.map((s) => `- ${s.name}: ${s.description}`).join("\n") ?? "";
+  const channels = architecturePlan?.channels?.join(", ") ?? "Web chat";
+  const triggers = architecturePlan?.triggers?.map((t) => `${t.type}: ${t.description}`).join(", ") ?? "Manual";
+
+  return `[INSTRUCTION]
+You are writing the SOUL.md file for an OpenClaw agent. This file defines the agent's identity, personality, purpose, and behavior rules. Write ONLY the SOUL.md content — nothing else.
+
+Agent name: ${agentName}
+Agent purpose: ${agentDescription}
+${personalityContext}
+
+Skills this agent will have:
+${skillNames}
+
+Channels: ${channels}
+Triggers: ${triggers}
+
+Write a complete SOUL.md with these sections:
+- Title and one-paragraph identity
+- ## Personality (voice, tone, style)
+- ## Core Purpose (what they exist to do)
+- ## Behaviour Rules (5-8 specific rules)
+- ## Workflow (numbered steps when activated)
+
+Be specific to THIS agent. No generic boilerplate. Write in a way that gives this agent a distinct character.
+
+Return ONLY the markdown content inside a fenced block:
+\`\`\`soul
+# Agent Name
+...
+\`\`\`
+[/INSTRUCTION]`;
+}
+
+// ── Focused prompt: single SKILL.md ─────────────────────────────────────────
+
+interface SkillBuildContext {
+  integrations: ArchitecturePlanIntegration[];
+  triggers: ArchitecturePlanTrigger[];
+  envVars: ArchitecturePlanEnvVar[];
+  allSkillNames: string[];
+}
+
+export function buildSingleSkillPrompt(
+  agentName: string,
+  agentDescription: string,
+  skill: ArchitecturePlanSkill,
+  context: SkillBuildContext,
+): string {
+  const relatedIntegrations = context.integrations
+    .filter((i) => skill.envVars.some((e) => i.envVars.includes(e)))
+    .map((i) => `- ${i.name} (${i.method}): requires ${i.envVars.join(", ")}`)
+    .join("\n");
+
+  const envVarDetails = skill.envVars
+    .map((key) => {
+      const detail = context.envVars.find((e) => e.key === key);
+      return detail ? `- \`${key}\`: ${detail.description}` : `- \`${key}\``;
+    })
+    .join("\n");
+
+  const dependencyList = skill.dependencies.length > 0
+    ? `Dependencies: ${skill.dependencies.join(", ")}`
+    : "";
+
+  return `[INSTRUCTION]
+You are an expert skill author for OpenClaw agents. Write a single, complete SKILL.md file for the skill described below. Be specific and include real implementation steps — not placeholders.
+
+Agent: ${agentName} — ${agentDescription}
+Other skills in this agent: ${context.allSkillNames.join(", ")}
+
+## Skill to build
+
+ID: ${skill.id}
+Name: ${skill.name}
+Description: ${skill.description}
+${dependencyList}
+${skill.externalApi ? `External API: ${skill.externalApi}` : ""}
+
+Environment variables:
+${envVarDetails || "None required"}
+
+${relatedIntegrations ? `Related integrations:\n${relatedIntegrations}` : ""}
+
+## SKILL.md format
+
+Write the SKILL.md with YAML frontmatter and implementation sections:
+
+\`\`\`skill
+---
+name: ${skill.id}
+version: 1.0.0
+description: "${skill.description}"
+allowed-tools:
+  - Bash
+  - WebFetch
+user-invocable: false
+metadata:
+  openclaw:
+    requires:
+      bins: [bash]
+      env: [${skill.envVars.join(", ")}]
+---
+
+# ${skill.name}
+
+## What This Skill Does
+<Specific description of inputs, outputs, and behavior>
+
+## Steps
+### Step 1: <action>
+<Detailed implementation with actual commands or API calls>
+
+### Step 2: <action>
+<Detailed implementation>
+\`\`\`
+
+Rules:
+- Write REAL implementation steps specific to the ${skill.externalApi || "task"} domain
+- Include actual API endpoints, data formats, and error handling
+- Reference the specific environment variables this skill needs
+- Return ONLY the SKILL.md content inside the fenced block above
+[/INSTRUCTION]`;
+}
+
+// ── Response parsing ────────────────────────────────────────────────────────
+
+function extractMarkdownBlock(response: ArchitectResponse): string {
+  const content = response.content ?? "";
+
+  // Try to extract from fenced blocks: ```soul, ```skill, ```markdown, or bare ```
+  const fencePatterns = [
+    /```(?:soul|skill|markdown)\s*\n([\s\S]*?)```/,
+    /```\s*\n([\s\S]*?)```/,
+  ];
+
+  for (const pattern of fencePatterns) {
+    const match = content.match(pattern);
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+
+  // No fenced block — use raw content (strip any leading/trailing noise)
+  return content.trim();
+}
+
+// ── LLM call wrappers ──────────────────────────────────────────────────────
+
+export async function generateSoulContent(
+  agentName: string,
+  agentDescription: string,
+  discoveryDocuments?: DiscoveryDocuments,
+  architecturePlan?: ArchitecturePlan,
+  forgeSandboxId?: string,
+): Promise<string> {
+  const sessionId = uuidv4();
+  const prompt = buildSoulPrompt(agentName, agentDescription, discoveryDocuments, architecturePlan);
+
+  try {
+    const response = await sendToArchitectStreaming(sessionId, prompt, undefined, {
+      forgeSandboxId,
+      mode: "copilot",
+    });
+    const extracted = extractMarkdownBlock(response);
+    if (extracted.length > 50) return extracted;
+    throw new Error("SOUL.md content too short");
+  } catch {
+    // Fallback: build a template SOUL.md from plan data
+    const skillList = architecturePlan?.skills.map((s) => `- **${s.name}**: ${s.description}`).join("\n") ?? "";
+    return `# ${agentName}\n\n${agentDescription}\n\n## Personality\n\nDirect, helpful, and professional.\n\n## Core Purpose\n\n${agentDescription}\n\n## Skills\n\n${skillList}\n\n## Behaviour Rules\n\n- Always validate inputs before acting\n- Report errors clearly\n- Never perform destructive actions without confirmation\n\n## Workflow\n\nWhen activated:\n1. Understand the request\n2. Execute the appropriate skill\n3. Return structured results\n`;
+  }
+}
+
+export async function generateSingleSkill(
+  agentName: string,
+  agentDescription: string,
+  skill: ArchitecturePlanSkill,
+  context: SkillBuildContext,
+  forgeSandboxId?: string,
+): Promise<{ skillId: string; skillMd: string }> {
+  const sessionId = uuidv4();
+  const prompt = buildSingleSkillPrompt(agentName, agentDescription, skill, context);
+
+  try {
+    const response = await sendToArchitectStreaming(sessionId, prompt, undefined, {
+      forgeSandboxId,
+      mode: "copilot",
+    });
+    const extracted = extractMarkdownBlock(response);
+    if (extracted.length > 50) {
+      return { skillId: skill.id, skillMd: extracted };
+    }
+    throw new Error("Skill content too short");
+  } catch {
+    // Fallback: use template builder
+    const fallbackMd = buildSkillMarkdown({
+      skill_id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      source: "custom",
+      status: "generated",
+      depends_on: skill.dependencies,
+      requires_env: skill.envVars,
+      external_api: skill.externalApi,
+    } as SkillGraphNode);
+    return { skillId: skill.id, skillMd: fallbackMd };
+  }
+}
+
+// ── Parallel build orchestrator ─────────────────────────────────────────────
+
+export interface ParallelBuildCallbacks {
+  onSoulComplete?: () => void;
+  onSkillStart?: (skillId: string, index: number, total: number) => void;
+  onSkillComplete?: (skillId: string, success: boolean) => void;
+  onProgress?: (completed: number, total: number, currentSkill: string | null) => void;
+  onStatus?: (message: string) => void;
+}
+
+const PARALLEL_CONCURRENCY = 3;
+
+export async function generateSkillsParallel(
+  agentName: string,
+  agentDescription: string,
+  discoveryDocuments: DiscoveryDocuments | undefined,
+  architecturePlan: ArchitecturePlan,
+  forgeSandboxId: string | undefined,
+  callbacks?: ParallelBuildCallbacks,
+): Promise<GeneratedSkills> {
+  const skills = architecturePlan.skills;
+  const limit = createConcurrencyLimiter(PARALLEL_CONCURRENCY);
+
+  const planContext: SkillBuildContext = {
+    integrations: architecturePlan.integrations,
+    triggers: architecturePlan.triggers,
+    envVars: architecturePlan.envVars,
+    allSkillNames: skills.map((s) => s.name),
+  };
+
+  callbacks?.onStatus?.(`Building SOUL.md + ${skills.length} skills (${PARALLEL_CONCURRENCY} concurrent)...`);
+
+  // Phase 1+2: SOUL.md and skills build concurrently
+  let completed = 0;
+
+  const soulPromise = generateSoulContent(
+    agentName, agentDescription, discoveryDocuments, architecturePlan, forgeSandboxId,
+  ).then((content) => {
+    callbacks?.onSoulComplete?.();
+    return content;
+  });
+
+  const skillResults = await Promise.allSettled(
+    skills.map((skill, index) =>
+      limit(async () => {
+        callbacks?.onSkillStart?.(skill.id, index, skills.length);
+        callbacks?.onProgress?.(completed, skills.length, skill.name);
+        const result = await generateSingleSkill(
+          agentName, agentDescription, skill, planContext, forgeSandboxId,
+        );
+        completed++;
+        callbacks?.onSkillComplete?.(skill.id, true);
+        callbacks?.onProgress?.(completed, skills.length, null);
+        return result;
+      }),
+    ),
+  );
+
+  // Collect successes, identify failures
+  const builtSkills = new Map<string, string>();
+  const failed: Array<{ skill: ArchitecturePlanSkill; index: number }> = [];
+
+  for (let i = 0; i < skillResults.length; i++) {
+    const result = skillResults[i];
+    if (result.status === "fulfilled") {
+      builtSkills.set(result.value.skillId, result.value.skillMd);
+    } else {
+      failed.push({ skill: skills[i], index: i });
+      callbacks?.onSkillComplete?.(skills[i].id, false);
+    }
+  }
+
+  // Retry failed skills once
+  if (failed.length > 0) {
+    callbacks?.onStatus?.(`Retrying ${failed.length} failed skill(s)...`);
+    const retryResults = await Promise.allSettled(
+      failed.map(({ skill }) =>
+        generateSingleSkill(agentName, agentDescription, skill, planContext, forgeSandboxId),
+      ),
+    );
+    for (let i = 0; i < retryResults.length; i++) {
+      const result = retryResults[i];
+      if (result.status === "fulfilled") {
+        builtSkills.set(result.value.skillId, result.value.skillMd);
+        completed++;
+        callbacks?.onSkillComplete?.(failed[i].skill.id, true);
+      } else {
+        // Permanent failure — use template fallback
+        const fallbackMd = buildSkillMarkdown({
+          skill_id: failed[i].skill.id,
+          name: failed[i].skill.name,
+          description: failed[i].skill.description,
+          source: "custom",
+          status: "generated",
+          depends_on: failed[i].skill.dependencies,
+          requires_env: failed[i].skill.envVars,
+          external_api: failed[i].skill.externalApi,
+        } as SkillGraphNode);
+        builtSkills.set(failed[i].skill.id, fallbackMd);
+        completed++;
+        callbacks?.onStatus?.(`${failed[i].skill.name}: using template fallback`);
+      }
+    }
+  }
+
+  // Await SOUL.md
+  const soulContent = await soulPromise;
+
+  callbacks?.onProgress?.(skills.length, skills.length, null);
+  callbacks?.onStatus?.("Writing workspace files...");
+
+  // Phase 3: Write to sandbox via configure-agent
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  if (forgeSandboxId) {
+    const configRes = await fetch(`${API_BASE}/api/sandboxes/${forgeSandboxId}/configure-agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_name: agentName,
+        soul_content: soulContent,
+        skills: skills.map((s) => ({
+          skill_id: s.id,
+          name: s.name,
+          description: s.description,
+          skill_md: builtSkills.get(s.id),
+        })),
+        cron_jobs: architecturePlan.triggers
+          .filter((t) => t.type === "cron")
+          .map((t) => ({ name: t.description, schedule: t.config, message: t.description })),
+        runtime_inputs: [],
+      }),
+    });
+    if (!configRes.ok) {
+      const detail = await configRes.text().catch(() => "");
+      console.warn(`[ParallelBuild] configure-agent failed: ${configRes.status} ${detail}`);
+    }
+  }
+
+  // Phase 4: Assemble result
+  const nodes: SkillGraphNode[] = skills.map((s) => ({
+    skill_id: s.id,
+    name: s.name,
+    description: s.description,
+    source: "custom" as const,
+    status: "generated" as const,
+    depends_on: s.dependencies,
+    requires_env: s.envVars,
+    tool_type: s.toolType,
+    skill_md: builtSkills.get(s.id),
+  }));
+
+  const workflow = normalizeWorkflow(
+    { steps: architecturePlan.workflow.steps.map((s) => s.skillId) },
+    nodes,
+    agentName,
+  );
+
+  return {
+    nodes,
+    workflow,
+    systemName: agentName,
+    agentRules: [],
+  };
 }

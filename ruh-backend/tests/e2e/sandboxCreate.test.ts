@@ -4,7 +4,6 @@
  */
 
 import { describe, expect, test, mock, beforeEach, afterEach } from 'bun:test';
-import { app, request, resetStreams, _streams } from '../helpers/app';
 
 // ── Mock sandboxManager ───────────────────────────────────────────────────────
 
@@ -51,7 +50,17 @@ const mockSaveSandbox = mock(async () => {});
 const mockMarkApproved = mock(async () => {});
 
 mock.module('../../src/sandboxManager', () => ({
+  PREVIEW_PORTS: [],
   createOpenclawSandbox: mockCreateSandbox,
+  reconfigureSandboxLlm: mock(async () => ({})),
+  retrofitSandboxToSharedCodex: mock(async () => ({})),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/store', () => ({
@@ -64,6 +73,13 @@ mock.module('../../src/store', () => ({
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+const {
+  app,
+  request,
+  resetStreams,
+  _streams,
+} = await import('../helpers/app.ts?e2eSandboxCreate');
 
 beforeEach(() => {
   resetStreams();

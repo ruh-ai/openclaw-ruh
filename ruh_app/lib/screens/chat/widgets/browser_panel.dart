@@ -13,12 +13,16 @@ class BrowserPanel extends StatefulWidget {
   final String sandboxId;
   final BrowserWorkspaceState browserState;
   final bool isAgentActive;
+  final BackendClient? client;
+  final Duration pollInterval;
 
   const BrowserPanel({
     super.key,
     required this.sandboxId,
     required this.browserState,
     this.isAgentActive = false,
+    this.client,
+    this.pollInterval = const Duration(milliseconds: 750),
   });
 
   @override
@@ -29,6 +33,8 @@ class _BrowserPanelState extends State<BrowserPanel> {
   Timer? _pollTimer;
   Uint8List? _screenshot;
   String? _error;
+  bool _isRefreshing = false;
+  bool _pollInFlight = false;
 
   @override
   void initState() {
@@ -54,7 +60,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
   void _startPolling() {
     _poll();
     _pollTimer = Timer.periodic(
-      const Duration(milliseconds: 750),
+      widget.pollInterval,
       (_) => _poll(),
     );
   }
@@ -64,10 +70,15 @@ class _BrowserPanelState extends State<BrowserPanel> {
     _pollTimer = null;
   }
 
-  Future<void> _poll() async {
+  Future<void> _poll({bool manual = false}) async {
+    if (_pollInFlight) return;
+    _pollInFlight = true;
+    if (manual && mounted) {
+      setState(() => _isRefreshing = true);
+    }
     try {
-      final client = ApiClient();
-      final response = await client.get<List<int>>(
+      final client = widget.client ?? ApiClient();
+      final response = await client.getBytes(
         '/api/sandboxes/${widget.sandboxId}/browser/screenshot',
       );
       if (!mounted) return;
@@ -88,13 +99,81 @@ class _BrowserPanelState extends State<BrowserPanel> {
           _error = 'Browser not connected';
         });
       }
+    } finally {
+      _pollInFlight = false;
+      if (manual && mounted) {
+        setState(() => _isRefreshing = false);
+      }
     }
+  }
+
+  Future<void> _refreshNow() async {
+    await _poll(manual: true);
+  }
+
+  String get _statusLabel {
+    if (_error != null) return _error!;
+    if (_screenshot != null) return 'Browser connected';
+    return 'Connecting to browser...';
   }
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFF111827),
+            border: Border(bottom: BorderSide(color: Color(0xFF1F2937))),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                _error != null
+                    ? LucideIcons.monitorOff
+                    : LucideIcons.monitor,
+                size: 14,
+                color: _error != null
+                    ? RuhTheme.warning
+                    : RuhTheme.textTertiary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _statusLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: RuhTheme.textSecondary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                onPressed: _isRefreshing ? null : _refreshNow,
+                tooltip: 'Refresh browser',
+                iconSize: 14,
+                constraints: const BoxConstraints(
+                  minWidth: 28,
+                  minHeight: 28,
+                ),
+                padding: EdgeInsets.zero,
+                icon: _isRefreshing
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(
+                        LucideIcons.refreshCw,
+                        size: 14,
+                        color: RuhTheme.textTertiary,
+                      ),
+              ),
+            ],
+          ),
+        ),
         // Screenshot area
         Expanded(
           flex: 3,
@@ -157,11 +236,17 @@ class _BrowserPanelState extends State<BrowserPanel> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _error ?? 'Connecting to browser...',
+                        _statusLabel,
                         style: const TextStyle(
                           color: RuhTheme.textTertiary,
                           fontSize: 13,
                         ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: _refreshNow,
+                        icon: const Icon(LucideIcons.refreshCw, size: 14),
+                        label: const Text('Retry'),
                       ),
                     ],
                   ),

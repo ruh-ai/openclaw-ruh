@@ -1,5 +1,7 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { render, fireEvent, waitFor } from "@testing-library/react";
+import lucideMock from "../test-lucide-mock";
+mock.module("lucide-react", () => lucideMock);
 
 // Mock next/navigation before importing the component
 mock.module("next/navigation", () => ({
@@ -35,22 +37,22 @@ describe("AdminLogin", () => {
     expect(passwordInput).toBeTruthy();
   });
 
-  test("renders sign in button", async () => {
+  test("renders Enter control plane button", async () => {
     const { default: AdminLogin } = await import("../app/(auth)/login/page");
     const { getByText } = render(<AdminLogin />);
-    expect(getByText("Sign In")).toBeTruthy();
+    expect(getByText("Enter control plane")).toBeTruthy();
   });
 
-  test("shows Ruh Admin title", async () => {
+  test("shows Sign in to Ruh Admin title", async () => {
     const { default: AdminLogin } = await import("../app/(auth)/login/page");
     const { getByText } = render(<AdminLogin />);
-    expect(getByText("Ruh Admin")).toBeTruthy();
+    expect(getByText("Sign in to Ruh Admin")).toBeTruthy();
   });
 
-  test("shows Platform Administration subtitle", async () => {
+  test("shows Super admin access badge", async () => {
     const { default: AdminLogin } = await import("../app/(auth)/login/page");
     const { getByText } = render(<AdminLogin />);
-    expect(getByText("Platform Administration")).toBeTruthy();
+    expect(getByText("Super admin access")).toBeTruthy();
   });
 
   test("submit button shows Signing in... when loading", async () => {

@@ -23,8 +23,7 @@ import { useAgentsStore, type SavedAgent } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
 import { DeploymentsPanel } from "./_components/DeploymentsPanel";
 import { ReproduceDialog } from "./create/_components/ReproduceDialog";
-import { Copy } from "lucide-react";
-import { Server } from "lucide-react";
+import { Copy, Server, BarChart2 } from "lucide-react";
 
 function summarizeSandboxHealth(
   sandboxIds: string[],
@@ -90,6 +89,7 @@ function AgentCard({
   onDeploy: (id: string) => void;
   onManageDeployments: (agent: SavedAgent) => void;
 }) {
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const isActive = agent.status === "active";
   const deploymentSummary = summarizeSandboxHealth(agent.sandboxIds ?? [], sandboxHealth);
@@ -276,6 +276,15 @@ function AgentCard({
           <Wrench className="h-3.5 w-3.5" />
           Build
         </button>
+        {isActive && (
+          <button
+            onClick={() => router.push(`/agents/${agent.id}/monitor`)}
+            className="flex items-center justify-center gap-1.5 h-8 w-8 rounded-lg border border-[var(--border-stroke)] bg-[var(--background)] hover:bg-[var(--color-light)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-all"
+            title="Monitor"
+          >
+            <BarChart2 className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -297,6 +306,37 @@ export default function AgentsPage() {
   useEffect(() => {
     fetchAgents();
   }, [fetchAgents]);
+
+  // Reconcile stale "forging" agents — if the container build completed while
+  // the frontend was closed, the backend will detect it and promote to "active".
+  const [hasReconciled, setHasReconciled] = useState(false);
+  useEffect(() => {
+    if (hasReconciled || agents.length === 0) return;
+
+    const forgingAgents = agents.filter((a) => a.status === "forging" && a.forgeSandboxId);
+    if (forgingAgents.length === 0) {
+      setHasReconciled(true);
+      return;
+    }
+
+    setHasReconciled(true);
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+    Promise.all(
+      forgingAgents.map(async (agent) => {
+        try {
+          const res = await fetch(`${API_BASE}/api/agents/${agent.id}/forge/status`, {
+            credentials: "include",
+          });
+          if (!res.ok) return false;
+          const data = await res.json();
+          return data.reconciled === true;
+        } catch { return false; }
+      }),
+    ).then((results) => {
+      if (results.some(Boolean)) fetchAgents();
+    });
+  }, [agents, fetchAgents, hasReconciled]);
 
   const selectionMode = selectedIds.size > 0;
 
@@ -522,7 +562,11 @@ export default function AgentsPage() {
                           <span className="text-2xl">{agent.avatar || "🔨"}</span>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-satoshi-bold text-[var(--text-primary)] truncate">{agent.name || "Untitled Agent"}</p>
-                            <p className="text-[10px] font-satoshi-medium text-[var(--primary)] mt-0.5">Building...</p>
+                            <p className="text-[10px] font-satoshi-medium text-[var(--primary)] mt-0.5">
+                              {agent.forgeStage
+                                ? `${agent.forgeStage.charAt(0).toUpperCase() + agent.forgeStage.slice(1)} stage`
+                                : "Building..."}
+                            </p>
                           </div>
                         </div>
                         {agent.description && (

@@ -13,7 +13,7 @@ export async function requireActiveCustomerOrg(user?: AuthUser) {
   }
 
   const organization = await orgStore.getOrg(user.orgId);
-  if (!organization || organization.kind !== 'customer') {
+  if (!organization || organization.kind !== 'customer' || organization.status !== 'active') {
     throw httpError(403, 'Customer access requires an active customer organization');
   }
 

@@ -24,7 +24,7 @@ const execQueue:  ExecResult[]  = [];
 let defaultSpawn: SpawnResult = [0, ''];
 let defaultExec:  ExecResult  = [true, ''];
 
-mock.module('../../../src/docker', () => ({
+mock.module('../../src/docker', () => ({
   getContainerName: (id: string) => `openclaw-${id}`,
 
   dockerSpawn: async (args: string[]): Promise<SpawnResult> => {
@@ -88,7 +88,8 @@ mock.module('../../../src/docker', () => ({
 // Skip real sleeps (polling loops in createOpenclawSandbox)
 spyOn(Bun, 'sleep').mockImplementation(async () => {});
 
-import { getContainerName, createOpenclawSandbox, reconfigureSandboxLlm } from '../../../src/sandboxManager';
+const sandboxManagerModule = await import('../../src/sandboxManager?unitSandboxManager');
+const { getContainerName, createOpenclawSandbox, reconfigureSandboxLlm } = sandboxManagerModule;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -462,7 +463,7 @@ describe('retrofitContainerToSharedCodex', () => {
     try {
       execQueue.push([true, '/root']);
 
-      const sandboxManager = (await import('../../../src/sandboxManager')) as Record<string, unknown>;
+      const sandboxManager = sandboxManagerModule as Record<string, unknown>;
       const retrofit = sandboxManager.retrofitContainerToSharedCodex as (
         containerName: string,
         opts: Record<string, string>
@@ -493,7 +494,7 @@ describe('retrofitContainerToSharedCodex', () => {
     try {
       execQueue.push([true, '/home/node']);
 
-      const sandboxManager = (await import('../../../src/sandboxManager')) as Record<string, unknown>;
+      const sandboxManager = sandboxManagerModule as Record<string, unknown>;
       const retrofit = sandboxManager.retrofitContainerToSharedCodex as (
         containerName: string,
         opts: Record<string, string>
@@ -530,7 +531,7 @@ describe('retrofitContainerToSharedCodex', () => {
       execQueue.push([true, 'absent']);
       execQueue.push([false, 'probe failed']);
 
-      const sandboxManager = (await import('../../../src/sandboxManager')) as Record<string, unknown>;
+      const sandboxManager = sandboxManagerModule as Record<string, unknown>;
       const retrofit = sandboxManager.retrofitContainerToSharedCodex as (
         containerName: string,
         opts: Record<string, string>
@@ -561,9 +562,13 @@ describe('retrofitContainerToSharedCodex', () => {
       })]);
       execQueue.push([true, '']);
       execQueue.push([true, '']);
+      execQueue.push([true, '']);
+      execQueue.push([true, '']);
+      execQueue.push([true, '']);
+      execQueue.push([true, '']);
       for (let i = 0; i < 10; i++) execQueue.push([false, 'connection refused']);
 
-      const sandboxManager = (await import('../../../src/sandboxManager')) as Record<string, unknown>;
+      const sandboxManager = sandboxManagerModule as Record<string, unknown>;
       const retrofit = sandboxManager.retrofitContainerToSharedCodex as (
         containerName: string,
         opts: Record<string, string>
@@ -593,7 +598,7 @@ describe('retrofitContainerToSharedCodex', () => {
         auth: { probes: { totalTargets: 0, results: [] } },
       })]);
 
-      const sandboxManager = (await import('../../../src/sandboxManager')) as Record<string, unknown>;
+      const sandboxManager = sandboxManagerModule as Record<string, unknown>;
       const retrofit = sandboxManager.retrofitContainerToSharedCodex as (
         containerName: string,
         opts: Record<string, string>
@@ -682,6 +687,10 @@ describe('reconfigureSandboxLlm', () => {
 
   test('throws when gateway does not become healthy after reconfiguration', async () => {
     execQueue.push([true, 'Config updated']);
+    execQueue.push([true, '']);
+    execQueue.push([true, '']);
+    execQueue.push([true, '']);
+    execQueue.push([true, '']);
     execQueue.push([true, '']);
     execQueue.push([true, '']);
     for (let i = 0; i < 10; i++) execQueue.push([false, 'connection refused']);

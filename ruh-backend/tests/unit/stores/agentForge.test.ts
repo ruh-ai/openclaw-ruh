@@ -10,11 +10,11 @@ import { describe, expect, test, mock, beforeEach } from 'bun:test';
 const mockQuery = mock(async (_sql: string, _params?: unknown[]) => ({ rows: [], rowCount: 0 }));
 const mockClient = { query: mockQuery };
 
-mock.module('../../../src/db', () => ({
+mock.module('../../src/db', () => ({
   withConn: async (fn: (c: typeof mockClient) => Promise<unknown>) => fn(mockClient),
 }));
 
-import * as agentStore from '../../../src/agentStore';
+const agentStore = await import('../../src/agentStore?unitAgentForge');
 
 // ─────────────────────────────────────────────────────────────────────────────
 

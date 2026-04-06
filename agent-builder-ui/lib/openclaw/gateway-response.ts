@@ -12,7 +12,10 @@ const KNOWN_RESPONSE_TYPES = new Set([
   "deploy_complete",
   "build_complete",
   "error",
+  "discovery",
+  "architecture_plan",
 ]);
+const KNOWN_RESPONSE_TYPE_LIST = Array.from(KNOWN_RESPONSE_TYPES);
 
 export interface FinalizeGatewayResponseOptions {
   agentId: string;
@@ -49,31 +52,13 @@ export function finalizeGatewayResponse(
   const systemNameFactory =
     options.systemNameFactory ?? (() => `agent-${Date.now().toString(36)}`);
 
-  const normalizedJson = tryParseJson(text);
-  if (normalizedJson) {
-    return finalizeKnownResponse(normalizedJson, text, options, systemNameFactory);
-  }
-
-  const embeddedJsonMatch = text.match(
-    /\{[\s\S]*"type"\s*:\s*"(clarification|ready_for_review|tool_recommendation|agent_response|deploy_complete|error)"[\s\S]*\}/,
-  );
-  if (embeddedJsonMatch) {
-    const normalizedEmbedded = tryParseJson(embeddedJsonMatch[0]);
-    if (normalizedEmbedded) {
-      return finalizeKnownResponse(normalizedEmbedded, text, options, systemNameFactory);
-    }
-  }
-
-  const jsonBlockMatch = text.match(/```json\s*\n([\s\S]*?)```/);
-  if (jsonBlockMatch) {
-    const normalizedJsonBlock = tryParseJson(jsonBlockMatch[1]);
-    if (normalizedJsonBlock) {
-      return finalizeKnownResponse(normalizedJsonBlock, text, options, systemNameFactory);
-    }
+  const extractedJson = extractStructuredResponseFromText(text);
+  if (extractedJson) {
+    return finalizeKnownResponse(extractedJson, text, options, systemNameFactory);
   }
 
   const typedYamlMatch = text.match(
-    /```(ready_for_review|clarification|tool_recommendation|deploy_complete|agent_response)\s*\n([\s\S]*?)```/,
+    /```(ready_for_review|clarification|tool_recommendation|deploy_complete|agent_response|discovery|architecture_plan)\s*\n([\s\S]*?)```/,
   );
   if (typedYamlMatch) {
     const typedYamlResponse = tryParseTypedYamlResponse(
@@ -106,6 +91,100 @@ export function finalizeGatewayResponse(
     agent: options.agentId,
     content: text,
   };
+}
+
+export function extractStructuredResponseFromText(text: string): UnknownRecord | null {
+  const normalizedJson = tryParseJson(text);
+  if (normalizedJson) {
+    const inferred = inferResponseType(normalizedJson);
+    return inferred ? { ...normalizedJson, type: inferred } : normalizedJson;
+  }
+
+  const codeBlockMatches = text.matchAll(
+    /```([a-z_]+)\s*\n([\s\S]*?)```/gi,
+  );
+  for (const match of codeBlockMatches) {
+    const parsed = tryParseJson(match[2] ?? "");
+    if (!parsed) continue;
+
+    const blockType = String(match[1] || "").toLowerCase();
+    const inferredType = inferResponseType(parsed);
+    if (inferredType) {
+      parsed.type = inferredType;
+    }
+    if (blockType === "json" || KNOWN_RESPONSE_TYPES.has(blockType) || typeof parsed.type === "string") {
+      return parsed;
+    }
+  }
+
+  for (const knownType of KNOWN_RESPONSE_TYPE_LIST) {
+    const extracted = tryExtractJsonByType(text, knownType);
+    if (extracted) return extracted;
+  }
+
+  return null;
+}
+
+function inferResponseType(payload: UnknownRecord): string | null {
+  const hasPRD = Boolean(payload.prd);
+  const hasTRD = Boolean(payload.trd);
+  if (hasPRD && hasTRD) {
+    return "discovery";
+  }
+
+  if (payload.architecture_plan) {
+    return "architecture_plan";
+  }
+
+  return null;
+}
+
+function tryExtractJsonByType(text: string, type: string): UnknownRecord | null {
+  const markerPattern = new RegExp(`"type"\\s*:\\s*"${type}"`);
+  const typeMatch = markerPattern.exec(text);
+  if (!typeMatch) return null;
+
+  let startIdx = -1;
+  for (let i = typeMatch.index; i >= 0; i--) {
+    if (text[i] === "{") {
+      startIdx = i;
+      break;
+    }
+  }
+  if (startIdx === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const char = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth++;
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return tryParseJson(text.slice(startIdx, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 export function buildAdapterAvailability(

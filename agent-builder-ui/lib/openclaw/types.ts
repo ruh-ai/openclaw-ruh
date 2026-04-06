@@ -209,6 +209,8 @@ export interface ArchitecturePlanSkill {
   externalApi?: string;
   toolType?: "mcp" | "api" | "cli";
   envVars: string[];
+  /** Full SKILL.md content — when present, Build stage deploys directly without architect. */
+  skillMd?: string;
 }
 
 export interface ArchitecturePlanWorkflow {
@@ -233,6 +235,13 @@ export interface ArchitecturePlanEnvVar {
   key: string;
   description: string;
   required: boolean;
+  label?: string;
+  inputType?: "text" | "boolean" | "number" | "select";
+  defaultValue?: string;
+  example?: string;
+  options?: string[];
+  group?: string;
+  populationStrategy?: "user_required" | "ai_inferred" | "static_default";
 }
 
 export interface SubAgentConfig {
@@ -259,6 +268,48 @@ export interface MissionControlConfig {
   widgets: MissionControlWidget[];
 }
 
+// ── Agent Runtime v2 — Data, API, Dashboard, Vector ─────────────────────────
+
+export interface DataSchemaTable {
+  name: string;
+  description: string;
+  columns: Array<{ name: string; type: string; description?: string }>;
+  indexes?: string[];
+}
+
+export interface DataSchema {
+  tables: DataSchemaTable[];
+}
+
+export interface ApiEndpoint {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  description: string;
+  query?: string;
+  responseShape?: string;
+}
+
+export interface DashboardPageComponent {
+  type: "metric-cards" | "data-table" | "line-chart" | "bar-chart" | "pie-chart" | "activity-feed" | "status-badge" | "empty-state";
+  title?: string;
+  dataSource: string;
+  config?: Record<string, unknown>;
+}
+
+export interface DashboardPage {
+  path: string;
+  title: string;
+  description?: string;
+  components: DashboardPageComponent[];
+}
+
+export interface VectorCollection {
+  name: string;
+  description: string;
+  embeddingTrigger?: string;
+  retrievalUse?: string;
+}
+
 export interface ArchitecturePlan {
   skills: ArchitecturePlanSkill[];
   workflow: ArchitecturePlanWorkflow;
@@ -268,6 +319,59 @@ export interface ArchitecturePlan {
   envVars: ArchitecturePlanEnvVar[];
   subAgents: SubAgentConfig[];
   missionControl: MissionControlConfig | null;
+  /** Full SOUL.md content — when present with skillMd, enables instant deploy. */
+  soulContent?: string;
+  // ── Agent Runtime v2 fields ──
+  dataSchema?: DataSchema | null;
+  apiEndpoints?: ApiEndpoint[];
+  dashboardPages?: DashboardPage[];
+  vectorCollections?: VectorCollection[];
+  /** Dependency graph between plan artifacts (v4). */
+  buildDependencies?: BuildDependency[];
+}
+
+export interface BuildDependency {
+  from: string;
+  to: string;
+  type: "requires" | "consumes";
+}
+
+// ── Build Manifest (v3 pipeline) ────────────────────────────────────────────
+
+export type BuildSpecialist = "scaffold" | "identity" | "database" | "backend" | "skills" | "dashboard";
+
+export interface BuildManifestTask {
+  id: string;
+  specialist: BuildSpecialist;
+  status: "pending" | "running" | "done" | "failed";
+  files: string[];
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+}
+
+export interface BuildManifest {
+  version: 3;
+  agentName: string;
+  createdAt: string;
+  plan: string; // relative path to architecture.json
+  tasks: BuildManifestTask[];
+  completedAt?: string;
+}
+
+// ── Build Validation ────────────────────────────────────────────────────────
+
+export interface ValidationReport {
+  timestamp: string;
+  planSkillsCovered: number;
+  planSkillsMissing: string[];
+  planEndpointsCovered: number;
+  planEndpointsMissing: string[];
+  planPagesCovered: number;
+  planPagesMissing: string[];
+  manifestFilesVerified: number;
+  manifestFilesMissing: string[];
+  overallStatus: "pass" | "warn" | "fail";
 }
 
 // ── Evaluation (Test stage) ─────────────────────────────────────────────────

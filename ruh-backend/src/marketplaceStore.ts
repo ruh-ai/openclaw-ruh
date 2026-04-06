@@ -33,6 +33,7 @@ export interface ListingRecord {
   reviewNotes: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
+  repoUrl: string | null;
   installCount: number;
   avgRating: number;
   publishedAt: string | null;
@@ -101,6 +102,7 @@ function serializeListingRow(row: Record<string, unknown>): ListingRecord {
     reviewNotes: row.review_notes ? String(row.review_notes) : null,
     reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
     reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+    repoUrl: row.repo_url ? String(row.repo_url) : null,
     installCount: Number(row.install_count),
     avgRating: Number(row.avg_rating ?? 0),
     publishedAt: row.published_at ? String(row.published_at) : null,
@@ -189,14 +191,15 @@ export async function createListing(data: {
   iconUrl?: string;
   screenshots?: string[];
   version?: string;
+  repoUrl?: string | null;
 }): Promise<ListingRecord> {
   return withConn(async (client) => {
     const id = uuidv4();
     const slug = slugify(data.title) + "-" + id.slice(0, 8);
     const result = await client.query(
       `INSERT INTO marketplace_listings
-         (id, agent_id, publisher_id, owner_org_id, title, slug, summary, description, category, tags, icon_url, screenshots, version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         (id, agent_id, publisher_id, owner_org_id, title, slug, summary, description, category, tags, icon_url, screenshots, version, repo_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [
         id,
@@ -212,6 +215,7 @@ export async function createListing(data: {
         data.iconUrl ?? null,
         JSON.stringify(data.screenshots ?? []),
         data.version ?? "1.0.0",
+        data.repoUrl ?? null,
       ],
     );
     return serializeListingRow(result.rows[0]);
@@ -225,6 +229,18 @@ export async function getListingById(
     const result = await client.query(
       "SELECT * FROM marketplace_listings WHERE id = $1",
       [id],
+    );
+    return result.rows[0] ? serializeListingRow(result.rows[0]) : null;
+  });
+}
+
+export async function getListingByAgentId(
+  agentId: string,
+): Promise<ListingRecord | null> {
+  return withConn(async (client) => {
+    const result = await client.query(
+      "SELECT * FROM marketplace_listings WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [agentId],
     );
     return result.rows[0] ? serializeListingRow(result.rows[0]) : null;
   });

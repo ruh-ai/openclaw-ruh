@@ -18,15 +18,285 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 
 ## Active Work Log
 
-### TASK-2026-04-03-01: CI pipeline fixes — get all jobs green after test suite merge
+### TASK-2026-04-06-01: Debug agent-builder auth spinner on localhost
 - Status: `completed`
-- Owner: `Claude Sonnet 4.6`
+- Owner: `Codex`
+- Started: `2026-04-06`
+- Updated: `2026-04-06`
+- Areas: `TODOS.md`, `agent-builder-ui/app/(auth)`, `agent-builder-ui/components/auth`, `agent-builder-ui/lib/auth`, `docs/journal/2026-04-06.md`
+- Summary: `Reproduced the localhost:3000 spinner with Playwright and confirmed it was not an auth-form failure. The running Next 15 dev server was serving HTML fallbacks/404s for required `/_next/static/*` assets (`main-app.js`, `app-pages-internals.js`, `app/(auth)/authenticate/page.js`, `app/layout.css`), so the client never hydrated and stayed on the loader. A clean restart of `agent-builder-ui` rebuilt those assets; Playwright then saw 200 responses for the same chunk/CSS URLs and the local login page rendered normally. No code change was needed.`
+- Next step: `If the spinner returns, restart `agent-builder-ui` first and inspect `/_next/static/*` responses before debugging auth logic; the failure signature is HTML/404 returned for JS/CSS asset URLs.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-08: Reset Hermes task state and make built-in schedule disables real
+- Status: `completed`
+- Owner: `Codex`
 - Started: `2026-04-03`
 - Updated: `2026-04-03`
-- Areas: `.github/workflows/ci.yml`, `ruh-backend/scripts/run-z-routes-tests.ts`, `ruh-backend/scripts/run-coverage.ts`, `ruh-backend/package.json`, `ruh-backend/tests/helpers/env.ts`, `ruh-backend/tests/integration/stores/agentVersionCrud.test.ts`, `ruh-backend/tests/integration/stores/costEventCrud.test.ts`, `ruh-backend/tests/integration/stores/executionRecordingCrud.test.ts`, `ruh-backend/tsconfig.json`, `packages/logger/bun.lock`
-- Summary: Six CI failures were diagnosed and fixed after PR #43 (comprehensive test suite) merged. (1) `@ruh/logger` workspace dep needs `bun install` in `packages/logger/` — pino was missing at runtime in all 6 backend jobs. (2) 18 z_routes test files share mock.module state in one `bun test` process — created `scripts/run-z-routes-tests.ts` to run each file in isolation; also updated `run-coverage.ts` to do the same. (3) CI trigger was `push: branches: ["**"]` — changed to `pull_request` only. (4) `db.test.ts` asserts `ssl:{rejectUnauthorized:true}` — needed `NODE_ENV=test` in unit/contract/security/e2e jobs so `isDev=false`. (5) Integration/smoke jobs run against a CI Postgres that has no SSL — `bunfig.toml` preloads `tests/helpers/env.ts` which was defaulting `NODE_ENV` to `test`, forcing SSL on and rejecting all connections; changed default to `development`. (6) `worker_id` columns are UUID but tests used `'worker-1'`; `agent_versions.created_by` is a FK to `users(id)` but tests used `'user-123'` with no matching row — fixed both.
-- Next step: Monitor PR CI run. If all backend jobs are green, merge. If another failure appears, share the job URL for diagnosis.
-- Blockers: None.
+- Areas: `TODOS.md`, `.claude/hermes-backend/src/workers/workerManager.ts`, `.claude/hermes-backend/src/stores/scheduledTaskStore.ts`, `.claude/hermes-backend/src`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Completed the Hermes blank-slate reset. Built-in strategist and analyst timers now honor the persisted schedule enabled flag, so disabling those two schedules actually prevents repopulation after restart. With those planners disabled, Hermes was unloaded cleanly, operational goal/task state plus BullMQ history were cleared, agent counters were reset, the backend was restarted, the empty board/task state held past the normal bootstrap window, and a bounded smoke task proved the pool still executed work before its verification artifact was deleted.`
+- Next step: `When you want autonomous planning back, re-enable the `strategist-assessment` and `analyst-sweep` schedules through `/api/schedules` or Mission Control before asking Hermes to self-generate goals again.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-07: Replace ruh-frontend root with installed-agent workspace index
+- Status: `active`
+- Owner: `frontend`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `ruh-frontend/app`, `ruh-frontend/__tests__`, `ruh-frontend/e2e`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Replacing the old sandbox-management home route in ruh-frontend with a customer workspace index backed by GET /api/marketplace/my/installed-listings. The new root should render active org/user inventory cards, remove SandboxSidebar/SandboxForm from the customer landing route, and hand each installed runtime into a dedicated agent workspace route that launches the agent sandbox before reusing the existing chat/history/mission-control panels.`
+- Next step: `Ship the new root + /agents/[agentId] route, update page/E2E coverage, typecheck ruh-frontend, then sync KB/journal notes with the new customer-web handoff contract.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-07: Rewrite ruh-frontend home workspace coverage
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-frontend/app/page.tsx`, `ruh-frontend/__tests__/pages/HomePage.test.tsx`, `ruh-frontend/__tests__/helpers/fixtures.ts`, `ruh-frontend/__tests__/helpers/server.ts`, `docs/knowledge-base/009-ruh-frontend.md`, `docs/journal/2026-04-02.md`
+- Summary: `Replaced the ruh-frontend home route with a customer workspace backed by "/api/marketplace/my/installed-listings" and rewrote the focused home-page coverage to validate loading, empty, error, and card-navigation behavior against installed listings instead of the legacy sandbox-sidebar shell.`
+- Next step: `Run the focused ruh-frontend Jest file and frontend typecheck, then extend adjacent customer-workspace coverage if the page gains launch actions.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-06: Add create→test forge continuity Playwright regression
+- Status: `active`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `agent-builder-ui/e2e/create-agent.spec.ts`, `docs/journal/2026-04-03.md`
+- Summary: `Adding one focused Playwright regression in the builder create flow that captures the newly created forge sandbox id, drives the Test stage, and proves live eval execution and persisted eval metadata stay pinned to that same forge workspace instead of falling back to a shared architect runtime.`
+- Next step: `Patch the builder E2E mocks to record forge/eval request bodies, add the create→test regression, then run targeted Playwright and builder typecheck.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-05: Convert Hermes goals into a Linear-style goal-task board
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `.claude/hermes-backend/src`, `.claude/hermes-mission-control`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Converted Hermes goals into a real goal-task board. The backend now has dedicated board tasks with required goal linkage, board status, planned vs actual agent ownership, execution-run linkage, and legacy backfill from existing goal-linked task logs; analyst/ingestion/execution flows keep those cards synchronized with live work. Mission Control’s /goals surface is now a lane-based board with inline task creation and agent-attributed cards, and goal detail separates board tasks from execution history.`
+- Next step: `Product follow-up only: if operators want heavier planning interactions later, add drag/drop column moves, task delete/archive actions, and richer per-card execution history drill-down on top of the shipped board model.`
+- Blockers: `None. Live `/api/goals/board`, `/api/board/tasks`, and `/goals` now run against the new board contract after Hermes restart.`
+
+### TASK-2026-04-03-05A: Add forge-only test-stage readiness coverage
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/test-stage-readiness.ts`, `agent-builder-ui/lib/openclaw/eval-runner.ts`, `agent-builder-ui/lib/openclaw/eval-runner.test.ts`, `agent-builder-ui/lib/openclaw/skill-test-runner.ts`, `agent-builder-ui/lib/openclaw/skill-test-runner.test.ts`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/__tests__/lifecycle-stage-logic.test.ts`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/specs/SPEC-real-agent-evaluation.md`, `docs/journal/2026-04-03.md`
+- Summary: `Made the Test stage fail closed when the per-agent sandbox is missing. `runEvalSuite()` now keeps tasks pending with an explicit container-not-ready reason instead of calling the retired shared architect path, `runSkillTest()` skips with the same reason, and the Test UI now surfaces `Container not ready` instead of implying simulated fallback coverage. Added focused Bun regressions for both runners plus lifecycle-stage logic coverage for the new UI state.`
+- Next step: `If broader eval UX cleanup is needed, decide whether the Mock/Live mode controls should stay visible while the container is still provisioning or collapse behind a sandbox-ready gate.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-04: Retire shared `/api/openclaw` gateway fallback
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `agent-builder-ui/app/api/openclaw/route.ts`, `agent-builder-ui/app/api/openclaw/route.test.ts`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/011-key-flows.md`, `docs/knowledge-base/specs/SPEC-openclaw-bridge-forge-required.md`, `docs/journal/2026-04-03.md`
+- Summary: `Retired the last shared-builder fallback at the route boundary. `/api/openclaw` now returns a typed `forge_sandbox_not_ready` SSE error when `forge_sandbox_id` is missing, never opens the legacy shared gateway, and the route test suite now uses forge-backed fixtures for the active bridge path plus a dedicated regression for the retired shared path.`
+- Next step: `None.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-03: Make Codex the default Hermes runtime safely
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `.claude/hermes-backend/src`, `~/Library/LaunchAgents/ai.ruh.hermes-backend.plist`, `~/.hermes-codex-home`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Hermes now starts with Codex as the default runtime on this machine. The backend supports `HERMES_CODEX_HOME` for a Hermes-owned Codex config/auth bundle, the launch agent now exports explicit Claude/Codex binary paths plus `HERMES_AGENT_RUNNER=codex`, and a live reviewer smoke task completed through Hermes under Codex with `HERMES-CODEX-SMOKE`.`
+- Next step: `If you want Codex to use more MCP integrations under Hermes later, add only command-based MCP server entries to ~/.hermes-codex-home/.codex/config.toml or upgrade the Codex CLI to a build that supports your preferred remote MCP config format.`
+- Blockers: `None. Hermes health now reports codex as the selected env-default runner and claude remains available as the fallback option.`
+
+### TASK-2026-04-03-02: Add selectable Hermes runner support for Claude Code and Codex
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `.claude/hermes-backend/src`, `.claude/hermes-mission-control`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Hermes now supports an explicit runtime runner choice between Claude Code and Codex. The backend resolves and validates both runners, exposes a fail-closed `PATCH /api/queue/runner` API plus richer queue health, routes new agent subprocesses through runner-specific adapters, and Mission Control now shows a switcher on Dashboard and Queue so operators can see and change the active runner intentionally.`
+- Next step: `If Codex should become selectable in this environment, fix ~/.codex/config.toml so every MCP server entry used by the installed Codex CLI has a supported local command definition or intentionally bypass Codex validation for a controlled test.`
+- Blockers: `Local Codex execution is still blocked by ~/.codex/config.toml because the installed Codex CLI rejects the current url-only MCP server entries for figma and linear. Claude Code remains the ready runner.`
+
+### TASK-2026-04-03-03: Fix Think→Plan auto-trigger and lifecycle resume for agent-builder chat
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `agent-builder-ui/lib/openclaw/create-session-cache.ts`, `agent-builder-ui/lib/openclaw/create-session-cache.test.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.ts`, `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`, `agent-builder-ui/lib/openclaw/ag-ui/event-consumer-map.ts`, `agent-builder-ui/lib/openclaw/ag-ui/__tests__/event-consumer-map.test.ts`, `agent-builder-ui/app/(platform)/agents/create/page.tsx`, `agent-builder-ui/app/(platform)/agents/create/_components/copilot/CoPilotLayout.tsx`, `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabChat.tsx`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Completed the lifecycle-truthfulness fix in four layers. First, create-session restore now gates stale Think/Plan user-trigger flags so refresh does not auto-post discovery or plan requests. Second, the create-flow reopen path no longer paints Think/Plan/Build green just because an inferred Review/Ship stage exists or an older active agent has a saved skill graph. Third, existing-agent workspace reconciliation no longer treats baseline saved skills as proof that a fresh improvement build already completed. Fourth, `skill_graph_ready` only advances Build to Review when the lifecycle is actually in the Build stage, so architect plan-time graph hydration cannot short-circuit the real build trigger.`
+- Next step: `None.`
+- Blockers: `None.`
+
+### TASK-2026-04-03-01: Restore Hermes goal execution and redesign Mission Control dashboard
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-03`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `.claude/hermes-backend/src`, `.claude/hermes-mission-control`, `docs/knowledge-base`, `docs/journal/2026-04-03.md`
+- Summary: `Fixed the live Hermes orchestration blocker and redesigned the Mission Control dashboard. Hermes backend now resolves the Claude CLI from explicit config or common absolute user-local paths instead of assuming launchd PATH contains \`claude\`, queue health now exposes runner readiness, and queue/job views derive effective status from linked task outcomes so stale rows do not read as active work. Mission Control now uses a stronger shell, surfaces active goals directly on the dashboard, and calls out blocked orchestration state with the exact runner error instead of looking deceptively healthy.`
+- Next step: `Phase 2 can apply the same shell/status language to the Queue, Agents, and Evolution pages and add more operator actions once the core dashboard proves out in daily use.`
+- Blockers: `None. Live verification now shows \`agentRunner.available=true\` with Hermes worker subprocesses active after restart.`
+
+### TASK-2026-04-02-16: Stabilize backend coverage harness and extend low-level store coverage
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-03`
+- Areas: `TODOS.md`, `ruh-backend/tests/contract`, `ruh-backend/tests/e2e`, `ruh-backend/tests/security`, `ruh-backend/tests/unit`, `docs/journal/2026-04-02.md`, `docs/journal/2026-04-03.md`, `docs/knowledge-base/002-backend-overview.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-backend-coverage-stabilization.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-03-backend-coverage-metrics.md`
+- Summary: `Extended the stable backend coverage slice beyond the earlier auth/runtime/client work. After verifying that a direct \`paperclipOrchestrator\` unit suite was too flaky under Bun's shared module-cache model, I removed it and instead shipped durable unit coverage for \`marketplaceRuntime.ts\`, \`openspaceClient.ts\`, \`paperclipClient.ts\`, \`evalResultStore.ts\`, \`agentStore.ts\`, \`docker.ts\` helpers, and the missing update/event branches in \`billingStore.ts\`. The packaged backend suite is now green on execution at 801 passing tests across 77 files. The weighted LCOV gate improved from 50.47% lines / 71.58% functions to 57.31% lines / 77.20% functions. Bun's text reporter now shows 88.78% lines / 88.03% functions, but that value is still only the simple mean of per-file percentages, not the weighted threshold metric enforced by \`scripts/check-coverage.ts\`.`
+- Next step: `Take the next weighted-coverage slice against the largest remaining offenders that can move the denominator materially without fighting Bun's shared mocks: \`marketplaceRoutes.ts\`, \`app.ts\`, \`paperclipOrchestrator.ts\` via existing app-route harnesses rather than a standalone module suite, and \`vncProxy.ts\`. Canonical imports matter for threshold movement; query-string imports are acceptable for isolation, but they should not be the default for modules where LCOV attribution must land on the real source file.`
+- Blockers: `\`cd ruh-backend && bun run test:coverage\` still fails the 80% weighted LCOV threshold because the uncovered denominator remains concentrated in \`src/app.ts\` (12.49% lines), \`src/marketplaceRoutes.ts\` (27.29%), \`src/paperclipOrchestrator.ts\` (7.45%), and \`src/vncProxy.ts\` (4.94%). Bun's cross-file \`mock.module()\` behavior also means standalone suites for shared modules can look fine in isolation while destabilizing the full packaged run.`
+
+### TASK-2026-04-02-15: Refresh agent-builder create-flow test contract
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `agent-builder-ui/e2e`, `docs/knowledge-base/008-agent-builder-ui.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-agent-create-e2e-contract.md`, `docs/journal/2026-04-02.md`
+- Summary: `Removed Playwright cases that still assumed blank \`/agents/create\` opened directly in builder chat, rewrote the main create-flow suite around the real forge-init -> provisioning -> \`?agentId=\` handoff, updated the shared Co-Pilot E2E bootstrap to create an agent through the init form before asserting workspace behavior, and audited the related unit plus backend integration coverage. The builder-side unit suites for mode selection, provisioning log mapping, progressive wizard events, and create-session state remain aligned with the current flow, and the backend create/forge unit + e2e coverage still matches the v2 contract.`
+- Next step: `Run the targeted Playwright suites for \`agent-builder-ui/e2e/create-agent.spec.ts\`, \`agent-builder-ui/e2e/copilot-workspace.spec.ts\`, and the updated navigation path when verification is requested.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-14: Raise backend auth and org store unit coverage
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/userStore.ts`, `ruh-backend/src/orgStore.ts`, `ruh-backend/src/sessionStore.ts`, `ruh-backend/src/organizationMembershipStore.ts`, `ruh-backend/src/authIdentityStore.ts`, `ruh-backend/src/auth/builderAccess.ts`, `ruh-backend/src/auth/customerAccess.ts`, `ruh-backend/tests/unit/authCoreStores.test.ts`, `ruh-backend/tests/unit/organizationMembershipStore.test.ts`, `ruh-backend/tests/unit/authOrgAccess.test.ts`, `ruh-backend/tests/unit/authRoutes.test.ts`, `ruh-backend/tests/unit/auth/middleware.test.ts`, `ruh-backend/tests/unit/auth/passwords.test.ts`, `ruh-backend/tests/contract/authEndpoints.test.ts`, `docs/journal/2026-04-02.md`
+- Summary: Completed a two-part backend auth coverage/stability slice. First, added 37 mock-db unit tests covering `userStore`, `orgStore`, `sessionStore`, `organizationMembershipStore`, `authIdentityStore`, `requireActiveDeveloperOrg`, and `requireActiveCustomerOrg`, lifting the backend coverage artifact from 38.48% to 39.91% lines and from 59.59% to 62.28% functions for that bounded pass. Then stabilized the auth-focused unit/contract suites for combined Bun execution by fixing stale auth contract fixtures, disabling auth rate-limiter interference in the contract harness, switching auth leaf suites to fresh query-string imports so Bun's module cache stops leaking prior mocks into them, and localizing `orgStore` / `organizationMembershipStore` / `bcryptjs` dependency mocks inside the affected tests.
+- Next step: Apply the same isolation pattern to the remaining backend suites that still share cached mocks through `tests/helpers/app` or direct `src/app` imports, starting with `conversationLifecycle`, `agentCreateEndpoints`, `customerAgentConfigApp`, `customerAgentLaunchApp`, and the broader `skillRegistryApp` / route-contract files before rerunning `bun run test:coverage`.
+- Blockers: Repo-wide backend coverage runs are still red, but the root cause is now broader Bun module-cache/mock leakage across many app-backed and store-backed suites rather than the auth-focused files above.
+
+### TASK-2026-04-02-13: Repair Flutter bearer session continuity
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/services/access_token_store.dart`, `ruh_app/lib/services/auth_service.dart`, `ruh_app/integration_test/login_flow_test.dart`, `ruh_app/test/services/access_token_store_test.dart`, `ruh_app/test/services/auth_service_test.dart`, `ruh-backend/src/authRoutes.ts`, `ruh-backend/tests/unit/authRoutes.test.ts`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-flutter-bearer-session-continuity.md`, `docs/journal/2026-04-02.md`
+- Summary: `Repaired the native bearer-session continuity path. `ruh_app` now keeps access + refresh tokens cached in-process so the first authenticated request after login or refresh does not depend on storage readback, restored sessions surface the stored refresh token back into `AuthSession`, backend `/api/auth/me` preserves active-org truth for bearer-token clients by falling back to the access token's `orgId`, and the live macOS login integration test now reflects the current customer shell.`
+- Next step: `User-facing follow-up: retry the Flutter app login against the updated build; if any auth issue remains, capture the exact screen/error after `Workspace` load rather than the old login failure path.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-12: Restructure admin organization detail page into tabbed workspace
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `DESIGN.md`, `admin-ui/app/(admin)/organizations/[id]/page.tsx`, `docs/knowledge-base/015-admin-panel.md`, `docs/journal/2026-04-02.md`
+- Summary: `Rebuilt the organization detail screen at `/organizations/:id` as a tabbed operator workspace instead of one continuous stack. The page now keeps org context and top metrics visible, then separates operations into Overview, People, Assets, Runtime, and Audit tabs while preserving the existing org actions and linking Billing into its own dedicated console.`
+- Next step: `If this workspace needs another depth pass, add tab-level URL state and smaller subfilters inside People and Assets instead of letting the page flatten again.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-11: Add Flutter runtime trust and recovery UX
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/providers/sandbox_health_provider.dart`, `ruh_app/lib/screens/chat/chat_screen.dart`, `ruh_app/lib/screens/chat/tabs/tab_mission_control.dart`, `ruh_app/lib/screens/chat/widgets/runtime_status_banner.dart`, `ruh_app/lib/screens/chat/widgets/browser_panel.dart`, `ruh_app/lib/screens/chat/widgets/code_panel.dart`, `ruh_app/test/providers/sandbox_health_provider_test.dart`, `ruh_app/test/widgets/runtime_status_banner_test.dart`, `ruh_app/test/widgets/code_panel_test.dart`, `ruh_app/test/widgets/browser_panel_test.dart`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/specs/SPEC-ruh-app-runtime-recovery.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-runtime-health-trust-surface.md`, `docs/plans/2026-04-02-ruh-app-runtime-recovery-design.md`, `docs/plans/2026-04-02-ruh-app-runtime-recovery.md`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the first Flutter runtime trust-and-recovery slice without expanding the backend contract. Sandbox health is now polled centrally from `sandboxHealthProvider`, the chat header shows real runtime state instead of unconditional `Online`, degraded or unreachable runtime states render an in-chat recovery banner with refresh/retry/restart actions, Browser and Files tabs now expose manual refresh affordances, and Mission Control’s placeholder quick action was replaced with a real runtime-status refresh action.`
+- Next step: `Product follow-up: add stale/offline-cache indicators for chat history, add auto-refresh heuristics for Files after file tools run, and decide whether Browser needs a richer connection/status model beyond screenshot polling.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-10: Implement admin billing control plane slice 1
+- Status: `active`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/schemaMigrations.ts`, `ruh-backend/src/billingStore.ts`, `ruh-backend/src/billing`, `ruh-backend/src/app.ts`, `ruh-backend/tests`, `admin-ui/app/(admin)/layout.tsx`, `admin-ui/app/(admin)/billing/page.tsx`, `admin-ui/app/(admin)/organizations/[id]/billing/page.tsx`, `docs/knowledge-base`, `docs/journal/2026-04-02.md`
+- Summary: `Implemented the first working admin billing-control-plane slice. Backend now has billing mirror tables, billing store primitives, entitlement access resolution, organization billing detail routes, fleet billing ops, and admin support actions for customer linkage, mirrored subscriptions/invoices, and entitlement pause/resume/temporary-access operations. Admin UI now exposes a branded fleet Billing page plus an organization-specific billing console at `/organizations/:id/billing`.`
+- Next step: `Add route/UI tests for the new billing surfaces, get permission to run targeted verification, and then start the next backend slice: Stripe sync/webhook ingestion plus entitlement-aware customer access gating.`
+- Blockers: `Tests and verification are planned, but repo workflow still requires explicit permission before running them.`
+
+### TASK-2026-04-02-09: Design admin billing control plane for customer-org operations
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/plans`, `docs/knowledge-base/000-INDEX.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/015-admin-panel.md`, `docs/knowledge-base/016-marketplace.md`, `docs/knowledge-base/specs`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the billing-control-plane planning pass. Added [[SPEC-admin-billing-control-plane]], the supporting design doc, KB backlinks/index updates, and a first-slice implementation plan covering the billing schema, store layer, Stripe sync/webhooks, admin billing routes, bounded support actions, and the first org billing tab in admin-ui. The approved operating model is Stripe as financial truth plus Ruh entitlements as product-access truth.`
+- Next step: `Choose the execution mode for implementation, then start with the first slice from `docs/plans/2026-04-02-admin-billing-control-plane.md`: schema, billing store, Stripe sync/webhooks, admin billing routes, and the org billing tab.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-08: Make Flutter agent open flow chat-first and add customer config tab
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh_app/lib/config/routes.dart`, `ruh_app/lib/models/agent.dart`, `ruh_app/lib/models/customer_agent_config.dart`, `ruh_app/lib/screens/agents/agent_list_screen.dart`, `ruh_app/lib/screens/chat/chat_screen.dart`, `ruh_app/lib/screens/chat/widgets/computer_view.dart`, `ruh_app/lib/screens/chat/widgets/agent_config_panel.dart`, `ruh_app/lib/services/agent_service.dart`, `ruh_app/test`, `ruh-backend/src/app.ts`, `ruh-backend/src/validation.ts`, `ruh-backend/tests/unit/customerAgentConfigApp.test.ts`, `ruh-backend/tests/unit/agentWorkspaceMemoryApp.test.ts`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/specs/SPEC-ruh-app-chat-first-agent-config.md`, `docs/knowledge-base/learnings/LEARNING-2026-04-02-customer-safe-agent-config-seam.md`, `docs/plans/2026-04-02-ruh-app-chat-first-agent-config-design.md`, `docs/plans/2026-04-02-ruh-app-chat-first-agent-config.md`, `docs/journal/2026-04-02.md`
+- Summary: `Completed the Flutter chat-first runtime package. Installed workspace cards now launch the agent runtime and navigate straight to `/chat/:id`; `/agents/:id` is kept only as a compatibility entry into chat with the new `Agent Config` tab preselected; and `ComputerView` now exposes Terminal, Files, Browser, and Agent Config in one runtime workspace. The backend now provides customer-safe `GET/PATCH /api/agents/:id/customer-config` for editable runtime fields (`name`, `description`, `agentRules`, runtime input values), while workspace-memory reads/writes resolve through the active org context so the same config panel can update reusable instructions safely from both developer and customer surfaces without widening builder-only config routes.`
+- Next step: `Product polish only: add dirty-state/unsaved-change affordances in `AgentConfigPanel`, then decide whether any additional config fields should become customer-editable through a new explicit contract rather than reusing builder authoring routes.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-07: Deepen admin organization operations and management workflows
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/orgStore.ts`, `ruh-backend/src/organizationMembershipStore.ts`, `ruh-backend/src/sessionStore.ts`, `ruh-backend/src/auth`, `ruh-backend/src/schemaMigrations.ts`, `admin-ui/app/(admin)/organizations`, `admin-ui/app/(admin)/_components`, `admin-ui/lib`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/004-api-reference.md`, `docs/knowledge-base/005-data-models.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/015-admin-panel.md`, `docs/knowledge-base/specs`
+- Summary: `Completed the next org-ops slice for the super-admin panel. Admins can now create organizations from `/organizations`, use quick suspend/reactivate/archive actions from the inventory view, open `/organizations/:id` for the full org console, manage memberships with last-owner protection, revoke org-pinned refresh sessions, reset session context, and govern org lifecycle/status in a way that actually affects builder/customer app access. Browser verification covered org creation, org-detail save, live-session creation via `/api/auth/switch-org`, session revocation, and suspend/reactivate behavior on a disposable org.`
+- Next step: `If org operations need another depth pass, add org-to-org asset transfer flows (agent/listing ownership reassignment), customer-org billing visibility, and org-scoped impersonation/read-only support tooling.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-06: Repair Flutter runtime chat, terminal, browser, and workspace contracts
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/app.ts`, `ruh-backend/src/sandboxManager.ts`, `ruh-backend/tests`, `ruh_app/lib`, `ruh_app/test`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/018-ruh-app.md`, `docs/knowledge-base/003-sandbox-lifecycle.md`, `docs/knowledge-base/004-api-reference.md`
+- Summary: `Completed the runtime contract repair for the Flutter customer chat surface. The backend sandbox status route now probes the real gateway `/health` endpoint, browser status/screenshot routes self-heal the Xvfb/x11vnc/websockify stack before failing, and `/api/sandboxes/:id/chat/ws` now replays structured tool events from the latest OpenClaw session transcript when the operator WebSocket omits live tool frames. On the Flutter side, the browser panel now fetches raw screenshot bytes instead of JSON-decoding image responses, `WorkspaceService` and `CodePanel` stay aligned with the backend `items` payload, and health polling now keys off `gateway_reachable` through `SandboxHealth` instead of stale string heuristics. Live verification against the seeded customer sandbox now shows healthy status, active browser connection, real JPEG screenshots, and tool start/end SSE frames for terminal activity.`
+- Next step: `Product follow-up, not a blocker: improve the customer chat UX beyond contract repair by adding reliable file auto-refresh, richer task/browser history, and a supported browser-target scaffold instead of the current debug-only Flutter web inspection path.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-05: Trace agent-builder creation flow and capture E2E event contract
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `docs/knowledge-base`, `agent-builder-ui`, `ruh-backend/Dockerfile.sandbox`, `.dockerignore`, `ruh-backend/tests/unit/sandboxDockerfile.test.ts`
+- Summary: `Completed a live Playwright trace of the local `/agents/create` flow with the seeded developer fixture and saved the resulting browser/network milestone contract in [[LEARNING-2026-04-02-agent-create-e2e-contract]]. The pass also surfaced a real sandbox-runtime regression: `agent-runtime` native deps were built with install scripts disabled and then overwritten by host `agent-runtime/node_modules` / `.next` artifacts copied into the Docker context. Fixed both constraints, added regression coverage, rebuilt `ruh-sandbox:latest`, and reverified that the live create flow reaches Co-Pilot without the dashboard startup warning.`
+- Next step: `If local architect turns still stall after provisioning, investigate the separate forge WebSocket device-identity auth fallback in `agent-builder-ui/app/api/openclaw/route.ts`; the create-flow runtime contract itself is now documented and the sandbox image/runtime issue is fixed.`
+- Blockers: `None for the create-flow trace. Residual follow-up only: local forge WebSocket auth still falls back to HTTP on the first architect turn.`
+
+### TASK-2026-04-02-04: Fix Flutter customer auth contract for mixed-org sessions
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `ruh-backend/src/auth`, `ruh-backend/tests`, `ruh_app`, `docs/journal/2026-04-02.md`, `docs/knowledge-base/014-auth-system.md`, `docs/knowledge-base/018-ruh-app.md`
+- Summary: `Fixed the remaining Flutter customer-auth bug by correcting the backend auth contract. `ruh-backend` now derives `appAccess` for `/api/auth/login`, `/api/auth/me`, and `/api/auth/switch-org` from the active membership/session org instead of the full membership union. That prevents mixed developer+customer accounts like `prasanjit@ruh.ai` from mounting the customer workspace under a developer-active session and then failing on `/api/marketplace/my/installed-listings` with `403 Customer access requires an active customer organization`. Added unit + contract regressions, updated the journal/KB, and verified the login/switch-org/backend flow directly.`
+- Next step: `If another customer surface reports “authenticated but not authorized,” compare `activeOrganization.kind` and `appAccess.customer` in `/api/auth/me` before changing UI state logic.`
+- Blockers: `None.`
+
+### TASK-2026-04-02-03: Fix Flutter browser startup overlay layout regression
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `ruh_app/lib`, `ruh_app/test`
+- Summary: `Confirmed the browser-targeted failures were split across app code and backend config. The web debug path could hit a startup `_RenderTheater` assertion when the debug-only `DebugOverlay` wrapped the router output, so web runs now skip that overlay. The real browser login error was backend CORS: `ruh-backend` only allowed the React/admin ports, so Flutter web dev origins (`4000`/`4001`) failed auth/bootstrap until those localhost origins were added to the backend env defaults. The KB now documents that browser runs are debug-only because `ruh_app` still has no checked-in `web/` scaffold, and the new Playwright smoke script verifies the Chrome-served login route mounts a Flutter view without startup errors.`
+- Next step: `If browser support becomes a real product target, add a proper `ruh_app/web/` scaffold plus a supported browser E2E path instead of relying on debug-only `flutter run -d chrome` workflows.`
+- Blockers: `Profile/release web builds and Flutter integration tests on web remain unsupported for this app until a real `web/` target is added.`
+
+### TASK-2026-04-02-02: Verify local Flutter app launch and seeded operator login
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/journal/2026-04-02.md`, `ruh_app`, `ruh-backend`
+- Summary: `Brought Docker back up, restarted local Postgres, reseeded the QA account matrix, verified that `prasanjit@ruh.ai` authenticates with the shared local password, started `ruh-backend` on :8000, served `ruh_app` on the web target, and launched the macOS Flutter app for direct inspection.`
+- Next step: `If the user reports UI/runtime issues while inspecting the running app, debug the native login/authenticated-shell flow first; the repo's existing macOS integration login test still fails with a Flutter test-binder error after launch even though the direct auth API works.`
+- Blockers: `No environment blocker remains. Residual issue: `flutter test integration_test/login_flow_test.dart -d macos` currently fails with an unhandled Flutter test-binder error after the app reaches the authenticated shell.`
+
+### TASK-2026-04-02-01: Build a real admin control plane for platform and business operations
+- Status: `completed`
+- Owner: `Codex`
+- Started: `2026-04-02`
+- Updated: `2026-04-02`
+- Areas: `TODOS.md`, `docs/plans`, `docs/knowledge-base`, `docs/journal/2026-04-02.md`, `ruh-backend/src/app.ts`, `admin-ui/app`, `admin-ui/lib`
+- Summary: `Completed the first real admin control-plane slice. `ruh-backend` now exposes richer admin reads for overview, organizations, runtime, marketplace, users, agents, and JWT-accessible audit/runtime operations. `admin-ui` now ships a denser super-admin shell with Overview, People, Organizations, Agents, Runtime, Audit, Marketplace, and System pages. Browser verification covered login, page navigation, org/agent/marketplace filtering, user-status mutation, runtime repair, audit filtering, and mobile navigation visibility.`
+- Next step: `Build drilldowns and action depth on top of this control-plane foundation: org details, agent detail drawers, request-id audit correlation, runtime restart/retrofit actions, marketplace moderation writes, and billing/plan visibility.`
+- Blockers: `None.`
 
 ### TASK-2026-04-01-07: Audit and redesign the Flutter app shell and core customer UX
 - Status: `completed`
@@ -8812,33 +9082,3 @@ For `Analyst-1` and `Worker-1`, a single TODO entry may represent one feature pa
 **Context:** The endpoint exists at `GET /api/sandboxes/:sandbox_id/models` (see `004-api-reference.md`). The fallback is `syntheticModels()` in `ruh-backend/src/utils.ts`. Start here: `agent-builder-ui/app/(platform)/agents/[id]/chat/_components/TabSettings.tsx`.
 
 **Depends on:** Agent Settings Tab PR merged. More useful after TODO-001 is done (gateway will expose real model lists once provider switching works).
-
-### TASK-2026-04-02-01: Drive all CI jobs to green for PR #43 (comprehensive test suite)
-- Status: `active`
-- Owner: `Claude`
-- Started: `2026-04-02`
-- Updated: `2026-04-02`
-- Areas: `.github/workflows/ci.yml`, `ruh-backend/tsconfig.json`, `admin-ui/package.json`, `admin-ui/scripts/run-unit-tests.ts`, `ruh-backend/package.json`, `ruh-backend/scripts/run-coverage.ts`, `.husky/pre-commit`, `.husky/pre-push`, multiple test files
-- Summary: `Continuing from previous session where 688 ruh-backend unit tests were brought to 0 failures. This session is driving the full CI pipeline to green for PR #43. Key fixes made:
-  1. admin-ui mock.module contamination: added run-unit-tests.ts isolation script (same pattern as agent-builder-ui). Multiple test files mock next/navigation differently; running each in separate bun process fixes contamination.
-  2. Backend typecheck failing in CI: removed rootDir from ruh-backend/tsconfig.json. On Linux, TypeScript follows the @ruh/logger workspace symlink to ../packages/logger/src/index.ts which is outside rootDir "./src", causing TS6059. rootDir is irrelevant for tsc --noEmit (bun run build uses bun build, not tsc).
-  3. Backend test mocks: updated e2e and security tests to mock docker module instead of @daytonaio/sdk (backend migrated to direct Docker orchestration).
-  4. Pre-commit/pre-push hooks: updated to use resolved bun path ($HOME/.bun/bin/bun fallback) since bun is not in PATH on this machine.
-  5. db.test.ts: deleted duplicate from tests/unit/utils/ (canonical copy in tests/unit/db/).
-  All fixes committed at 2747eb6 and pushed. CI run #105/106 in progress.`
-- Next step: `Wait for CI run #105/#106 to complete. If typecheck passes, all downstream backend jobs should run. If any fail, check logs and fix. The docker job won't run on this branch (not main/dev), but all other jobs should be green.`
-- Blockers: `CI run #105/#106 still in progress at time of writing.`
-
-#### Update 2026-04-02 (session continuation):
-Further CI fixes after first round of backend tests ran:
-- `packages/logger` (@ruh/logger workspace dep) needs `pino` installed in CI test jobs.
-  bun install only installs the link, not transitive deps of linked packages.
-  Fix: added `bun install --frozen-lockfile` in packages/logger/ to ALL 6 backend CI jobs.
-  Committed packages/logger/bun.lock so frozen-lockfile works.
-- Integration test truncateAll() referenced `webhook_deliveries` but real table is
-  `webhook_delivery_dedupes`. Fixed in tests/helpers/db.ts.
-- Typecheck fix: removed `rootDir: "./src"` from ruh-backend/tsconfig.json since
-  TypeScript on Linux follows @ruh/logger symlink outside rootDir → TS6059.
-- Pre-commit/pre-push hooks: updated to use `$HOME/.bun/bin/bun` fallback path.
-All fixes in commit e9848cd, pushed. CI run in progress.
-- Next step: Wait for CI e9848cd results. If all backend tests pass (688 unit + 74 e2e + 68 contract + 4 security + integration), the PR is ready to merge. Integration tests need postgres service in CI (already configured in workflow).

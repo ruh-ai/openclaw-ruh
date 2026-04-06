@@ -1,21 +1,30 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, mock, beforeEach } from "bun:test";
 
-// The root page calls redirect("/dashboard") which throws a NEXT_REDIRECT error.
-// We mock next/navigation to capture the redirect call.
-const mockRedirect = mock((path: string) => {
-  throw new Error(`NEXT_REDIRECT:${path}`);
-});
+let redirectTarget: string | null = null;
 
 mock.module("next/navigation", () => ({
-  redirect: mockRedirect,
+  redirect: (url: string) => {
+    redirectTarget = url;
+    throw new Error("NEXT_REDIRECT");
+  },
   usePathname: () => "/",
   useRouter: () => ({ push: mock(() => {}) }),
 }));
 
-describe("RootPage", () => {
-  test("redirects to /dashboard", async () => {
-    const { default: Home } = await import("../app/page");
-    expect(() => Home()).toThrow("NEXT_REDIRECT:/dashboard");
-    expect(mockRedirect).toHaveBeenCalledWith("/dashboard");
+// Import once — the mock is already in place
+const { default: Home } = await import("../app/page");
+
+describe("Home (root page)", () => {
+  beforeEach(() => {
+    redirectTarget = null;
+  });
+
+  test("redirects to /dashboard", () => {
+    try {
+      Home();
+    } catch {
+      // redirect throws by design
+    }
+    expect(redirectTarget).toBe("/dashboard");
   });
 });

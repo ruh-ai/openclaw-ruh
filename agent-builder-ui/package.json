@@ -24,7 +24,8 @@
     "test:unit:app-isolated": "bun test app/api/auth.test.ts 'app/(platform)/agents/create/_components/review/ReviewAgent.test.ts' 'app/(platform)/agents/create/_components/copilot/__tests__/lifecycle-stage-logic.test.ts' 'app/(platform)/agents/[id]/chat/_components/tab-workspace-autoswitch.test.ts'",
     "test:unit:app": "bun run scripts/run-unit-tests.ts",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:coverage": "bun test --coverage --coverage-reporter=lcov --path-ignore-patterns 'e2e/**' --path-ignore-patterns 'test-results/**' && bun run scripts/check-coverage.ts"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.48",

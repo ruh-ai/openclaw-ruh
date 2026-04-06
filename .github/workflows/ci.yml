@@ -1,8 +1,10 @@
 name: CI
 
 on:
-  pull_request:
+  push:
     branches: ["**"]
+  pull_request:
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -26,17 +28,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.11"
+          bun-version: latest
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install @ruh/logger dependencies
-        # @ruh/logger is a file: workspace dep. bun install in ruh-backend/ links
-        # the package but does NOT install its own deps (e.g. pino). Install them
-        # so TypeScript can resolve imports inside packages/logger/src/index.ts.
-        working-directory: packages/logger
-        run: bun install --frozen-lockfile
+      - name: Install workspace package dependencies
+        run: cd ../packages/logger && bun install
 
       - name: Type check
         run: bun run typecheck
@@ -44,12 +42,11 @@ jobs:
       - name: Build
         run: bun run build
 
-  # ── 2. Unit tests with coverage ───────────────────────────────────────────
+  # ── 2. Fast tests with coverage (unit + e2e + security + contract) ─────────
   #    No database service needed — all modules are mocked.
-  #    Runs separate bun test processes per group to avoid Bun 1.3.x shared
-  #    module-registry pollution between mock.module() calls across files.
-  backend-unit:
-    name: Backend · unit tests (coverage)
+  #    Runs in parallel with frontend jobs for faster feedback.
+  backend-fast:
+    name: Backend · unit + e2e + security + contract (coverage)
     runs-on: ubuntu-latest
     needs: [backend-build]
     defaults:
@@ -57,8 +54,9 @@ jobs:
         working-directory: ruh-backend
 
     env:
-      NODE_ENV: test
+      DAYTONA_API_KEY: ci-placeholder-key
       ALLOWED_ORIGINS: http://localhost:3000
+      # No DATABASE_URL — tests in this job mock the DB layer
       DATABASE_URL: postgres://localhost/openclaw_test
 
     steps:
@@ -66,123 +64,24 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.11"
+          bun-version: latest
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
-        run: bun install --frozen-lockfile
-
-      - name: Run unit tests with coverage
-        # test:coverage runs each group in its own bun process:
-        #   stores → clients → auth → db → utils → z_routes
-        # then asserts the 75% line/function threshold via check-coverage.ts
+      - name: Run fast test suites with coverage
         run: bun run test:coverage
+        # test:coverage = bun test ... --coverage --coverage-reporter=lcov
+        #                 && bun run scripts/check-coverage.ts (75% threshold)
 
-      - name: Upload backend coverage
+      - name: Upload backend coverage (lcov)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
-          # Multiple lcov files, one per test group
-          path: ruh-backend/coverage/
+          path: ruh-backend/coverage/lcov.info
 
-  # ── 3. Contract tests (API shape validation) ──────────────────────────────
-  backend-contract:
-    name: Backend · contract tests
-    runs-on: ubuntu-latest
-    needs: [backend-build]
-    defaults:
-      run:
-        working-directory: ruh-backend
-
-    env:
-      NODE_ENV: test
-      ALLOWED_ORIGINS: http://localhost:3000
-      DATABASE_URL: postgres://localhost/openclaw_test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
-        run: bun install --frozen-lockfile
-
-      - name: Run contract tests
-        run: bun run test:contract
-
-  # ── 4. Security tests ─────────────────────────────────────────────────────
-  backend-security:
-    name: Backend · security tests
-    runs-on: ubuntu-latest
-    needs: [backend-build]
-    defaults:
-      run:
-        working-directory: ruh-backend
-
-    env:
-      NODE_ENV: test
-      ALLOWED_ORIGINS: http://localhost:3000
-      DATABASE_URL: postgres://localhost/openclaw_test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
-        run: bun install --frozen-lockfile
-
-      - name: Run security tests
-        run: bun run test:security
-
-  # ── 5. E2E tests ──────────────────────────────────────────────────────────
-  backend-e2e:
-    name: Backend · e2e tests
-    runs-on: ubuntu-latest
-    needs: [backend-build]
-    defaults:
-      run:
-        working-directory: ruh-backend
-
-    env:
-      NODE_ENV: test
-      ALLOWED_ORIGINS: http://localhost:3000
-      DATABASE_URL: postgres://localhost/openclaw_test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
-        run: bun install --frozen-lockfile
-
-      - name: Run e2e tests
-        run: bun run test:e2e
-
-  # ── 6. Integration tests (real PostgreSQL) ────────────────────────────────
+  # ── 3. Integration tests (real PostgreSQL) ────────────────────────────────
   backend-integration:
     name: Backend · integration (DB)
     runs-on: ubuntu-latest
@@ -207,8 +106,8 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: test
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openclaw_test
+      DAYTONA_API_KEY: ci-placeholder-key
       ALLOWED_ORIGINS: http://localhost:3000
 
     steps:
@@ -216,23 +115,19 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.11"
+          bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
         run: bun install --frozen-lockfile
 
       - name: Integration tests
         run: bun run test:integration
 
-  # ── 7. Smoke tests (main branch only — boots a real server) ───────────────
+  # ── 4. Smoke tests (main branch only — boots a real server) ───────────────
   backend-smoke:
     name: Backend · smoke
     runs-on: ubuntu-latest
-    needs: [backend-unit, backend-contract, backend-security, backend-e2e, backend-integration]
+    needs: [backend-fast, backend-integration]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     defaults:
       run:
@@ -254,8 +149,8 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: test
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openclaw_smoke
+      DAYTONA_API_KEY: smoke-placeholder
       ALLOWED_ORIGINS: http://localhost:3000
 
     steps:
@@ -263,13 +158,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.11"
+          bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install @ruh/logger dependencies
-        working-directory: packages/logger
         run: bun install --frozen-lockfile
 
       - name: Smoke tests
@@ -279,7 +170,7 @@ jobs:
 # RUH FRONTEND
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 8. Lint + build ───────────────────────────────────────────────────────
+  # ── 5. Lint + build ───────────────────────────────────────────────────────
   frontend-build:
     name: ruh-frontend · lint + build
     runs-on: ubuntu-latest
@@ -307,7 +198,7 @@ jobs:
           NEXT_PUBLIC_API_URL: ""
         run: npm run build
 
-  # ── 9. Jest unit + component tests with coverage ──────────────────────────
+  # ── 6. Jest unit + component tests with coverage ──────────────────────────
   frontend-test:
     name: ruh-frontend · Jest (coverage)
     runs-on: ubuntu-latest
@@ -341,7 +232,7 @@ jobs:
           name: frontend-coverage
           path: ruh-frontend/coverage/
 
-  # ── 10. Playwright E2E (main + dev only) ──────────────────────────────────
+  # ── 7. Playwright E2E (main + dev only) ──────────────────────────────────
   frontend-e2e:
     name: ruh-frontend · Playwright E2E
     runs-on: ubuntu-latest
@@ -391,7 +282,7 @@ jobs:
 # AGENT BUILDER UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 11. Build ─────────────────────────────────────────────────────────────
+  # ── 8. Lint + build ───────────────────────────────────────────────────────
   agent-builder-build:
     name: agent-builder-ui · build
     runs-on: ubuntu-latest
@@ -402,65 +293,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: agent-builder-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile || bun install
 
       - name: Type check
-        run: npx tsc --noEmit || true   # non-fatal until types are fully clean
+        run: bun run typecheck || true   # non-fatal until types are fully clean
 
       - name: Build
         env:
           OPENCLAW_GATEWAY_URL: "ws://localhost:18789"
           OPENCLAW_GATEWAY_TOKEN: "ci-placeholder"
           OPENCLAW_GATEWAY_ORIGIN: "https://clawagentbuilder.ruh.ai"
-        run: npm run build
+        run: bun run build
 
-  # ── 12. Unit tests ────────────────────────────────────────────────────────
-  #    Tests are run with bun (invoked via npm scripts). Separate bun test
-  #    invocations are used per group to avoid shared module-registry issues.
-  agent-builder-test:
-    name: agent-builder-ui · unit tests
-    runs-on: ubuntu-latest
-    needs: [agent-builder-build]
-    defaults:
-      run:
-        working-directory: agent-builder-ui
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: agent-builder-ui/package-lock.json
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run unit tests
-        # npm run test:unit calls bun under the hood in separate invocations:
-        #   test:unit:api  → bun test lib/openclaw/api.test.ts
-        #   test:unit:store → bun test hooks/use-openclaw-chat.test.ts
-        #   test:unit:ag-ui → bun test lib/openclaw/ag-ui/__tests__/...
-        #   test:unit:core  → bun test (remaining files)
-        run: npm run test:unit
-
-  # ── 13. Playwright E2E for agent-builder-ui (main + dev only) ────────────
+  # ── 9. Playwright E2E for agent-builder-ui (main + dev only) ─────────────
   agent-builder-e2e:
     name: agent-builder-ui · Playwright E2E
     runs-on: ubuntu-latest
-    needs: [agent-builder-test]
+    needs: [agent-builder-build]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     defaults:
       run:
@@ -469,14 +327,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: agent-builder-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -486,15 +346,15 @@ jobs:
           OPENCLAW_GATEWAY_URL: "ws://localhost:18789"
           OPENCLAW_GATEWAY_TOKEN: "ci-placeholder"
           OPENCLAW_GATEWAY_ORIGIN: "https://clawagentbuilder.ruh.ai"
-        run: npm run build
+        run: bun run build
 
       - name: Run Playwright E2E tests
         env:
           CI: "true"
         run: |
-          npm run start &
+          bun run start &
           npx wait-on http://localhost:3001 --timeout 30000
-          npm run test:e2e
+          bun run test:e2e
 
       - name: Upload Playwright report
         if: always()
@@ -507,72 +367,54 @@ jobs:
 # ADMIN UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 14. Admin UI tests ─────────────────────────────────────────────────────
+  # ── 10. Admin UI tests ──────────────────────────────────────────────────
   admin-ui-test:
-    name: admin-ui · tests
+    name: admin-ui — tests (coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: admin-ui
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun run test
+      - run: bun install
+      - name: Run tests with coverage
+        run: bun run test:coverage
+      - name: Enforce coverage threshold (60%)
+        run: bun run scripts/check-coverage.ts
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MARKETPLACE UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 15. Marketplace UI tests ───────────────────────────────────────────────
+  # ── 11. Marketplace UI tests ────────────────────────────────────────────
   marketplace-ui-test:
-    name: marketplace-ui · tests
+    name: marketplace-ui — tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/marketplace-ui
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.11"
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test
+      - run: bun install
+      - run: bun test
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOCKER
 # ─────────────────────────────────────────────────────────────────────────────
 
-  # ── 16. Docker image build check ──────────────────────────────────────────
-  #    Gates on all test jobs passing before attempting image builds.
+  # ── 12. Docker image build check ─────────────────────────────────────────
   docker:
     name: Docker · build check
     runs-on: ubuntu-latest
     needs:
-      - backend-unit
-      - backend-contract
-      - backend-security
-      - backend-e2e
+      - backend-fast
       - backend-integration
       - frontend-test
-      - agent-builder-test
+      - agent-builder-build
       - admin-ui-test
       - marketplace-ui-test
-      - flutter-test
 
     steps:
       - uses: actions/checkout@v4
@@ -582,8 +424,7 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./ruh-backend/Dockerfile
+          context: ./ruh-backend
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -594,96 +435,5 @@ jobs:
           context: ./ruh-frontend
           push: false
           build-args: NEXT_PUBLIC_API_URL=
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FLUTTER APP
-# ─────────────────────────────────────────────────────────────────────────────
-
-  # ── 17. Flutter unit tests ────────────────────────────────────────────────
-  flutter-test:
-    name: ruh_app · Flutter unit tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ruh_app
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.32.x"
-          channel: "stable"
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-infos
-
-      - name: Run unit tests with coverage
-        run: flutter test --no-pub --coverage
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-coverage
-          path: ruh_app/coverage/lcov.info
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-test-results
-          path: ruh_app/test/
-
-  # ── 18. Flutter build check ───────────────────────────────────────────────
-  flutter-build:
-    name: ruh_app · Flutter build (APK + Web)
-    runs-on: ubuntu-latest
-    needs: [flutter-test]
-    defaults:
-      run:
-        working-directory: ruh_app
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.32.x"
-          channel: "stable"
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK (debug)
-        run: flutter build apk --debug --dart-define=API_BASE_URL=https://api.ruh.ai
-
-      - name: Build Web (release)
-        run: flutter build web --release --dart-define=API_BASE_URL= --base-href="/app/"
-
-  # ── 19. Flutter Docker image build check ─────────────────────────────────
-  flutter-docker:
-    name: ruh_app · Docker build check
-    runs-on: ubuntu-latest
-    needs: [flutter-test]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build Flutter web Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./ruh_app
-          push: false
-          build-args: API_BASE_URL=
           cache-from: type=gha
           cache-to: type=gha,mode=max

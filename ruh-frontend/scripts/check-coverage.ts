@@ -1,0 +1,59 @@
+#!/usr/bin/env node
+/**
+ * Coverage threshold enforcer for ruh-frontend.
+ * Reads coverage/lcov.info and fails (exit 1) if below thresholds.
+ *
+ * Usage: node scripts/check-coverage.ts
+ *   (or via ts-node / tsx)
+ */
+
+import { readFileSync } from 'fs';
+
+const LINE_THRESHOLD = 0.70;   // 70%
+const FUNC_THRESHOLD = 0.70;   // 70%
+
+const lcovPath = './coverage/lcov.info';
+
+let lcov: string;
+try {
+  lcov = readFileSync(lcovPath, 'utf8');
+} catch {
+  console.error(`[coverage] Could not read ${lcovPath}. Run 'npm test -- --coverage' first.`);
+  process.exit(1);
+}
+
+let linesHit = 0, linesFound = 0, fnHit = 0, fnFound = 0;
+
+for (const line of lcov.split('\n')) {
+  if (line.startsWith('LH:')) linesHit += parseInt(line.slice(3));
+  if (line.startsWith('LF:')) linesFound += parseInt(line.slice(3));
+  if (line.startsWith('FNH:')) fnHit += parseInt(line.slice(4));
+  if (line.startsWith('FNF:')) fnFound += parseInt(line.slice(4));
+}
+
+const linePct = linesFound > 0 ? linesHit / linesFound : 0;
+const fnPct = fnFound > 0 ? fnHit / fnFound : 0;
+
+const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+
+console.log(`[coverage] ruh-frontend`);
+console.log(`[coverage] Lines:     ${pct(linePct)} (${linesHit}/${linesFound})`);
+console.log(`[coverage] Functions: ${pct(fnPct)}  (${fnHit}/${fnFound})`);
+
+let failed = false;
+
+if (linePct < LINE_THRESHOLD) {
+  console.error(`[coverage] ✗ Lines below threshold: ${pct(linePct)} < ${pct(LINE_THRESHOLD)}`);
+  failed = true;
+} else {
+  console.log(`[coverage] ✓ Lines above threshold: ${pct(linePct)} >= ${pct(LINE_THRESHOLD)}`);
+}
+
+if (fnPct < FUNC_THRESHOLD) {
+  console.error(`[coverage] ✗ Functions below threshold: ${pct(fnPct)} < ${pct(FUNC_THRESHOLD)}`);
+  failed = true;
+} else {
+  console.log(`[coverage] ✓ Functions above threshold: ${pct(fnPct)} >= ${pct(FUNC_THRESHOLD)}`);
+}
+
+if (failed) process.exit(1);

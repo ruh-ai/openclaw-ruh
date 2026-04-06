@@ -1,3 +1,4 @@
+import '../config/api_config.dart';
 import 'api_client.dart';
 import 'logger.dart';
 
@@ -13,7 +14,7 @@ class WorkspaceFileEntry {
     return WorkspaceFileEntry(
       path: json['path'] as String? ?? '',
       size: (json['size'] as num?)?.toInt(),
-      modified: json['modified'] as String?,
+      modified: json['modified'] as String? ?? json['modified_at'] as String?,
     );
   }
 
@@ -66,7 +67,10 @@ class WorkspaceService {
       final data = response.data;
       if (data == null) return [];
 
-      final files = data['files'] as List<dynamic>? ?? [];
+      final files =
+          data['items'] as List<dynamic>? ??
+          data['files'] as List<dynamic>? ??
+          [];
 
       // The backend may return strings or objects — handle both.
       return files.map((e) {
@@ -110,7 +114,35 @@ class WorkspaceService {
       final data = response.data;
       if (data == null) return [];
 
-      final ports = data['ports'] as List<dynamic>? ?? [];
+      final activePorts = ((data['active'] as List<dynamic>?) ?? const [])
+          .map((value) => int.tryParse(value.toString()))
+          .whereType<int>()
+          .toSet();
+      final portMap = data['ports'];
+      if (portMap is Map) {
+        final ports = <PreviewPort>[];
+        for (final entry in portMap.entries) {
+          final containerPort = int.tryParse(entry.key.toString());
+          final hostPort = int.tryParse(entry.value.toString());
+          if (containerPort == null || hostPort == null) {
+            continue;
+          }
+          ports.add(
+            PreviewPort(
+              port: containerPort,
+              label: activePorts.contains(containerPort)
+                  ? 'Live preview'
+                  : 'Port exposed',
+              url:
+                  '${ApiConfig.baseUrl}/api/sandboxes/$sandboxId/preview/proxy/$containerPort/',
+            ),
+          );
+        }
+        ports.sort((a, b) => a.port.compareTo(b.port));
+        return ports;
+      }
+
+      final ports = portMap as List<dynamic>? ?? [];
       return ports
           .map((e) => PreviewPort.fromJson(e as Map<String, dynamic>))
           .toList();

@@ -5,10 +5,11 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../config/responsive.dart';
 import '../config/theme.dart';
+import '../models/agent.dart';
 import '../models/auth_session.dart';
 import '../providers/auth_provider.dart';
-import '../screens/agents/agent_detail_screen.dart';
 import '../screens/agents/agent_list_screen.dart';
+import '../screens/agents/agent_setup_screen.dart';
 import '../screens/auth/auth_loading_screen.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/chat/chat_screen.dart';
@@ -74,7 +75,29 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final agentId = state.pathParameters['agentId']!;
               return CustomTransitionPage(
                 key: state.pageKey,
-                child: AgentDetailScreen(agentId: agentId),
+                child: ChatScreen(
+                  agentId: agentId,
+                  initialComputerTab: 'config',
+                ),
+                transitionsBuilder: _slideTransition,
+              );
+            },
+          ),
+          GoRoute(
+            path: '/agents/:agentId/setup',
+            pageBuilder: (context, state) {
+              final agent = state.extra as Agent?;
+              if (agent == null) {
+                // Fallback: redirect to agent list if no agent passed
+                return CustomTransitionPage(
+                  key: state.pageKey,
+                  child: const AgentListScreen(),
+                  transitionsBuilder: _fadeTransition,
+                );
+              }
+              return CustomTransitionPage(
+                key: state.pageKey,
+                child: AgentSetupScreen(agent: agent),
                 transitionsBuilder: _slideTransition,
               );
             },

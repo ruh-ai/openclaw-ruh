@@ -18,6 +18,7 @@ import { CustomEventName } from "./types";
 import { parseWizardDirectives } from "../wizard-directive-parser";
 import { detectChannelHintIds } from "../builder-hint-normalization";
 import { tracer } from "./event-tracer";
+import { extractStructuredResponseFromText } from "../gateway-response";
 
 // ─── Context passed to every handler ────────────────────────────────────────
 
@@ -315,8 +316,33 @@ function handleClarification(response: ArchitectResponse, ctx: EventContext): Ba
 }
 
 function handleAgentResponse(response: ArchitectResponse, ctx: EventContext): BaseEvent[] {
-  const events: BaseEvent[] = [];
   const content = response.content || "I'm processing your request...";
+
+  // Failsafe: the server-side parser may fail to extract embedded structured
+  // JSON (discovery / architecture_plan) from the agent's text response,
+  // returning type: "agent_response" with the raw text in content. Try to
+  // re-parse it here so the Think/Plan stages still work.
+  const embeddedResponse = extractStructuredResponseFromText(content);
+  if (embeddedResponse && typeof embeddedResponse.type === "string") {
+    const fakeResponse = {
+      ...embeddedResponse,
+      content,
+      type: embeddedResponse.type,
+    } as unknown as ArchitectResponse;
+    if (embeddedResponse.type === "discovery" && embeddedResponse.prd && embeddedResponse.trd) {
+      tracer.emit("builder-agent", "CUSTOM", "discovery_documents", "agent_response-failsafe");
+      return handleDiscovery(fakeResponse, ctx);
+    }
+    if (embeddedResponse.type === "architecture_plan" && embeddedResponse.architecture_plan) {
+      tracer.emit("builder-agent", "CUSTOM", "architecture_plan_ready", "agent_response-failsafe");
+      return handleArchitecturePlan(fakeResponse, ctx);
+    }
+    if (embeddedResponse.type === "ready_for_review" && embeddedResponse.skill_graph) {
+      return handleReadyForReview({ ...fakeResponse, skill_graph: embeddedResponse.skill_graph } as unknown as ArchitectResponse, ctx);
+    }
+  }
+
+  const events: BaseEvent[] = [];
 
   if (!ctx.isCopilot || !ctx.hasStreamedDeltas) {
     events.push(...textMessageEvents(ctx.messageId, content));

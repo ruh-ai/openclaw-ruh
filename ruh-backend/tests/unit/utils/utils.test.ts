@@ -36,7 +36,7 @@ function makeRecord(overrides: Partial<SandboxRecord> = {}): SandboxRecord {
     standard_url: null,
     preview_token: null,
     gateway_token: null,
-    gateway_port: 18789,
+    gateway_port: 0,
     ssh_command: '',
     created_at: new Date().toISOString(),
     approved: false,
@@ -59,10 +59,22 @@ describe('gatewayUrlAndHeaders', () => {
     });
     const [url, headers] = gatewayUrlAndHeaders(rec, '/v1/models');
     expect(url).toBe('https://signed.example.com/v1/models');
-    // signed_url present → no preview token header
+    // signed_url present → no preview token header and no Authorization header
     expect(headers['X-Daytona-Preview-Token']).toBeUndefined();
-    // gateway token still set
+    expect(headers['Authorization']).toBeUndefined();
+  });
+
+  test('prefers the local mapped gateway port when available', () => {
+    const rec = makeRecord({
+      gateway_port: 49960,
+      signed_url: 'https://signed.example.com/',
+      standard_url: 'https://standard.example.com',
+      gateway_token: 'tok123',
+    });
+    const [url, headers] = gatewayUrlAndHeaders(rec, '/api/status');
+    expect(url).toBe('http://127.0.0.1:49960/api/status');
     expect(headers['Authorization']).toBe('Bearer tok123');
+    expect(headers['X-Daytona-Preview-Token']).toBeUndefined();
   });
 
   test('uses standard_url when no signed_url', () => {
@@ -96,6 +108,33 @@ describe('gatewayUrlAndHeaders', () => {
     const rec = makeRecord({ standard_url: 'https://example.com' });
     const [, headers] = gatewayUrlAndHeaders(rec, '/path');
     expect(headers['Authorization']).toBeUndefined();
+  });
+
+  test('treats whitespace-only URLs as absent', () => {
+    const rec = makeRecord({ signed_url: '   ', standard_url: 'https://standard.example.com' });
+    const [url] = gatewayUrlAndHeaders(rec, '/v1/models');
+    expect(url).toBe('https://standard.example.com/v1/models');
+  });
+
+  test('throws 503 when all URLs are whitespace-only', () => {
+    const rec = makeRecord({ signed_url: '  ', standard_url: '\t', dashboard_url: '\n' });
+    expect(() => gatewayUrlAndHeaders(rec, '/v1/models')).toThrow('No gateway URL available');
+  });
+
+  test('throws 502 for malformed URL', () => {
+    const rec = makeRecord({ standard_url: 'not-a-url' });
+    expect(() => gatewayUrlAndHeaders(rec, '/path')).toThrow('Malformed gateway URL');
+  });
+
+  test('throws 502 for unsupported protocol', () => {
+    const rec = makeRecord({ standard_url: 'ftp://example.com' });
+    expect(() => gatewayUrlAndHeaders(rec, '/path')).toThrow('Unsupported gateway URL protocol');
+  });
+
+  test('adds Authorization header for standard_url with gateway_token', () => {
+    const rec = makeRecord({ standard_url: 'https://example.com', gateway_token: 'tok' });
+    const [, headers] = gatewayUrlAndHeaders(rec, '/path');
+    expect(headers['Authorization']).toBe('Bearer tok');
   });
 });
 

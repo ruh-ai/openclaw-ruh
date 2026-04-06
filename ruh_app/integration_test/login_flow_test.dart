@@ -11,7 +11,9 @@ void main() {
 
   testWidgets('customer admin can sign in on the desktop app', (tester) async {
     await _expectBackendListening();
-    await AccessTokenStore().clear();
+    final tokenStore = AccessTokenStore();
+    await tokenStore.clear();
+    await tokenStore.clearRefreshToken();
 
     app.main();
     await tester.pump();
@@ -32,7 +34,7 @@ void main() {
 
     await _pumpUntilVisible(
       tester,
-      find.byTooltip('Create Agent'),
+      find.text('Workspace'),
       description: 'authenticated shell',
     );
 

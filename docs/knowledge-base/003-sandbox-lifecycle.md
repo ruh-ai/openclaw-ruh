@@ -121,6 +121,110 @@ The standalone builder gateway is not DB-tracked, so it is handled separately by
 
 ---
 
+## SSE Stream Timeout and `_streams` Map Lifecycle
+
+### `_streams` In-Memory Map
+
+The `_streams` Map (`app.ts:209`) holds `StreamEntry` objects keyed by `stream_id` (UUID). Each entry tracks creation progress:
+
+```typescript
+interface StreamEntry {
+  status: 'pending' | 'running' | 'done' | 'error';
+  request: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+```
+
+**Lifecycle:**
+1. `POST /api/sandboxes/create` → sets entry with `status: 'pending'`
+2. `GET /api/sandboxes/stream/:stream_id` → transitions to `'running'`, rejects if not `'pending'` (409)
+3. Generator completes → `'done'`; generator yields `error` or handler catches → `'error'`
+
+**Known gap: no TTL or eviction.** Entries are never removed from the map. A `pending` entry that is never consumed (client never connects to SSE) stays forever. Completed/errored entries also accumulate. On long-running backend processes, this is a slow memory leak. See [[LEARNING-2026-03-25-sandbox-provisioning-job-persistence]].
+
+The `GET /api/sandboxes/:sandbox_id` route also checks `_streams` as a fallback — if `sandbox_id` matches a `stream_id`, it returns the stream's current status and result, providing a polling alternative to SSE.
+
+### SSE Timeout Behavior
+
+`initializeSseStream()` (`app.ts:283`) disables both request and response timeouts (`req.setTimeout(0)`, `res.setTimeout(0)`), so the SSE connection itself has no server-side timeout. A heartbeat comment (`: heartbeat\n\n`) is sent every 15 seconds to keep the connection alive through proxies.
+
+Client disconnect is detected via `req.on('aborted')` and `req.on('close')` — after disconnect, `sendEvent` becomes a silent no-op. The generator continues running to completion in the background (provisioning is not cancelled). See [[LEARNING-2026-03-27-sandbox-stream-disconnect-and-cached-image-pull]].
+
+**Proxy timeout risk:** The 15s heartbeat interval is below most proxy idle timeouts (typically 60s), but long-running steps (npm install, image pull) can exceed the heartbeat window if the generator blocks on `await` between heartbeats. See [[LEARNING-2026-03-25-sse-heartbeat-idle-timeout-gap]].
+
+---
+
+## Container Cleanup Patterns and Known Gaps
+
+### Normal Cleanup via `failCreate()`
+
+Inside `createOpenclawSandbox()` (`sandboxManager.ts`), a local `failCreate()` helper removes the container on any provisioning failure:
+
+```typescript
+const failCreate = async (message: string): Promise<SandboxEvent> => {
+  createSpan.setStatus({ code: SpanStatusCode.ERROR, message });
+  createSpan.end();
+  await dockerSpawn(['rm', '-f', containerName], 15_000);
+  return ['error', message];
+};
+```
+
+This covers all explicit error paths (failed install, failed onboard, failed probe, failed bootstrap verification, etc.). Some early failures (e.g., port mapping failure) also call `dockerSpawn(['rm', '-f', containerName])` directly before the `failCreate` helper is defined.
+
+### Deletion Cleanup
+
+`DELETE /api/sandboxes/:sandbox_id` calls `stopAndRemoveContainer()` which runs `docker rm -f openclaw-<id>` with a 15-second timeout.
+
+### Orphan Cleanup Script
+
+`scripts/cleanup-sandboxes.sh` provides manual cleanup of stopped/orphaned containers. Three modes: stopped-only (default), `--all`, `--dry`. Filters by container name prefix `openclaw-` and excludes infrastructure containers (langfuse, gateway, oauth-smoke).
+
+### Known Gap: No Cleanup on Generator Throws
+
+The `createOpenclawSandbox()` async generator has no `try/finally` block wrapping the entire flow. If the generator is terminated externally (e.g., via `generator.throw()` or `generator.return()` from the consuming `for await` loop in the stream handler), the `failCreate` cleanup does not run. The container would be left running with no DB record.
+
+In practice, the stream handler (`app.ts`) does not call `.throw()` or `.return()` on the generator — it iterates to completion via `for await...of`. But if the handler's `catch` block is reached due to an unexpected exception during iteration, the generator is abandoned without cleanup. The container survives, and the only recovery path is the manual cleanup script or the admin reconciliation endpoint (`GET /api/admin/sandboxes/reconcile`). See [[SPEC-sandbox-runtime-reconciliation]].
+
+---
+
+## Gateway URL Resolution and Auth Headers
+
+### `gatewayUrlAndHeaders()` — `utils.ts:17`
+
+Resolves the gateway base URL from a `SandboxRecord` in strict priority order:
+
+| Priority | Field | When Used |
+|---|---|---|
+| 1 | `signed_url` | Pre-authenticated URL (e.g., Daytona signed URLs). No extra auth header needed beyond the URL itself. |
+| 2 | `standard_url` | Direct gateway URL (e.g., `http://localhost:<port>`). Default for local Docker sandboxes. |
+| 3 | `dashboard_url` | Fallback — typically the agent dashboard URL, not the gateway API. |
+
+If none are set, throws `httpError(503, 'No gateway URL available for this sandbox')`.
+
+### Auth Header Behavior
+
+```typescript
+const headers: Record<string, string> = {};
+// Daytona preview token — only when signed_url is NOT available
+if (!record.signed_url && record.preview_token) {
+  headers['X-Daytona-Preview-Token'] = record.preview_token;
+}
+// Gateway bearer token — always added when present
+if (record.gateway_token) {
+  headers['Authorization'] = `Bearer ${record.gateway_token}`;
+}
+```
+
+Key rules:
+- **`signed_url`**: No `X-Daytona-Preview-Token` added (the URL itself carries auth). `Authorization: Bearer` still added if `gateway_token` is set.
+- **`standard_url` / `dashboard_url`**: `X-Daytona-Preview-Token` added when `preview_token` is set. `Authorization: Bearer` added when `gateway_token` is set.
+- **Local sandboxes**: Typically only have `standard_url` (from `docker port` mapping) and `gateway_token` (read from `openclaw.json` during bootstrap). No `signed_url` or `preview_token`.
+
+The resolved URL has trailing slashes stripped and the `path` argument appended directly (e.g., `http://localhost:32769/v1/chat/completions`).
+
+---
+
 ## Container Naming
 
 Container name = `openclaw-<sandbox_id>` (e.g., `openclaw-a1b2c3d4-...`)
@@ -157,6 +261,11 @@ DELETE /api/sandboxes/:sandbox_id
 
 Sandbox lifecycle inspection now also has an explicit reconciliation contract. `GET /api/sandboxes/:sandbox_id/status` distinguishes `healthy`, `gateway_unreachable`, and `db_only`, while admins can inspect DB-only and container-only drift through `GET /api/admin/sandboxes/reconcile` before deciding whether to delete a stale row or remove an orphan container.
 
+The runtime repair path now treats the gateway/browser stack as first-class parts of sandbox health instead of assuming “container running” is enough:
+- status probes the OpenClaw gateway `GET /health` endpoint, not the older nonexistent `/api/status` path
+- launch/browser repair paths can re-run `ensureInteractiveRuntimeServices()` to restore `Xvfb`, `x11vnc`, and `websockify` before reporting the browser inactive
+- when the operator WebSocket does not stream live tool frames, deployed chat can still recover structured tool events from the latest OpenClaw session transcript for the same `sessionKey`; see [[LEARNING-2026-04-02-flutter-runtime-contract-repair]]
+
 ---
 
 ## SSH Into a Sandbox
@@ -181,6 +290,8 @@ Each sandbox record includes `ssh_command`: `docker exec -it openclaw-<id> bash`
 - [[LEARNING-2026-03-26-sandbox-bootstrap-verification-contract]] — bootstrap truthfulness now depends on explicit required-step checks plus a final config verification read before sandbox-create `result`
 - [[LEARNING-2026-03-27-sandbox-bootstrap-verify-node-e-shell-quoting]] — shell quoting can break the verification command itself before any config mismatch is even evaluated
 - [[LEARNING-2026-03-27-sandbox-stream-disconnect-and-cached-image-pull]] — sandbox-create streams must survive client disconnects, and repeated local deploys should skip forced base-image pulls when the image is already cached
+- [[LEARNING-2026-04-02-agent-create-e2e-contract]] — live forge creation stays on the onboarding screen for minutes, and the sandbox image must keep agent-runtime install scripts enabled so `better-sqlite3` loads inside the container
+- [[LEARNING-2026-04-02-flutter-runtime-contract-repair]] — Flutter runtime surfaces exposed that gateway `/health`, browser self-healing, and transcript-backed tool replay are all required to make a “running” sandbox actually interactive
 
 ---
 

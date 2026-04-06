@@ -462,6 +462,23 @@ async function readFilePayload(targetPath, relativePath, mode) {
 }
 
 (async () => {
+  // ── Status mode: lightweight workspace summary (no path required) ──
+  if (payload.mode === "status") {
+    const result = { soul_exists: false, agents_md_exists: false, skill_count: 0, tool_count: 0, trigger_count: 0, skill_ids: [], last_modified: null };
+    try { await fs.access(path.join(workspaceRoot, "SOUL.md")); result.soul_exists = true; } catch {}
+    try { await fs.access(path.join(workspaceRoot, "AGENTS.md")); result.agents_md_exists = true; } catch {}
+    try {
+      const entries = await fs.readdir(path.join(workspaceRoot, "skills"), { withFileTypes: true });
+      const dirs = entries.filter(e => e.isDirectory());
+      result.skill_count = dirs.length;
+      result.skill_ids = dirs.map(e => e.name);
+    } catch {}
+    try { const t = await fs.readdir(path.join(workspaceRoot, "tools")); result.tool_count = t.filter(f => f.endsWith(".json")).length; } catch {}
+    try { const t = await fs.readdir(path.join(workspaceRoot, "triggers")); result.trigger_count = t.filter(f => f.endsWith(".json")).length; } catch {}
+    console.log(JSON.stringify(result));
+    return;
+  }
+
   const targetPath = path.join(workspaceRoot, payload.path || "");
   ensureInsideWorkspace(targetPath);
   const stats = await fs.stat(targetPath);
@@ -514,4 +531,8 @@ export function createWorkspaceHandoffCommand(relativePath: string, downloadName
 
 export function createWorkspaceArchiveCommand(relativePath: string, downloadName?: string): string {
   return createWorkspaceCommand({ mode: "archive", path: relativePath, downloadName });
+}
+
+export function createWorkspaceStatusCommand(): string {
+  return createWorkspaceCommand({ mode: "status" });
 }

@@ -12,7 +12,8 @@ import { v4 as uuidv4 } from "uuid";
 import { Rocket, Loader2, Check, AlertCircle } from "lucide-react";
 import { TabChat } from "@/app/(platform)/agents/[id]/chat/_components/TabChat";
 import { buildDeployConfigSummary } from "@/lib/agents/operator-config-summary";
-import { isRuntimeInputFilled, mergeRuntimeInputDefinitions } from "@/lib/agents/runtime-inputs";
+import { isRuntimeInputFilled, mergeRuntimeInputDefinitions, enrichRuntimeInputsFromPlan } from "@/lib/agents/runtime-inputs";
+import { generateSkillTests, skillTestsToEvalTasks } from "@/lib/openclaw/skill-test-generator";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
   evaluateCoPilotDeployReadiness,
@@ -83,8 +84,11 @@ export function CoPilotLayout({
     skipDiscovery,
     setDevStage,
     setThinkStatus,
+    setUserTriggeredThink,
     setPlanStatus,
+    setUserTriggeredPlan,
     setBuildStatus,
+    setUserTriggeredBuild,
     pushBuildActivity,
     setBuildProgress,
   } = coPilotStore;
@@ -156,6 +160,10 @@ export function CoPilotLayout({
     };
   }, []);
 
+  // Workspace reconciliation removed — new agents must always go through the
+  // full Think → Plan → Build flow. Stale workspace files from previous
+  // attempts or container reuse should not short-circuit the build process.
+
   useEffect(() => {
     onBuilderStateChange({
       name,
@@ -169,23 +177,78 @@ export function CoPilotLayout({
       return;
     }
 
+    // When the lifecycle has progressed past build (review/test/ship/reflect),
+    // all skills in the graph should be considered built — even if builtSkillIds
+    // was never populated (e.g. workspace reconciliation, session restore).
+    const POST_BUILD_STAGES = new Set(["review", "test", "ship", "reflect"]);
+    const effectiveBuiltIds = POST_BUILD_STAGES.has(coPilotStore.devStage)
+      ? skillGraph.map((n) => n.skill_id)
+      : builtSkillIds;
+
     setSkillAvailability(
-      resolveSkillAvailability(skillGraph, skillRegistry, builtSkillIds),
+      resolveSkillAvailability(skillGraph, skillRegistry, effectiveBuiltIds),
     );
-  }, [builtSkillIds, setSkillAvailability, skillGraph, skillRegistry]);
+  }, [builtSkillIds, coPilotStore.devStage, setSkillAvailability, skillGraph, skillRegistry]);
 
   useEffect(() => {
-    const mergedRuntimeInputs = mergeRuntimeInputDefinitions({
+    let mergedRuntimeInputs = mergeRuntimeInputDefinitions({
       existing: runtimeInputs,
       skillGraph,
       agentRules,
     });
+    // Enrich with metadata from the architecture plan (labels, defaults, types, groups)
+    if (architecturePlan?.envVars) {
+      mergedRuntimeInputs = enrichRuntimeInputsFromPlan(mergedRuntimeInputs, architecturePlan.envVars);
+    }
     const currentSignature = JSON.stringify(runtimeInputs);
     const mergedSignature = JSON.stringify(mergedRuntimeInputs);
     if (currentSignature !== mergedSignature) {
       setRuntimeInputs(mergedRuntimeInputs);
     }
-  }, [agentRules, runtimeInputs, setRuntimeInputs, skillGraph]);
+  }, [agentRules, architecturePlan, runtimeInputs, setRuntimeInputs, skillGraph]);
+
+  // AI auto-population for ai_inferred variables
+  const inferAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (inferAttemptedRef.current || !architecturePlan || runtimeInputs.length === 0) return;
+
+    const inferrable = runtimeInputs.filter(
+      (input) => (input.populationStrategy ?? "user_required") === "ai_inferred" && !input.value?.trim(),
+    );
+    if (inferrable.length === 0) return;
+
+    inferAttemptedRef.current = true;
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    fetch(`${apiBase}/api/infer-inputs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        agentName: name,
+        agentDescription: description,
+        variables: inferrable.map((v) => ({
+          key: v.key,
+          label: v.label,
+          description: v.description,
+          example: v.example,
+          options: v.options,
+        })),
+      }),
+    })
+      .then((r) => r.json())
+      .then((data: { values: Record<string, string> }) => {
+        if (data.values && Object.keys(data.values).length > 0) {
+          const updated = runtimeInputs.map((input) =>
+            data.values[input.key] && !input.value?.trim()
+              ? { ...input, value: data.values[input.key] }
+              : input,
+          );
+          setRuntimeInputs(updated);
+        }
+      })
+      .catch(() => {});
+  }, [architecturePlan, runtimeInputs, name, description, setRuntimeInputs]);
 
   // Keep the ref in sync so the generation effect can check it without depending on skillGraph
   useEffect(() => {
@@ -239,12 +302,67 @@ export function CoPilotLayout({
     // AFTER discovery_documents has already set thinkStatus to "ready".
     // Without this guard, the effect re-fires and resets the status.
     const currentThinkStatus = useCoPilotStore.getState().thinkStatus;
-    if (currentThinkStatus !== "ready" && currentThinkStatus !== "approved") {
+    if (
+      currentThinkStatus !== "ready"
+      && currentThinkStatus !== "approved"
+      && currentThinkStatus !== "generating"
+      && currentThinkStatus !== "done"
+    ) {
       setThinkStatus("generating");
+      setUserTriggeredThink(true);
       setDiscoveryStatus("loading");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, description]);
+
+  // ── Workspace rehydration: restore Think/Plan state from workspace files ──
+  const rehydratedRef = useRef(false);
+  useEffect(() => {
+    const sandboxId = activeSandbox?.sandbox_id;
+    if (!sandboxId || rehydratedRef.current) return;
+    rehydratedRef.current = true;
+
+    // Non-blocking: try reading workspace files to restore state after page refresh
+    import("@/lib/openclaw/workspace-writer").then(({ readWorkspaceFile }) => {
+      Promise.all([
+        readWorkspaceFile(sandboxId, ".openclaw/discovery/PRD.md"),
+        readWorkspaceFile(sandboxId, ".openclaw/discovery/TRD.md"),
+        readWorkspaceFile(sandboxId, ".openclaw/discovery/research-brief.md"),
+        readWorkspaceFile(sandboxId, ".openclaw/plan/architecture.json"),
+      ]).then(([prd, trd, researchBrief, planJson]) => {
+        // Rehydrate Think paths if docs exist
+        if (researchBrief) coPilotStore.setResearchBriefPath(".openclaw/discovery/research-brief.md");
+        if (prd) coPilotStore.setPrdPath(".openclaw/discovery/PRD.md");
+        if (trd) coPilotStore.setTrdPath(".openclaw/discovery/TRD.md");
+
+        // If all think docs exist and think hasn't progressed, mark as ready
+        if (prd && trd && coPilotStore.thinkStatus === "idle") {
+          coPilotStore.setThinkStep("complete");
+          coPilotStore.setThinkStatus("ready");
+        }
+
+        // Rehydrate Plan if architecture.json exists
+        if (planJson && !coPilotStore.architecturePlan) {
+          try {
+            const plan = JSON.parse(planJson);
+            coPilotStore.setArchitecturePlan(plan);
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }).catch(() => {
+        // Workspace read failures are non-fatal — fresh state is fine
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSandbox?.sandbox_id]);
+
+  // Set agentSandboxId early so workspace reads work during Think/Plan (not just Build)
+  useEffect(() => {
+    if (activeSandbox?.sandbox_id && !coPilotStore.agentSandboxId) {
+      coPilotStore.setAgentSandboxId(activeSandbox.sandbox_id);
+    }
+  }, [activeSandbox?.sandbox_id, coPilotStore.agentSandboxId, coPilotStore]);
 
   // ── Step 2: When discovery is complete/skipped, trigger skill generation ──
   const buildRetryCountRef = useRef(0);
@@ -310,8 +428,36 @@ export function CoPilotLayout({
             systemName: generated.systemName ?? trimmedName,
             agentRules: generated.agentRules,
           });
-          // Build stage complete — advance to review
+          // Publish built skills back to the registry (non-blocking).
+          // This grows the ecosystem — future agents benefit from reuse.
+          for (const node of generated.nodes) {
+            if (node.skill_md) {
+              fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/skills`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  skill_id: node.skill_id,
+                  name: node.name,
+                  description: node.description || node.name,
+                  tags: [trimmedName.toLowerCase().replace(/\s+/g, "-"), node.source || "custom"],
+                  skill_md: node.skill_md,
+                }),
+              }).catch(() => {}); // Non-blocking — failure doesn't affect the build
+            }
+          }
+
+          // Build stage complete — generate skill tests then advance
           setBuildStatus("done");
+
+          // Auto-generate skill smoke tests from the built skill graph
+          if (generated.nodes.length > 0) {
+            const skillTests = generateSkillTests(generated.nodes, generated.systemName ?? trimmedName);
+            const evalTasks = skillTestsToEvalTasks(skillTests);
+            if (evalTasks.length > 0) {
+              coPilotStore.setEvalTasks(evalTasks);
+            }
+          }
+
           setDevStage("review");
         })
         .catch((error) => {
@@ -347,36 +493,154 @@ export function CoPilotLayout({
   // Called when user completes discovery (Think stage) or clicks "Skip"
   const handleDiscoveryComplete = useCallback(() => {
     setThinkStatus("approved");
+
+    // Persist PRD/TRD to workspace so they survive refresh and ship with the template
+    const sandboxId = activeSandbox?.sandbox_id;
+    const docs = coPilotStore.discoveryDocuments;
+    if (sandboxId && docs) {
+      import("@/lib/openclaw/plan-formatter").then(({ formatPRD, formatTRD }) =>
+        import("@/lib/openclaw/workspace-writer").then(({ writeWorkspaceFiles }) =>
+          writeWorkspaceFiles(sandboxId, [
+            { path: ".openclaw/discovery/PRD.md", content: formatPRD(docs.prd) },
+            { path: ".openclaw/discovery/TRD.md", content: formatTRD(docs.trd) },
+          ]).catch((err) => console.warn("[CoPilot] Failed to persist discovery docs:", err)),
+        ),
+      );
+    }
+
     setDevStage("plan");
     setPlanStatus("generating");
+    setUserTriggeredPlan(true);
     // Plan stage will show a loading spinner until the architect returns
     // an architecture_plan response. The actual message is sent by TabChat
     // via the onPlanGenerationNeeded callback.
-  }, [setThinkStatus, setDevStage, setPlanStatus]);
+  }, [setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments]);
 
-  // Called when user approves Plan stage — triggers actual build
-  const handlePlanApproved = useCallback(() => {
+  // Called when user approves Plan stage — triggers v4 orchestrator build
+  const handlePlanApproved = useCallback(async () => {
     setPlanStatus("approved");
+
+    const sandboxId = activeSandbox?.sandbox_id;
+    if (!sandboxId) {
+      setBuildStatus("failed");
+      setSkillGeneration("error", "No active sandbox — cannot build.");
+      return;
+    }
+
+    // Persist architecture plan to workspace before build starts
+    if (architecturePlan) {
+      try {
+        const { renderPlanSummary } = await import("@/lib/openclaw/plan-formatter");
+        const { writeWorkspaceFiles } = await import("@/lib/openclaw/workspace-writer");
+        await writeWorkspaceFiles(sandboxId, [
+          { path: ".openclaw/plan/architecture.json", content: JSON.stringify(architecturePlan, null, 2) },
+          { path: ".openclaw/plan/PLAN.md", content: renderPlanSummary(architecturePlan) },
+        ]);
+      } catch (err) {
+        console.warn("[CoPilot] Failed to persist plan:", err);
+      }
+    }
+
     setDevStage("build");
     setBuildStatus("building");
-    const trimmedName = name.trim();
-    const trimmedDescription = description.trim();
-    const context = discoveryStatus === "skipped" ? undefined : discoveryAnswers;
-    const docs = discoveryDocuments ?? undefined;
-    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs, architecturePlan);
-  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, architecturePlan, triggerSkillGeneration, setPlanStatus, setDevStage, setBuildStatus]);
-
-  // Called when user retries a failed build
-  const handleRetryBuild = useCallback(() => {
-    buildRetryCountRef.current = 0; // Reset auto-retry counter for manual retry
-    setBuildStatus("building");
+    setUserTriggeredBuild(true);
     setSkillGeneration("loading");
     const trimmedName = name.trim();
     const trimmedDescription = description.trim();
-    const context = discoveryStatus === "skipped" ? undefined : discoveryAnswers;
-    const docs = discoveryDocuments ?? undefined;
-    triggerSkillGeneration(trimmedName, trimmedDescription, context, docs, architecturePlan);
-  }, [name, description, discoveryStatus, discoveryAnswers, discoveryDocuments, architecturePlan, triggerSkillGeneration, setBuildStatus, setSkillGeneration]);
+
+    // ── V4 build: always use orchestrator with specialist sub-agents ──
+    pushBuildActivity({ type: "task", label: "Starting build pipeline..." });
+
+    import("@/lib/openclaw/build-orchestrator").then(({ runBuildPipeline }) =>
+      runBuildPipeline(
+        sandboxId,
+        {
+          onTaskStart: (task) => {
+            pushBuildActivity({ type: "task", label: `Starting ${task.specialist}...` });
+          },
+          onTaskComplete: (task) => {
+            pushBuildActivity({ type: "task", label: `${task.specialist} complete (${task.files.length} files)` });
+          },
+          onTaskFailed: (task, error) => {
+            pushBuildActivity({ type: "task", label: `${task.specialist} failed: ${error.slice(0, 80)}` });
+          },
+          onFileWritten: (path) => {
+            pushBuildActivity({ type: "file", label: path.split("/").slice(-2).join("/") });
+          },
+          onProgress: (completed, total) => {
+            setBuildProgress({ completed, total, currentSkill: null });
+          },
+          onStatus: (msg) => {
+            pushBuildActivity({ type: "tool", label: msg });
+          },
+          onValidation: (report) => {
+            coPilotStore.setBuildValidation(report);
+          },
+        },
+        {
+          plan: architecturePlan ?? undefined,
+          agentName: trimmedName,
+          discoveryDocs: discoveryDocuments,
+        },
+      ).then((manifest) => {
+        coPilotStore.setBuildManifest(manifest);
+        coPilotStore.setAgentSandboxId(sandboxId);
+
+        // Extract skill graph from plan for the Review stage
+        if (architecturePlan) {
+          const nodes = architecturePlan.skills.map((s) => ({
+            skill_id: s.id,
+            name: s.name,
+            description: s.description,
+            status: "generated" as const,
+            source: "custom" as const,
+            depends_on: s.dependencies,
+            requires_env: s.envVars,
+            skill_md: s.skillMd ?? "",
+          }));
+          const workflow = architecturePlan.workflow
+            ? {
+                name: "main-workflow",
+                description: `${trimmedName} workflow`,
+                steps: architecturePlan.workflow.steps.map((step, i) => ({
+                  id: `step-${i}`,
+                  action: "execute" as const,
+                  skill: step.skillId,
+                  wait_for: i > 0 ? [architecturePlan.workflow.steps[i - 1].skillId] : [],
+                })),
+              }
+            : null;
+          setSkillGraph(nodes, workflow, []);
+          onBuilderStateChange({
+            name: trimmedName,
+            description: trimmedDescription,
+            skillGraph: nodes,
+            workflow,
+            systemName: trimmedName,
+          });
+        }
+
+        const allDone = manifest.tasks.every((t) => t.status === "done");
+        if (allDone) {
+          setBuildStatus("done");
+          setDevStage("review");
+        } else {
+          setBuildStatus("failed");
+          setSkillGeneration("error", "Some build tasks failed. Check the build log.");
+        }
+      }).catch((error) => {
+        setSkillGeneration("error", error instanceof Error ? error.message : "Build failed.");
+        setBuildStatus("failed");
+      }),
+    );
+  }, [name, description, discoveryDocuments, architecturePlan, activeSandbox, coPilotStore, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, onBuilderStateChange]);
+
+  // Called when user retries a failed build — re-triggers handlePlanApproved
+  const handleRetryBuild = useCallback(() => {
+    buildRetryCountRef.current = 0;
+    // Re-enter the plan-approved flow which detects v3 vs v2 automatically
+    handlePlanApproved();
+  }, [handlePlanApproved]);
 
   // Called when user clicks Done on reflect stage
   const handleDone = useCallback(() => {

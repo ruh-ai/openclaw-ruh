@@ -109,3 +109,8 @@ export async function fetchSkillRegistry(): Promise<SkillRegistryEntry[]> {
   const data = await res.json();
   return Array.isArray(data) ? (data as SkillRegistryEntry[]) : [];
 }
+
+// ─── Skill Registry Search ──────────────────────────────────────────────────
+// The registry is a searchable reference the Architect can browse for
+// inspiration. Skills are never auto-assigned to new agents. Each agent
+// must have its skills built from scratch by the Architect.

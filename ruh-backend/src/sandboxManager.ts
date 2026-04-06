@@ -589,12 +589,41 @@ function resolveProviderOptions(
   return { providerId, providerDef, modelId, baseUrl, apiKey, envUpdates, providerConfig };
 }
 
-export async function restartGateway(containerName: string): Promise<void> {
-  await dockerExec(containerName, 'openclaw gateway stop 2>/dev/null || true', 15_000);
-  await Bun.sleep(2000);
+export async function ensureInteractiveRuntimeServices(containerName: string): Promise<void> {
   await dockerExec(
     containerName,
-    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
+    'pgrep -f "Xvfb :99" >/dev/null || nohup Xvfb :99 -screen 0 1280x720x24 -ac > /tmp/openclaw-xvfb.log 2>&1 &',
+    10_000,
+  );
+  await Bun.sleep(500);
+  await dockerExec(
+    containerName,
+    'command -v x11vnc >/dev/null 2>&1 && (pgrep -f x11vnc >/dev/null || DISPLAY=:99 nohup x11vnc -display :99 -nopw -listen localhost -forever -shared -rfbport 5900 > /tmp/openclaw-x11vnc.log 2>&1 &) || true',
+    10_000,
+  );
+  await dockerExec(
+    containerName,
+    `command -v websockify >/dev/null 2>&1 && (pgrep -f "websockify.*${VNC_WS_PORT}" >/dev/null || (websockify --web /usr/share/novnc --daemon ${VNC_WS_PORT} localhost:5900 > /tmp/openclaw-websockify.log 2>&1 || true)) || true`,
+    10_000,
+  );
+}
+
+async function ensureGatewayControlUiBypass(containerName: string): Promise<void> {
+  await dockerExec(
+    containerName,
+    'openclaw config set gateway.controlUi.allowInsecureAuth true >/dev/null && openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true >/dev/null',
+    15_000,
+  );
+}
+
+export async function restartGateway(containerName: string): Promise<void> {
+  await ensureGatewayControlUiBypass(containerName);
+  await dockerExec(containerName, 'openclaw gateway stop 2>/dev/null || true', 15_000);
+  await Bun.sleep(2000);
+  await ensureInteractiveRuntimeServices(containerName);
+  await dockerExec(
+    containerName,
+    `DISPLAY=:99 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
     10_000,
   );
 }
@@ -613,15 +642,15 @@ async function detectContainerHomeDir(containerName: string): Promise<string> {
   return homeDir;
 }
 
-async function waitForGateway(containerName: string): Promise<boolean> {
+export async function waitForGateway(containerName: string): Promise<boolean> {
   for (let i = 0; i < 10; i++) {
-    await Bun.sleep(1500);
     const [ok] = await dockerExec(
       containerName,
       `node -e "const n=require('net');const c=n.connect(${GATEWAY_PORT},'127.0.0.1',()=>{c.end();process.exit(0)});c.on('error',()=>process.exit(1))"`,
       5000,
     );
     if (ok) return true;
+    await Bun.sleep(1500);
   }
   return false;
 }
@@ -870,6 +899,17 @@ export async function* createOpenclawSandbox(
   }
   yield ['log', `Container started: ${containerName}`];
 
+  const removeContainer = async () => {
+    await dockerSpawn(['rm', '-f', containerName], 15_000);
+  };
+
+  const failCreate = async (message: string): Promise<SandboxEvent> => {
+    createSpan.setStatus({ code: SpanStatusCode.ERROR, message });
+    createSpan.end();
+    await removeContainer();
+    return ['error', message];
+  };
+
   // Resolve the host port Docker assigned
   await Bun.sleep(500);
   const [portCode, portOut] = await dockerSpawn(
@@ -877,16 +917,14 @@ export async function* createOpenclawSandbox(
     10_000,
   );
   if (portCode !== 0 || !portOut) {
-    yield ['error', `Failed to get port mapping: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
+    yield await failCreate(`Failed to get port mapping: ${portOut}`);
     return;
   }
 
   // portOut is like "0.0.0.0:32769" or ":::32769"
   const hostPort = portOut.trim().split(':').pop() ?? '';
   if (!hostPort || isNaN(parseInt(hostPort))) {
-    yield ['error', `Could not parse host port from: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
+    yield await failCreate(`Could not parse host port from: ${portOut}`);
     return;
   }
 
@@ -920,17 +958,6 @@ export async function* createOpenclawSandbox(
 
   const run = (cmd: string, timeoutSec = 300) =>
     dockerExec(containerName, cmd, timeoutSec * 1000);
-
-  const removeContainer = async () => {
-    await dockerSpawn(['rm', '-f', containerName], 15_000);
-  };
-
-  const failCreate = async (message: string): Promise<SandboxEvent> => {
-    createSpan.setStatus({ code: SpanStatusCode.ERROR, message });
-    createSpan.end();
-    await removeContainer();
-    return ['error', message];
-  };
 
   const runRequiredBootstrapStep = async (
     step: BootstrapCommandStep,
@@ -1226,6 +1253,11 @@ export async function* createOpenclawSandbox(
       id: 'gateway.controlUi.allowInsecureAuth',
       label: 'gateway insecure auth override',
       command: 'openclaw config set gateway.controlUi.allowInsecureAuth true',
+    },
+    {
+      id: 'gateway.controlUi.dangerouslyDisableDeviceAuth',
+      label: 'gateway device auth override',
+      command: 'openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true',
     },
     {
       id: 'gateway.http.endpoints.chatCompletions.enabled',

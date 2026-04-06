@@ -143,7 +143,19 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
 
       p: ({ children, ...props }: React.ComponentPropsWithoutRef<"p"> & { children?: React.ReactNode }) => (
         <p {...props} className="leading-[1.6] my-1.5 first:mt-0 last:mb-0 text-[#3c3a3d]">
-          {children}
+          {typeof children === "string"
+            ? children.split(/(\s+)/).map((segment, i) =>
+                /^\s+$/.test(segment) ? segment : (
+                  <span
+                    key={i}
+                    className="typewriter-word"
+                    style={{ animationDelay: `${i * 0.03}s` }}
+                  >
+                    {segment}
+                  </span>
+                )
+              )
+            : children}
         </p>
       ),
 

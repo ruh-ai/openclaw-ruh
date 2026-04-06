@@ -25,16 +25,24 @@ export default function MarketplacePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (category) params.set("category", category);
-    if (search) params.set("search", search);
-    apiFetch(`${API_URL}/api/marketplace/listings?${params}`)
-      .then(r => r.ok ? r.json() : { items: [] })
-      .then(data => setListings(data.items || []))
-      .catch(() => setListings([]))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const fetchListings = async () => {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (category) params.set("category", category);
+      if (search) params.set("search", search);
+      try {
+        const r = await apiFetch(`${API_URL}/api/marketplace/listings?${params}`);
+        const data = r.ok ? await r.json() : { items: [] };
+        if (!cancelled) setListings(data.items || []);
+      } catch {
+        if (!cancelled) setListings([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchListings();
+    return () => { cancelled = true; };
   }, [search, category]);
 
   return (

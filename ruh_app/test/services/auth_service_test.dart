@@ -29,6 +29,14 @@ class FakeBackendClient implements BackendClient {
   }
 
   @override
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<Response<T>> post<T>(
     String path, {
     Object? data,
@@ -96,14 +104,17 @@ class FakeBackendClient implements BackendClient {
     storedToken = null;
   }
 
+  @override
   Future<void> setRefreshToken(String token) async {
     storedRefreshToken = token;
   }
 
+  @override
   Future<String?> getRefreshToken() async {
     return storedRefreshToken;
   }
 
+  @override
   Future<void> clearRefreshToken() async {
     storedRefreshToken = null;
   }
@@ -162,6 +173,7 @@ void main() {
 
       expect(client.lastPostPath, '/api/auth/login');
       expect(client.storedToken, 'access-123');
+      expect(client.storedRefreshToken, 'refresh-123');
       expect(session.user.email, 'admin@globex.test');
       expect(session.hasCustomerAccess, isTrue);
     });
@@ -238,6 +250,7 @@ void main() {
       'restoreSession rehydrates from /api/auth/me using stored token',
       () async {
         final client = FakeBackendClient()
+          ..storedRefreshToken = 'stale-refresh'
           ..storedToken = 'stored-token'
           ..getResponseData = {
             'id': 'user-1',
@@ -273,6 +286,7 @@ void main() {
         expect(client.lastGetPath, '/api/auth/me');
         expect(session, isNotNull);
         expect(session!.accessToken, 'stored-token');
+        expect(session.refreshToken, 'stale-refresh');
         expect(session.user.email, 'member@globex.test');
       },
     );
@@ -281,6 +295,7 @@ void main() {
       'restoreSession clears stored token when the backend rejects it',
       () async {
         final client = FakeBackendClient()
+          ..storedRefreshToken = 'stale-refresh'
           ..storedToken = 'stale-token'
           ..getError = unauthorizedError('/api/auth/me');
         final service = BackendAuthService(client: client);
@@ -289,6 +304,7 @@ void main() {
 
         expect(session, isNull);
         expect(client.storedToken, isNull);
+        expect(client.storedRefreshToken, isNull);
       },
     );
 
@@ -296,6 +312,7 @@ void main() {
       'logout clears the local token even if the backend call fails',
       () async {
         final client = FakeBackendClient()
+          ..storedRefreshToken = 'refresh-to-clear'
           ..storedToken = 'token-to-clear'
           ..postError = unauthorizedError('/api/auth/logout');
         final service = BackendAuthService(client: client);
@@ -303,7 +320,21 @@ void main() {
         await service.logout();
 
         expect(client.storedToken, isNull);
+        expect(client.storedRefreshToken, isNull);
       },
     );
+
+    test('clearLocalSession clears both access and refresh tokens', () async {
+      final client = FakeBackendClient()
+        ..storedRefreshToken = 'refresh'
+        ..storedToken = 'access';
+
+      final service = BackendAuthService(client: client);
+
+      await service.clearLocalSession();
+
+      expect(client.storedToken, isNull);
+      expect(client.storedRefreshToken, isNull);
+    });
   });
 }

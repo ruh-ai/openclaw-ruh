@@ -75,3 +75,4 @@ The review phase in `agent-builder-ui` should let operators send trial prompts t
 ## Related Learnings
 
 - [[LEARNING-2026-03-26-soul-config-context-gap]] — the review-test transport and deploy-time prompt should reuse one safe saved-config summary instead of drifting away from the Review/Deploy contract
+- [[LEARNING-2026-03-29-eval-engine-mock-api-architecture]] — mock mode eval for enterprise adoption; heuristic scoring tuned for the proving case

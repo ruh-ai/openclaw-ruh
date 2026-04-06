@@ -40,6 +40,7 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 | slug | TEXT UNIQUE | URL-safe identifier |
 | kind | TEXT | developer, customer |
 | plan | TEXT | free (default) |
+| status | TEXT | active, suspended, archived |
 
 ### sessions
 | Column | Type | Notes |
@@ -47,6 +48,8 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 | id | TEXT PK | UUID |
 | user_id | TEXT FK → users | CASCADE delete |
 | refresh_token | TEXT UNIQUE | Raw UUID |
+| user_agent | TEXT | Optional session device metadata |
+| ip_address | TEXT | Optional source metadata |
 | active_org_id | TEXT FK → organizations | Current tenant context for the refresh session |
 | expires_at | TIMESTAMPTZ | 7 days from creation |
 
@@ -115,22 +118,28 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 - Auth cookies are `Secure` only in production; local `http://localhost` development keeps them non-secure so browser-based login flows can persist sessions during cross-port testing
 - `POST /api/auth/register` can now optionally bootstrap an organization plus owner membership for local testing
 - Auth responses now include `memberships`, `activeMembership`, `activeOrganization`, `platformRole`, and derived `appAccess` so frontends can render tenant-aware session state and enforce app entry without extra join endpoints
+- Membership responses now include `organizationStatus`, and `activeOrganization` includes the org `status`, so frontends and admin tooling can reason about org lifecycle without extra joins
 - The shared contract is intentionally two-layered: `memberships[]` is the full org list for the person, while `appAccess` is derived only from the current session's active org. Frontends should use `memberships[]` plus `POST /api/auth/switch-org` to recover into the right surface when a valid multi-org user lands on the wrong tenant.
+- `POST /api/auth/login`, `GET /api/auth/me`, and `POST /api/auth/switch-org` now derive `appAccess` from the active membership only, not the union of all memberships. Mixed developer+customer accounts still receive every org in `memberships[]`, but customer surfaces must not see `appAccess.customer = true` until the active org is actually customer-scoped. See [[LEARNING-2026-04-02-auth-app-access-session-scope]].
+- Active memberships alone are no longer sufficient for builder/customer access: if the active org is `suspended` or `archived`, `appAccess.builder` / `appAccess.customer` now fail closed until the org returns to `active`
 - `requireActiveDeveloperOrg` is now the builder-specific authz seam for creator-owned agent routes: it rejects customer sessions and developer sessions without an active developer-org membership before any builder mutation logic runs
+- Customer runtime editing now has its own authz seam instead of reusing builder routes: installed-agent config updates go through `GET/PATCH /api/agents/:id/customer-config`, while workspace-memory routes resolve ownership from the active org context so the same runtime memory model can be edited from customer or builder surfaces without widening builder-only authoring mutations. See [[SPEC-ruh-app-chat-first-agent-config]] and [[LEARNING-2026-04-02-customer-safe-agent-config-seam]].
 - Backend builder routes now stamp `created_by` plus the active developer `org_id` on new agents and scope `/api/agents*` reads/mutations to the current creator instead of exposing a global builder-visible agent list
 - Marketplace listing creation now stamps `owner_org_id` from the active developer-org session and listing management (`PATCH`, `submit`, `my/listings`) resolves through that org ownership, while creation still rejects attempts to publish an agent not owned by the current creator
 - The local test-user seed path currently uses the shared QA password `RuhTest123` by default so manual testing across admin, builder, web customer, and Flutter customer surfaces does not depend on punctuation-heavy credentials
 - The seeded local matrix now includes `prasanjit@ruh.ai` as a practical cross-surface operator fixture: platform admin, `acme-dev` owner, and `globex` admin.
 - `ruh-frontend` and `ruh_app` now both enforce `appAccess.customer`, but they transport sessions differently:
   - `ruh-frontend` uses cookie-backed browser auth with `credentials: include`
-  - `ruh_app` uses the bearer-token path by persisting the returned access token in `FlutterSecureStorage`, restoring the session through `GET /api/auth/me`, and clearing the token on logout or rejected bootstrap
+  - `ruh_app` uses the bearer-token path by persisting access + refresh tokens locally, keeping an in-process token cache for immediate follow-up requests, restoring the session through `GET /api/auth/me`, and clearing both tokens on logout or rejected bootstrap
 - `ruh-frontend` and `agent-builder-ui` now both auto-switch recoverable multi-org sessions during login/bootstrap instead of failing immediately when the initial active org belongs to the wrong surface. `ruh-frontend` also exposes a lightweight customer-org switcher overlay, while `agent-builder-ui` exposes developer-org switching from the existing user-profile dropdown.
 - `ruh_app` now has a native login route, auth-loading bootstrap route, Riverpod auth controller, and guarded GoRouter redirect helper, so the Flutter customer surface fails closed the same way as the customer web app
 - `ruh_app` now also auto-switches to a customer org during login when a multi-org user initially lands on a developer org, and Settings exposes customer-org switching while the current session still has its refresh token in memory.
-- Under [[SPEC-ruh-app-login-convenience]], the Flutter login form now adds a password visibility toggle and opt-in remembered email, but it still does not store raw passwords locally. Only the existing access token remains persisted for session restore.
+- Under [[SPEC-ruh-app-login-convenience]], the Flutter login form now adds a password visibility toggle and opt-in remembered email, but it still does not store raw passwords locally. The native token store now persists access + refresh tokens for session continuity while keeping passwords out of device storage.
+- `GET /api/auth/me` must preserve active-org truth for bearer-token clients even when no refresh-token cookie is present, so the backend now falls back to the authenticated bearer token's `orgId` when reconstructing session context for native apps. See [[LEARNING-2026-04-02-flutter-bearer-session-continuity]].
 - The builder browser transport currently sends `ngrok-skip-browser-warning: true` on API requests, so backend CORS must allow that header or `/api/auth/me` preflights will fail and the builder auth gate will sit on its loading state
 - Local builder fallback auth only renders when `agent-builder-ui` runs with `NEXT_PUBLIC_AUTH_URL` blank; if local env points that value at another app, `/authenticate` switches to external-redirect mode instead of showing the seeded email/password form. `NEXT_PUBLIC_APP_URL` should match the live builder origin when testing redirects locally
 - Builder auth redirect targets are now sanitized before existing sessions are bounced off `/authenticate`: invalid or self-referential `redirect_url` values fail closed to `/agents` instead of looping between the login page and missing builder routes
+- Admin org-ops now uses the same session model for governance: org detail screens can clear `active_org_id` or revoke refresh sessions pinned to a specific org without touching unrelated sessions
 - Config: `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` env vars (dev defaults provided)
 - When those JWT env vars are omitted in development or test, the backend now generates one fallback access secret and one fallback refresh secret per process and reuses them for the lifetime of that server. Recomputing them per `getConfig()` call breaks every login by making newly minted tokens unverifiable on the next request. See [[LEARNING-2026-03-31-dev-jwt-secret-instability]].
 - Ownership columns (`created_by`, `org_id`) added to agents and sandboxes tables
@@ -141,9 +150,14 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 - [[SPEC-local-test-user-seeding]] — adds an idempotent local QA seed path for platform, developer-org, customer-org, and cross-org login fixtures
 - [[SPEC-local-demo-marketplace-seeding]] — layers real developer-owned demo agents and published listings on top of the seeded local account matrix
 - [[SPEC-app-access-and-org-marketplace]] — extends auth into explicit app-access decisions for admin, builder, and customer surfaces, plus later org-owned checkout and seat assignment
+- [[SPEC-admin-billing-control-plane]] — adds billing/entitlement truth that later customer access and admin support flows depend on
 - [[SPEC-marketplace-store-parity]] — depends on active customer-org session truth for catalog CTA state, checkout ownership, assignment, and post-purchase launch
+- [[SPEC-ruh-app-chat-first-agent-config]] — adds a customer-safe runtime-config mutation seam instead of widening builder-only agent update routes inside the Flutter app
 - [[SPEC-ruh-app-login-convenience]] — defines the native login UX improvement that remembers only email on-device while leaving auth/session semantics unchanged
 
 ## Related Learnings
 
 - [[LEARNING-2026-03-31-dev-jwt-secret-instability]] — local admin login initially failed even after successful `POST /api/auth/login` because missing JWT env vars caused `getConfig()` to mint a new fallback signing secret on every call
+- [[LEARNING-2026-04-02-auth-app-access-session-scope]] — auth payloads for customer surfaces must scope `appAccess` to the current active org or the UI can enter a half-authenticated developer-session state
+- [[LEARNING-2026-04-02-customer-safe-agent-config-seam]] — customer runtime tuning should use a dedicated safe config contract instead of builder authoring patch routes
+- [[LEARNING-2026-04-02-flutter-bearer-session-continuity]] — native bearer clients need active-org continuity without cookie assumptions, and token persistence should not block the immediate next authenticated request

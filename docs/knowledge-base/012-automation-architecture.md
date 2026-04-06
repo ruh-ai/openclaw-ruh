@@ -66,6 +66,18 @@ All recurring automations follow the same shared learning contract as interactiv
 - `docs/knowledge-base/learnings/LEARNING-YYYY-MM-DD-<task-slug>.md` is required when the run uncovers durable knowledge
 - `memory.md` remains private continuity for that automation and does not replace those repo-visible artifacts
 
+## Hermes Runner Selection
+
+Hermes Mission Control now exposes an operator-visible runner selector; see [[SPEC-hermes-selectable-runner]]. The selected runner is a process-local runtime override applied by the Hermes backend, while `HERMES_AGENT_RUNNER` remains the restart-time default. Queue health reports both the selected runner and per-runner availability so operators can distinguish "Claude is selected and ready" from "Codex exists on disk but is blocked by local configuration."
+
+## Hermes Goal Board
+
+Hermes Mission Control now uses a dedicated goal-task board model; see [[SPEC-hermes-goal-task-board]]. Goals remain the parent initiative, but analyst decomposition now creates board tasks first and execution `task_logs` attach back to those cards through `board_task_id`. This keeps planning state separate from execution evidence and lets operators answer "what is planned, blocked, or done for this goal?" without treating raw execution rows as the task manager itself.
+
+## Hermes Task Reset
+
+Hermes can now hold a true blank slate for task and goal state; see [[SPEC-hermes-resettable-task-state]]. The built-in `strategist-assessment` and `analyst-sweep` timers now consult the same persisted `scheduled_tasks.enabled` flag that Mission Control exposes, so disabling those two planners before a reset prevents immediate goal repopulation on backend restart. The reset contract clears task/goal operational tables and BullMQ history while preserving agent definitions, runner config, worker-pool config, and memories unless the operator explicitly asks for a deeper wipe.
+
 ## Repo-Local Agent Definitions
 
 This repo keeps named maintainer-agent role contracts in two places:
@@ -195,6 +207,10 @@ For the test-coverage automation specifically:
 - [[SPEC-feature-at-a-time-automation-contract]] — defines the feature-package unit of work and the complete-feature expectation for maintainer runs
 - [[SPEC-agent-learning-and-journal]] — defines the shared journal and durable-learning contract for all agent runs
 - [[SPEC-test-coverage-automation]] — specifies the execution model, guardrails, and fallback behavior for the repo's test-coverage automation
+- [[SPEC-hermes-runner-readiness-and-dashboard]] — defines how Hermes surfaces agent-runner readiness and blocked orchestration state in Mission Control
+- [[SPEC-hermes-goal-task-board]] — defines the dedicated goal/task board layer, board-task execution linkage, and Mission Control board UI
+- [[SPEC-hermes-selectable-runner]] — defines explicit Claude Code vs Codex runner selection, validation, and switching behavior for Hermes
+- [[SPEC-hermes-resettable-task-state]] — defines the stable blank-slate reset flow and the built-in schedule guards that prevent planner repopulation after restart
 
 ---
 

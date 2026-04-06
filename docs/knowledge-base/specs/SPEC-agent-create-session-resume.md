@@ -48,6 +48,11 @@ When the operator loads `/agents/create?agentId=<id>`:
   - backend agent snapshot as the persisted baseline
   - local safe create-session cache as the overlay for in-progress non-secret work
 - If no saved agent record exists but a local safe cache does, the page may recover from that cache alone for the same `agentId`.
+- `forge_stage` is only a lifecycle hint. Resume must not treat `review`, `test`, `ship`, or `reflect` as completed unless persisted build artifacts already exist for that agent.
+- If `forge_stage` points at `review` or later but the agent still has no persisted `skillGraph` or saved co-pilot snapshot, the page must fail closed to the artifact-backed state instead of reopening with green completed stages.
+- When the page must infer a viewed stage from persisted agent data alone, completion badges must still come from explicit saved lifecycle statuses rather than from the inferred stage position itself. Older active agents may reopen on `review` for inspection without automatically marking Think/Plan/Build complete.
+- Existing-agent improve flows must not treat already-saved workspace files or baseline `skillGraph` data as proof that a new improvement build already ran. Workspace reconciliation may fast-forward only brand-new or truly in-progress create sessions, not prebuilt agents reopened for edits.
+- `skill_graph_ready` or equivalent ready-for-review events may only mark Build complete when the lifecycle is already in `build`. The UI must not jump from `think` or `plan` to completed Build just because the architect emitted a graph-shaped payload early.
 
 ### Draft Autosave Contract
 
@@ -62,10 +67,16 @@ When the operator loads `/agents/create?agentId=<id>`:
 - The old lighter lifecycle cache may remain as a backward-compatible fallback.
 - On successful completion, deploy handoff, promote-to-reflect, or discard/delete, the create-session cache and lifecycle cache for that `agentId` must be cleared.
 
+### Forge Stage Persistence Contract
+
+- `forge_stage` updates may remain immediate for `think`, `plan`, and `build`, because those are in-progress lifecycle markers.
+- `review` and later must not be written back to `forge_stage` until the matching persisted build artifacts exist, so refresh/reopen cannot observe a stage marker that outran the saved skill graph/session data.
+
 ## Implementation Notes
 
 - Frontend route hydration lives in `agent-builder-ui/app/(platform)/agents/create/page.tsx`.
 - The safe local cache is implemented in `agent-builder-ui/lib/openclaw/create-session-cache.ts`.
+- Lifecycle fallback and forge-stage truthiness checks live in `agent-builder-ui/lib/openclaw/copilot-flow.ts`.
 - Cold-store autosave fallback lives in `agent-builder-ui/hooks/use-agents-store.ts`.
 - Backend metadata validation for forge-backed draft autosave lives in `ruh-backend/src/validation.ts`.
 - Focused regressions cover the cache merge behavior and the cold-store `saveAgentDraft()` path.
@@ -73,6 +84,7 @@ When the operator loads `/agents/create?agentId=<id>`:
 ## Test Plan
 
 - `agent-builder-ui/lib/openclaw/create-session-cache.test.ts`
+- `agent-builder-ui/lib/openclaw/copilot-flow.test.ts`
 - `agent-builder-ui/hooks/use-agents-store.test.ts`
 - `ruh-backend/tests/unit/validation.test.ts`
 - Manual browser verification:

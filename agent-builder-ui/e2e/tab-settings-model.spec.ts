@@ -14,6 +14,7 @@
  */
 
 import { test, expect, Page } from "@playwright/test";
+import { setupAuth } from "./helpers/auth";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -165,6 +166,10 @@ function mockReconfigure(page: Page): Promise<Record<string, unknown>> {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe("TabSettings — model selection", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
+
   test("renders Settings tab with provider and model cards", async ({ page }) => {
     await seedAgent(page);
     await mockSandboxes(page);
@@ -299,6 +304,10 @@ test.describe("TabSettings — model selection", () => {
 });
 
 test.describe("TabSettings — model pass-through to API", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
+
   test("chat request body includes selected model", async ({ page }) => {
     await seedAgent(page, "claude-sonnet-4-6");
     await mockSandboxes(page);

@@ -1,10 +1,40 @@
 import { setupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
-import { makeSandbox, makeConversation, makeCronJob, makeChannelsConfig, SANDBOX_ID, CONV_ID } from './fixtures';
+import {
+  makeSandbox,
+  makeConversation,
+  makeCronJob,
+  makeChannelsConfig,
+  makeAgentRecord,
+  makeCustomerSession,
+  makeInstalledMarketplaceListing,
+  SANDBOX_ID,
+  CONV_ID,
+} from './fixtures';
 
 const BASE = 'http://localhost:8000';
 
 export const handlers = [
+  http.get(`${BASE}/api/auth/me`, () =>
+    HttpResponse.json(makeCustomerSession()),
+  ),
+
+  http.get(`${BASE}/api/marketplace/my/installed-listings`, () =>
+    HttpResponse.json({ items: [makeInstalledMarketplaceListing()] }),
+  ),
+
+  http.get(`${BASE}/api/agents/:agent_id`, () =>
+    HttpResponse.json(makeAgentRecord()),
+  ),
+
+  http.post(`${BASE}/api/agents/:agent_id/launch`, () =>
+    HttpResponse.json({
+      launched: false,
+      sandboxId: SANDBOX_ID,
+      agent: makeAgentRecord(),
+    }),
+  ),
+
   // ── Sandboxes ────────────────────────────────────────────────────────────────
 
   http.get(`${BASE}/api/sandboxes`, () =>

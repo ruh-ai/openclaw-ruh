@@ -6,6 +6,7 @@ import { runSchemaMigrations } from './schemaMigrations';
 import { app } from './app';
 import { markBackendNotReady, markBackendReady } from './backendReadiness';
 import { handleVncUpgrade } from './vncProxy';
+import { handleGatewayUpgrade } from './gatewayProxy';
 import { initTelemetry, shutdownTelemetry } from './telemetry';
 
 export interface StartupLogger {
@@ -95,9 +96,16 @@ export async function startBackend(deps: StartupDependencies = {}): Promise<void
     initializePool();
     await initializeSchemaMigrations();
     const server = await listen(port, host);
-    // Attach WebSocket upgrade handler for VNC proxy
+    // Attach WebSocket upgrade handlers for VNC and gateway proxies
     if (server && typeof server.on === 'function') {
-      server.on('upgrade', handleVncUpgrade);
+      server.on('upgrade', (req, socket, head) => {
+        const url = req.url ?? '';
+        if (url.startsWith('/ws/gateway/')) {
+          handleGatewayUpgrade(req, socket, head);
+        } else {
+          handleVncUpgrade(req, socket, head);
+        }
+      });
     }
     markBackendReady();
     logger.log(`OpenClaw backend (TypeScript/Bun) listening on port ${port}`);

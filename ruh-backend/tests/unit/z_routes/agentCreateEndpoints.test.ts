@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
+import { signAccessToken } from '../../src/auth/tokens';
 
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ const mockGetAgentForCreator = mock(async (id: string) => ({
   sandbox_ids: ['sandbox-test-001'],
 }));
 
-mock.module('../../../src/store', () => ({
+mock.module('../../src/store', () => ({
   getSandbox: mock(async () => null),
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -48,7 +49,7 @@ mock.module('../../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../../src/conversationStore', () => ({
+mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -60,7 +61,7 @@ mock.module('../../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../../src/agentStore', () => ({
+mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
   listAgentsForCreator: mock(async () => []),
@@ -68,41 +69,25 @@ mock.module('../../../src/agentStore', () => ({
   saveAgent: mockSaveAgent,
   getAgent: mockGetAgent,
   getAgentForCreator: mockGetAgentForCreator,
-  getAgentForCreatorInOrg: mock(async () => null),
-  getAgentOwnership: mock(async () => null),
+  getAgentForCreatorInOrg: mockGetAgentForCreator,
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
+  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
   removeSandboxFromAgent: mock(async () => ({})),
   setForgeSandbox: mock(async () => ({})),
   promoteForgeSandbox: mock(async () => ({})),
   clearForgeSandbox: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
-  updatePaperclipMapping: mock(async () => null),
-  getAgentBySandboxId: mock(async () => null),
-  saveAgentCredential: mock(async () => {}),
-  deleteAgentCredential: mock(async () => {}),
   getAgentCredentials: mock(async () => []),
   getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'user-test-001',
-      email: 'developer@test.dev',
-      role: 'developer',
-      orgId: 'org-test-001',
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-}));
-
-mock.module('../../../src/auth/builderAccess', () => ({
+mock.module('../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
     organization: {
@@ -115,24 +100,27 @@ mock.module('../../../src/auth/builderAccess', () => ({
   })),
 }));
 
-mock.module('../../../src/sandboxManager', () => ({
+mock.module('../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../../src/channelManager', () => ({
+mock.module('../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   getFormattedChannelsConfig: mock(async () => ({})),
   configureChannels: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../../src/docker', () => ({
+mock.module('../../src/docker', () => ({
   dockerContainerRunning: mock(async () => false),
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
@@ -148,13 +136,32 @@ mock.module('../../../src/docker', () => ({
   listManagedSandboxContainers: mock(async () => []),
 }));
 
-mock.module('../../../src/backendReadiness', () => ({
-  markBackendReady: mock(() => {}),
-  markBackendNotReady: mock(() => {}),
-  getBackendReadiness: mock(() => ({ status: 'ready', reason: null, timestamp: Date.now() })),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
-const { request, resetStreams } = await import('../../helpers/app');
+const { request, resetStreams } = await import('../helpers/app.ts?unitAgentCreateEndpoints');
+
+function developerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'user-test-001',
+    email: 'developer@test.dev',
+    role: 'developer',
+    orgId: 'org-test-001',
+  })}`;
+}
 
 // ── Test suite ──────────────────────────────────────────────────────────────
 
@@ -169,18 +176,18 @@ beforeEach(() => {
 
 describe('POST /api/agents/create', () => {
   test('returns 400 when name is missing', async () => {
-    const res = await request().post('/api/agents/create').send({});
+    const res = await request().post('/api/agents/create').set('Authorization', developerAuthHeader()).send({});
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain('name');
   });
 
   test('returns 400 when name is empty string', async () => {
-    const res = await request().post('/api/agents/create').send({ name: '   ' });
+    const res = await request().post('/api/agents/create').set('Authorization', developerAuthHeader()).send({ name: '   ' });
     expect(res.status).toBe(400);
   });
 
   test('returns agent_id and stream_id on success', async () => {
-    const res = await request().post('/api/agents/create').send({
+    const res = await request().post('/api/agents/create').set('Authorization', developerAuthHeader()).send({
       name: 'Google Ads Manager',
       description: 'Manages Google Ads campaigns',
     });
@@ -192,7 +199,7 @@ describe('POST /api/agents/create', () => {
   });
 
   test('calls saveAgent with draft status', async () => {
-    await request().post('/api/agents/create').send({ name: 'Test Agent' });
+    await request().post('/api/agents/create').set('Authorization', developerAuthHeader()).send({ name: 'Test Agent' });
     expect(mockSaveAgent).toHaveBeenCalledTimes(1);
     const call = mockSaveAgent.mock.calls[0][0] as Record<string, unknown>;
     expect(call.name).toBe('Test Agent');
@@ -206,19 +213,19 @@ describe('POST /api/agents/create', () => {
 
 describe('POST /api/agents/reproduce', () => {
   test('returns 400 when name is missing', async () => {
-    const res = await request().post('/api/agents/reproduce').send({ repo_url: 'https://github.com/test/repo' });
+    const res = await request().post('/api/agents/reproduce').set('Authorization', developerAuthHeader()).send({ repo_url: 'https://github.com/test/repo' });
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain('name');
   });
 
   test('returns 400 when repo_url is missing', async () => {
-    const res = await request().post('/api/agents/reproduce').send({ name: 'Cloned Agent' });
+    const res = await request().post('/api/agents/reproduce').set('Authorization', developerAuthHeader()).send({ name: 'Cloned Agent' });
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain('repo_url');
   });
 
   test('returns agent_id and stream_id on success', async () => {
-    const res = await request().post('/api/agents/reproduce').send({
+    const res = await request().post('/api/agents/reproduce').set('Authorization', developerAuthHeader()).send({
       name: 'Cloned Agent',
       repo_url: 'https://github.com/test/agent-template',
     });
@@ -228,7 +235,7 @@ describe('POST /api/agents/reproduce', () => {
   });
 
   test('passes github_token when provided', async () => {
-    const res = await request().post('/api/agents/reproduce').send({
+    const res = await request().post('/api/agents/reproduce').set('Authorization', developerAuthHeader()).send({
       name: 'Private Clone',
       repo_url: 'https://github.com/test/private-agent',
       github_token: 'ghp_test123',
@@ -241,24 +248,24 @@ describe('POST /api/agents/reproduce', () => {
 
 describe('PATCH /api/agents/:id/mode', () => {
   test('returns 400 for invalid mode', async () => {
-    const res = await request().patch('/api/agents/agent-test-001/mode').send({ mode: 'invalid' });
+    const res = await request().patch('/api/agents/agent-test-001/mode').set('Authorization', developerAuthHeader()).send({ mode: 'invalid' });
     expect(res.status).toBe(400);
     expect(JSON.stringify(res.body)).toContain('mode');
   });
 
   test('returns 400 when mode is missing', async () => {
-    const res = await request().patch('/api/agents/agent-test-001/mode').send({});
+    const res = await request().patch('/api/agents/agent-test-001/mode').set('Authorization', developerAuthHeader()).send({});
     expect(res.status).toBe(400);
   });
 
   test('accepts "building" mode', async () => {
-    const res = await request().patch('/api/agents/agent-test-001/mode').send({ mode: 'building' });
+    const res = await request().patch('/api/agents/agent-test-001/mode').set('Authorization', developerAuthHeader()).send({ mode: 'building' });
     // May fail on dockerExec (mocked), but should not 400
     expect(res.status).not.toBe(400);
   });
 
   test('accepts "live" mode', async () => {
-    const res = await request().patch('/api/agents/agent-test-001/mode').send({ mode: 'live' });
+    const res = await request().patch('/api/agents/agent-test-001/mode').set('Authorization', developerAuthHeader()).send({ mode: 'live' });
     expect(res.status).not.toBe(400);
   });
 });
@@ -267,7 +274,7 @@ describe('PATCH /api/agents/:id/mode', () => {
 
 describe('DELETE /api/agents/:id/forge', () => {
   test('returns 200 and confirms deletion', async () => {
-    const res = await request().delete('/api/agents/agent-test-001/forge');
+    const res = await request().delete('/api/agents/agent-test-001/forge').set('Authorization', developerAuthHeader());
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('deleted', 'agent-test-001');
     expect(res.body).toHaveProperty('sandbox_cleaned');
@@ -275,7 +282,7 @@ describe('DELETE /api/agents/:id/forge', () => {
 
   test('returns 404 for non-existent agent', async () => {
     mockGetAgentForCreator.mockImplementationOnce(async () => null);
-    const res = await request().delete('/api/agents/nonexistent/forge');
+    const res = await request().delete('/api/agents/nonexistent/forge').set('Authorization', developerAuthHeader());
     expect(res.status).toBe(404);
   });
 });

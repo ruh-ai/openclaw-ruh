@@ -215,6 +215,7 @@ See [[016-marketplace]] for the full marketplace contract.
 ## Related Learnings
 
 - [[LEARNING-2026-03-28-repo-testability-audit]] — backend testability is currently constrained more by monolithic route/orchestration boundaries and singleton dependencies than by missing assertions
+- [[LEARNING-2026-04-03-backend-coverage-metrics]] — Bun's printed `All files` coverage is a simple file-average, while the packaged backend gate is driven by weighted LCOV totals; large files dominate the true threshold
 - [[LEARNING-2026-03-28-agent-readable-system-events]] — durable product/runtime observability should land in the backend `system_events` ledger first, with external tracing used only as additive correlation
 - [[LEARNING-2026-03-25-backend-request-validation-gap]] — the backend currently relies on scattered ad hoc checks instead of a shared request-schema boundary, so malformed write/proxy payloads can reach persistence or downstream services without a consistent fail-fast contract
 - [[LEARNING-2026-03-25-backend-error-diagnostic-exposure]] — several backend routes still echo raw gateway or CLI diagnostics straight to clients, so the API lacks a client-safe error boundary
@@ -234,3 +235,7 @@ See [[016-marketplace]] for the full marketplace contract.
 - [[SPEC-sandbox-conversation-cleanup]] — defines sandbox-owned conversation cleanup plus fail-closed direct conversation-route guards
 - [[SPEC-graceful-shutdown]] — defines the process-lifecycle contract for signal handling, request draining, SSE termination, and DB-pool shutdown
 - [[SPEC-agent-builder-gated-skill-tool-flow]] — adds the read-only skill-registry route surface used by the gated Co-Pilot builder
+
+## Related Reviews
+
+- [[REVIEW-paperclip-openspace-architecture]] — reviews fire-and-forget Paperclip/OpenSpace hooks in `app.ts`, shell injection risk, double-provisioning race, and post-chat DB read overhead

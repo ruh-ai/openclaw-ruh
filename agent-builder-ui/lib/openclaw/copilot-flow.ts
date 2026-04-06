@@ -19,10 +19,21 @@ import {
 import type { SkillAvailability } from "@/lib/skills/skill-registry";
 import { applyAcceptedImprovementsToConfig } from "@/app/(platform)/agents/create/create-session-config";
 import type { CoPilotPhase, SkillGenerationStatus } from "./copilot-state";
-import type { AgentDevStage, DiscoveryDocuments, SkillGraphNode, StageStatus, WorkflowDefinition } from "./types";
+import type { AgentDevStage, ArchitecturePlan, DiscoveryDocuments, SkillGraphNode, StageStatus, WorkflowDefinition } from "./types";
 
 export function hasPurposeMetadata(name: string, description: string): boolean {
   return name.trim().length > 0 && description.trim().length > 0;
+}
+
+/**
+ * Check if an architecture plan has inline content (skillMd + soulContent)
+ * that enables instant deploy without a separate Build/architect call.
+ */
+export function planHasInlineContent(plan: ArchitecturePlan): boolean {
+  if (!plan.soulContent?.trim()) return false;
+  if (!plan.skills || plan.skills.length === 0) return false;
+  // All skills must have skillMd content
+  return plan.skills.every((s) => !!s.skillMd?.trim());
 }
 
 export function resolveCoPilotToolResearchUseCase(description: string): string | undefined {
@@ -259,6 +270,27 @@ interface CoPilotAgentSeed {
   buildStatus?: StageStatus;
 }
 
+const STAGE_ORDER: AgentDevStage[] = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+const REVIEW_STAGE_INDEX = STAGE_ORDER.indexOf("review");
+
+function normalizeForgeStage(stage: string | null | undefined): AgentDevStage | null {
+  const normalized = stage === "complete" ? "ship" : stage;
+  if (!normalized) return null;
+  return STAGE_ORDER.includes(normalized as AgentDevStage)
+    ? (normalized as AgentDevStage)
+    : null;
+}
+
+export function canPersistReviewOrLaterForgeStage(
+  stage: AgentDevStage,
+  skillGraphCount: number,
+): boolean {
+  const stageIdx = STAGE_ORDER.indexOf(stage);
+  if (stageIdx < 0) return false;
+  if (stageIdx < REVIEW_STAGE_INDEX) return true;
+  return skillGraphCount > 0;
+}
+
 export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed {
   const skillGraph = agent.skillGraph ?? [];
   const projected = applyAcceptedImprovementsToConfig({
@@ -279,24 +311,30 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     })
     .filter((skill, index, all) => all.indexOf(skill) === index);
 
-  // When an agent is forging and has a skill graph, those skills were already
-  // built inside the forge sandbox. Mark them as built so a page refresh
-  // doesn't regress the deploy-readiness check to "unresolved".
-  const isForgedWithSkills = agent.status === "forging" && skillGraph.length > 0;
-  const builtSkillIds = isForgedWithSkills
+  // When an agent has a skill graph and is past the build stage, mark skills as built
+  // so a page refresh doesn't regress the deploy-readiness check to "unresolved".
+  const forgeStage = normalizeForgeStage(agent.forgeStage as string | null | undefined);
+  const forgeStageIdx = forgeStage ? STAGE_ORDER.indexOf(forgeStage) : -1;
+  const pastBuild = forgeStageIdx >= STAGE_ORDER.indexOf("review");
+  const hasSkills = skillGraph.length > 0;
+
+  const builtSkillIds = (pastBuild || agent.status === "active") && hasSkills
     ? skillGraph.map((node) => node.skill_id)
     : [];
 
-  // For forging agents that already have skills, restore the lifecycle stage
-  // to "ship" so the user lands back where they were instead of regressing to "think".
-  const lifecycleOverrides: Partial<CoPilotAgentSeed> = isForgedWithSkills
-    ? {
-        devStage: "ship" as const,
-        thinkStatus: "done" as const,
-        planStatus: "done" as const,
-        buildStatus: "done" as const,
-      }
-    : {};
+  // Restore only the viewed lifecycle stage from persisted agent truth.
+  // Completion badges must come from saved co-pilot lifecycle state, not from
+  // inferred agent status alone, otherwise reopened improve-agent flows paint
+  // Think/Plan/Build green even when this session never completed them.
+  const lifecycleOverrides: Partial<CoPilotAgentSeed> = {};
+  if (forgeStage && canPersistReviewOrLaterForgeStage(forgeStage, skillGraph.length)) {
+    lifecycleOverrides.devStage = forgeStage;
+  } else if (agent.status === "active" && hasSkills) {
+    // Older active agents without saved lifecycle state reopen in Review so the
+    // operator can inspect current config, but we intentionally do not infer
+    // earlier stage completion from "active" alone.
+    lifecycleOverrides.devStage = "review";
+  }
 
   return {
     name: agent.name,

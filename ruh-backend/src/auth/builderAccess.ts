@@ -16,7 +16,7 @@ export async function requireActiveDeveloperOrg(user?: AuthUser) {
   }
 
   const organization = await orgStore.getOrg(user.orgId);
-  if (!organization || organization.kind !== 'developer') {
+  if (!organization || organization.kind !== 'developer' || organization.status !== 'active') {
     throw httpError(403, 'Builder access requires an active developer organization');
   }
 

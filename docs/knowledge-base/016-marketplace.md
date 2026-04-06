@@ -129,6 +129,7 @@ Those demo listings are backed by real `agents` rows, appear in `/api/marketplac
 
 - [[SPEC-app-access-and-org-marketplace]] — moves marketplace ownership from user installs to developer-org listings, customer-org purchases, Stripe checkout, and seat-based assignment
 - [[SPEC-marketplace-store-parity]] — defines the store.ruh.ai-style catalog/detail/use parity rollout across backend, web, and Flutter while preserving org-owned entitlements
+- [[SPEC-admin-billing-control-plane]] — defines the admin/operator billing layer over Stripe plus Ruh org entitlements for customer-org purchases
 - [[SPEC-ruh-app-customer-surface-redesign]] — customer-facing Flutter marketplace redesign that removes internal/demo copy and clarifies install/use hierarchy
 - [[SPEC-local-demo-marketplace-seeding]] — repeatable local seed for real agent-backed published listings used in marketplace QA/demo environments
 

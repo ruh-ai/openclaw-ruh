@@ -33,6 +33,7 @@ export interface AuditEventFilters {
   target_id?: string;
   actor_type?: string;
   actor_id?: string;
+  request_id?: string;
   outcome?: string;
   limit?: number;
 }
@@ -87,6 +88,7 @@ export async function listAuditEvents(filters: AuditEventFilters = {}): Promise<
   addFilter('target_id', filters.target_id);
   addFilter('actor_type', filters.actor_type);
   addFilter('actor_id', filters.actor_id);
+  addFilter('request_id', filters.request_id);
   addFilter('outcome', filters.outcome);
 
   const limit = Math.min(Math.max(Number(filters.limit ?? 50), 1), 100);

@@ -346,7 +346,7 @@ describe("createCoPilotSeedFromAgent", () => {
       description: "Optimize paid search accounts",
       skillGraph: agent.skillGraph,
       selectedSkillIds: ["google-ads-audit", "budget-pacing-report"],
-      builtSkillIds: [],
+      builtSkillIds: ["google-ads-audit", "budget-pacing-report"],
       workflow: agent.workflow,
       skillGenerationStatus: "ready",
       skillGenerationError: null,
@@ -360,6 +360,7 @@ describe("createCoPilotSeedFromAgent", () => {
       discoveryDocuments: agent.discoveryDocuments,
       systemName: "Google Ads Optimizer",
       phase: "review",
+      devStage: "review",
     });
   });
 
@@ -506,6 +507,35 @@ describe("createCoPilotSeedFromAgent", () => {
       "google-ads-audit",
       "budget-pacing-report",
     ]);
+  });
+
+  test("fails closed when forge_stage claims review but no persisted skill graph exists", () => {
+    const agent = {
+      id: "agent-empty-review",
+      name: "Google Ads Recovery",
+      avatar: "🤖",
+      description: "Recover saved Google Ads config in Co-Pilot",
+      skills: [],
+      triggerLabel: "Weekday schedule",
+      status: "forging",
+      forgeStage: "review",
+      createdAt: "2026-03-26T00:00:00.000Z",
+      sandboxIds: ["sandbox-1"],
+      skillGraph: [],
+      workflow: null,
+      agentRules: [],
+      toolConnections: [],
+      triggers: [],
+      improvements: [],
+    } satisfies SavedAgent;
+
+    const seed = createCoPilotSeedFromAgent(agent);
+    expect(seed.phase).toBe("purpose");
+    expect(seed.skillGenerationStatus).toBe("idle");
+    expect(seed.devStage).toBeUndefined();
+    expect(seed.thinkStatus).toBeUndefined();
+    expect(seed.planStatus).toBeUndefined();
+    expect(seed.buildStatus).toBeUndefined();
   });
 });
 

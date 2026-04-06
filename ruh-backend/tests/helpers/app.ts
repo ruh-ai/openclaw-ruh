@@ -3,8 +3,15 @@
  * Call closeApp() in afterAll to drain any open handles.
  */
 
-import { app, _streams } from '../../src/app';
+import { mock } from 'bun:test';
 import supertest from 'supertest';
+
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+const cacheTag = new URL(import.meta.url).search.replace(/^\?/, '') || 'shared';
+const { app, _streams } = await import(`../../src/app.ts?${cacheTag}`);
 
 export { app, _streams };
 

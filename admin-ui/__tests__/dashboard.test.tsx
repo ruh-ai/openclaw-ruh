@@ -1,22 +1,7 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { render } from "@testing-library/react";
-
-// Mock lucide-react icons to avoid SVG rendering issues
-mock.module("lucide-react", () => {
-  const Icon = ({ children, ...props }: Record<string, unknown>) => <span {...props}>{children}</span>;
-  return {
-    Users: Icon,
-    Bot: Icon,
-    Server: Icon,
-    Store: Icon,
-    LayoutDashboard: Icon,
-    Activity: Icon,
-    LogOut: Icon,
-    Shield: Icon,
-    User: Icon,
-    Code: Icon,
-  };
-});
+import lucideMock from "../test-lucide-mock";
+mock.module("lucide-react", () => lucideMock);
 
 mock.module("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -49,32 +34,31 @@ describe("DashboardPage", () => {
     localStorage.setItem("accessToken", "test-token");
   });
 
-  test("renders Dashboard heading", async () => {
+  test("renders Overview heading", async () => {
     const { default: DashboardPage } = await import(
       "../app/(admin)/dashboard/page"
     );
     const { getByText } = render(<DashboardPage />);
-    expect(getByText("Dashboard")).toBeTruthy();
+    expect(getByText("Overview")).toBeTruthy();
   });
 
   test("renders platform overview subtitle", async () => {
     const { default: DashboardPage } = await import(
       "../app/(admin)/dashboard/page"
     );
-    const { getByText } = render(<DashboardPage />);
-    expect(getByText("Platform overview and health")).toBeTruthy();
+    const { container } = render(<DashboardPage />);
+    const text = container.textContent || "";
+    expect(text).toContain("command view");
   });
 
-  test("renders 4 stat card labels", async () => {
+  test("renders stat card labels", async () => {
     const { default: DashboardPage } = await import(
       "../app/(admin)/dashboard/page"
     );
     const { container } = render(<DashboardPage />);
     const text = container.textContent || "";
-    expect(text).toContain("Total Users");
-    expect(text).toContain("Total Agents");
-    expect(text).toContain("Active Sandboxes");
-    expect(text).toContain("Marketplace");
+    expect(text).toContain("Users");
+    expect(text).toContain("Agents");
   });
 
   test("fetches stats from API on mount", async () => {
@@ -84,6 +68,6 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
     expect(mockFetch).toHaveBeenCalled();
     const calledUrl = (mockFetch.mock.calls[0] as unknown[])[0] as string;
-    expect(calledUrl).toContain("/api/admin/stats");
+    expect(calledUrl).toContain("/api/admin/overview");
   });
 });

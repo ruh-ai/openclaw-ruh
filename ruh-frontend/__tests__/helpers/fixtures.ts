@@ -2,6 +2,8 @@ import type { SandboxRecord } from '@/components/SandboxSidebar';
 
 export const SANDBOX_ID = 'sb-test-001';
 export const CONV_ID = 'conv-test-001';
+export const AGENT_ID = 'agent-runtime-001';
+export const LISTING_ID = 'listing-sarah-001';
 
 export function makeSandbox(overrides: Partial<SandboxRecord> = {}): SandboxRecord {
   return {
@@ -66,6 +68,64 @@ export function makeChannelsConfig(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function makeCustomerSession(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'user-1',
+    email: 'customer@ruh.ai',
+    displayName: 'Ruh Customer',
+    appAccess: { admin: false, builder: false, customer: true },
+    activeOrganization: {
+      id: 'org-customer-1',
+      name: 'Acme Customer Org',
+      slug: 'acme-customer',
+      kind: 'customer',
+      plan: 'growth',
+    },
+    memberships: [
+      {
+        organizationId: 'org-customer-1',
+        organizationName: 'Acme Customer Org',
+        organizationSlug: 'acme-customer',
+        organizationKind: 'customer',
+        role: 'owner',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function makeAgentRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: AGENT_ID,
+    name: 'Sarah Assistant',
+    description: 'Warm executive operator for meetings, follow-ups, and operational coordination.',
+    status: 'active',
+    sandbox_ids: [SANDBOX_ID],
+    ...overrides,
+  };
+}
+
+export function makeInstalledListing(overrides: Record<string, unknown> = {}) {
+  return {
+    installId: 'install-001',
+    listingId: LISTING_ID,
+    agentId: AGENT_ID,
+    installedVersion: '1.2.0',
+    installedAt: new Date('2026-04-01T12:00:00Z').toISOString(),
+    listing: {
+      id: LISTING_ID,
+      title: 'Sarah Assistant',
+      slug: 'sarah-assistant-d15e3c9d',
+      summary: 'Warm, polished executive assistant for calendar and operations.',
+      category: 'operations',
+      iconUrl: null,
+      installCount: 241,
+      avgRating: 4.9,
+    },
+    ...overrides,
+  };
+}
+
 export const MOCK_CHAT_RESPONSE = {
   id: 'chatcmpl-test-001',
   object: 'chat.completion',
@@ -78,3 +138,50 @@ export const MOCK_CHAT_RESPONSE = {
   }],
   usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
 };
+
+export function makeMarketplaceListing(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'listing-sarah',
+    agentId: 'agent-sarah',
+    publisherId: 'publisher-1',
+    ownerOrgId: 'org-1',
+    title: 'Sarah Assistant',
+    slug: 'sarah-assistant',
+    summary: 'Warm, polished executive assistant for calendar and operations.',
+    description:
+      'Sarah keeps an organization running by coordinating meetings, following up on action items, and handling operational admin work with a human tone.',
+    category: 'operations',
+    tags: ['assistant', 'operations'],
+    iconUrl: null,
+    screenshots: [],
+    version: '1.2.0',
+    status: 'published',
+    reviewNotes: null,
+    reviewedBy: null,
+    reviewedAt: null,
+    installCount: 241,
+    avgRating: 4.9,
+    publishedAt: '2026-03-31T10:00:00.000Z',
+    createdAt: '2026-03-30T10:00:00.000Z',
+    updatedAt: '2026-03-31T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+export function makeInstalledMarketplaceListing(overrides: Record<string, unknown> = {}) {
+  const listingOverrides = (overrides.listing as Record<string, unknown> | undefined) ?? {};
+
+  return {
+    installId: 'install-sarah',
+    listingId: 'listing-sarah',
+    orgId: 'org-customer-1',
+    userId: 'user-customer-1',
+    agentId: 'agent-installed-sarah',
+    sourceAgentVersionId: 'agent-version-sarah',
+    installedVersion: '1.2.0',
+    installedAt: '2026-04-01T08:30:00.000Z',
+    lastLaunchedAt: '2026-04-02T09:45:00.000Z',
+    listing: makeMarketplaceListing(listingOverrides),
+    ...overrides,
+  };
+}

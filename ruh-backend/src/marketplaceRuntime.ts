@@ -28,6 +28,8 @@ export interface AgentRuntimeSnapshot {
   channels: agentStore.AgentChannelRecord[];
   agentRules: string[];
   workflow: unknown | null;
+  /** GitHub repo URL for v3 agents — used to clone workspace on install. */
+  repoUrl?: string | null;
 }
 
 interface SkillGraphNodeLike {
@@ -291,6 +293,7 @@ export function buildPublishedRuntimeSnapshot(
     channels: agent.channels,
     agentRules: agent.agent_rules,
     workflow: agent.workflow,
+    repoUrl: agent.repo_url ?? null,
   };
 }
 

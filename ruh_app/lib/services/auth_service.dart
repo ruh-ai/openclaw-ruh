@@ -52,9 +52,7 @@ class BackendAuthService implements AuthService {
       }
 
       final session = await _ensureCustomerAccess(AuthSession.fromJson(data));
-      if (session.accessToken != null && session.accessToken!.isNotEmpty) {
-        await _client.setAccessToken(session.accessToken!);
-      }
+      await _persistSessionTokens(session);
       return session;
     } on DioException catch (error) {
       throw _mapException(error, fallbackMessage: 'Login failed');
@@ -80,9 +78,7 @@ class BackendAuthService implements AuthService {
       }
 
       final session = AuthSession.fromJson(data, refreshToken: refreshToken);
-      if (session.accessToken != null && session.accessToken!.isNotEmpty) {
-        await _client.setAccessToken(session.accessToken!);
-      }
+      await _persistSessionTokens(session);
       return session;
     } on DioException catch (error) {
       throw _mapException(
@@ -94,23 +90,26 @@ class BackendAuthService implements AuthService {
 
   @override
   Future<AuthSession?> restoreSession() async {
-    final accessToken = await _client.getAccessToken();
-    if (accessToken == null || accessToken.isEmpty) {
-      return null;
-    }
-
     try {
       final response = await _client.get<Map<String, dynamic>>('/api/auth/me');
       final data = response.data;
       if (data == null) {
         await _client.clearAccessToken();
+        await _client.clearRefreshToken();
         return null;
       }
-      return AuthSession.fromJson(data, accessToken: accessToken);
+      final accessToken = await _client.getAccessToken();
+      final refreshToken = await _client.getRefreshToken();
+      return AuthSession.fromJson(
+        data,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+      );
     } on DioException catch (error) {
       final statusCode = error.response?.statusCode;
       if (statusCode == 401 || statusCode == 403) {
         await _client.clearAccessToken();
+        await _client.clearRefreshToken();
         return null;
       }
       throw _mapException(
@@ -128,12 +127,14 @@ class BackendAuthService implements AuthService {
       // Clearing the local token is the critical part for native clients.
     } finally {
       await _client.clearAccessToken();
+      await _client.clearRefreshToken();
     }
   }
 
   @override
   Future<void> clearLocalSession() async {
     await _client.clearAccessToken();
+    await _client.clearRefreshToken();
   }
 
   Future<AuthSession> _ensureCustomerAccess(AuthSession session) async {
@@ -186,5 +187,14 @@ class BackendAuthService implements AuthService {
       error.message ?? fallbackMessage,
       statusCode: error.response?.statusCode,
     );
+  }
+
+  Future<void> _persistSessionTokens(AuthSession session) async {
+    if (session.accessToken != null && session.accessToken!.isNotEmpty) {
+      await _client.setAccessToken(session.accessToken!);
+    }
+    if (session.refreshToken != null && session.refreshToken!.isNotEmpty) {
+      await _client.setRefreshToken(session.refreshToken!);
+    }
   }
 }

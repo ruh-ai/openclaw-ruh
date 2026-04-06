@@ -6,7 +6,7 @@
 
 ## Overview
 
-A Next.js 16 web application (port 3001) that is currently in transition from a sandbox-management developer surface into the first customer-org web app. The underlying UI is still the older sandbox/chat shell, but it now boots behind the shared customer-session contract: `/login` is public, non-auth routes are gated by middleware, and runtime calls use cookie-backed auth so customer org admins and members can enter the app with the same backend `appAccess.customer` truth used by the rest of the platform. As of 2026-04-01, its marketplace is no longer browse-only: `/marketplace` remains the live catalog list, `/marketplace/[slug]` renders real agent detail from `/api/marketplace/listings/:slug`, and the detail view resolves legacy install CTA state from `/api/marketplace/my/installs` before calling `POST /api/marketplace/listings/:id/install`. Checkout/use parity and assigned inventory are still tracked in [[SPEC-marketplace-store-parity]].
+A Next.js 16 web application (port 3001) that is currently in transition from a sandbox-management developer surface into the first customer-org web app. It now boots behind the shared customer-session contract: `/login` is public, non-auth routes are gated by middleware, and runtime calls use cookie-backed auth so customer org admins and members can enter the app with the same backend `appAccess.customer` truth used by the rest of the platform. As of 2026-04-02, `/` is no longer the legacy sandbox/chat shell: it renders the installed customer workspace backed by `GET /api/marketplace/my/installed-listings`, including loading, empty, and error states plus card navigation into `/marketplace/[slug]`. `/marketplace` remains the live catalog list, `/marketplace/[slug]` renders real agent detail from `/api/marketplace/listings/:slug`, and the detail view resolves legacy install CTA state from `/api/marketplace/my/installs` before calling `POST /api/marketplace/listings/:id/install`. Checkout/use parity and assigned inventory are still tracked in [[SPEC-marketplace-store-parity]] and [[SPEC-app-access-and-org-marketplace]].
 
 **Path:** `ruh-frontend/`
 
@@ -22,7 +22,7 @@ app/
   login/page.tsx    — customer login page
   marketplace/[slug]/page.tsx — customer-web marketplace detail route
   marketplace/[slug]/MarketplaceDetailClient.tsx — live detail + install client component
-  page.tsx          — main page, renders full sandbox management UI
+  page.tsx          — customer workspace home, renders installed marketplace listings
 components/
   SandboxSidebar.tsx    — left sidebar: list + select + delete sandboxes
   SandboxForm.tsx       — create new sandbox (SSE progress display)
@@ -48,6 +48,15 @@ middleware.ts           — route guard that keeps `/login` public and redirects
 ---
 
 ## Components
+
+### `app/page.tsx`
+
+- Fetches `GET /api/marketplace/my/installed-listings` on mount
+- Renders workspace loading, empty, and error states for installed customer inventory
+- Links each installed listing card to `/marketplace/[slug]` for detail and install context
+- Keeps the primary acquisition CTA anchored on `/marketplace`
+
+---
 
 ### `SandboxSidebar`
 
@@ -119,7 +128,7 @@ Configure Telegram/Slack channels.
 
 The customer-web gate is now active per [[SPEC-app-access-and-org-marketplace]]. `middleware.ts` keeps `/login` public but redirects every other page to `/login?redirect_url=...` when both auth cookies are missing. After hydration, `CustomerSessionGate.tsx` calls `GET /api/auth/me` with `credentials: "include"`, auto-switches to the first eligible customer membership through `POST /api/auth/switch-org` when a recoverable multi-org session is active on the wrong tenant, and only redirects to `/login` when no eligible customer org exists.
 
-Customer login is local-email/password for now. `app/login/page.tsx` posts to `POST /api/auth/login`, auto-switches through `POST /api/auth/switch-org` when the returned session includes a valid customer membership but started on a developer org, then requires `appAccess.customer` before redirecting back to the requested route. The shell still renders the legacy sandbox-management UI, but it now does so under a real customer-org session instead of a no-auth local surface.
+Customer login is local-email/password for now. `app/login/page.tsx` posts to `POST /api/auth/login`, auto-switches through `POST /api/auth/switch-org` when the returned session includes a valid customer membership but started on a developer org, then requires `appAccess.customer` before redirecting back to the requested route. The authenticated shell now lands on the installed-agent workspace at `/`, while legacy sandbox-management components remain in the codebase as older internal surfaces rather than the default customer home.
 
 `CustomerSessionGate.tsx` also now renders a lightweight active-organization switcher for multi-customer-org users, so they can move between customer tenants without logging out as long as the browser session is still valid.
 
@@ -127,7 +136,7 @@ Customer login is local-email/password for now. `app/login/page.tsx` posts to `P
 - `apiFetch()` always sends `credentials: "include"` to the backend
 - `createAuthenticatedEventSource()` always opens SSE with `withCredentials: true`
 
-That helper is used by the sandbox sidebar, chat, history, mission control, cron, channel, marketplace catalog/detail/install flows, and sandbox-create flows so the web app no longer logs in successfully and then drops auth on every cross-origin backend request.
+That helper is used by the installed-workspace home, marketplace catalog/detail/install flows, and the remaining legacy sandbox/chat surfaces so the web app no longer logs in successfully and then drops auth on every cross-origin backend request.
 
 ---
 

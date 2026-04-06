@@ -19,24 +19,12 @@ import { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } from './age
 import { createLogger } from '@ruh/logger';
 import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
-import * as _authMiddleware from './auth/middleware';
-import * as _builderAccess from './auth/builderAccess';
-import * as _customerAccess from './auth/customerAccess';
-
-// Late-binding wrappers: call through the namespace so that mock.module()
-// replacements take effect even after app.ts has already been evaluated and
-// route handlers have been registered.  Without this, named imports are
-// captured by value at route-registration time and subsequent mock.module
-// calls in test files cannot override them.
-const requireAuth: (req: Request, res: Response, next: NextFunction) => void =
-  (req, res, next) => _authMiddleware.requireAuth(req, res, next);
-const requireRole: (...roles: string[]) => (req: Request, res: Response, next: NextFunction) => void =
-  (...roles) => (req, res, next) => _authMiddleware.requireRole(...roles)(req, res, next);
-const requireActiveDeveloperOrg: typeof _builderAccess.requireActiveDeveloperOrg =
-  (...args) => _builderAccess.requireActiveDeveloperOrg(...args);
-const requireActiveCustomerOrg: typeof _customerAccess.requireActiveCustomerOrg =
-  (...args) => _customerAccess.requireActiveCustomerOrg(...args);
+import { optionalAuth, requireAuth, requireRole } from './auth/middleware';
+import { deriveAppAccess } from './auth/appAccess';
+import { requireActiveDeveloperOrg } from './auth/builderAccess';
+import { requireActiveCustomerOrg } from './auth/customerAccess';
 import * as userStore from './userStore';
+import * as sessionStore from './sessionStore';
 import { withConn } from './db';
 
 import {
@@ -55,23 +43,29 @@ import * as conversationStore from './conversationStore';
 import * as agentStore from './agentStore';
 import * as evalResultStore from './evalResultStore';
 import * as orgStore from './orgStore';
+import * as organizationMembershipStore from './organizationMembershipStore';
 import * as channelManager from './channelManager';
 import * as auditStore from './auditStore';
 import * as systemEventStore from './systemEventStore';
 import * as webhookDeliveryStore from './webhookDeliveryStore';
-import { findSkill, listSkills } from './skillRegistry';
+import * as billingStore from './billingStore';
+import { resolveEntitlementAccess } from './billing/entitlementState';
+import { findSkill, listSkills, searchSkills, publishSkill, registryStats } from './skillRegistry';
+import { listTemplates, getTemplate, searchTemplates, listCategories } from './templateRegistry';
 import * as paperclipOrchestrator from './paperclipOrchestrator';
 import { getBackendReadiness } from './backendReadiness';
 import { getSandboxConversationRecord } from './conversationAccess';
 import {
   createOpenclawSandbox,
   dockerExec,
+  ensureInteractiveRuntimeServices,
   getContainerName,
   PREVIEW_PORTS,
   reconfigureSandboxLlm,
   restartGateway,
   retrofitSandboxToSharedCodex,
   stopAndRemoveContainer,
+  waitForGateway,
 } from './sandboxManager';
 import {
   httpError,
@@ -85,6 +79,7 @@ import {
   createWorkspaceHandoffCommand,
   createWorkspaceListCommand,
   createWorkspaceReadCommand,
+  createWorkspaceStatusCommand,
   normalizeWorkspaceRelativePath,
 } from "./workspaceFiles";
 import {
@@ -94,6 +89,7 @@ import {
   validateAgentCreateBody,
   validateAgentMetadataPatchBody,
   validateAgentSandboxAttachBody,
+  validateCustomerAgentConfigPatchBody,
   validateAgentWorkspaceMemoryPatchBody,
   validateConversationMessagesAppendBody,
 } from './validation';
@@ -108,6 +104,11 @@ import {
   classifySandboxRuntime,
 } from './sandboxRuntime';
 import { buildConfigurePayloadFromAgent } from './marketplaceRuntime';
+import {
+  extractToolEventsFromTranscript,
+  resolveSessionTranscriptFile,
+  type TranscriptToolEvent,
+} from './sessionToolTranscript';
 
 // ---------------------------------------------------------------------------
 // Architect SOUL.md — injected into every new agent's forge container so the
@@ -213,14 +214,10 @@ app.use('/api/auth', authRouter);
 app.use('/api/marketplace', marketplaceRouter);
 app.use('/api/agents/:agentId', createCostRouter());
 
-// In-memory store for active creation streams (exported for test cleanup)
-export interface StreamEntry {
-  status: 'pending' | 'running' | 'done' | 'error';
-  request: Record<string, unknown>;
-  result?: Record<string, unknown>;
-  error?: string;
-}
-export const _streams = new Map<string, StreamEntry>();
+// In-memory store for active creation streams (shared registry, exported for test cleanup)
+import { streams as _sharedStreams, type StreamEntry } from './streamRegistry';
+export type { StreamEntry };
+export const _streams = _sharedStreams;
 
 interface ConfigureAgentStepResult {
   kind: 'soul' | 'skill' | 'cron' | 'mcp' | 'runtime_env' | 'webhook';
@@ -449,6 +446,171 @@ async function resolveActiveSandboxForAgent(
   return null;
 }
 
+async function ensureLaunchableSandboxRuntime(
+  record: store.SandboxRecord,
+): Promise<store.SandboxRecord | null> {
+  const containerName = getContainerName(record.sandbox_id);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+  if (!running) {
+    return null;
+  }
+
+  await ensureInteractiveRuntimeServices(containerName).catch(() => {});
+  const alreadyHealthy = await waitForGateway(containerName).catch(() => false);
+  const authBypassEnabled = await isGatewayDeviceAuthBypassEnabled(
+    containerName,
+  ).catch(() => false);
+  if (alreadyHealthy && authBypassEnabled) {
+    return refreshSandboxRuntimePorts(record);
+  }
+
+  await restartGateway(containerName);
+  const recovered = await waitForGateway(containerName).catch(() => false);
+  if (!recovered) {
+    return null;
+  }
+  return refreshSandboxRuntimePorts(record);
+}
+
+async function isGatewayDeviceAuthBypassEnabled(
+  containerName: string,
+): Promise<boolean> {
+  const [ok, output] = await dockerExec(
+    containerName,
+    'openclaw config get gateway.controlUi.dangerouslyDisableDeviceAuth',
+    10_000,
+  );
+  if (!ok) {
+    return false;
+  }
+  const normalized = output
+    .split('\n')
+    .map((line) => line.trim().replace(/^"+|"+$/g, ''))
+    .find(Boolean);
+  return normalized === 'true';
+}
+
+async function resolvePublishedDockerPort(
+  containerName: string,
+  containerPort: number,
+): Promise<number | null> {
+  const [exitCode, output] = await dockerSpawn(
+    ['port', containerName, `${containerPort}/tcp`],
+    10_000,
+  );
+  if (exitCode !== 0 || !output.trim()) {
+    return null;
+  }
+
+  const firstMapping = output
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean);
+  const parsed = firstMapping
+    ? parseInt(firstMapping.split(':').pop() ?? '', 10)
+    : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function refreshSandboxRuntimePorts(
+  record: store.SandboxRecord,
+): Promise<store.SandboxRecord> {
+  const containerName = getContainerName(record.sandbox_id);
+  const [gatewayPort, vncPort] = await Promise.all([
+    resolvePublishedDockerPort(containerName, 18789),
+    resolvePublishedDockerPort(containerName, 6080),
+  ]);
+
+  const nextGatewayPort = gatewayPort ?? record.gateway_port ?? 18789;
+  const nextVncPort = vncPort ?? record.vnc_port ?? null;
+  if (
+    nextGatewayPort === record.gateway_port &&
+    nextVncPort === record.vnc_port
+  ) {
+    return record;
+  }
+
+  await store.saveSandbox(
+    {
+      ...record,
+      gateway_port: nextGatewayPort,
+      vnc_port: nextVncPort,
+    } as unknown as Record<string, unknown>,
+    record.sandbox_name,
+  );
+
+  return (
+    (await store.getSandbox(record.sandbox_id).catch(() => null)) ?? {
+      ...record,
+      gateway_port: nextGatewayPort,
+      vnc_port: nextVncPort,
+    }
+  );
+}
+
+async function readSandboxSessionToolEvents(
+  sandboxId: string,
+  sessionKey: string,
+): Promise<TranscriptToolEvent[]> {
+  const [indexCode, indexOutput] = await sandboxExec(
+    sandboxId,
+    'cat "$HOME/.openclaw/agents/main/sessions/sessions.json" 2>/dev/null',
+    10,
+  );
+  if (indexCode !== 0 || !indexOutput.trim()) {
+    return [];
+  }
+
+  const sessionFile = resolveSessionTranscriptFile(indexOutput, sessionKey);
+  if (!sessionFile) {
+    return [];
+  }
+
+  const [transcriptCode, transcriptOutput] = await sandboxExec(
+    sandboxId,
+    `tail -n 400 ${joinShellArgs([sessionFile])} 2>/dev/null`,
+    10,
+  );
+  if (transcriptCode !== 0 || !transcriptOutput.trim()) {
+    return [];
+  }
+
+  return extractToolEventsFromTranscript(transcriptOutput);
+}
+
+async function ensureSandboxBrowserRuntime(
+  record: store.SandboxRecord,
+): Promise<store.SandboxRecord> {
+  const containerName = getContainerName(record.sandbox_id);
+  await ensureInteractiveRuntimeServices(containerName).catch(() => {});
+  await Bun.sleep(500);
+  return refreshSandboxRuntimePorts(record).catch(() => record);
+}
+
+async function isSandboxBrowserActive(sandboxId: string): Promise<boolean> {
+  const [code, output] = await sandboxExec(sandboxId, 'pgrep -f x11vnc', 5);
+  return code === 0 && output.trim().length > 0;
+}
+
+async function captureSandboxBrowserScreenshot(
+  sandboxId: string,
+): Promise<Buffer | null> {
+  const [code, output] = await sandboxExec(
+    sandboxId,
+    'DISPLAY=:99 import -window root -quality 60 jpeg:- 2>/dev/null | base64 -w0',
+    10,
+  );
+  if (code !== 0 || !output.trim()) {
+    return null;
+  }
+
+  try {
+    return Buffer.from(output.trim(), 'base64');
+  } catch {
+    return null;
+  }
+}
+
 async function persistWebhookDeliveryStatus(
   agent: agentStore.AgentRecord,
   triggerId: string,
@@ -531,6 +693,901 @@ function requireAdmin(req: Request): void {
 interface AuditActor {
   actor_type: string;
   actor_id: string;
+}
+
+function requireAdminAccess(req: Request): AuditActor {
+  if (req.user?.role === 'admin') {
+    return {
+      actor_type: 'user',
+      actor_id: req.user.userId,
+    };
+  }
+
+  requireAdmin(req);
+  return {
+    actor_type: 'admin_token',
+    actor_id: 'openclaw_admin_token',
+  };
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) {
+    return value as T[];
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed as T[] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function toAdminMembershipResponse(
+  membership: organizationMembershipStore.OrganizationMembershipRecord,
+) {
+  return {
+    id: membership.id,
+    organizationId: membership.orgId,
+    organizationName: membership.organizationName,
+    organizationSlug: membership.organizationSlug,
+    organizationKind: membership.organizationKind,
+    organizationPlan: membership.organizationPlan,
+    organizationStatus: membership.organizationStatus,
+    role: membership.role,
+    status: membership.status,
+  };
+}
+
+async function buildAdminMemberships(user: userStore.UserRecord) {
+  const memberships = await organizationMembershipStore.listMembershipsForUser(user.id);
+  if (memberships.length > 0) {
+    return memberships.map(toAdminMembershipResponse);
+  }
+
+  if (!user.orgId) {
+    return [];
+  }
+
+  const org = await orgStore.getOrg(user.orgId);
+  if (!org) {
+    return [];
+  }
+
+  return [{
+    id: `legacy:${user.id}:${org.id}`,
+    organizationId: org.id,
+    organizationName: org.name,
+    organizationSlug: org.slug,
+    organizationKind: org.kind,
+    organizationPlan: org.plan,
+    organizationStatus: org.status,
+    role: user.role === 'developer' ? 'developer' : 'employee',
+    status: 'active',
+  }];
+}
+
+async function buildAdminUserResponse(user: userStore.UserRecord) {
+  const memberships = await buildAdminMemberships(user);
+  const platformRole = user.role === 'admin' ? 'platform_admin' : 'user';
+  const appAccess = deriveAppAccess({ platformRole, memberships });
+  const primaryOrganization =
+    memberships.find((membership) => membership.organizationId === user.orgId)
+    ?? null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified,
+    orgId: user.orgId,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    platformRole,
+    appAccess,
+    memberships,
+    primaryOrganization,
+  };
+}
+
+async function listAdminOrganizationSummaries(filters: {
+  kind?: string;
+  status?: string;
+  search?: string;
+} = {}) {
+  return withConn(async (client) => {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let paramIdx = 1;
+
+    if (filters.kind) {
+      conditions.push(`o.kind = $${paramIdx++}`);
+      params.push(filters.kind);
+    }
+
+    if (filters.status) {
+      conditions.push(`o.status = $${paramIdx++}`);
+      params.push(filters.status);
+    }
+
+    if (filters.search) {
+      conditions.push(`(o.name ILIKE $${paramIdx} OR o.slug ILIKE $${paramIdx})`);
+      params.push(`%${filters.search}%`);
+      paramIdx += 1;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const result = await client.query(
+      `
+      SELECT
+        o.id,
+        o.name,
+        o.slug,
+        o.kind,
+        o.plan,
+        o.status,
+        o.created_at,
+        o.updated_at,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id) AS member_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active') AS active_member_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'owner') AS owner_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'admin') AS admin_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'developer') AS developer_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'employee') AS employee_count,
+        (SELECT COUNT(*) FROM agents a WHERE a.org_id = o.id) AS agent_count,
+        (SELECT COUNT(*) FROM agents a WHERE a.org_id = o.id AND a.status = 'active') AS active_agent_count,
+        (SELECT COUNT(*) FROM marketplace_listings ml WHERE ml.owner_org_id = o.id) AS listing_count,
+        (SELECT COUNT(*) FROM marketplace_listings ml WHERE ml.owner_org_id = o.id AND ml.status = 'published') AS published_listing_count,
+        (SELECT COUNT(*) FROM marketplace_runtime_installs mi WHERE mi.org_id = o.id) AS install_count,
+        (SELECT COUNT(*) FROM sessions s WHERE s.active_org_id = o.id) AS active_session_count
+      FROM organizations o
+      ${where}
+      ORDER BY member_count DESC, install_count DESC, agent_count DESC, o.created_at DESC
+      `,
+      params,
+    );
+
+    return result.rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      kind: String(row.kind),
+      plan: String(row.plan),
+      status: String(row.status ?? 'active'),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      memberCount: Number(row.member_count ?? 0),
+      activeMemberCount: Number(row.active_member_count ?? 0),
+      membershipBreakdown: {
+        owner: Number(row.owner_count ?? 0),
+        admin: Number(row.admin_count ?? 0),
+        developer: Number(row.developer_count ?? 0),
+        employee: Number(row.employee_count ?? 0),
+      },
+      agentCount: Number(row.agent_count ?? 0),
+      activeAgentCount: Number(row.active_agent_count ?? 0),
+      listingCount: Number(row.listing_count ?? 0),
+      publishedListingCount: Number(row.published_listing_count ?? 0),
+      installCount: Number(row.install_count ?? 0),
+      activeSessionCount: Number(row.active_session_count ?? 0),
+    }));
+  });
+}
+
+async function loadAdminOrganizationDetail(orgId: string) {
+  return withConn(async (client) => {
+    const summaryResult = await client.query(
+      `
+      SELECT
+        o.id,
+        o.name,
+        o.slug,
+        o.kind,
+        o.plan,
+        o.status,
+        o.created_at,
+        o.updated_at,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id) AS member_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active') AS active_member_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'owner') AS owner_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'admin') AS admin_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'developer') AS developer_count,
+        (SELECT COUNT(*) FROM organization_memberships m WHERE m.org_id = o.id AND m.status = 'active' AND m.role = 'employee') AS employee_count,
+        (SELECT COUNT(*) FROM agents a WHERE a.org_id = o.id) AS agent_count,
+        (SELECT COUNT(*) FROM agents a WHERE a.org_id = o.id AND a.status = 'active') AS active_agent_count,
+        (SELECT COUNT(*) FROM marketplace_listings ml WHERE ml.owner_org_id = o.id) AS listing_count,
+        (SELECT COUNT(*) FROM marketplace_listings ml WHERE ml.owner_org_id = o.id AND ml.status = 'published') AS published_listing_count,
+        (SELECT COUNT(*) FROM marketplace_runtime_installs mi WHERE mi.org_id = o.id) AS install_count,
+        (SELECT COUNT(*) FROM sessions s WHERE s.active_org_id = o.id) AS active_session_count
+      FROM organizations o
+      WHERE o.id = $1
+      LIMIT 1
+      `,
+      [orgId],
+    );
+
+    const row = summaryResult.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    const membersResult = await client.query(
+      `
+      SELECT
+        m.id,
+        m.org_id,
+        m.user_id,
+        m.role,
+        m.status,
+        m.created_at,
+        m.updated_at,
+        o.name AS organization_name,
+        o.slug AS organization_slug,
+        o.kind AS organization_kind,
+        o.plan AS organization_plan,
+        o.status AS organization_status,
+        u.email AS user_email,
+        u.display_name AS user_display_name,
+        u.role AS user_role,
+        u.status AS user_status,
+        u.email_verified AS user_email_verified,
+        u.created_at AS user_created_at
+      FROM organization_memberships m
+      JOIN organizations o ON o.id = m.org_id
+      JOIN users u ON u.id = m.user_id
+      WHERE m.org_id = $1
+      ORDER BY
+        CASE m.role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          WHEN 'developer' THEN 2
+          ELSE 3
+        END,
+        m.created_at ASC
+      `,
+      [orgId],
+    );
+
+    const agentsResult = await client.query(
+      `
+      SELECT
+        a.id,
+        a.name,
+        a.description,
+        a.status,
+        a.created_at,
+        a.sandbox_ids,
+        a.forge_sandbox_id,
+        u.email AS creator_email,
+        u.display_name AS creator_display_name
+      FROM agents a
+      LEFT JOIN users u ON u.id = a.created_by
+      WHERE a.org_id = $1
+      ORDER BY a.created_at DESC
+      LIMIT 24
+      `,
+      [orgId],
+    );
+
+    const agentItems = agentsResult.rows.map((agentRow) => ({
+      id: String(agentRow.id),
+      name: String(agentRow.name),
+      description: String(agentRow.description ?? ''),
+      status: String(agentRow.status),
+      createdAt: String(agentRow.created_at),
+      sandboxIds: parseJsonArray<string>(agentRow.sandbox_ids),
+      forgeSandboxId: agentRow.forge_sandbox_id ? String(agentRow.forge_sandbox_id) : null,
+      creatorEmail: agentRow.creator_email ? String(agentRow.creator_email) : null,
+      creatorDisplayName: agentRow.creator_display_name ? String(agentRow.creator_display_name) : null,
+    }));
+
+    const listingsResult = await client.query(
+      `
+      SELECT
+        ml.id,
+        ml.title,
+        ml.slug,
+        ml.status,
+        ml.version,
+        ml.category,
+        ml.install_count,
+        ml.updated_at,
+        u.email AS publisher_email
+      FROM marketplace_listings ml
+      LEFT JOIN users u ON u.id = ml.publisher_id
+      WHERE ml.owner_org_id = $1
+      ORDER BY ml.updated_at DESC, ml.created_at DESC
+      LIMIT 24
+      `,
+      [orgId],
+    );
+
+    const installsResult = await client.query(
+      `
+      SELECT
+        mri.user_id,
+        u.email AS user_email,
+        ml.id AS listing_id,
+        ml.title AS listing_title,
+        mri.agent_id,
+        a.name AS agent_name,
+        mri.version,
+        mri.installed_at,
+        mri.last_launched_at
+      FROM marketplace_runtime_installs mri
+      JOIN users u ON u.id = mri.user_id
+      JOIN marketplace_listings ml ON ml.id = mri.listing_id
+      LEFT JOIN agents a ON a.id = mri.agent_id
+      WHERE mri.org_id = $1
+      ORDER BY mri.installed_at DESC
+      LIMIT 24
+      `,
+      [orgId],
+    );
+
+    const sessionsResult = await client.query(
+      `
+      SELECT
+        s.id,
+        s.user_id,
+        s.user_agent,
+        s.ip_address,
+        s.expires_at,
+        s.created_at,
+        u.email AS user_email,
+        u.display_name AS user_display_name,
+        u.role AS user_role,
+        u.status AS user_status
+      FROM sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.active_org_id = $1
+        AND s.expires_at > NOW()
+      ORDER BY s.created_at DESC
+      LIMIT 50
+      `,
+      [orgId],
+    );
+
+    const runtimeIds = Array.from(
+      new Set(
+        agentItems.flatMap((agent) => [
+          ...agent.sandboxIds,
+          ...(agent.forgeSandboxId ? [agent.forgeSandboxId] : []),
+        ]),
+      ),
+    );
+
+    let runtimeItems: Array<Record<string, unknown>> = [];
+    if (runtimeIds.length > 0) {
+      const runtimeResult = await client.query(
+        `
+        SELECT
+          sandbox_id,
+          sandbox_name,
+          sandbox_state,
+          approved,
+          shared_codex_enabled,
+          shared_codex_model,
+          dashboard_url,
+          signed_url,
+          standard_url,
+          created_at
+        FROM sandboxes
+        WHERE sandbox_id = ANY($1::text[])
+        ORDER BY created_at DESC
+        `,
+        [runtimeIds],
+      );
+
+      runtimeItems = runtimeResult.rows.map((runtimeRow) => {
+        const sandboxId = String(runtimeRow.sandbox_id);
+        const linkedAgents = agentItems
+          .filter(
+            (agent) =>
+              agent.sandboxIds.includes(sandboxId) || agent.forgeSandboxId === sandboxId,
+          )
+          .map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            status: agent.status,
+            attachment: agent.forgeSandboxId === sandboxId ? 'forge' : 'runtime',
+          }));
+
+        return {
+          sandbox_id: sandboxId,
+          sandbox_name: runtimeRow.sandbox_name ? String(runtimeRow.sandbox_name) : null,
+          sandbox_state: runtimeRow.sandbox_state ? String(runtimeRow.sandbox_state) : null,
+          approved: Boolean(runtimeRow.approved),
+          shared_codex_enabled: Boolean(runtimeRow.shared_codex_enabled),
+          shared_codex_model: runtimeRow.shared_codex_model ? String(runtimeRow.shared_codex_model) : null,
+          dashboard_url: runtimeRow.dashboard_url ? String(runtimeRow.dashboard_url) : null,
+          signed_url: runtimeRow.signed_url ? String(runtimeRow.signed_url) : null,
+          standard_url: runtimeRow.standard_url ? String(runtimeRow.standard_url) : null,
+          created_at: runtimeRow.created_at ? String(runtimeRow.created_at) : null,
+          linked_agents: linkedAgents,
+        };
+      });
+    }
+
+    const auditResult = await client.query(
+      `
+      SELECT
+        event_id,
+        occurred_at,
+        request_id,
+        action_type,
+        target_type,
+        target_id,
+        outcome,
+        actor_type,
+        actor_id,
+        origin,
+        details
+      FROM control_plane_audit_events
+      WHERE (target_type = 'organization' AND target_id = $1)
+         OR (details->>'org_id' = $1)
+      ORDER BY occurred_at DESC, event_id DESC
+      LIMIT 30
+      `,
+      [orgId],
+    );
+
+    const organization = {
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      kind: String(row.kind),
+      plan: String(row.plan),
+      status: String(row.status ?? 'active'),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      memberCount: Number(row.member_count ?? 0),
+      activeMemberCount: Number(row.active_member_count ?? 0),
+      membershipBreakdown: {
+        owner: Number(row.owner_count ?? 0),
+        admin: Number(row.admin_count ?? 0),
+        developer: Number(row.developer_count ?? 0),
+        employee: Number(row.employee_count ?? 0),
+      },
+      agentCount: Number(row.agent_count ?? 0),
+      activeAgentCount: Number(row.active_agent_count ?? 0),
+      listingCount: Number(row.listing_count ?? 0),
+      publishedListingCount: Number(row.published_listing_count ?? 0),
+      installCount: Number(row.install_count ?? 0),
+      activeSessionCount: Number(row.active_session_count ?? 0),
+    };
+
+    const warnings: Array<{
+      id: string;
+      severity: 'high' | 'medium' | 'low';
+      title: string;
+      detail: string;
+    }> = [];
+
+    if (organization.membershipBreakdown.owner === 0) {
+      warnings.push({
+        id: 'no-owner',
+        severity: 'high',
+        title: 'No active owner remains on this organization',
+        detail: 'Promote an owner before suspending or removing additional privileged members.',
+      });
+    }
+
+    if (organization.kind === 'customer' && organization.membershipBreakdown.admin === 0 && organization.membershipBreakdown.owner === 0) {
+      warnings.push({
+        id: 'no-customer-admin',
+        severity: 'medium',
+        title: 'Customer organization has no active admin',
+        detail: 'The tenant can still hold members, but nobody can actively administer the customer workspace.',
+      });
+    }
+
+    if (organization.status !== 'active') {
+      warnings.push({
+        id: 'org-not-active',
+        severity: 'medium',
+        title: `Organization is ${organization.status}`,
+        detail: 'Builder and customer app access are blocked while the organization is suspended or archived.',
+      });
+    }
+
+    if (organization.activeSessionCount > 0 && organization.status !== 'active') {
+      warnings.push({
+        id: 'active-session-context',
+        severity: 'low',
+        title: 'Existing sessions still point at this organization',
+        detail: 'Use the session-context reset action to clear active-org selection for current refresh sessions.',
+      });
+    }
+
+    return {
+      organization,
+      members: membersResult.rows.map((memberRow) => ({
+        id: String(memberRow.id),
+        userId: String(memberRow.user_id),
+        role: String(memberRow.role),
+        status: String(memberRow.status),
+        createdAt: String(memberRow.created_at),
+        updatedAt: String(memberRow.updated_at),
+        user: {
+          email: String(memberRow.user_email),
+          displayName: String(memberRow.user_display_name ?? ''),
+          role: String(memberRow.user_role),
+          status: String(memberRow.user_status),
+          emailVerified: Boolean(memberRow.user_email_verified),
+          createdAt: String(memberRow.user_created_at),
+        },
+      })),
+      agents: agentItems,
+      listings: listingsResult.rows.map((listingRow) => ({
+        id: String(listingRow.id),
+        title: String(listingRow.title),
+        slug: String(listingRow.slug),
+        status: String(listingRow.status),
+        version: String(listingRow.version ?? '1.0.0'),
+        category: String(listingRow.category ?? 'general'),
+        installCount: Number(listingRow.install_count ?? 0),
+        updatedAt: String(listingRow.updated_at),
+        publisherEmail: listingRow.publisher_email ? String(listingRow.publisher_email) : null,
+      })),
+      installs: installsResult.rows.map((installRow) => ({
+        userId: String(installRow.user_id),
+        userEmail: String(installRow.user_email),
+        listingId: String(installRow.listing_id),
+        listingTitle: String(installRow.listing_title),
+        agentId: String(installRow.agent_id),
+        agentName: installRow.agent_name ? String(installRow.agent_name) : null,
+        version: String(installRow.version),
+        installedAt: String(installRow.installed_at),
+        lastLaunchedAt: installRow.last_launched_at ? String(installRow.last_launched_at) : null,
+      })),
+      sessions: sessionsResult.rows.map((sessionRow) => ({
+        id: String(sessionRow.id),
+        userId: String(sessionRow.user_id),
+        userAgent: sessionRow.user_agent ? String(sessionRow.user_agent) : null,
+        ipAddress: sessionRow.ip_address ? String(sessionRow.ip_address) : null,
+        createdAt: String(sessionRow.created_at),
+        expiresAt: String(sessionRow.expires_at),
+        user: {
+          email: String(sessionRow.user_email),
+          displayName: String(sessionRow.user_display_name ?? ''),
+          role: String(sessionRow.user_role),
+          status: String(sessionRow.user_status),
+        },
+      })),
+      runtime: runtimeItems,
+      audit: {
+        items: auditResult.rows,
+      },
+      warnings,
+    };
+  });
+}
+
+async function getAdminOwnerGuard(orgId: string, membershipId: string) {
+  const membership = await organizationMembershipStore.getMembershipById(membershipId);
+  if (!membership || membership.orgId !== orgId) {
+    throw httpError(404, 'Organization membership not found');
+  }
+
+  const memberships = await organizationMembershipStore.listMembershipsForOrg(orgId);
+  const activeOwnerCount = memberships.filter(
+    (item) => item.role === 'owner' && item.status === 'active',
+  ).length;
+
+  return { membership, activeOwnerCount };
+}
+
+async function loadAdminMarketplaceData(filters: {
+  status?: string;
+  search?: string;
+} = {}) {
+  return withConn(async (client) => {
+    const summaryResult = await client.query(
+      `
+      SELECT
+        COUNT(*) AS total_listings,
+        COUNT(*) FILTER (WHERE status = 'draft') AS draft_count,
+        COUNT(*) FILTER (WHERE status = 'pending_review') AS pending_review_count,
+        COUNT(*) FILTER (WHERE status = 'published') AS published_count,
+        COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_count,
+        COUNT(*) FILTER (WHERE status = 'archived') AS archived_count
+      FROM marketplace_listings
+      `,
+    );
+
+    const installsResult = await client.query(
+      'SELECT COUNT(*) AS total_installs FROM marketplace_runtime_installs',
+    );
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let paramIdx = 1;
+
+    if (filters.status) {
+      conditions.push(`ml.status = $${paramIdx++}`);
+      params.push(filters.status);
+    }
+
+    if (filters.search) {
+      conditions.push(
+        `(ml.title ILIKE $${paramIdx} OR ml.slug ILIKE $${paramIdx} OR ml.summary ILIKE $${paramIdx} OR COALESCE(u.email, '') ILIKE $${paramIdx} OR COALESCE(o.name, '') ILIKE $${paramIdx})`,
+      );
+      params.push(`%${filters.search}%`);
+      paramIdx += 1;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const selectListings = `
+      SELECT
+        ml.id,
+        ml.title,
+        ml.slug,
+        ml.category,
+        ml.version,
+        ml.status,
+        ml.install_count,
+        ml.avg_rating,
+        ml.review_notes,
+        ml.reviewed_at,
+        ml.published_at,
+        ml.created_at,
+        ml.updated_at,
+        u.email AS publisher_email,
+        u.display_name AS publisher_display_name,
+        o.name AS owner_org_name,
+        o.slug AS owner_org_slug
+      FROM marketplace_listings ml
+      LEFT JOIN users u ON u.id = ml.publisher_id
+      LEFT JOIN organizations o ON o.id = ml.owner_org_id
+      ${where}
+    `;
+
+    const [recentListingsResult, topListingsResult] = await Promise.all([
+      client.query(
+        `${selectListings} ORDER BY ml.created_at DESC LIMIT 12`,
+        params,
+      ),
+      client.query(
+        `${selectListings} ORDER BY ml.install_count DESC, ml.published_at DESC NULLS LAST, ml.created_at DESC LIMIT 8`,
+        params,
+      ),
+    ]);
+
+    const serializeListing = (row: Record<string, unknown>) => ({
+      id: String(row.id),
+      title: String(row.title),
+      slug: String(row.slug),
+      category: String(row.category),
+      version: String(row.version),
+      status: String(row.status),
+      installCount: Number(row.install_count ?? 0),
+      avgRating: Number(row.avg_rating ?? 0),
+      reviewNotes: row.review_notes ? String(row.review_notes) : null,
+      reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+      publishedAt: row.published_at ? String(row.published_at) : null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      publisherEmail: row.publisher_email ? String(row.publisher_email) : null,
+      publisherDisplayName: row.publisher_display_name ? String(row.publisher_display_name) : null,
+      ownerOrgName: row.owner_org_name ? String(row.owner_org_name) : null,
+      ownerOrgSlug: row.owner_org_slug ? String(row.owner_org_slug) : null,
+    });
+
+    const summary = summaryResult.rows[0] ?? {};
+    return {
+      summary: {
+        totalListings: Number(summary.total_listings ?? 0),
+        draft: Number(summary.draft_count ?? 0),
+        pendingReview: Number(summary.pending_review_count ?? 0),
+        published: Number(summary.published_count ?? 0),
+        rejected: Number(summary.rejected_count ?? 0),
+        archived: Number(summary.archived_count ?? 0),
+        totalInstalls: Number(installsResult.rows[0]?.total_installs ?? 0),
+      },
+      recentListings: recentListingsResult.rows.map((row) => serializeListing(row as Record<string, unknown>)),
+      topListings: topListingsResult.rows.map((row) => serializeListing(row as Record<string, unknown>)),
+    };
+  });
+}
+
+async function loadAdminRuntimeData() {
+  const [records, containers, agents] = await Promise.all([
+    store.listSandboxes(),
+    listManagedSandboxContainers(),
+    agentStore.listAgents(),
+  ]);
+
+  const report = buildSandboxRuntimeReconciliation({ records, containers });
+  const recordById = new Map(records.map((record) => [record.sandbox_id, record]));
+  const linkedAgentsBySandboxId = new Map<string, {
+    id: string;
+    name: string;
+    status: string;
+    attachment: 'runtime' | 'forge';
+  }[]>();
+
+  const pushLinkedAgent = (
+    sandboxId: string,
+    agent: { id: string; name: string; status: string; attachment: 'runtime' | 'forge' },
+  ) => {
+    const existing = linkedAgentsBySandboxId.get(sandboxId) ?? [];
+    existing.push(agent);
+    linkedAgentsBySandboxId.set(sandboxId, existing);
+  };
+
+  for (const agent of agents) {
+    for (const sandboxId of agent.sandbox_ids) {
+      pushLinkedAgent(sandboxId, {
+        id: agent.id,
+        name: agent.name,
+        status: agent.status,
+        attachment: 'runtime',
+      });
+    }
+
+    if (agent.forge_sandbox_id) {
+      pushLinkedAgent(agent.forge_sandbox_id, {
+        id: agent.id,
+        name: agent.name,
+        status: agent.status,
+        attachment: 'forge',
+      });
+    }
+  }
+
+  const items = report.items.map((item) => {
+    const record = recordById.get(item.sandbox_id);
+    return {
+      ...item,
+      sandbox_state: record?.sandbox_state ?? null,
+      approved: record?.approved ?? false,
+      shared_codex_enabled: record?.shared_codex_enabled ?? false,
+      shared_codex_model: record?.shared_codex_model ?? null,
+      dashboard_url: record?.dashboard_url ?? null,
+      signed_url: record?.signed_url ?? null,
+      standard_url: record?.standard_url ?? null,
+      gateway_port: record?.gateway_port ?? null,
+      vnc_port: record?.vnc_port ?? null,
+      linked_agents: linkedAgentsBySandboxId.get(item.sandbox_id) ?? [],
+    };
+  });
+
+  return {
+    summary: {
+      ...report.summary,
+      approved: records.filter((record) => record.approved).length,
+      sharedCodexEnabled: records.filter((record) => record.shared_codex_enabled).length,
+    },
+    items,
+  };
+}
+
+async function loadAdminOverview() {
+  const [userCounts, agentCounts, organizationItems, runtime, marketplace, recentAudit] = await Promise.all([
+    withConn(async (client) => {
+      const result = await client.query(
+        `
+        SELECT
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE role = 'admin') AS admin_count,
+          COUNT(*) FILTER (WHERE role = 'developer') AS developer_count,
+          COUNT(*) FILTER (WHERE role = 'end_user') AS end_user_count,
+          COUNT(*) FILTER (WHERE status = 'active') AS active_count,
+          COUNT(*) FILTER (WHERE status = 'suspended') AS suspended_count,
+          COUNT(*) FILTER (WHERE status = 'pending') AS pending_count
+        FROM users
+        `,
+      );
+      return result.rows[0] ?? {};
+    }),
+    withConn(async (client) => {
+      const result = await client.query(
+        `
+        SELECT
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE status = 'active') AS active_count,
+          COUNT(*) FILTER (WHERE status = 'draft') AS draft_count,
+          COUNT(*) FILTER (WHERE status = 'forging') AS forging_count
+        FROM agents
+        `,
+      );
+      return result.rows[0] ?? {};
+    }),
+    listAdminOrganizationSummaries(),
+    loadAdminRuntimeData(),
+    loadAdminMarketplaceData(),
+    auditStore.listAuditEvents({ limit: 8 }),
+  ]);
+
+  const organizationTotals = {
+    total: organizationItems.length,
+    developer: organizationItems.filter((org) => org.kind === 'developer').length,
+    customer: organizationItems.filter((org) => org.kind === 'customer').length,
+  };
+
+  const attention = [];
+  if (runtime.summary.db_only > 0 || runtime.summary.container_only > 0) {
+    attention.push({
+      id: 'runtime-drift',
+      severity: 'high',
+      title: 'Runtime drift needs cleanup',
+      detail: `${runtime.summary.db_only} DB-only and ${runtime.summary.container_only} container-only sandboxes need operator action.`,
+      href: '/runtime',
+    });
+  }
+  if (runtime.summary.gateway_unreachable > 0) {
+    attention.push({
+      id: 'gateway-unreachable',
+      severity: 'medium',
+      title: 'Some sandboxes are unreachable',
+      detail: `${runtime.summary.gateway_unreachable} sandboxes exist in both DB and Docker but the gateway does not appear healthy.`,
+      href: '/runtime',
+    });
+  }
+  if (Number(marketplace.summary.pendingReview) > 0) {
+    attention.push({
+      id: 'marketplace-review',
+      severity: 'medium',
+      title: 'Marketplace review queue is not empty',
+      detail: `${marketplace.summary.pendingReview} listings are waiting for review.`,
+      href: '/marketplace',
+    });
+  }
+  if (Number(userCounts.suspended_count ?? 0) > 0) {
+    attention.push({
+      id: 'suspended-users',
+      severity: 'low',
+      title: 'There are suspended users to review',
+      detail: `${userCounts.suspended_count} user accounts are currently suspended.`,
+      href: '/users',
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    users: {
+      total: Number(userCounts.total ?? 0),
+      byRole: {
+        admin: Number(userCounts.admin_count ?? 0),
+        developer: Number(userCounts.developer_count ?? 0),
+        endUser: Number(userCounts.end_user_count ?? 0),
+      },
+      byStatus: {
+        active: Number(userCounts.active_count ?? 0),
+        suspended: Number(userCounts.suspended_count ?? 0),
+        pending: Number(userCounts.pending_count ?? 0),
+      },
+    },
+    organizations: {
+      ...organizationTotals,
+      top: organizationItems.slice(0, 6),
+    },
+    agents: {
+      total: Number(agentCounts.total ?? 0),
+      byStatus: {
+        active: Number(agentCounts.active_count ?? 0),
+        draft: Number(agentCounts.draft_count ?? 0),
+        forging: Number(agentCounts.forging_count ?? 0),
+      },
+    },
+    runtime: {
+      summary: runtime.summary,
+      issues: runtime.items.filter((item) => item.drift_state !== 'healthy').slice(0, 8),
+    },
+    marketplace,
+    activity: {
+      recentAuditEvents: recentAudit.items,
+    },
+    attention,
+  };
 }
 
 async function recordAuditEvent(
@@ -762,7 +1819,7 @@ async function applyAgentConfiguration(
     const runtimeEnvContent = buildRuntimeEnvFileContent(
       (runtime_inputs ?? []).map((input) => ({
         key: String(input.key ?? ''),
-        value: String(input.value ?? ''),
+        value: String(input.value ?? '').trim() || String((input as Record<string, unknown>).defaultValue ?? ''),
       })),
     );
     const [ok, out] = await dockerExec(
@@ -987,15 +2044,19 @@ app.get(
           });
           sendEvent('result', data);
         } else if (eventType === 'approved') {
-          await store.markApproved(entry.result!['sandbox_id'] as string);
+          if (!entry.result?.['sandbox_id']) {
+            sendEvent('error', { message: 'Cannot approve: sandbox result is missing or has no sandbox_id' });
+            break;
+          }
+          await store.markApproved(entry.result['sandbox_id'] as string);
           entry.status = 'done';
           await recordSystemEvent(req, {
             level: 'info',
             category: 'sandbox.lifecycle',
             action: 'sandbox.create.approved',
             status: 'success',
-            message: `Sandbox ${String(entry.result?.['sandbox_id'] ?? '')} device approval succeeded`,
-            sandbox_id: String(entry.result?.['sandbox_id'] ?? ''),
+            message: `Sandbox ${String(entry.result['sandbox_id'])} device approval succeeded`,
+            sandbox_id: String(entry.result['sandbox_id']),
             source: 'ruh-backend:sandbox-stream',
             details: {
               stream_id,
@@ -1104,14 +2165,76 @@ app.delete('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
 
 // ── Agents CRUD ──────────────────────────────────────────────────────────────
 
-app.get('/api/skills', asyncHandler(async (_req, res) => {
-  res.json(listSkills());
+app.get('/api/skills', asyncHandler(async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (q) {
+    res.json(searchSkills(q));
+  } else {
+    res.json(listSkills());
+  }
+}));
+
+app.get('/api/skills/stats', asyncHandler(async (_req, res) => {
+  res.json(registryStats());
 }));
 
 app.get('/api/skills/:skill_id', asyncHandler(async (req, res) => {
   const skill = findSkill(req.params.skill_id);
   if (!skill) throw httpError(404, 'Skill not found');
   res.json(skill);
+}));
+
+app.post('/api/skills', requireAuth, asyncHandler(async (req, res) => {
+  const { skill_id, name, description, tags, skill_md, agent_id } = req.body as {
+    skill_id: string; name: string; description: string;
+    tags: string[]; skill_md: string; agent_id?: string;
+  };
+  if (!skill_id || !name || !skill_md) {
+    throw httpError(400, 'skill_id, name, and skill_md are required');
+  }
+  const added = publishSkill({
+    skill_id, name,
+    description: description || name,
+    tags: Array.isArray(tags) ? tags : [],
+    skill_md,
+    source: 'community',
+    publishedBy: typeof agent_id === 'string' ? agent_id : undefined,
+  });
+  res.status(added ? 201 : 200).json({ ok: true, added, skill_id });
+}));
+
+// ── Agent Templates ───────────────────────────────────────────────────────────
+// Public — no auth required. Templates are read-only seed data.
+
+app.get('/api/templates', asyncHandler(async (req, res) => {
+  const category = typeof req.query.category === 'string' ? req.query.category.trim() : undefined;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+  let results;
+  if (q) {
+    results = searchTemplates(q);
+    if (category) {
+      const cat = category.toLowerCase();
+      results = results.filter((t) => t.category.toLowerCase() === cat);
+    }
+  } else {
+    results = listTemplates(category);
+  }
+
+  // Strip architecturePlan from the list response to keep payloads small.
+  // Callers fetch the full template via GET /api/templates/:id before deploy.
+  const lightweight = results.map(({ architecturePlan: _plan, ...rest }) => rest);
+  res.json(lightweight);
+}));
+
+app.get('/api/templates/categories', asyncHandler(async (_req, res) => {
+  res.json(listCategories());
+}));
+
+app.get('/api/templates/:id', asyncHandler(async (req, res) => {
+  const template = getTemplate(req.params.id);
+  if (!template) throw httpError(404, 'Template not found');
+  res.json(template);
 }));
 
 async function getAgentRecord(agentId: string): Promise<agentStore.AgentRecord> {
@@ -1160,6 +2283,69 @@ async function getReadableAgentRecord(req: Request, agentId: string): Promise<ag
   return getOwnedAgentRecord(req, agentId);
 }
 
+function buildCustomerAgentConfigResponse(record: agentStore.AgentRecord) {
+  const safeRecord = redactAgentWebhookSecrets(record);
+  const workspaceMemory = safeRecord.workspace_memory ?? {
+    instructions: '',
+    continuity_summary: '',
+    pinned_paths: [],
+    updated_at: null,
+  };
+
+  return {
+    agent: {
+      id: safeRecord.id,
+      name: safeRecord.name,
+      avatar: safeRecord.avatar,
+      description: safeRecord.description,
+      status: safeRecord.status,
+      sandboxIds: safeRecord.sandbox_ids ?? [],
+      createdAt: safeRecord.created_at,
+      updatedAt: safeRecord.updated_at,
+    },
+    skills: safeRecord.skills ?? [],
+    agentRules: safeRecord.agent_rules ?? [],
+    runtimeInputs: safeRecord.runtime_inputs ?? [],
+    toolConnections: (safeRecord.tool_connections ?? []).map((tool) => ({
+      toolId: tool.toolId,
+      name: tool.name,
+      description: tool.description,
+      status: tool.status,
+      connectorType: tool.connectorType,
+      authKind: tool.authKind,
+      configSummary: tool.configSummary,
+    })),
+    triggers: safeRecord.triggers ?? [],
+    channels: safeRecord.channels ?? [],
+    workspaceMemory: {
+      instructions: workspaceMemory.instructions ?? '',
+      continuitySummary: workspaceMemory.continuity_summary ?? '',
+      pinnedPaths: workspaceMemory.pinned_paths ?? [],
+      updatedAt: workspaceMemory.updated_at ?? null,
+    },
+    creationSession: safeRecord.creation_session ?? null,
+  };
+}
+
+function applyCustomerRuntimeInputValues(
+  currentInputs: agentStore.AgentRuntimeInputRecord[],
+  updates: Array<{ key: string; value: string }>,
+) {
+  const nextValueByKey = new Map(updates.map((entry) => [entry.key, entry.value]));
+  for (const entry of updates) {
+    const match = currentInputs.find((input) => input.key === entry.key);
+    if (!match) {
+      throw httpError(422, `Unknown runtime input key: ${entry.key}`);
+    }
+  }
+
+  return currentInputs.map((input) => (
+    nextValueByKey.has(input.key)
+      ? { ...input, value: nextValueByKey.get(input.key) ?? '' }
+      : input
+  ));
+}
+
 app.get('/api/agents', requireAuth, asyncHandler(async (req, res) => {
   const activeOrgKind = await getActiveOrgKind(req);
   if (activeOrgKind === 'customer') {
@@ -1191,6 +2377,39 @@ app.get('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
   res.json(redactAgentWebhookSecrets(await getReadableAgentRecord(req, req.params.id)));
 }));
 
+app.get('/api/agents/:id/customer-config', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getCustomerOwnedAgentRecord(req, req.params.id);
+  res.json(buildCustomerAgentConfigResponse(agent));
+}));
+
+app.patch('/api/agents/:id/customer-config', requireAuth, asyncHandler(async (req, res) => {
+  let agent = await getCustomerOwnedAgentRecord(req, req.params.id);
+  const body = validateCustomerAgentConfigPatchBody(req.body);
+
+  if (body.name !== undefined || body.description !== undefined) {
+    agent = await agentStore.updateAgent(req.params.id, {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+    }) ?? agent;
+  }
+
+  if (body.agentRules !== undefined || body.runtimeInputValues !== undefined) {
+    const runtimeInputs = body.runtimeInputValues === undefined
+      ? agent.runtime_inputs
+      : applyCustomerRuntimeInputValues(
+          agent.runtime_inputs ?? [],
+          body.runtimeInputValues,
+        );
+
+    agent = await agentStore.updateAgentConfig(req.params.id, {
+      ...(body.agentRules !== undefined ? { agentRules: body.agentRules } : {}),
+      ...(body.runtimeInputValues !== undefined ? { runtimeInputs } : {}),
+    }) ?? agent;
+  }
+
+  res.json(buildCustomerAgentConfigResponse(agent));
+}));
+
 app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) => {
   req.setTimeout(0);
   res.setTimeout(0);
@@ -1205,11 +2424,31 @@ app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) =>
     throw httpError(404, 'Agent not found');
   }
 
+  // Validate that required user_required inputs have values
+  const missingInputs = (agent.runtime_inputs ?? []).filter(
+    (input: { required?: boolean; populationStrategy?: string; value?: string; defaultValue?: string }) =>
+      input.required &&
+      (input.populationStrategy ?? 'user_required') === 'user_required' &&
+      !(input.value?.trim()) &&
+      !(input.defaultValue?.trim()),
+  );
+  if (missingInputs.length > 0) {
+    const keys = missingInputs.map((i: { key: string }) => i.key).join(', ');
+    throw httpError(400, `Missing required configuration: ${keys}. Please complete setup first.`);
+  }
+
   const activeSandbox = await resolveActiveSandboxForAgent(agent);
   if (activeSandbox) {
+    const readySandbox = await ensureLaunchableSandboxRuntime(activeSandbox);
+    if (!readySandbox) {
+      throw httpError(
+        503,
+        'Existing sandbox is running but its gateway could not be repaired. Please restart the runtime.',
+      );
+    }
     res.json({
       launched: false,
-      sandboxId: activeSandbox.sandbox_id,
+      sandboxId: readySandbox.sandbox_id,
       agent: redactAgentWebhookSecrets(agent),
     });
     return;
@@ -1271,9 +2510,29 @@ app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) =>
 }));
 
 app.patch('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
-  await getOwnedAgentRecord(req, req.params.id);
+  const existing = await getOwnedAgentRecord(req, req.params.id);
   const body = validateAgentMetadataPatchBody(req.body);
   const updated = await agentStore.updateAgent(req.params.id, body);
+
+  // Auto-snapshot a config version whenever the agent becomes active
+  if (body.status === 'active' && existing.status !== 'active' && updated) {
+    const snapshot = {
+      skillGraph: updated.skill_graph,
+      workflow: updated.workflow,
+      agentRules: updated.agent_rules,
+      runtimeInputs: updated.runtime_inputs,
+      toolConnections: updated.tool_connections,
+      triggers: updated.triggers,
+      discoveryDocuments: updated.discovery_documents,
+    };
+    agentStore.createAgentConfigVersion(
+      updated.id,
+      snapshot,
+      'Auto-snapshot on activation',
+      req.user!.userId,
+    ).catch(() => {});
+  }
+
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
@@ -1396,6 +2655,348 @@ app.delete('/api/agents/:id/eval-results/:evalId', requireAuth, asyncHandler(asy
   res.json({ deleted: req.params.evalId });
 }));
 
+// ── Clone / Fork Agent ────────────────────────────────────────────────────────
+
+app.post('/api/agents/:id/clone', requireAuth, asyncHandler(async (req, res) => {
+  const source = await getOwnedAgentRecord(req, req.params.id);
+  const builder = await requireBuilderContext(req);
+
+  const clone = await agentStore.saveAgent({
+    name: `${source.name} (Copy)`,
+    avatar: source.avatar,
+    description: source.description,
+    skills: source.skills,
+    triggerLabel: source.trigger_label,
+    status: 'draft',
+    skillGraph: source.skill_graph,
+    workflow: source.workflow,
+    agentRules: source.agent_rules,
+    runtimeInputs: source.runtime_inputs,
+    toolConnections: source.tool_connections,
+    triggers: source.triggers,
+    discoveryDocuments: source.discovery_documents,
+    createdBy: req.user!.userId,
+    orgId: builder.organization.id,
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'agent.clone',
+    target_type: 'agent',
+    target_id: clone.id,
+    outcome: 'success',
+    details: { source_agent_id: source.id },
+  });
+
+  res.status(201).json(redactAgentWebhookSecrets(clone));
+}));
+
+// ── Infer Runtime Input Values (AI auto-population) ─────────────────────────
+
+async function inferInputValues(
+  agentName: string,
+  agentDescription: string,
+  variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>,
+): Promise<Record<string, string>> {
+  const config = getConfig();
+
+  if (!variables?.length) return {};
+
+  const apiKey = config.openrouterApiKey || config.anthropicApiKey || config.openaiApiKey;
+  if (!apiKey) return {};
+
+  const variablesList = variables
+    .map((v) => `- ${v.key} (${v.label}): ${v.description}${v.example ? ` Example: ${v.example}` : ''}${v.options?.length ? ` Options: ${v.options.join(', ')}` : ''}`)
+    .join('\n');
+
+  const prompt = `Given this AI agent:
+- Name: ${agentName}
+- Description: ${agentDescription || 'No description'}
+
+Suggest realistic, sensible values for these configuration variables. These are NOT secrets — they are behavioral settings, preferences, and metadata that can be inferred from the agent's purpose.
+
+Variables:
+${variablesList}
+
+Respond with ONLY a JSON object mapping variable keys to suggested values. No explanation, no markdown fences.
+Example: {"TIMEZONE": "America/New_York", "COMPANY_NAME": "Acme Corp"}`;
+
+  let values: Record<string, string> = {};
+
+  if (config.openrouterApiKey) {
+    const resp = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+      model: 'anthropic/claude-haiku',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openrouterApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.choices?.[0]?.message?.content ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  } else if (config.anthropicApiKey) {
+    const resp = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+    }, {
+      headers: {
+        'x-api-key': config.anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.content?.[0]?.text ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  } else if (config.openaiApiKey) {
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openaiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.choices?.[0]?.message?.content ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  }
+
+  // Only return values for keys that were requested
+  const filtered: Record<string, string> = {};
+  for (const v of variables) {
+    if (values[v.key] !== undefined) {
+      filtered[v.key] = String(values[v.key]);
+    }
+  }
+  return filtered;
+}
+
+// Per-agent route (setup page — agent already exists)
+app.post('/api/agents/:id/infer-inputs', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+
+  const { variables } = req.body as {
+    variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>;
+  };
+
+  try {
+    const values = await inferInputValues(agent.name, agent.description ?? '', variables ?? []);
+    res.json({ values });
+  } catch (err) {
+    appLogger.warn(`infer-inputs LLM call failed: ${(err as Error).message}`);
+    res.json({ values: {} });
+  }
+}));
+
+// Generic route (creation flow — agent not yet saved)
+app.post('/api/infer-inputs', requireAuth, asyncHandler(async (req, res) => {
+  const { agentName, agentDescription, variables } = req.body as {
+    agentName: string;
+    agentDescription: string;
+    variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>;
+  };
+
+  if (!agentName) {
+    res.status(400).json({ error: 'agentName is required' });
+    return;
+  }
+
+  try {
+    const values = await inferInputValues(agentName, agentDescription ?? '', variables ?? []);
+    res.json({ values });
+  } catch (err) {
+    appLogger.warn(`infer-inputs LLM call failed: ${(err as Error).message}`);
+    res.json({ values: {} });
+  }
+}));
+
+// ── Agent Config Versioning ───────────────────────────────────────────────────
+
+app.post('/api/agents/:id/versions', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const message = typeof req.body?.message === 'string' ? req.body.message : undefined;
+
+  const snapshot = {
+    skillGraph: agent.skill_graph,
+    workflow: agent.workflow,
+    agentRules: agent.agent_rules,
+    runtimeInputs: agent.runtime_inputs,
+    toolConnections: agent.tool_connections,
+    triggers: agent.triggers,
+    discoveryDocuments: agent.discovery_documents,
+  };
+
+  const version = await agentStore.createAgentConfigVersion(
+    agent.id,
+    snapshot,
+    message,
+    req.user!.userId,
+  );
+  res.status(201).json(version);
+}));
+
+app.get('/api/agents/:id/versions', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  const versions = await agentStore.listAgentConfigVersions(req.params.id, limit);
+  res.json(versions);
+}));
+
+app.get('/api/agents/:id/versions/:version', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const versionNumber = parseInt(req.params.version, 10);
+  if (isNaN(versionNumber) || versionNumber < 1) throw httpError(400, 'version must be a positive integer');
+  const version = await agentStore.getAgentConfigVersion(req.params.id, versionNumber);
+  if (!version) throw httpError(404, 'Version not found');
+  res.json(version);
+}));
+
+app.post('/api/agents/:id/versions/:version/rollback', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const versionNumber = parseInt(req.params.version, 10);
+  if (isNaN(versionNumber) || versionNumber < 1) throw httpError(400, 'version must be a positive integer');
+
+  const updated = await agentStore.rollbackAgentToConfigVersion(req.params.id, versionNumber);
+  if (!updated) throw httpError(404, 'Version not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'agent.config.rollback',
+    target_type: 'agent',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: { version_number: versionNumber },
+  });
+
+  res.json(redactAgentWebhookSecrets(updated));
+}));
+
+// ── Agent Monitoring ──────────────────────────────────────────────────────────
+
+app.get('/api/agents/:id/metrics', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const agentId = req.params.id;
+
+  const metrics = await withConn(async (client) => {
+    const [totalConvsRes, totalMsgsRes, errorsRes, lastActiveRes, toolUsageRes] =
+      await Promise.all([
+        client.query(
+          `SELECT COUNT(DISTINCT details->>'conversation_id') AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1 AND action_type = 'sandbox.chat'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1 AND action_type = 'sandbox.chat'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1
+             AND outcome = 'failure'
+             AND occurred_at >= NOW() - INTERVAL '24 hours'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT MAX(occurred_at) AS last_active
+           FROM control_plane_audit_events
+           WHERE target_id = $1`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT details->>'tool_name' AS tool_name, COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1
+             AND action_type = 'sandbox.tool_call'
+             AND details->>'tool_name' IS NOT NULL
+           GROUP BY details->>'tool_name'
+           ORDER BY count DESC`,
+          [agentId],
+        ),
+      ]);
+
+    const toolUsage: Record<string, number> = {};
+    for (const row of toolUsageRes.rows) {
+      toolUsage[String(row.tool_name)] = Number(row.count);
+    }
+
+    return {
+      total_conversations: Number(totalConvsRes.rows[0]?.count ?? 0),
+      total_messages: Number(totalMsgsRes.rows[0]?.count ?? 0),
+      errors_last_24h: Number(errorsRes.rows[0]?.count ?? 0),
+      last_active: lastActiveRes.rows[0]?.last_active instanceof Date
+        ? lastActiveRes.rows[0].last_active.toISOString()
+        : (lastActiveRes.rows[0]?.last_active ?? null),
+      tool_usage: toolUsage,
+    };
+  });
+
+  res.json(metrics);
+}));
+
+app.get('/api/agents/:id/activity', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const agentId = req.params.id;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+
+  const events = await withConn(async (client) => {
+    const res = await client.query(
+      `SELECT event_id, occurred_at, action_type, outcome, details
+       FROM control_plane_audit_events
+       WHERE target_id = $1
+       ORDER BY occurred_at DESC
+       LIMIT $2`,
+      [agentId, limit],
+    );
+    return res.rows;
+  });
+
+  const activity = events.map((row: Record<string, unknown>) => {
+    const details = (row.details && typeof row.details === 'object') ? row.details as Record<string, unknown> : {};
+    const actionType = String(row.action_type);
+    const outcome = String(row.outcome);
+
+    let type = actionType;
+    let summary = actionType;
+    if (actionType === 'sandbox.chat') {
+      type = outcome === 'failure' ? 'error' : 'message';
+      summary = outcome === 'failure' ? 'Chat error' : 'Conversation message';
+    } else if (actionType === 'sandbox.tool_call') {
+      type = 'tool_call';
+      summary = details.tool_name ? `Tool: ${details.tool_name}` : 'Tool call';
+    } else if (actionType === 'agent.deploy') {
+      type = 'deploy';
+      summary = 'Agent deployed';
+    } else if (actionType === 'agent.clone') {
+      type = 'clone';
+      summary = 'Agent cloned';
+    }
+
+    return {
+      id: String(row.event_id),
+      type,
+      timestamp: row.occurred_at instanceof Date
+        ? (row.occurred_at as Date).toISOString()
+        : String(row.occurred_at),
+      summary,
+      details,
+    };
+  });
+
+  res.json(activity);
+}));
+
 app.post('/api/agents/:id/sandbox', requireAuth, asyncHandler(async (req, res) => {
   await getOwnedAgentRecord(req, req.params.id);
   const { sandbox_id } = validateAgentSandboxAttachBody(req.body);
@@ -1454,6 +3055,8 @@ app.post('/api/agents/create', requireAuth, asyncHandler(async (req, res) => {
       createdBy: req.user!.userId,
       orgId: builder.organization.id,
     });
+    // Track the creation lifecycle — starts at "think"
+    await agentStore.updateAgent(agent.id, { forge_stage: 'think' });
 
     // 2. Set up the forge stream entry (same pattern as POST /api/agents/:id/forge)
     const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
@@ -1589,15 +3192,19 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
         });
         sendEvent('result', { ...(data as Record<string, unknown>), forge_agent_id: agentId });
       } else if (eventType === 'approved') {
-        await store.markApproved(entry.result!['sandbox_id'] as string);
+        if (!entry.result?.['sandbox_id']) {
+          sendEvent('error', { message: 'Cannot approve: forge result is missing or has no sandbox_id' });
+          break;
+        }
+        await store.markApproved(entry.result['sandbox_id'] as string);
         entry.status = 'done';
         await recordSystemEvent(req, {
           level: 'info',
           category: 'sandbox.lifecycle',
           action: 'agent.forge.approved',
           status: 'success',
-          message: `Forge sandbox ${String(entry.result?.['sandbox_id'] ?? '')} device approval succeeded`,
-          sandbox_id: String(entry.result?.['sandbox_id'] ?? ''),
+          message: `Forge sandbox ${String(entry.result['sandbox_id'])} device approval succeeded`,
+          sandbox_id: String(entry.result['sandbox_id']),
           agent_id: agentId,
           source: 'ruh-backend:forge-stream',
           details: {
@@ -1635,6 +3242,25 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
             sendEvent('log', { message: 'Template cloned into workspace.' });
             sendEvent('log', { message: 'Restarting gateway with cloned soul...' });
             await restartGateway(forgeCName).catch(() => {});
+
+            // Run agent setup if requested (v3 marketplace install flow)
+            if (entry.request.run_agent_setup) {
+              sendEvent('log', { message: 'Running agent setup from .openclaw/setup.json...' });
+              try {
+                const { runAgentSetup } = await import('./agentSetup');
+                const setupResult = await runAgentSetup(sandboxIdStr, (msg) => {
+                  sendEvent('log', { message: msg });
+                });
+                if (setupResult.ok) {
+                  sendEvent('log', { message: 'Agent setup complete — all services running.' });
+                } else {
+                  sendEvent('log', { message: 'Agent setup completed with issues.' });
+                }
+              } catch (setupErr) {
+                sendEvent('log', { message: `Agent setup error: ${setupErr instanceof Error ? setupErr.message : String(setupErr)}` });
+              }
+            }
+
             endSpanOk(cloneSpan);
           } else {
             sendEvent('log', { message: `Clone failed: ${String(cloneOut).slice(0, 200)}` });
@@ -1780,15 +3406,52 @@ app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, re
     return;
   }
 
-  const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+  const containerName = getContainerName(agent.forge_sandbox_id);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+
+  // Reconcile: if forge_stage is "complete" (Ship finished) but agent status
+  // is still "forging", promote to "active". This handles the case where the
+  // frontend completed Ship but the status update failed or browser closed.
+  // We ONLY promote when forge_stage explicitly says "complete" — never guess
+  // from file existence, because that skips review/test/ship stages.
+  let reconciled = false;
+  if (agent.status === 'forging' && agent.forge_stage === 'complete') {
+    await agentStore.updateAgent(req.params.id, { status: 'active' });
+    reconciled = true;
+  }
+
   res.json({
     active: running,
     status: running ? 'ready' : 'stopped',
     forge_sandbox_id: agent.forge_sandbox_id,
+    forge_stage: agent.forge_stage,
     vnc_port: record.vnc_port ?? null,
     gateway_port: record.gateway_port,
     standard_url: record.standard_url,
+    reconciled,
+    agent_status: reconciled ? 'active' : agent.status,
   });
+}));
+
+/**
+ * Update the agent's forge stage. Called by the frontend on each lifecycle
+ * stage transition so the backend always knows where the creation process is.
+ * This is the source of truth for resuming interrupted builds.
+ */
+const VALID_FORGE_STAGES = ['think', 'plan', 'build', 'review', 'test', 'ship', 'complete'];
+app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const { stage } = req.body;
+
+  if (!stage || !VALID_FORGE_STAGES.includes(stage)) {
+    throw httpError(400, `Invalid stage: ${stage}. Must be one of: ${VALID_FORGE_STAGES.join(', ')}`);
+  }
+
+  // When stage reaches "complete", also promote status to "active"
+  const statusUpdate = stage === 'complete' ? { status: 'active' as const, forge_stage: stage as agentStore.AgentForgeStage } : { forge_stage: stage as agentStore.AgentForgeStage };
+  await agentStore.updateAgent(req.params.id, statusUpdate);
+
+  res.json({ id: agent.id, forge_stage: stage, status: stage === 'complete' ? 'active' : agent.status });
 }));
 
 /**
@@ -2075,13 +3738,13 @@ app.patch('/api/agents/:id/config', requireAuth, asyncHandler(async (req, res) =
 }));
 
 app.get('/api/agents/:id/workspace-memory', requireAuth, asyncHandler(async (req, res) => {
-  await getOwnedAgentRecord(req, req.params.id);
+  await getReadableAgentRecord(req, req.params.id);
   const memory = await agentStore.getAgentWorkspaceMemory(req.params.id);
   res.json(memory);
 }));
 
 app.patch('/api/agents/:id/workspace-memory', requireAuth, asyncHandler(async (req, res) => {
-  await getOwnedAgentRecord(req, req.params.id);
+  await getReadableAgentRecord(req, req.params.id);
   const body = validateAgentWorkspaceMemoryPatchBody(req.body);
   const updated = await agentStore.updateAgentWorkspaceMemory(req.params.id, body);
   res.json(updated);
@@ -2180,25 +3843,20 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
     res.status(500).json({ ok: false, applied: false, detail: 'Agent config apply failed', steps });
   };
 
+  // Runtime inputs are end-user configuration collected at first chat, not
+  // developer build-time requirements. Developers ship agents to the
+  // marketplace without filling them in — end users provide values when
+  // they start using the agent. Log missing inputs as warnings, not errors.
   const missingRuntimeInputs = (runtime_inputs ?? []).filter(
     (input) => input.required && String(input.value ?? '').trim().length === 0,
   );
-  if (missingRuntimeInputs.length > 0) {
-    for (const input of missingRuntimeInputs) {
-      pushStep({
-        kind: 'runtime_env',
-        target: input.key,
-        ok: false,
-        message: `Missing required runtime input: ${input.key}`,
-      });
-    }
-    res.status(400).json({
-      ok: false,
-      applied: false,
-      detail: `Missing required runtime inputs: ${missingRuntimeInputs.map((input) => input.key).join(', ')}`,
-      steps,
+  for (const input of missingRuntimeInputs) {
+    pushStep({
+      kind: 'runtime_env',
+      target: input.key,
+      ok: true,
+      message: `Runtime input "${input.key}" not set — will be collected from end user at first chat`,
     });
-    return;
   }
 
   // Write SOUL.md
@@ -2269,7 +3927,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
     const runtimeEnvContent = buildRuntimeEnvFileContent(
       (runtime_inputs ?? []).map((input) => ({
         key: String(input.key ?? ''),
-        value: String(input.value ?? ''),
+        value: String(input.value ?? '').trim() || String((input as Record<string, unknown>).defaultValue ?? ''),
       })),
     );
     const [ok, out] = await dockerExec(
@@ -2552,7 +4210,7 @@ app.get('/api/sandboxes/:sandbox_id/models', asyncHandler(async (req, res) => {
 
 app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
   const record = await getRecord(req.params.sandbox_id);
-  const [url, headers] = gatewayUrlAndHeaders(record, '/api/status');
+  const [url, headers] = gatewayUrlAndHeaders(record, '/health');
   const container_running = await dockerContainerRunning(getContainerName(record.sandbox_id))
     .catch(() => false);
   let gatewayReachable = false;
@@ -2609,18 +4267,17 @@ app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
   });
 }));
 
-app.get('/api/admin/sandboxes/reconcile', asyncHandler(async (req, res) => {
-  requireAdmin(req);
-  const [records, containers] = await Promise.all([
-    store.listSandboxes(),
-    listManagedSandboxContainers(),
-  ]);
-  const report = buildSandboxRuntimeReconciliation({ records, containers });
-  res.json(report);
+app.get('/api/admin/sandboxes/reconcile', optionalAuth, asyncHandler(async (req, res) => {
+  requireAdminAccess(req);
+  const runtime = await loadAdminRuntimeData();
+  res.json({
+    summary: runtime.summary,
+    items: runtime.items,
+  });
 }));
 
-app.post('/api/admin/sandboxes/:sandbox_id/reconcile/repair', asyncHandler(async (req, res) => {
-  requireAdmin(req);
+app.post('/api/admin/sandboxes/:sandbox_id/reconcile/repair', optionalAuth, asyncHandler(async (req, res) => {
+  const actor = requireAdminAccess(req);
   const sandboxId = String(req.params.sandbox_id ?? '').trim();
   const action = String(req.body?.action ?? '').trim();
   const [records, containers] = await Promise.all([
@@ -2655,7 +4312,7 @@ app.post('/api/admin/sandboxes/:sandbox_id/reconcile/repair', asyncHandler(async
     target_id: sandboxId,
     outcome: 'success',
     details: { action, prior_drift_state: item.drift_state },
-  }, { actor_type: 'admin_token', actor_id: 'openclaw_admin_token' });
+  }, actor);
 
   res.json({
     ok: true,
@@ -2728,8 +4385,8 @@ app.post('/api/sandboxes/:sandbox_id/reconfigure-llm', asyncHandler(async (req, 
   res.json(result);
 }));
 
-app.post('/api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', asyncHandler(async (req, res) => {
-  requireAdmin(req);
+app.post('/api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', optionalAuth, asyncHandler(async (req, res) => {
+  const actor = requireAdminAccess(req);
 
   const { sandbox_id } = req.params;
   await getRecord(sandbox_id);
@@ -2748,12 +4405,61 @@ app.post('/api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', asyncHandler(
       model: result.model,
       authSource: result.authSource,
     },
-  }, { actor_type: 'admin_token', actor_id: 'openclaw_admin_token' });
+  }, actor);
   res.json(result);
 }));
 
-app.get('/api/admin/audit-events', asyncHandler(async (req, res) => {
-  requireAdmin(req);
+app.post('/api/admin/sandboxes/:sandbox_id/restart', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { sandbox_id } = req.params;
+  await getRecord(sandbox_id);
+  const containerName = getContainerName(sandbox_id);
+
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+  if (!running) {
+    const [startCode] = await dockerSpawn(['start', containerName], 30_000);
+    if (startCode !== 0) {
+      throw httpError(
+        409,
+        'Container does not exist or cannot be started. Please redeploy this agent.',
+      );
+    }
+  }
+
+  await restartGateway(containerName);
+
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.restart',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { restarted: true, initiated_from: 'admin_panel' },
+  });
+  res.json({ restarted: true, sandbox_id });
+}));
+
+app.post('/api/admin/sandboxes/:sandbox_id/gateway/restart', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { sandbox_id } = req.params;
+  await getRecord(sandbox_id);
+  const containerName = getContainerName(sandbox_id);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+
+  if (!running) {
+    throw httpError(409, 'Container is not running. Restart the sandbox before restarting its gateway.');
+  }
+
+  await restartGateway(containerName);
+  await recordAuditEvent(req, {
+    action_type: 'sandbox.gateway_restart',
+    target_type: 'sandbox',
+    target_id: sandbox_id,
+    outcome: 'success',
+    details: { restarted: true, initiated_from: 'admin_panel' },
+  });
+  res.json({ restarted: true, sandbox_id, gateway: true });
+}));
+
+app.get('/api/admin/audit-events', optionalAuth, asyncHandler(async (req, res) => {
+  requireAdminAccess(req);
   const limit = Math.min(parsePositiveIntParam(req.query.limit, 50, 'audit-event limit'), 100);
   const result = await auditStore.listAuditEvents({
     action_type: req.query.action_type == null ? undefined : String(req.query.action_type),
@@ -2761,6 +4467,7 @@ app.get('/api/admin/audit-events', asyncHandler(async (req, res) => {
     target_id: req.query.target_id == null ? undefined : String(req.query.target_id),
     actor_type: req.query.actor_type == null ? undefined : String(req.query.actor_type),
     actor_id: req.query.actor_id == null ? undefined : String(req.query.actor_id),
+    request_id: req.query.request_id == null ? undefined : String(req.query.request_id),
     outcome: req.query.outcome == null ? undefined : String(req.query.outcome),
     limit,
   });
@@ -2770,19 +4477,1294 @@ app.get('/api/admin/audit-events', asyncHandler(async (req, res) => {
 // ── JWT-authenticated admin panel routes ──────────────────────────────────────
 
 app.get('/api/admin/stats', requireAuth, requireRole('admin'), asyncHandler(async (_req, res) => {
-  const userCount = await withConn(async (client) => {
-    const r = await client.query('SELECT COUNT(*) FROM users');
-    return parseInt(r.rows[0].count, 10);
+  const overview = await loadAdminOverview();
+  res.json({
+    totalUsers: overview.users.total,
+    totalAgents: overview.agents.total,
+    activeSandboxes: overview.runtime.summary.healthy,
+    marketplaceListings: overview.marketplace.summary.totalListings,
   });
-  const agentCount = await withConn(async (client) => {
-    const r = await client.query('SELECT COUNT(*) FROM agents');
-    return parseInt(r.rows[0].count, 10);
+}));
+
+app.get('/api/admin/overview', requireAuth, requireRole('admin'), asyncHandler(async (_req, res) => {
+  const overview = await loadAdminOverview();
+  res.json(overview);
+}));
+
+const ADMIN_BILLING_STATUS_VALUES: billingStore.BillingStatus[] = [
+  'trialing',
+  'active',
+  'past_due',
+  'unpaid',
+  'canceled',
+  'incomplete',
+];
+const ADMIN_BILLING_STATUSES = new Set<string>(ADMIN_BILLING_STATUS_VALUES);
+
+const ADMIN_ENTITLEMENT_STATUS_VALUES: billingStore.EntitlementStatus[] = [
+  'active',
+  'grace_period',
+  'suspended',
+  'revoked',
+  'override_active',
+];
+const ADMIN_ENTITLEMENT_STATUSES = new Set<string>(ADMIN_ENTITLEMENT_STATUS_VALUES);
+
+const ADMIN_OVERRIDE_KINDS = new Set([
+  'temporary_access',
+  'manual_resume',
+  'manual_suspend',
+  'credit_hold',
+  'seat_comp',
+]);
+
+const BILLING_RISK_ORDER: Record<'high' | 'medium' | 'low', number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+function hasOwnKey(value: unknown, key: string): boolean {
+  return Boolean(value) && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function parseOptionalTrimmedString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function parseRequiredTrimmedString(field: string, value: unknown): string {
+  const parsed = parseOptionalTrimmedString(value);
+  if (!parsed) throw httpError(400, `${field} is required`);
+  return parsed;
+}
+
+function parseOptionalIsoTimestamp(field: string, value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) {
+    throw httpError(400, `${field} must be a valid ISO timestamp`);
+  }
+  return parsed.toISOString();
+}
+
+function parseOptionalInteger(field: string, value: unknown, options: { min?: number } = {}): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    throw httpError(400, `${field} must be an integer`);
+  }
+  const min = options.min ?? 0;
+  if (parsed < min) {
+    throw httpError(400, `${field} must be at least ${min}`);
+  }
+  return parsed;
+}
+
+function parseOptionalBoolean(value: unknown): boolean | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw httpError(400, 'Boolean field must be true or false');
+}
+
+function getAdminActorUserId(req: Request): string | null {
+  const actor = (req as Request & { user?: { id?: string } }).user;
+  return actor?.id ? String(actor.id) : null;
+}
+
+function resolveBillingRiskLevel(attention: Array<{ severity: 'high' | 'medium' | 'low' }>): 'high' | 'medium' | 'low' {
+  if (attention.some((item) => item.severity === 'high')) return 'high';
+  if (attention.some((item) => item.severity === 'medium')) return 'medium';
+  return 'low';
+}
+
+async function loadMarketplaceListingMeta(listingIds: string[]) {
+  const uniqueIds = Array.from(new Set(listingIds.filter(Boolean)));
+  if (!uniqueIds.length) {
+    return new Map<string, { title: string; slug: string; status: string }>();
+  }
+
+  const result = await withConn(async (client) => client.query(
+    `
+    SELECT id, title, slug, status
+    FROM marketplace_listings
+    WHERE id = ANY($1::uuid[])
+    `,
+    [uniqueIds],
+  ));
+
+  return new Map<string, { title: string; slug: string; status: string }>(
+    result.rows.map((row) => [
+      String(row.id),
+      {
+        title: String(row.title),
+        slug: String(row.slug),
+        status: String(row.status),
+      },
+    ]),
+  );
+}
+
+async function getAdminBillingEntitlementOrThrow(orgId: string, entitlementId: string) {
+  const organization = await orgStore.getOrg(orgId);
+  if (!organization) throw httpError(404, 'Organization not found');
+
+  const summary = await billingStore.listOrgBillingSummary(orgId);
+  const entitlement = summary.entitlements.find((item) => item.id === entitlementId) ?? null;
+  if (!entitlement) throw httpError(404, 'Entitlement not found');
+
+  return { organization, summary, entitlement };
+}
+
+async function loadAdminOrganizationBillingDetail(orgId: string) {
+  const organization = await orgStore.getOrg(orgId);
+  if (!organization) return null;
+
+  const summary = await billingStore.listOrgBillingSummary(orgId);
+  const listingMeta = await loadMarketplaceListingMeta([
+    ...summary.entitlements.map((item) => item.listingId).filter(Boolean) as string[],
+    ...summary.subscriptions.map((item) => item.listingId).filter(Boolean) as string[],
+  ]);
+
+  const overridesByEntitlement = new Map<string, billingStore.OrgEntitlementOverrideRecord[]>();
+  for (const override of summary.overrides) {
+    const existing = overridesByEntitlement.get(override.entitlementId) ?? [];
+    existing.push(override);
+    overridesByEntitlement.set(override.entitlementId, existing);
+  }
+
+  const subscriptionsByEntitlementId = new Map<string, billingStore.BillingSubscriptionRecord>();
+  for (const subscription of summary.subscriptions) {
+    if (subscription.entitlementId) {
+      subscriptionsByEntitlementId.set(subscription.entitlementId, subscription);
+    }
+  }
+
+  const entitlements = summary.entitlements.map((entitlement) => {
+    const overrides = overridesByEntitlement.get(entitlement.id) ?? [];
+    const access = resolveEntitlementAccess({
+      billingStatus: entitlement.billingStatus,
+      entitlementStatus: entitlement.entitlementStatus,
+      graceEndsAt: entitlement.graceEndsAt,
+      overrides,
+    });
+    const listing = entitlement.listingId ? listingMeta.get(entitlement.listingId) : null;
+    const linkedSubscription = subscriptionsByEntitlementId.get(entitlement.id)
+      ?? (entitlement.billingSubscriptionId
+        ? summary.subscriptions.find((item) => item.id === entitlement.billingSubscriptionId) ?? null
+        : null);
+
+    return {
+      ...entitlement,
+      listingTitle: listing?.title ?? null,
+      listingSlug: listing?.slug ?? null,
+      listingStatus: listing?.status ?? null,
+      access,
+      overrides,
+      subscription: linkedSubscription,
+    };
   });
-  const sandboxCount = await withConn(async (client) => {
-    const r = await client.query("SELECT COUNT(*) FROM sandboxes WHERE sandbox_state = 'running'");
-    return parseInt(r.rows[0].count, 10);
+
+  const now = Date.now();
+  const invoices = summary.invoices.map((invoice) => ({
+    ...invoice,
+    isPastDue:
+      Boolean(invoice.dueAt)
+      && new Date(String(invoice.dueAt)).getTime() < now
+      && invoice.amountRemaining > 0
+      && invoice.status !== 'paid',
+  }));
+
+  const subscriptions = summary.subscriptions.map((subscription) => {
+    const listing = subscription.listingId ? listingMeta.get(subscription.listingId) : null;
+    return {
+      ...subscription,
+      listingTitle: listing?.title ?? null,
+      listingSlug: listing?.slug ?? null,
+      listingStatus: listing?.status ?? null,
+    };
   });
-  res.json({ totalUsers: userCount, totalAgents: agentCount, activeSandboxes: sandboxCount, marketplaceListings: 0 });
+
+  const blockedEntitlements = entitlements.filter((item) => !item.access.canAccess);
+  const pastDueEntitlements = entitlements.filter(
+    (item) => item.billingStatus === 'past_due' || item.billingStatus === 'unpaid',
+  );
+  const overrideActiveEntitlements = entitlements.filter((item) => item.access.overrideActive);
+  const overCapacityEntitlements = entitlements.filter((item) => item.seatInUse > item.seatCapacity);
+  const overdueInvoices = invoices.filter((item) => item.isPastDue);
+  const payableInvoices = invoices.filter((item) => item.amountRemaining > 0);
+
+  const attention: Array<{
+    id: string;
+    severity: 'high' | 'medium' | 'low';
+    title: string;
+    detail: string;
+  }> = [];
+
+  if (!summary.customer && organization.kind === 'customer') {
+    attention.push({
+      id: 'missing-customer',
+      severity: 'medium',
+      title: 'Billing customer not linked',
+      detail: 'This organization has no billing customer record yet, so Stripe state cannot be mirrored or reconciled.',
+    });
+  }
+
+  if (!entitlements.length && organization.kind === 'customer') {
+    attention.push({
+      id: 'missing-entitlement',
+      severity: 'low',
+      title: 'No entitlements configured',
+      detail: 'No org entitlement exists yet. Customer access and seat governance will stay undefined until at least one entitlement is attached.',
+    });
+  }
+
+  if (blockedEntitlements.length) {
+    attention.push({
+      id: 'blocked-access',
+      severity: 'high',
+      title: 'Customer access is currently blocked',
+      detail: `${blockedEntitlements.length} entitlement${blockedEntitlements.length === 1 ? '' : 's'} cannot access the product right now.`,
+    });
+  }
+
+  if (pastDueEntitlements.length) {
+    attention.push({
+      id: 'past-due',
+      severity: 'high',
+      title: 'Past-due billing requires intervention',
+      detail: `${pastDueEntitlements.length} entitlement${pastDueEntitlements.length === 1 ? '' : 's'} are in past_due or unpaid billing state.`,
+    });
+  }
+
+  if (overCapacityEntitlements.length) {
+    attention.push({
+      id: 'seat-overage',
+      severity: 'medium',
+      title: 'Seat usage exceeds purchased capacity',
+      detail: `${overCapacityEntitlements.length} entitlement${overCapacityEntitlements.length === 1 ? '' : 's'} are over their recorded seat limit.`,
+    });
+  }
+
+  if (overdueInvoices.length) {
+    attention.push({
+      id: 'overdue-invoices',
+      severity: 'high',
+      title: 'Invoices are overdue',
+      detail: `${overdueInvoices.length} invoice${overdueInvoices.length === 1 ? '' : 's'} are past due with a remaining balance.`,
+    });
+  }
+
+  const totalSeatCapacity = entitlements.reduce((sum, item) => sum + item.seatCapacity, 0);
+  const totalSeatInUse = entitlements.reduce((sum, item) => sum + item.seatInUse, 0);
+  const totalAmountDue = payableInvoices.reduce((sum, item) => sum + item.amountRemaining, 0);
+
+  return {
+    organization,
+    customer: summary.customer,
+    subscriptions,
+    invoices,
+    entitlements,
+    overrides: summary.overrides.slice(0, 25),
+    events: summary.events.slice(0, 25),
+    attention,
+    summary: {
+      activeEntitlements: entitlements.filter((item) => item.access.canAccess).length,
+      blockedEntitlements: blockedEntitlements.length,
+      pastDueEntitlements: pastDueEntitlements.length,
+      overrideActiveEntitlements: overrideActiveEntitlements.length,
+      seatCapacity: totalSeatCapacity,
+      seatInUse: totalSeatInUse,
+      payableInvoices: payableInvoices.length,
+      amountDue: totalAmountDue,
+    },
+  };
+}
+
+async function loadAdminBillingOps(filters: {
+  search?: string;
+  status?: string;
+  risk?: string;
+}) {
+  const organizations = await listAdminOrganizationSummaries({
+    kind: 'customer',
+    status: filters.status,
+    search: filters.search,
+  });
+
+  const details = (await Promise.all(
+    organizations.map((organization) => loadAdminOrganizationBillingDetail(organization.id)),
+  )).filter(Boolean) as NonNullable<Awaited<ReturnType<typeof loadAdminOrganizationBillingDetail>>>[];
+
+  let items = details.map((detail) => ({
+    orgId: detail.organization.id,
+    orgName: detail.organization.name,
+    orgSlug: detail.organization.slug,
+    orgStatus: detail.organization.status,
+    plan: detail.organization.plan,
+    customerLinked: Boolean(detail.customer),
+    activeEntitlements: detail.summary.activeEntitlements,
+    blockedEntitlements: detail.summary.blockedEntitlements,
+    pastDueEntitlements: detail.summary.pastDueEntitlements,
+    overrideActiveEntitlements: detail.summary.overrideActiveEntitlements,
+    payableInvoices: detail.summary.payableInvoices,
+    amountDue: detail.summary.amountDue,
+    seatCapacity: detail.summary.seatCapacity,
+    seatInUse: detail.summary.seatInUse,
+    risk: resolveBillingRiskLevel(detail.attention),
+    signals: detail.attention.map((item) => item.title),
+    lastEventAt: detail.events[0]?.createdAt ?? null,
+  }));
+
+  if (filters.risk && ['high', 'medium', 'low'].includes(filters.risk)) {
+    items = items.filter((item) => item.risk === filters.risk);
+  }
+
+  items.sort((left, right) => {
+    const riskDiff = BILLING_RISK_ORDER[left.risk] - BILLING_RISK_ORDER[right.risk];
+    if (riskDiff !== 0) return riskDiff;
+    if (right.amountDue !== left.amountDue) return right.amountDue - left.amountDue;
+    return left.orgName.localeCompare(right.orgName);
+  });
+
+  const events = details
+    .flatMap((detail) =>
+      detail.events.slice(0, 5).map((event) => ({
+        ...event,
+        orgId: detail.organization.id,
+        orgName: detail.organization.name,
+        orgSlug: detail.organization.slug,
+      })),
+    )
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 20);
+
+  return {
+    summary: {
+      customerOrgs: items.length,
+      activeEntitlements: items.reduce((sum, item) => sum + item.activeEntitlements, 0),
+      pastDueOrgs: items.filter((item) => item.pastDueEntitlements > 0).length,
+      blockedOrgs: items.filter((item) => item.blockedEntitlements > 0).length,
+      missingCustomerLinks: items.filter((item) => !item.customerLinked).length,
+      overrideActiveEntitlements: items.reduce((sum, item) => sum + item.overrideActiveEntitlements, 0),
+      invoicesDue: items.reduce((sum, item) => sum + item.payableInvoices, 0),
+      amountDue: items.reduce((sum, item) => sum + item.amountDue, 0),
+    },
+    items,
+    events,
+  };
+}
+
+app.get('/api/admin/billing/ops', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const data = await loadAdminBillingOps({
+    search: req.query.search ? String(req.query.search) : undefined,
+    status: req.query.status ? String(req.query.status) : undefined,
+    risk: req.query.risk ? String(req.query.risk) : undefined,
+  });
+  res.json(data);
+}));
+
+app.get('/api/admin/organizations/:id/billing', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const detail = await loadAdminOrganizationBillingDetail(req.params.id);
+  if (!detail) throw httpError(404, 'Organization not found');
+  res.json(detail);
+}));
+
+app.post('/api/admin/organizations/:id/billing/customer', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const organization = await orgStore.getOrg(req.params.id);
+  if (!organization) throw httpError(404, 'Organization not found');
+
+  const customer = await billingStore.upsertBillingCustomer({
+    orgId: req.params.id,
+    stripeCustomerId: parseRequiredTrimmedString('stripeCustomerId', req.body.stripeCustomerId),
+    billingEmail: parseOptionalTrimmedString(req.body.billingEmail),
+    companyName: parseOptionalTrimmedString(req.body.companyName),
+    taxCountry: parseOptionalTrimmedString(req.body.taxCountry),
+    taxId: parseOptionalTrimmedString(req.body.taxId),
+    defaultPaymentMethodBrand: parseOptionalTrimmedString(req.body.defaultPaymentMethodBrand),
+    defaultPaymentMethodLast4: parseOptionalTrimmedString(req.body.defaultPaymentMethodLast4),
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    source: 'admin',
+    eventType: 'billing.customer.upsert',
+    status: 'success',
+    payload: {
+      billing_customer_id: customer.id,
+      stripe_customer_id: customer.stripeCustomerId,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.customer_upsert',
+    target_type: 'billing_customer',
+    target_id: customer.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      stripe_customer_id: customer.stripeCustomerId,
+      billing_email: customer.billingEmail,
+      company_name: customer.companyName,
+    },
+  });
+
+  res.json(customer);
+}));
+
+app.post('/api/admin/organizations/:id/billing/subscriptions', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const organization = await orgStore.getOrg(req.params.id);
+  if (!organization) throw httpError(404, 'Organization not found');
+
+  const subscription = await billingStore.upsertBillingSubscription({
+    orgId: req.params.id,
+    listingId: parseOptionalTrimmedString(req.body.listingId),
+    entitlementId: parseOptionalTrimmedString(req.body.entitlementId),
+    stripeSubscriptionId: parseRequiredTrimmedString('stripeSubscriptionId', req.body.stripeSubscriptionId),
+    stripePriceId: parseOptionalTrimmedString(req.body.stripePriceId),
+    stripeProductId: parseOptionalTrimmedString(req.body.stripeProductId),
+    status: parseRequiredTrimmedString('status', req.body.status),
+    quantity: parseOptionalInteger('quantity', req.body.quantity, { min: 1 }) ?? 1,
+    cancelAtPeriodEnd: parseOptionalBoolean(req.body.cancelAtPeriodEnd) ?? false,
+    currentPeriodStart: parseOptionalIsoTimestamp('currentPeriodStart', req.body.currentPeriodStart),
+    currentPeriodEnd: parseOptionalIsoTimestamp('currentPeriodEnd', req.body.currentPeriodEnd),
+    trialEndsAt: parseOptionalIsoTimestamp('trialEndsAt', req.body.trialEndsAt),
+    graceEndsAt: parseOptionalIsoTimestamp('graceEndsAt', req.body.graceEndsAt),
+    lastSyncedAt: new Date().toISOString(),
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: subscription.entitlementId,
+    source: 'admin',
+    eventType: 'billing.subscription.upsert',
+    status: 'success',
+    payload: {
+      billing_subscription_id: subscription.id,
+      stripe_subscription_id: subscription.stripeSubscriptionId,
+      status: subscription.status,
+      quantity: subscription.quantity,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.subscription_upsert',
+    target_type: 'billing_subscription',
+    target_id: subscription.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      entitlement_id: subscription.entitlementId,
+      stripe_subscription_id: subscription.stripeSubscriptionId,
+      status: subscription.status,
+      quantity: subscription.quantity,
+    },
+  });
+
+  res.json(subscription);
+}));
+
+app.post('/api/admin/organizations/:id/billing/invoices', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const organization = await orgStore.getOrg(req.params.id);
+  if (!organization) throw httpError(404, 'Organization not found');
+
+  const invoice = await billingStore.upsertBillingInvoice({
+    orgId: req.params.id,
+    entitlementId: parseOptionalTrimmedString(req.body.entitlementId),
+    billingSubscriptionId: parseOptionalTrimmedString(req.body.billingSubscriptionId),
+    stripeInvoiceId: parseRequiredTrimmedString('stripeInvoiceId', req.body.stripeInvoiceId),
+    stripeSubscriptionId: parseOptionalTrimmedString(req.body.stripeSubscriptionId),
+    status: parseRequiredTrimmedString('status', req.body.status),
+    currency: parseOptionalTrimmedString(req.body.currency) ?? 'usd',
+    amountDue: parseOptionalInteger('amountDue', req.body.amountDue, { min: 0 }) ?? 0,
+    amountPaid: parseOptionalInteger('amountPaid', req.body.amountPaid, { min: 0 }) ?? 0,
+    amountRemaining: parseOptionalInteger('amountRemaining', req.body.amountRemaining, { min: 0 }) ?? 0,
+    hostedInvoiceUrl: parseOptionalTrimmedString(req.body.hostedInvoiceUrl),
+    invoicePdfUrl: parseOptionalTrimmedString(req.body.invoicePdfUrl),
+    dueAt: parseOptionalIsoTimestamp('dueAt', req.body.dueAt),
+    paidAt: parseOptionalIsoTimestamp('paidAt', req.body.paidAt),
+    lastSyncedAt: new Date().toISOString(),
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: invoice.entitlementId,
+    source: 'admin',
+    eventType: 'billing.invoice.upsert',
+    status: 'success',
+    payload: {
+      billing_invoice_id: invoice.id,
+      stripe_invoice_id: invoice.stripeInvoiceId,
+      status: invoice.status,
+      amount_remaining: invoice.amountRemaining,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.invoice_upsert',
+    target_type: 'billing_invoice',
+    target_id: invoice.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      entitlement_id: invoice.entitlementId,
+      stripe_invoice_id: invoice.stripeInvoiceId,
+      status: invoice.status,
+      amount_due: invoice.amountDue,
+      amount_remaining: invoice.amountRemaining,
+    },
+  });
+
+  res.json(invoice);
+}));
+
+app.post('/api/admin/organizations/:id/billing/entitlements', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const organization = await orgStore.getOrg(req.params.id);
+  if (!organization) throw httpError(404, 'Organization not found');
+
+  const billingStatus = parseOptionalTrimmedString(req.body.billingStatus) ?? 'active';
+  const entitlementStatus = parseOptionalTrimmedString(req.body.entitlementStatus) ?? 'active';
+  if (!ADMIN_BILLING_STATUSES.has(billingStatus)) {
+    throw httpError(400, 'Invalid billing status');
+  }
+  if (!ADMIN_ENTITLEMENT_STATUSES.has(entitlementStatus)) {
+    throw httpError(400, 'Invalid entitlement status');
+  }
+
+  const customer = await billingStore.getBillingCustomerByOrgId(req.params.id);
+  const entitlement = await billingStore.upsertOrgEntitlement({
+    orgId: req.params.id,
+    listingId: parseOptionalTrimmedString(req.body.listingId),
+    billingCustomerId: customer?.id ?? null,
+    billingSubscriptionId: parseOptionalTrimmedString(req.body.billingSubscriptionId),
+    billingModel: parseRequiredTrimmedString('billingModel', req.body.billingModel),
+    billingStatus: billingStatus as billingStore.BillingStatus,
+    entitlementStatus: entitlementStatus as billingStore.EntitlementStatus,
+    seatCapacity: parseOptionalInteger('seatCapacity', req.body.seatCapacity, { min: 0 }) ?? 1,
+    seatInUse: parseOptionalInteger('seatInUse', req.body.seatInUse, { min: 0 }) ?? 0,
+    graceEndsAt: parseOptionalIsoTimestamp('graceEndsAt', req.body.graceEndsAt),
+    accessStartsAt: parseOptionalIsoTimestamp('accessStartsAt', req.body.accessStartsAt),
+    accessEndsAt: parseOptionalIsoTimestamp('accessEndsAt', req.body.accessEndsAt),
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: entitlement.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.upsert',
+    status: 'success',
+    payload: {
+      entitlement_id: entitlement.id,
+      billing_model: entitlement.billingModel,
+      billing_status: entitlement.billingStatus,
+      entitlement_status: entitlement.entitlementStatus,
+      seat_capacity: entitlement.seatCapacity,
+      seat_in_use: entitlement.seatInUse,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_upsert',
+    target_type: 'org_entitlement',
+    target_id: entitlement.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      billing_model: entitlement.billingModel,
+      billing_status: entitlement.billingStatus,
+      entitlement_status: entitlement.entitlementStatus,
+      seat_capacity: entitlement.seatCapacity,
+      seat_in_use: entitlement.seatInUse,
+    },
+  });
+
+  res.json(entitlement);
+}));
+
+app.patch('/api/admin/organizations/:id/billing/entitlements/:entitlementId', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { entitlement } = await getAdminBillingEntitlementOrThrow(req.params.id, req.params.entitlementId);
+  const customer = await billingStore.getBillingCustomerByOrgId(req.params.id);
+
+  const billingStatus = hasOwnKey(req.body, 'billingStatus')
+    ? parseOptionalTrimmedString(req.body.billingStatus)
+    : entitlement.billingStatus;
+  const entitlementStatus = hasOwnKey(req.body, 'entitlementStatus')
+    ? parseOptionalTrimmedString(req.body.entitlementStatus)
+    : entitlement.entitlementStatus;
+
+  if (!billingStatus || !ADMIN_BILLING_STATUSES.has(billingStatus)) {
+    throw httpError(400, 'Invalid billing status');
+  }
+  if (!entitlementStatus || !ADMIN_ENTITLEMENT_STATUSES.has(entitlementStatus)) {
+    throw httpError(400, 'Invalid entitlement status');
+  }
+
+  const updated = await billingStore.upsertOrgEntitlement({
+    id: entitlement.id,
+    orgId: req.params.id,
+    listingId: hasOwnKey(req.body, 'listingId')
+      ? parseOptionalTrimmedString(req.body.listingId)
+      : entitlement.listingId,
+    billingCustomerId: customer?.id ?? entitlement.billingCustomerId,
+    billingSubscriptionId: hasOwnKey(req.body, 'billingSubscriptionId')
+      ? parseOptionalTrimmedString(req.body.billingSubscriptionId)
+      : entitlement.billingSubscriptionId,
+    billingModel: hasOwnKey(req.body, 'billingModel')
+      ? parseRequiredTrimmedString('billingModel', req.body.billingModel)
+      : entitlement.billingModel,
+    billingStatus: billingStatus as billingStore.BillingStatus,
+    entitlementStatus: entitlementStatus as billingStore.EntitlementStatus,
+    seatCapacity: hasOwnKey(req.body, 'seatCapacity')
+      ? parseOptionalInteger('seatCapacity', req.body.seatCapacity, { min: 0 }) ?? 0
+      : entitlement.seatCapacity,
+    seatInUse: hasOwnKey(req.body, 'seatInUse')
+      ? parseOptionalInteger('seatInUse', req.body.seatInUse, { min: 0 }) ?? 0
+      : entitlement.seatInUse,
+    graceEndsAt: hasOwnKey(req.body, 'graceEndsAt')
+      ? parseOptionalIsoTimestamp('graceEndsAt', req.body.graceEndsAt)
+      : entitlement.graceEndsAt,
+    accessStartsAt: hasOwnKey(req.body, 'accessStartsAt')
+      ? parseOptionalIsoTimestamp('accessStartsAt', req.body.accessStartsAt)
+      : entitlement.accessStartsAt,
+    accessEndsAt: hasOwnKey(req.body, 'accessEndsAt')
+      ? parseOptionalIsoTimestamp('accessEndsAt', req.body.accessEndsAt)
+      : entitlement.accessEndsAt,
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: updated.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.update',
+    status: 'success',
+    payload: {
+      entitlement_id: updated.id,
+      billing_status: updated.billingStatus,
+      entitlement_status: updated.entitlementStatus,
+      seat_capacity: updated.seatCapacity,
+      seat_in_use: updated.seatInUse,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_update',
+    target_type: 'org_entitlement',
+    target_id: updated.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      billing_status: updated.billingStatus,
+      entitlement_status: updated.entitlementStatus,
+      seat_capacity: updated.seatCapacity,
+      seat_in_use: updated.seatInUse,
+    },
+  });
+
+  res.json(updated);
+}));
+
+app.post('/api/admin/organizations/:id/billing/entitlements/:entitlementId/pause', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { entitlement } = await getAdminBillingEntitlementOrThrow(req.params.id, req.params.entitlementId);
+  const actorUserId = getAdminActorUserId(req);
+
+  const reason = parseOptionalTrimmedString(req.body.reason) ?? 'Paused by admin';
+
+  await withConn(async (client) => client.query(
+    `
+    UPDATE org_entitlement_overrides
+    SET status = 'inactive'
+    WHERE entitlement_id = $1
+      AND status = 'active'
+      AND kind IN ('manual_resume', 'temporary_access', 'seat_comp')
+    `,
+    [entitlement.id],
+  ));
+
+  const override = await billingStore.createOrgEntitlementOverride({
+    entitlementId: entitlement.id,
+    kind: 'manual_suspend',
+    reason,
+    createdBy: actorUserId,
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: entitlement.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.pause',
+    status: 'success',
+    payload: {
+      entitlement_id: entitlement.id,
+      override_id: override.id,
+      reason,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_pause',
+    target_type: 'org_entitlement',
+    target_id: entitlement.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      override_id: override.id,
+      reason,
+    },
+  });
+
+  res.json({ paused: true, override });
+}));
+
+app.post('/api/admin/organizations/:id/billing/entitlements/:entitlementId/resume', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { entitlement } = await getAdminBillingEntitlementOrThrow(req.params.id, req.params.entitlementId);
+  const actorUserId = getAdminActorUserId(req);
+
+  const reason = parseOptionalTrimmedString(req.body.reason) ?? 'Resumed by admin';
+  const effectiveEndsAt = parseOptionalIsoTimestamp('effectiveEndsAt', req.body.effectiveEndsAt);
+
+  const deactivated = await withConn(async (client) => client.query(
+    `
+    UPDATE org_entitlement_overrides
+    SET status = 'inactive'
+    WHERE entitlement_id = $1
+      AND status = 'active'
+      AND kind IN ('manual_suspend', 'credit_hold')
+    RETURNING id
+    `,
+    [entitlement.id],
+  ));
+
+  const override = await billingStore.createOrgEntitlementOverride({
+    entitlementId: entitlement.id,
+    kind: 'manual_resume',
+    reason,
+    effectiveEndsAt,
+    createdBy: actorUserId,
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: entitlement.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.resume',
+    status: 'success',
+    payload: {
+      entitlement_id: entitlement.id,
+      override_id: override.id,
+      overrides_deactivated: deactivated.rowCount ?? 0,
+      reason,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_resume',
+    target_type: 'org_entitlement',
+    target_id: entitlement.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      override_id: override.id,
+      overrides_deactivated: deactivated.rowCount ?? 0,
+      reason,
+      effective_ends_at: effectiveEndsAt,
+    },
+  });
+
+  res.json({
+    resumed: true,
+    override,
+    deactivatedBlockingOverrides: Number(deactivated.rowCount ?? 0),
+  });
+}));
+
+app.post('/api/admin/organizations/:id/billing/entitlements/:entitlementId/grant-temporary-access', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { entitlement } = await getAdminBillingEntitlementOrThrow(req.params.id, req.params.entitlementId);
+  const actorUserId = getAdminActorUserId(req);
+
+  const effectiveEndsAt = parseOptionalIsoTimestamp('effectiveEndsAt', req.body.effectiveEndsAt);
+  if (!effectiveEndsAt) throw httpError(400, 'effectiveEndsAt is required');
+
+  const reason = parseOptionalTrimmedString(req.body.reason) ?? 'Temporary access granted by admin';
+
+  const override = await billingStore.createOrgEntitlementOverride({
+    entitlementId: entitlement.id,
+    kind: 'temporary_access',
+    reason,
+    effectiveEndsAt,
+    createdBy: actorUserId,
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: entitlement.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.temporary_access',
+    status: 'success',
+    payload: {
+      entitlement_id: entitlement.id,
+      override_id: override.id,
+      effective_ends_at: effectiveEndsAt,
+      reason,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_temporary_access',
+    target_type: 'org_entitlement',
+    target_id: entitlement.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      override_id: override.id,
+      effective_ends_at: effectiveEndsAt,
+      reason,
+    },
+  });
+
+  res.json({ granted: true, override });
+}));
+
+app.post('/api/admin/organizations/:id/billing/entitlements/:entitlementId/overrides', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { entitlement } = await getAdminBillingEntitlementOrThrow(req.params.id, req.params.entitlementId);
+  const actorUserId = getAdminActorUserId(req);
+
+  const kind = parseRequiredTrimmedString('kind', req.body.kind);
+  if (!ADMIN_OVERRIDE_KINDS.has(kind)) {
+    throw httpError(400, 'Invalid entitlement override kind');
+  }
+
+  const override = await billingStore.createOrgEntitlementOverride({
+    entitlementId: entitlement.id,
+    kind,
+    status: parseOptionalTrimmedString(req.body.status) ?? 'active',
+    reason: parseOptionalTrimmedString(req.body.reason) ?? '',
+    effectiveStartsAt: parseOptionalIsoTimestamp('effectiveStartsAt', req.body.effectiveStartsAt),
+    effectiveEndsAt: parseOptionalIsoTimestamp('effectiveEndsAt', req.body.effectiveEndsAt),
+    createdBy: actorUserId,
+  });
+
+  await billingStore.recordBillingEvent({
+    orgId: req.params.id,
+    entitlementId: entitlement.id,
+    source: 'admin',
+    eventType: 'billing.entitlement.override',
+    status: 'success',
+    payload: {
+      entitlement_id: entitlement.id,
+      override_id: override.id,
+      kind: override.kind,
+      status: override.status,
+    },
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'billing.entitlement_override',
+    target_type: 'org_entitlement_override',
+    target_id: override.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      entitlement_id: entitlement.id,
+      kind: override.kind,
+      status: override.status,
+      reason: override.reason,
+    },
+  });
+
+  res.json(override);
+}));
+
+app.post('/api/admin/organizations', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name) throw httpError(400, 'Organization name is required');
+
+  const kind = typeof req.body.kind === 'string' ? req.body.kind.trim() : 'customer';
+  const plan = typeof req.body.plan === 'string' ? req.body.plan.trim() : 'free';
+  const status = typeof req.body.status === 'string' ? req.body.status.trim() : 'active';
+  const ownerRole = typeof req.body.ownerRole === 'string' ? req.body.ownerRole.trim() : 'owner';
+  const ownerStatus = typeof req.body.ownerStatus === 'string' ? req.body.ownerStatus.trim() : 'active';
+
+  if (!['developer', 'customer'].includes(kind)) {
+    throw httpError(400, 'Invalid organization kind');
+  }
+  if (!['active', 'suspended', 'archived'].includes(status)) {
+    throw httpError(400, 'Invalid organization status');
+  }
+  if (!['owner', 'admin', 'developer', 'employee'].includes(ownerRole)) {
+    throw httpError(400, 'Invalid owner membership role');
+  }
+  if (!['active', 'invited', 'suspended'].includes(ownerStatus)) {
+    throw httpError(400, 'Invalid owner membership status');
+  }
+
+  const explicitSlug = typeof req.body.slug === 'string' ? req.body.slug.trim() : '';
+  const fallbackSlug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  const slug = explicitSlug || fallbackSlug;
+  if (!slug) throw httpError(400, 'Organization slug is required');
+
+  let ownerUser: userStore.UserRecord | null = null;
+  if (typeof req.body.userId === 'string' && req.body.userId.trim()) {
+    ownerUser = await userStore.getUserById(req.body.userId.trim());
+  } else if (typeof req.body.ownerEmail === 'string' && req.body.ownerEmail.trim()) {
+    ownerUser = await userStore.getUserByEmail(req.body.ownerEmail.trim().toLowerCase());
+  }
+
+  if (
+    (typeof req.body.userId === 'string' && req.body.userId.trim())
+    || (typeof req.body.ownerEmail === 'string' && req.body.ownerEmail.trim())
+  ) {
+    if (!ownerUser) {
+      throw httpError(404, 'Owner user not found');
+    }
+  }
+
+  let created: orgStore.OrgRecord;
+  try {
+    created = await orgStore.createOrg(name, slug, kind as orgStore.OrgRecord['kind'], {
+      plan,
+      status: status as orgStore.OrgRecord['status'],
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw httpError(409, 'Organization slug already exists');
+    }
+    throw error;
+  }
+
+  if (ownerUser) {
+    await organizationMembershipStore.createMembership(
+      created.id,
+      ownerUser.id,
+      ownerRole as organizationMembershipStore.OrganizationMembershipRecord['role'],
+      ownerStatus as organizationMembershipStore.OrganizationMembershipRecord['status'],
+    );
+  }
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.create',
+    target_type: 'organization',
+    target_id: created.id,
+    outcome: 'success',
+    details: {
+      org_id: created.id,
+      name,
+      slug,
+      kind,
+      plan,
+      status,
+      ...(ownerUser
+        ? {
+          owner_user_id: ownerUser.id,
+          owner_email: ownerUser.email,
+          owner_role: ownerRole,
+          owner_status: ownerStatus,
+        }
+        : {}),
+    },
+  });
+
+  const detail = await loadAdminOrganizationDetail(created.id);
+  res.status(201).json(detail ?? { organization: created });
+}));
+
+app.get('/api/admin/organizations', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const items = await listAdminOrganizationSummaries({
+    kind: req.query.kind ? String(req.query.kind) : undefined,
+    status: req.query.status ? String(req.query.status) : undefined,
+    search: req.query.search ? String(req.query.search) : undefined,
+  });
+  res.json({ items, total: items.length });
+}));
+
+app.get('/api/admin/organizations/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const detail = await loadAdminOrganizationDetail(req.params.id);
+  if (!detail) throw httpError(404, 'Organization not found');
+  res.json(detail);
+}));
+
+app.patch('/api/admin/organizations/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : undefined;
+  const slug = typeof req.body.slug === 'string' ? req.body.slug.trim() : undefined;
+  const plan = typeof req.body.plan === 'string' ? req.body.plan.trim() : undefined;
+  const status = typeof req.body.status === 'string' ? req.body.status.trim() : undefined;
+
+  if (status && !['active', 'suspended', 'archived'].includes(status)) {
+    throw httpError(400, 'Invalid organization status');
+  }
+
+  const updated = await orgStore.updateOrg(req.params.id, {
+    ...(name ? { name } : {}),
+    ...(slug ? { slug } : {}),
+    ...(plan ? { plan } : {}),
+    ...(status ? { status: status as 'active' | 'suspended' | 'archived' } : {}),
+  });
+  if (!updated) throw httpError(404, 'Organization not found');
+  await recordAuditEvent(req, {
+    action_type: 'organization.update',
+    target_type: 'organization',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      ...(name ? { name } : {}),
+      ...(slug ? { slug } : {}),
+      ...(plan ? { plan } : {}),
+      ...(status ? { status } : {}),
+    },
+  });
+  res.json(updated);
+}));
+
+app.post('/api/admin/organizations/:id/members', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const org = await orgStore.getOrg(req.params.id);
+  if (!org) throw httpError(404, 'Organization not found');
+
+  const role = typeof req.body.role === 'string' ? req.body.role.trim() : 'employee';
+  const status = typeof req.body.status === 'string' ? req.body.status.trim() : 'active';
+  if (!['owner', 'admin', 'developer', 'employee'].includes(role)) {
+    throw httpError(400, 'Invalid membership role');
+  }
+  if (!['active', 'invited', 'suspended'].includes(status)) {
+    throw httpError(400, 'Invalid membership status');
+  }
+
+  let user: userStore.UserRecord | null = null;
+  if (typeof req.body.userId === 'string' && req.body.userId.trim()) {
+    user = await userStore.getUserById(req.body.userId.trim());
+  } else if (typeof req.body.email === 'string' && req.body.email.trim()) {
+    user = await userStore.getUserByEmail(req.body.email.trim().toLowerCase());
+  }
+
+  if (!user) {
+    throw httpError(404, 'User not found');
+  }
+
+  const existing = await organizationMembershipStore.getMembershipForUserOrg(user.id, req.params.id);
+  const membership = existing
+    ? await organizationMembershipStore.updateMembership(existing.id, {
+      role: role as organizationMembershipStore.OrganizationMembershipRecord['role'],
+      status: status as organizationMembershipStore.OrganizationMembershipRecord['status'],
+    })
+    : await organizationMembershipStore.createMembership(
+      req.params.id,
+      user.id,
+      role as organizationMembershipStore.OrganizationMembershipRecord['role'],
+      status as organizationMembershipStore.OrganizationMembershipRecord['status'],
+    );
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.membership_upsert',
+    target_type: 'organization_membership',
+    target_id: membership?.id ?? `${req.params.id}:${user.id}`,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      user_id: user.id,
+      email: user.email,
+      role,
+      status,
+    },
+  });
+
+  res.json(membership);
+}));
+
+app.patch('/api/admin/organizations/:id/members/:membershipId', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const role = typeof req.body.role === 'string' ? req.body.role.trim() : undefined;
+  const status = typeof req.body.status === 'string' ? req.body.status.trim() : undefined;
+  if (role && !['owner', 'admin', 'developer', 'employee'].includes(role)) {
+    throw httpError(400, 'Invalid membership role');
+  }
+  if (status && !['active', 'invited', 'suspended'].includes(status)) {
+    throw httpError(400, 'Invalid membership status');
+  }
+
+  const { membership, activeOwnerCount } = await getAdminOwnerGuard(
+    req.params.id,
+    req.params.membershipId,
+  );
+
+  const nextRole = role ?? membership.role;
+  const nextStatus = status ?? membership.status;
+  if (
+    membership.role === 'owner' &&
+    membership.status === 'active' &&
+    activeOwnerCount <= 1 &&
+    (nextRole !== 'owner' || nextStatus !== 'active')
+  ) {
+    throw httpError(409, 'Cannot demote or suspend the last active owner');
+  }
+
+  const updated = await organizationMembershipStore.updateMembership(req.params.membershipId, {
+    ...(role ? { role: role as organizationMembershipStore.OrganizationMembershipRecord['role'] } : {}),
+    ...(status ? { status: status as organizationMembershipStore.OrganizationMembershipRecord['status'] } : {}),
+  });
+  if (!updated) throw httpError(404, 'Organization membership not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.membership_update',
+    target_type: 'organization_membership',
+    target_id: req.params.membershipId,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      user_id: updated.userId,
+      ...(role ? { role } : {}),
+      ...(status ? { status } : {}),
+    },
+  });
+
+  res.json(updated);
+}));
+
+app.delete('/api/admin/organizations/:id/members/:membershipId', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const { membership, activeOwnerCount } = await getAdminOwnerGuard(
+    req.params.id,
+    req.params.membershipId,
+  );
+
+  if (membership.role === 'owner' && membership.status === 'active' && activeOwnerCount <= 1) {
+    throw httpError(409, 'Cannot remove the last active owner');
+  }
+
+  const deleted = await organizationMembershipStore.deleteMembership(req.params.membershipId);
+  if (!deleted) throw httpError(404, 'Organization membership not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.membership_delete',
+    target_type: 'organization_membership',
+    target_id: req.params.membershipId,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      user_id: membership.userId,
+      role: membership.role,
+      status: membership.status,
+    },
+  });
+
+  res.json({ deleted: true, membershipId: req.params.membershipId });
+}));
+
+app.post('/api/admin/organizations/:id/session-context/reset', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const org = await orgStore.getOrg(req.params.id);
+  if (!org) throw httpError(404, 'Organization not found');
+
+  const cleared = await sessionStore.clearActiveOrgForOrganization(req.params.id);
+  await recordAuditEvent(req, {
+    action_type: 'organization.session_context_reset',
+    target_type: 'organization',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      sessions_cleared: cleared,
+    },
+  });
+  res.json({ cleared });
+}));
+
+app.delete('/api/admin/organizations/:id/sessions/:sessionId', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const org = await orgStore.getOrg(req.params.id);
+  if (!org) throw httpError(404, 'Organization not found');
+
+  const sessionResult = await withConn(async (client) => client.query(
+    `
+    SELECT id, user_id
+    FROM sessions
+    WHERE id = $1
+      AND active_org_id = $2
+    LIMIT 1
+    `,
+    [req.params.sessionId, req.params.id],
+  ));
+
+  const sessionRow = sessionResult.rows[0];
+  if (!sessionRow) throw httpError(404, 'Organization session not found');
+
+  await sessionStore.deleteSession(req.params.sessionId);
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.session_revoke',
+    target_type: 'organization',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      session_id: req.params.sessionId,
+      user_id: String(sessionRow.user_id),
+    },
+  });
+
+  res.json({ deleted: true, sessionId: req.params.sessionId });
+}));
+
+app.delete('/api/admin/organizations/:id/sessions', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const org = await orgStore.getOrg(req.params.id);
+  if (!org) throw httpError(404, 'Organization not found');
+
+  const deleteResult = await withConn(async (client) => client.query(
+    `
+    DELETE FROM sessions
+    WHERE active_org_id = $1
+    RETURNING id
+    `,
+    [req.params.id],
+  ));
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.sessions_revoke_all',
+    target_type: 'organization',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      sessions_revoked: deleteResult.rowCount ?? 0,
+    },
+  });
+
+  res.json({ deleted: Number(deleteResult.rowCount ?? 0) });
+}));
+
+app.delete('/api/admin/organizations/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const detail = await loadAdminOrganizationDetail(req.params.id);
+  if (!detail) throw httpError(404, 'Organization not found');
+
+  if (detail.organization.status !== 'archived') {
+    throw httpError(409, 'Archive the organization before deleting it');
+  }
+
+  if (
+    detail.organization.memberCount > 0 ||
+    detail.organization.agentCount > 0 ||
+    detail.organization.listingCount > 0 ||
+    detail.organization.installCount > 0
+  ) {
+    throw httpError(409, 'Only empty archived organizations can be deleted');
+  }
+
+  const deleted = await orgStore.deleteOrg(req.params.id);
+  if (!deleted) throw httpError(404, 'Organization not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'organization.delete',
+    target_type: 'organization',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      org_id: req.params.id,
+      deleted: true,
+    },
+  });
+
+  res.json({ deleted: true, organizationId: req.params.id });
 }));
 
 app.get('/api/admin/users', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
@@ -2794,25 +5776,189 @@ app.get('/api/admin/users', requireAuth, requireRole('admin'), asyncHandler(asyn
     limit: limit ? parseInt(String(limit), 10) : undefined,
     offset: offset ? parseInt(String(offset), 10) : undefined,
   });
-  res.json(result);
+  const items = await Promise.all(result.items.map((user) => buildAdminUserResponse(user)));
+  res.json({ items, total: result.total });
 }));
 
 app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const { role, status } = req.body;
   const updated = await userStore.updateUser(req.params.id, { role, status });
   if (!updated) throw httpError(404, 'User not found');
+  await recordAuditEvent(req, {
+    action_type: 'user.update',
+    target_type: 'user',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      ...(role ? { role } : {}),
+      ...(status ? { status } : {}),
+    },
+  });
   res.json(updated);
 }));
 
 app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
   const deleted = await userStore.deleteUser(req.params.id);
   if (!deleted) throw httpError(404, 'User not found');
+  await recordAuditEvent(req, {
+    action_type: 'user.delete',
+    target_type: 'user',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: { deleted: true, initiated_from: 'admin_panel' },
+  });
   res.json({ message: 'User deleted' });
 }));
 
-app.get('/api/admin/agents', requireAuth, requireRole('admin'), asyncHandler(async (_req, res) => {
-  const agents = await agentStore.listAgents();
-  res.json({ items: agents });
+app.get('/api/admin/agents', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let paramIdx = 1;
+
+  if (req.query.status) {
+    conditions.push(`a.status = $${paramIdx++}`);
+    params.push(String(req.query.status));
+  }
+
+  if (req.query.search) {
+    conditions.push(`(a.name ILIKE $${paramIdx} OR a.description ILIKE $${paramIdx} OR COALESCE(u.email, '') ILIKE $${paramIdx} OR COALESCE(o.name, '') ILIKE $${paramIdx})`);
+    params.push(`%${String(req.query.search)}%`);
+    paramIdx += 1;
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 50;
+  const offset = req.query.offset ? parseInt(String(req.query.offset), 10) : 0;
+
+  const result = await withConn(async (client) => {
+    const countResult = await client.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM agents a
+      LEFT JOIN users u ON u.id = a.created_by
+      LEFT JOIN organizations o ON o.id = a.org_id
+      ${where}
+      `,
+      params,
+    );
+
+    const rowsResult = await client.query(
+      `
+      SELECT
+        a.id,
+        a.name,
+        a.description,
+        a.status,
+        a.created_at,
+        a.updated_at,
+        a.sandbox_ids,
+        a.forge_sandbox_id,
+        a.runtime_inputs,
+        a.tool_connections,
+        a.triggers,
+        a.channels,
+        a.improvements,
+        a.created_by,
+        a.org_id,
+        u.email AS creator_email,
+        u.display_name AS creator_display_name,
+        o.name AS org_name,
+        o.slug AS org_slug,
+        o.kind AS org_kind
+      FROM agents a
+      LEFT JOIN users u ON u.id = a.created_by
+      LEFT JOIN organizations o ON o.id = a.org_id
+      ${where}
+      ORDER BY a.created_at DESC
+      LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
+      `,
+      [...params, limit, offset],
+    );
+
+    return {
+      total: Number(countResult.rows[0]?.total ?? 0),
+      items: rowsResult.rows.map((row) => {
+        const sandboxIds = parseJsonArray<string>(row.sandbox_ids);
+        return {
+          id: String(row.id),
+          name: String(row.name),
+          description: String(row.description ?? ''),
+          status: String(row.status),
+          createdAt: String(row.created_at),
+          updatedAt: String(row.updated_at),
+          sandboxIds,
+          sandboxCount: sandboxIds.length,
+          forgeSandboxId: row.forge_sandbox_id ? String(row.forge_sandbox_id) : null,
+          runtimeInputCount: parseJsonArray(row.runtime_inputs).length,
+          toolConnectionCount: parseJsonArray(row.tool_connections).length,
+          triggerCount: parseJsonArray(row.triggers).length,
+          channelCount: parseJsonArray(row.channels).length,
+          improvementCount: parseJsonArray(row.improvements).length,
+          createdBy: row.created_by ? String(row.created_by) : null,
+          creatorEmail: row.creator_email ? String(row.creator_email) : null,
+          creatorDisplayName: row.creator_display_name ? String(row.creator_display_name) : null,
+          orgId: row.org_id ? String(row.org_id) : null,
+          orgName: row.org_name ? String(row.org_name) : null,
+          orgSlug: row.org_slug ? String(row.org_slug) : null,
+          orgKind: row.org_kind ? String(row.org_kind) : null,
+        };
+      }),
+    };
+  });
+
+  res.json(result);
+}));
+
+app.delete('/api/admin/agents/:id', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const agent = await agentStore.getAgent(req.params.id);
+  if (!agent) throw httpError(404, 'Agent not found');
+
+  paperclipOrchestrator.teardownPaperclipCompany(req.params.id).catch(() => {});
+
+  const sandboxIds: string[] = agent.sandbox_ids ?? [];
+  for (const sid of sandboxIds) {
+    await store.deleteSandbox(sid).catch(() => {});
+    stopAndRemoveContainer(sid).catch(() => {});
+  }
+
+  if (agent.forge_sandbox_id) {
+    await store.deleteSandbox(agent.forge_sandbox_id).catch(() => {});
+    stopAndRemoveContainer(agent.forge_sandbox_id).catch(() => {});
+  }
+
+  const deleted = await agentStore.deleteAgent(req.params.id);
+  if (!deleted) throw httpError(404, 'Agent not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'agent.delete',
+    target_type: 'agent',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: {
+      deleted: true,
+      sandboxesCleaned: sandboxIds.length + (agent.forge_sandbox_id ? 1 : 0),
+      initiated_from: 'admin_panel',
+    },
+  });
+
+  res.json({
+    deleted: req.params.id,
+    sandboxesCleaned: sandboxIds.length,
+    forgeSandboxCleaned: Boolean(agent.forge_sandbox_id),
+  });
+}));
+
+app.get('/api/admin/runtime', requireAuth, requireRole('admin'), asyncHandler(async (_req, res) => {
+  const runtime = await loadAdminRuntimeData();
+  res.json(runtime);
+}));
+
+app.get('/api/admin/marketplace', requireAuth, requireRole('admin'), asyncHandler(async (req, res) => {
+  const marketplace = await loadAdminMarketplaceData({
+    status: req.query.status ? String(req.query.status) : undefined,
+    search: req.query.search ? String(req.query.search) : undefined,
+  });
+  res.json(marketplace);
 }));
 
 app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
@@ -3006,7 +6152,7 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
   const gwPort = record.gateway_port || 18789;
   const wsUrl = `ws://localhost:${gwPort}`;
   const token = record.gateway_token || '';
-  const origin = 'https://localhost';
+  const origin = 'http://localhost';
 
   // Set up SSE response
   res.setHeader('Content-Type', 'text/event-stream');
@@ -3018,9 +6164,17 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     } catch { /* client may have disconnected */ }
   };
+  const emitToolEnd = (toolName: string, output?: string) => {
+    sseSend('tool_end', {
+      tool: toolName,
+      name: toolName,
+      output: output ?? `Completed: ${toolName}`,
+    });
+  };
 
   let assistantText = '';
   let activeToolName: string | null = null;
+  let sawLiveToolEvents = false;
   let resolved = false;
 
   const ws = new WebSocket(wsUrl, { headers: { Origin: origin } });
@@ -3118,12 +6272,29 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
         const phase = agentData?.phase as string;
         // Emit tool_end when lifecycle moves away from tool_execution
         if (activeToolName && phase !== 'tool_execution') {
-          res.write(`data: ${JSON.stringify({ result: `Completed: ${activeToolName}` })}\n\n`);
+          sawLiveToolEvents = true;
+          emitToolEnd(activeToolName);
           activeToolName = null;
         }
-        if (phase === 'end' && assistantText) {
+        if (phase === 'end') {
+          if (!sawLiveToolEvents) {
+            const transcriptToolEvents = await readSandboxSessionToolEvents(
+              req.params.sandbox_id,
+              sessionKey,
+            ).catch(() => []);
+            for (const event of transcriptToolEvents) {
+              sseSend(event.type, {
+                tool: event.tool,
+                name: event.name,
+                ...(event.type === 'tool_start'
+                  ? { input: event.input ?? event.tool }
+                  : { output: event.output ?? `Completed: ${event.tool}` }),
+              });
+            }
+          }
+
           // Persist conversation
-          if (conversationId && persistedUserMessage) {
+          if (conversationId && persistedUserMessage && assistantText) {
             try {
               await conversationStore.appendMessages(conversationId, [
                 persistedUserMessage,
@@ -3149,16 +6320,28 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
     if (frame.type === 'event' && frame.event === 'exec.approval.requested') {
       const payload = frame.payload as Record<string, unknown>;
       const toolName = (payload.tool as string) || (payload.name as string) || 'tool';
-      const summary = (payload.command as string) || (payload.description as string) || toolName;
+      const toolInputValue =
+        payload.input ??
+        payload.args ??
+        payload.command ??
+        payload.description ??
+        toolName;
+      const summary = typeof toolInputValue === 'string'
+        ? toolInputValue
+        : JSON.stringify(toolInputValue);
 
       // End previous tool if still active
       if (activeToolName) {
-        res.write(`data: ${JSON.stringify({ result: `Completed: ${activeToolName}` })}\n\n`);
+        emitToolEnd(activeToolName);
       }
       activeToolName = toolName;
+      sawLiveToolEvents = true;
 
-      // Emit structured tool event (SandboxAgent already handles {tool, input} format)
-      res.write(`data: ${JSON.stringify({ tool: toolName, input: summary })}\n\n`);
+      sseSend('tool_start', {
+        tool: toolName,
+        name: toolName,
+        input: summary,
+      });
 
       // Auto-allow the tool execution
       ws.send(JSON.stringify({
@@ -3173,34 +6356,31 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
 // ── Browser / VNC status ──────────────────────────────────────────────────────
 
 app.get('/api/sandboxes/:sandbox_id/browser/status', asyncHandler(async (req, res) => {
-  const record = await getRecord(req.params.sandbox_id);
-  if (!record.vnc_port) {
-    res.json({ active: false, reason: 'VNC not provisioned for this sandbox' });
-    return;
+  let record = await getRecord(req.params.sandbox_id);
+  let active = await isSandboxBrowserActive(req.params.sandbox_id);
+  if (!active) {
+    record = await ensureSandboxBrowserRuntime(record);
+    active = await isSandboxBrowserActive(req.params.sandbox_id);
   }
-  // Check if x11vnc is running inside the container
-  const [code, output] = await sandboxExec(req.params.sandbox_id, 'pgrep -f x11vnc', 5);
   res.json({
-    active: code === 0 && output.trim().length > 0,
+    active: active && Boolean(record.vnc_port),
     vnc_port: record.vnc_port,
   });
 }));
 
 app.get('/api/sandboxes/:sandbox_id/browser/screenshot', asyncHandler(async (req, res) => {
-  await getRecord(req.params.sandbox_id);
-  // Capture X11 framebuffer as JPEG, output base64 to stdout
-  const [code, output] = await sandboxExec(
-    req.params.sandbox_id,
-    'DISPLAY=:99 import -window root -quality 60 jpeg:- 2>/dev/null | base64 -w0',
-    10,
-  );
-  if (code !== 0 || !output.trim()) {
+  let record = await getRecord(req.params.sandbox_id);
+  let buffer = await captureSandboxBrowserScreenshot(req.params.sandbox_id);
+  if (buffer == null) {
+    record = await ensureSandboxBrowserRuntime(record);
+    buffer = await captureSandboxBrowserScreenshot(req.params.sandbox_id);
+  }
+  if (buffer == null) {
     // Display not available — return a 1x1 transparent PNG
     res.setHeader('Content-Type', 'image/png');
     res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
     return;
   }
-  const buffer = Buffer.from(output.trim(), 'base64');
   res.setHeader('Content-Type', 'image/jpeg');
   res.setHeader('Cache-Control', 'no-store');
   res.send(buffer);
@@ -3294,10 +6474,13 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
         res.setHeader(key, value as string);
       }
     }
-    // Allow iframe embedding
-    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    // Allow iframe embedding — remove restrictive headers from upstream,
+    // then set permissive ones so the dashboard loads in the builder's iframe
     res.removeHeader('content-security-policy');
     res.removeHeader('x-frame-options');
+    res.removeHeader('content-security-policy-report-only');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.setHeader('Content-Security-Policy', "frame-ancestors *");
 
     res.send(Buffer.from(proxyRes.data as ArrayBuffer));
   } catch (err) {
@@ -3333,6 +6516,17 @@ app.get('/api/sandboxes/:sandbox_id/workspace/files', asyncHandler(async (req, r
     res.json(parseJsonOutput(output));
   } catch {
     throw httpError(502, 'Failed to parse workspace list output');
+  }
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace/status', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const [code, output] = await sandboxExec(req.params.sandbox_id, createWorkspaceStatusCommand(), 10);
+  if (code !== 0) classifyWorkspaceExecError(output, 'status');
+  try {
+    res.json(parseJsonOutput(output));
+  } catch {
+    throw httpError(502, 'Failed to parse workspace status output');
   }
 }));
 
@@ -3439,6 +6633,100 @@ app.get('/api/sandboxes/:sandbox_id/workspace/archive', asyncHandler(async (req,
   res.setHeader('Content-Type', mimeType);
   res.setHeader('Content-Disposition', `attachment; filename="${downloadName.replace(/"/g, '')}"`);
   res.send(buffer);
+}));
+
+// ── Workspace write (v3 build pipeline) ──────────────────────────────────────
+
+import { writeWorkspaceFile as writeWsFile, writeWorkspaceFiles as writeWsFiles, mergeWorkspaceCopilotToMain, readWorkspaceCopilotFile } from './workspaceWriter';
+import { pushWorkspaceToGitHub } from './workspaceGitPush';
+import { shipAgent } from './agentRepo';
+
+app.post('/api/sandboxes/:sandbox_id/workspace/write', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { path, content } = req.body ?? {};
+  if (typeof path !== 'string' || !path.trim()) throw httpError(400, 'path is required');
+  if (typeof content !== 'string') throw httpError(400, 'content is required');
+  const result = await writeWsFile(req.params.sandbox_id, path, content);
+  if (!result.ok) throw httpError(500, result.error ?? 'Write failed');
+  res.json(result);
+}));
+
+app.post('/api/sandboxes/:sandbox_id/workspace/write-batch', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { files } = req.body ?? {};
+  if (!Array.isArray(files)) throw httpError(400, 'files array is required');
+  if (files.length === 0) throw httpError(400, 'files array is empty');
+  if (files.length > 50) throw httpError(400, 'Maximum 50 files per batch');
+  for (const f of files) {
+    if (typeof f?.path !== 'string' || !f.path.trim()) throw httpError(400, 'Each file must have a path');
+    if (typeof f?.content !== 'string') throw httpError(400, 'Each file must have content');
+  }
+  const results = await writeWsFiles(req.params.sandbox_id, files);
+  const failed = results.filter((r) => !r.ok);
+  res.json({ ok: failed.length === 0, results, failed: failed.length, succeeded: results.length - failed.length });
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace-copilot/file', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+  if (!filePath) throw httpError(400, 'path query parameter is required');
+  const content = await readWorkspaceCopilotFile(req.params.sandbox_id, filePath);
+  if (content === null) throw httpError(404, 'File not found in copilot workspace');
+  res.json({ path: filePath, content });
+}));
+
+app.post('/api/sandboxes/:sandbox_id/workspace/merge-copilot', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const ok = await mergeWorkspaceCopilotToMain(req.params.sandbox_id);
+  if (!ok) throw httpError(500, 'Failed to merge copilot workspace into main workspace');
+  res.json({ ok: true });
+}));
+
+// Push workspace directly to GitHub from inside the container
+// Auth via GitHub PAT in the request body — no JWT needed
+app.post('/api/sandboxes/:sandbox_id/workspace/git-push', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { repo, githubToken, commitMessage, agentName } = req.body ?? {};
+  if (typeof repo !== 'string' || !repo.trim()) throw httpError(400, 'repo is required (owner/repo)');
+  const result = await pushWorkspaceToGitHub({
+    sandboxId: req.params.sandbox_id,
+    repoUrl: repo.trim(),
+    githubToken: typeof githubToken === 'string' ? githubToken.trim() : undefined,
+    commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
+    agentName: typeof agentName === 'string' ? agentName : undefined,
+  });
+  res.json(result);
+}));
+
+// ── Agent Setup (start services after build) ─────────────────────────────────
+
+app.post('/api/sandboxes/:sandbox_id/setup', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { runAgentSetup } = await import('./agentSetup');
+  const result = await runAgentSetup(req.params.sandbox_id, (msg) => {
+    console.log(`[setup:${req.params.sandbox_id.slice(0, 8)}] ${msg}`);
+  });
+  res.json(result);
+}));
+
+// ── Agent Ship (persistent repo) ──────────────────────────────────────────────
+
+app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await agentStore.getAgent(req.params.id);
+  if (!agent) throw httpError(404, 'Agent not found');
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox — build the agent first');
+  const { githubToken, commitMessage, repoName } = req.body ?? {};
+  if (typeof githubToken !== 'string' || !githubToken.trim()) throw httpError(400, 'githubToken is required');
+  const result = await shipAgent({
+    agentId: req.params.id,
+    sandboxId,
+    githubToken: githubToken.trim(),
+    repoName: typeof repoName === 'string' ? repoName.trim() : undefined,
+    commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
+    onLog: (msg) => console.log(`[ship:${req.params.id.slice(0,8)}] ${msg}`),
+  });
+  res.json(result);
 }));
 
 // ── Conversation management ───────────────────────────────────────────────────

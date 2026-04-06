@@ -1,162 +1,149 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { render } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
 
-const mockPush = mock(() => {});
-const mockReplace = mock(() => {});
-
-mock.module("lucide-react", () => {
-  const Icon = ({ children, ...props }: Record<string, unknown>) => <span {...props}>{children}</span>;
-  return {
-    Users: Icon, Bot: Icon, Server: Icon, Store: Icon,
-    LayoutDashboard: Icon, Activity: Icon, LogOut: Icon,
-    Shield: Icon, User: Icon, Code: Icon,
-  };
-});
+const replaceFn = mock(() => {});
 
 mock.module("next/navigation", () => ({
   usePathname: () => "/dashboard",
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ replace: replaceFn }),
 }));
 
-mock.module("next/link", () => ({
-  default: ({ children, href }: { children: React.ReactNode; href: string }) => (
-    <a href={href}>{children}</a>
-  ),
-}));
-
-const mockFetch = mock(() =>
-  Promise.resolve({
-    ok: true,
-    json: () =>
-      Promise.resolve({
-        id: "user-1",
-        email: "admin@ruh.ai",
-        displayName: "Admin",
-        platformRole: "platform_admin",
-        appAccess: { admin: true, builder: true, customer: false },
-      }),
-  } as Response),
+// Must be after mock.module so the component picks up mocked modules
+const { AdminSessionGate } = await import(
+  "../app/_components/AdminSessionGate"
 );
 
+beforeEach(() => {
+  replaceFn.mockClear();
+  // @ts-expect-error — replacing global fetch for test
+  globalThis.fetch = mock(() =>
+    Promise.resolve({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({}),
+    })
+  );
+});
+
 describe("AdminSessionGate", () => {
-  beforeEach(() => {
-    mockFetch.mockClear();
-    mockPush.mockClear();
-    mockReplace.mockClear();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
-  });
-
   test("shows loading spinner initially", async () => {
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    const { container } = render(
-      <AdminSessionGate>
-        <div>Protected Content</div>
-      </AdminSessionGate>,
-    );
-    // Should show spinner, not children
-    expect(container.querySelector(".animate-spin")).toBeTruthy();
-    expect(container.textContent).not.toContain("Protected Content");
+    // Use a never-resolving promise so the component stays in loading state
+    // regardless of how fast microtasks flush in the test environment
+    // @ts-expect-error — replacing global fetch for test
+    globalThis.fetch = mock(() => new Promise(() => {}));
+
+    let container: HTMLElement;
+    let queryByText: ReturnType<typeof render>["queryByText"];
+    await act(async () => {
+      ({ container, queryByText } = render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      ));
+    });
+
+    // Component should not render children while loading
+    expect(queryByText!("Protected")).toBeNull();
+    // Should render spinner wrapper (two nested divs, no children text)
+    expect(container!.querySelector("div > div")).toBeTruthy();
   });
 
-  test("renders children when session is valid admin", async () => {
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    const { findByText } = render(
-      <AdminSessionGate>
-        <div>Protected Content</div>
-      </AdminSessionGate>,
-    );
-    const content = await findByText("Protected Content");
-    expect(content).toBeTruthy();
-  });
-
-  test("redirects to login when fetch fails", async () => {
-    mockFetch.mockImplementation(() =>
-      Promise.resolve({ ok: false, status: 401 } as Response),
-    );
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    render(
-      <AdminSessionGate>
-        <div>Protected Content</div>
-      </AdminSessionGate>,
-    );
-    // Wait for the async bootstrap to complete
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockReplace).toHaveBeenCalled();
-    const url = mockReplace.mock.calls[0]?.[0] as string;
-    expect(url).toContain("/login");
-    expect(url).toContain("redirect_url");
-  });
-
-  test("redirects when user lacks admin access", async () => {
-    mockFetch.mockImplementation(() =>
+  test("renders children when authenticated with admin access", async () => {
+    // @ts-expect-error — replacing global fetch for test
+    globalThis.fetch = mock(() =>
       Promise.resolve({
         ok: true,
+        status: 200,
         json: () =>
           Promise.resolve({
-            id: "user-2",
-            email: "dev@ruh.ai",
-            displayName: "Dev",
-            platformRole: "user",
-            appAccess: { admin: false, builder: true, customer: false },
+            id: "u1",
+            email: "admin@ruh.ai",
+            displayName: "Admin",
+            platformRole: "platform_admin",
+            appAccess: { admin: true, builder: true, customer: true },
           }),
-      } as Response),
+      })
     );
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    render(
-      <AdminSessionGate>
-        <div>Admin Only</div>
-      </AdminSessionGate>,
-    );
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockReplace).toHaveBeenCalled();
+
+    let getByText: ReturnType<typeof render>["getByText"];
+    await act(async () => {
+      ({ getByText } = render(
+        <AdminSessionGate>
+          <div>Protected Content</div>
+        </AdminSessionGate>
+      ));
+    });
+
+    await waitFor(() => {
+      expect(getByText!("Protected Content")).toBeTruthy();
+    });
+    expect(replaceFn).not.toHaveBeenCalled();
   });
 
-  test("calls /api/auth/me with credentials", async () => {
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    render(
-      <AdminSessionGate>
-        <div>Content</div>
-      </AdminSessionGate>,
-    );
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const call = mockFetch.mock.calls[0] as unknown[];
-    const url = call[0] as string;
-    expect(url).toContain("/api/auth/me");
+  test("redirects when fetch returns non-ok response", async () => {
+    // Default beforeEach sets fetch to return 401
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
+
+    await waitFor(() => {
+      expect(replaceFn).toHaveBeenCalledWith(
+        "/login?redirect_url=%2Fdashboard"
+      );
+    });
   });
 
-  test("redirects when appAccess is null", async () => {
-    mockFetch.mockImplementation(() =>
+  test("redirects when user lacks admin app access", async () => {
+    // @ts-expect-error — replacing global fetch for test
+    globalThis.fetch = mock(() =>
       Promise.resolve({
         ok: true,
+        status: 200,
         json: () =>
           Promise.resolve({
-            id: "user-3",
-            email: "none@ruh.ai",
-            displayName: "No Access",
-            appAccess: null,
+            id: "u2",
+            email: "user@ruh.ai",
+            displayName: "User",
+            appAccess: { admin: false, builder: true, customer: true },
           }),
-      } as Response),
+      })
     );
-    const { AdminSessionGate } = await import(
-      "../app/_components/AdminSessionGate"
-    );
-    render(
-      <AdminSessionGate>
-        <div>Content</div>
-      </AdminSessionGate>,
-    );
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockReplace).toHaveBeenCalled();
+
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
+
+    await waitFor(() => {
+      expect(replaceFn).toHaveBeenCalledWith(
+        "/login?redirect_url=%2Fdashboard"
+      );
+    });
+  });
+
+  test("redirects when fetch throws a network error", async () => {
+    // @ts-expect-error — replacing global fetch for test
+    globalThis.fetch = mock(() => Promise.reject(new Error("Network error")));
+
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
+
+    await waitFor(() => {
+      expect(replaceFn).toHaveBeenCalledWith(
+        "/login?redirect_url=%2Fdashboard"
+      );
+    });
   });
 });

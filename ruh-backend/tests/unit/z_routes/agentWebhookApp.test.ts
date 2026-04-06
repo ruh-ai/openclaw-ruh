@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 
-import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../../helpers/fixtures';
+import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
 
 const webhookSecret = 'whsec_test_secret';
 const webhookSecretHash = createHash('sha256').update(webhookSecret).digest('hex');
@@ -30,7 +30,7 @@ const mockAxiosPost = mock(async () => ({ status: 200, data: { ok: true } }));
 const mockReserveWebhookDelivery = mock(async () => ({ reserved: true, existingStatus: null }));
 const mockMarkWebhookDeliveryStatus = mock(async () => {});
 
-mock.module('../../../src/store', () => ({
+mock.module('../../src/store', () => ({
   getSandbox: mockGetSandbox,
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -40,7 +40,7 @@ mock.module('../../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../../src/conversationStore', () => ({
+mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -52,46 +52,47 @@ mock.module('../../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../../src/agentStore', () => ({
+mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mockListAgents,
-  listAgentsForCreator: mock(async () => []),
-  listAgentsForCreatorInOrg: mock(async () => []),
+  listAgentsForCreator: mockListAgents,
+  listAgentsForCreatorInOrg: mockListAgents,
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
-  getAgentForCreator: mock(async () => null),
-  getAgentForCreatorInOrg: mock(async () => null),
-  getAgentOwnership: mock(async () => null),
+  getAgentForCreator: mock(async () => makeAgentRecord({ id: 'agent-1', sandbox_ids: [SANDBOX_ID] })),
+  getAgentForCreatorInOrg: mock(async () => makeAgentRecord({ id: 'agent-1', sandbox_ids: [SANDBOX_ID] })),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mockUpdateAgentConfig,
+  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
-  removeSandboxFromAgent: mock(async () => ({})),
   setForgeSandbox: mock(async () => ({})),
   promoteForgeSandbox: mock(async () => ({})),
   clearForgeSandbox: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
+  removeSandboxFromAgent: mock(async () => ({})),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
-  updatePaperclipMapping: mock(async () => null),
-  getAgentBySandboxId: mock(async () => null),
-  saveAgentCredential: mock(async () => {}),
-  deleteAgentCredential: mock(async () => {}),
   getAgentCredentials: mock(async () => []),
   getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../../src/sandboxManager', () => ({
+mock.module('../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../../src/channelManager', () => ({
+mock.module('../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -100,30 +101,43 @@ mock.module('../../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
-mock.module('../../../src/docker', () => ({
+mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: () => '',
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
-  dockerSpawn: mock(async () => ({ code: 0, stdout: '', stderr: '' })),
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
 }));
 
-mock.module('../../../src/auditStore', () => ({
+mock.module('../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-mock.module('../../../src/webhookDeliveryStore', () => ({
+mock.module('../../src/webhookDeliveryStore', () => ({
   reserveWebhookDelivery: mockReserveWebhookDelivery,
   markWebhookDeliveryStatus: mockMarkWebhookDeliveryStatus,
 }));
@@ -134,7 +148,7 @@ mock.module('axios', () => ({
   post: mockAxiosPost,
 }));
 
-const { app } = await import('../../../src/app');
+const { app } = await import('../../src/app.ts?unitAgentWebhookApp');
 
 type MockReq = {
   method: string;

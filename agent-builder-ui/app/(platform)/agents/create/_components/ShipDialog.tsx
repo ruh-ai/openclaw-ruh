@@ -14,6 +14,7 @@ import { createWorkspaceApiUrl } from "@/lib/openclaw/files-workspace";
 interface ShipDialogProps {
   sandboxId: string;
   agentName: string;
+  agentId?: string;
   onClose: () => void;
 }
 
@@ -21,7 +22,7 @@ type ShipStep = "form" | "reading" | "pushing" | "done" | "error";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
+export function ShipDialog({ sandboxId, agentName, agentId, onClose }: ShipDialogProps) {
   const [githubToken, setGithubToken] = useState("");
   const [repo, setRepo] = useState("");
   const [step, setStep] = useState<ShipStep>("form");
@@ -31,85 +32,40 @@ export function ShipDialog({ sandboxId, agentName, onClose }: ShipDialogProps) {
 
   const handleShip = useCallback(async () => {
     if (!githubToken.trim() || !repo.trim()) return;
-    setStep("reading");
-    setStatusMsg("Reading workspace files...");
+    setStep("pushing");
+    setStatusMsg("Pushing workspace to GitHub...");
     setErrorMsg("");
 
     try {
-      // 1. List workspace files
-      const listUrl = new URL(createWorkspaceApiUrl(API_BASE, sandboxId, "files"));
-      listUrl.searchParams.set("depth", "4");
-      listUrl.searchParams.set("limit", "200");
-      const listRes = await fetch(listUrl.toString());
-      if (!listRes.ok) throw new Error("Failed to list workspace files");
-      const listData = await listRes.json();
-      const items: Array<{ path: string; name: string; type: string; preview_kind?: string }> =
-        listData.items ?? [];
-
-      const textFiles = items.filter(
-        (i) => i.type === "file" && (i.preview_kind === "text" || !i.preview_kind),
-      );
-
-      if (textFiles.length === 0) throw new Error("Workspace is empty — nothing to ship");
-
-      // 2. Read each file
-      setStatusMsg(`Reading ${textFiles.length} files...`);
-      const fileContents: Array<{ path: string; content: string }> = [];
-      for (const file of textFiles) {
-        const readUrl = createWorkspaceApiUrl(API_BASE, sandboxId, "file", file.path);
-        const readRes = await fetch(readUrl);
-        if (!readRes.ok) continue;
-        const readData = await readRes.json();
-        if (readData.content) {
-          fileContents.push({ path: file.path, content: readData.content });
-        }
-      }
-
-      if (fileContents.length === 0) throw new Error("No readable files in workspace");
-
-      // 3. Separate into SOUL, skills, config, and other files
-      const soulFile = fileContents.find((f) => f.path === "SOUL.md" || f.path.endsWith("/SOUL.md"));
-      const soulContent = soulFile?.content ?? `# ${agentName}\n\nAgent template.\n`;
-
-      const skills: Record<string, string> = {};
-      const config: Record<string, string> = {};
-
-      for (const file of fileContents) {
-        if (file.path === soulFile?.path) continue;
-        if (file.path.startsWith("skills/")) {
-          const skillKey = file.path.replace(/^skills\//, "").replace(/\/SKILL\.md$/, "");
-          if (file.path.endsWith("SKILL.md")) {
-            skills[skillKey] = file.content;
-          } else {
-            config[file.path] = file.content;
-          }
-        } else {
-          config[file.path] = file.content;
-        }
-      }
-
-      // 4. Push to GitHub
-      setStep("pushing");
-      setStatusMsg("Pushing to GitHub...");
-
-      const exportRes = await fetch("/api/openclaw/github-export", {
+      // Push directly from the container — no file reading, no temp dirs.
+      // The workspace IS the repo. Git runs inside the sandbox.
+      const res = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/workspace/git-push`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          githubToken: githubToken.trim(),
           repo: repo.trim(),
+          githubToken: githubToken.trim(),
           agentName,
-          soulContent,
-          skills,
-          config,
           commitMessage: `ship: ${agentName} agent template`,
         }),
       });
 
-      const result = await exportRes.json();
-      if (!result.ok) throw new Error(result.error ?? "GitHub export failed");
+      const result = await res.json();
+      if (!result.ok) throw new Error(result.error ?? "GitHub push failed");
 
       setRepoUrl(result.repoUrl);
+
+      // Save repo_url to the agent record so marketplace publish includes it
+      if (agentId && result.repoUrl) {
+        fetch(`${API_BASE}/api/agents/${agentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ repo_url: result.repoUrl }),
+        }).catch(() => {});
+      }
+
       setStep("done");
       setStatusMsg(`Shipped ${result.filesPushed} files`);
     } catch (err) {

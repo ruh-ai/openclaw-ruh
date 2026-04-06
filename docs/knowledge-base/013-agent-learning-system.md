@@ -108,7 +108,7 @@ Do not create a learning note for routine edits, formatting-only changes, or sta
 - Areas: `path/one`, `path/two`
 - Summary: <what this run did and why>
 - Verification: <commands run, review performed, or "not run">
-- Learning Note: [[LEARNING-YYYY-MM-DD-task-slug]] or `None`
+- Learning Note: `LEARNING-YYYY-MM-DD-task-slug` or `None`
 - Blockers: <none or concrete blocker>
 ```
 
@@ -117,7 +117,7 @@ Do not create a learning note for routine edits, formatting-only changes, or sta
 ```markdown
 # LEARNING: <Title>
 
-[[000-INDEX|← Index]] | [[013-agent-learning-system]] | [[SPEC-agent-learning-and-journal]]
+`[[000-INDEX|← Index]]` | `[[013-agent-learning-system]]` | `[[relevant-spec]]`
 
 ## Context
 
@@ -128,8 +128,8 @@ Do not create a learning note for routine edits, formatting-only changes, or sta
 ## Implications For Future Agents
 
 ## Links
-- [[<affected-note>]]
-- [[<affected-spec>]]
+- `[[affected-note]]`
+- `[[affected-spec]]`
 - [Journal entry](../../journal/YYYY-MM-DD.md)
 ```
 
@@ -139,6 +139,9 @@ Do not create a learning note for routine edits, formatting-only changes, or sta
 
 - [[LEARNING-2026-03-25-agent-learning-system]] — rollout lesson: keep canonical KB notes stable, use daily journals for chronology, and update runtime automation prompts when role contracts change
 - [[LEARNING-2026-03-25-feature-at-a-time-automation-contract]] — maintainer automations should package work as one complete feature so scheduled runs leave behind testable outcomes instead of isolated slices
+- [[LEARNING-2026-03-29-eval-engine-mock-api-architecture]] — mock API layer is essential for enterprise eval; well-known API templates outperform pure LLM generation for mock data
+- [[LEARNING-2026-03-30-build-stage-architecture-plan-handoff]] — build-stage generation must consume the approved architecture plan, not just the purpose prompt
+- [[LEARNING-2026-03-31-copilot-built-skill-hydration]] — Co-Pilot build results must infer `builtSkillIds` from returned `skill_md` instead of relying on explicit `markSkillBuilt()` calls
 
 ## Related Specs
 

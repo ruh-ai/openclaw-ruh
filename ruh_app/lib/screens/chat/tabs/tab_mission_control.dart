@@ -4,7 +4,6 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../../config/theme.dart';
 import '../../../models/agent.dart';
-import '../../../providers/agent_provider.dart';
 import '../../../providers/sandbox_health_provider.dart';
 
 /// Mission control dashboard showing agent status, skills, rules, and memory.
@@ -23,18 +22,36 @@ class TabMissionControl extends ConsumerStatefulWidget {
 }
 
 class _TabMissionControlState extends ConsumerState<TabMissionControl> {
+  Future<void> _refreshStatus() async {
+    if (widget.sandboxId == null) return;
+    try {
+      await ref
+          .read(sandboxHealthProvider(widget.sandboxId!).notifier)
+          .refreshStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Runtime status refreshed')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Refresh failed: $e')));
+      }
+    }
+  }
+
   Future<void> _restartSandbox() async {
     if (widget.sandboxId == null) return;
     try {
-      final service = ref.read(agentServiceProvider);
-      await service.restartSandbox(widget.sandboxId!);
+      await ref
+          .read(sandboxHealthProvider(widget.sandboxId!).notifier)
+          .restartRuntime();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Sandbox restart initiated')),
         );
-      }
-      if (widget.sandboxId != null) {
-        ref.invalidate(sandboxHealthProvider(widget.sandboxId!));
       }
     } catch (e) {
       if (mounted) {
@@ -245,16 +262,9 @@ class _TabMissionControlState extends ConsumerState<TabMissionControl> {
       children: [
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () {
-              // Push config — placeholder action
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Push config not yet implemented'),
-                ),
-              );
-            },
-            icon: const Icon(LucideIcons.upload, size: 16),
-            label: const Text('Push Config'),
+            onPressed: _refreshStatus,
+            icon: const Icon(LucideIcons.activity, size: 16),
+            label: const Text('Refresh Status'),
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 12),
             ),

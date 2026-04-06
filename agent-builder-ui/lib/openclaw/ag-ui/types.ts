@@ -94,6 +94,30 @@ export const CustomEventName = {
   BUILD_PROGRESS: "build_progress",
   /** Any workspace file change (create/update/delete). */
   WORKSPACE_CHANGED: "workspace_changed",
+  /** Build task status change (v4 orchestrator). */
+  BUILD_TASK_UPDATED: "build_task_updated",
+  // ── Think phase events (v4 multi-step research) ──
+  /** Think sub-step transition (research → prd → trd). */
+  THINK_STEP: "think_step",
+  /** A research finding discovered during Think research phase. */
+  THINK_RESEARCH_FINDING: "think_research_finding",
+  /** A Think document was written to workspace. */
+  THINK_DOCUMENT_READY: "think_document_ready",
+  // ── Plan phase events (v4 incremental plan building) ──
+  /** Plan skills decision. */
+  PLAN_SKILLS: "plan_skills",
+  /** Plan workflow decision. */
+  PLAN_WORKFLOW: "plan_workflow",
+  /** Plan data schema decision. */
+  PLAN_DATA_SCHEMA: "plan_data_schema",
+  /** Plan API endpoints decision. */
+  PLAN_API_ENDPOINTS: "plan_api_endpoints",
+  /** Plan dashboard pages decision. */
+  PLAN_DASHBOARD_PAGES: "plan_dashboard_pages",
+  /** Plan environment variables decision. */
+  PLAN_ENV_VARS: "plan_env_vars",
+  /** All plan decisions emitted — plan is complete. */
+  PLAN_COMPLETE: "plan_complete",
 } as const;
 
 // ─── Event payload types ─────────────────────────────────────────────────────
@@ -117,6 +141,64 @@ export interface BuildProgressPayload {
 export interface WorkspaceChangedPayload {
   action: "create" | "update" | "delete";
   path: string;
+}
+
+export interface BuildTaskUpdatedPayload {
+  taskId: string;
+  specialist: string;
+  status: "pending" | "running" | "done" | "failed";
+  files: string[];
+  error?: string;
+}
+
+// ─── Think phase payloads ──────────────────────────────────────────────────
+
+export type ThinkSubStep = "research" | "prd" | "trd";
+
+export interface ThinkStepPayload {
+  step: ThinkSubStep;
+  status: "started" | "complete";
+}
+
+export interface ThinkResearchFindingPayload {
+  title: string;
+  summary: string;
+  source?: string;
+}
+
+export type ThinkDocType = "research_brief" | "prd" | "trd";
+
+export interface ThinkDocumentReadyPayload {
+  docType: ThinkDocType;
+  path: string;
+}
+
+// ─── Plan phase payloads ───────────────────────────────────────────────────
+
+export type PlanSubStep = "skills" | "workflow" | "data" | "api" | "dashboard" | "envvars" | "complete";
+
+export interface PlanSkillsPayload {
+  skills: Array<{ id: string; name: string; description: string; dependencies: string[]; toolType?: string; envVars?: string[] }>;
+}
+
+export interface PlanWorkflowPayload {
+  workflow: { steps: Array<{ skillId: string; parallel?: boolean }> };
+}
+
+export interface PlanDataSchemaPayload {
+  dataSchema: { tables: Array<{ name: string; description: string; columns: Array<{ name: string; type: string; description: string }>; indexes?: string[] }> };
+}
+
+export interface PlanApiEndpointsPayload {
+  apiEndpoints: Array<{ method: string; path: string; description: string; query?: string; responseShape?: string }>;
+}
+
+export interface PlanDashboardPagesPayload {
+  dashboardPages: Array<{ path: string; title: string; description: string; components: Array<{ type: string; title: string; dataSource: string }> }>;
+}
+
+export interface PlanEnvVarsPayload {
+  envVars: Array<{ key: string; label: string; description: string; required: boolean; inputType?: string; defaultValue?: string; group?: string }>;
 }
 
 // ─── Editor file changed payload ────────────────────────────────────────────

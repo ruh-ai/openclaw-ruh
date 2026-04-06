@@ -13,6 +13,11 @@ abstract class BackendClient {
     Map<String, dynamic>? queryParameters,
   });
 
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  });
+
   Future<Response<T>> post<T>(
     String path, {
     Object? data,
@@ -44,6 +49,9 @@ abstract class BackendClient {
   Future<void> setAccessToken(String token);
   Future<String?> getAccessToken();
   Future<void> clearAccessToken();
+  Future<void> setRefreshToken(String token);
+  Future<String?> getRefreshToken();
+  Future<void> clearRefreshToken();
 }
 
 /// Singleton HTTP client that wraps Dio with auth and SSE streaming support.
@@ -61,7 +69,7 @@ class ApiClient implements BackendClient {
       ),
     );
 
-    _dio.interceptors.add(_AuthInterceptor(_tokenStore));
+    _dio.interceptors.add(_AuthInterceptor(_dio, _tokenStore));
     _dio.interceptors.add(_LoggingInterceptor());
   }
 
@@ -83,6 +91,18 @@ class ApiClient implements BackendClient {
     Map<String, dynamic>? queryParameters,
   }) {
     return _dio.get<T>(path, queryParameters: queryParameters);
+  }
+
+  @override
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) {
+    return _dio.get<List<int>>(
+      path,
+      queryParameters: queryParameters,
+      options: Options(responseType: ResponseType.bytes),
+    );
   }
 
   @override
@@ -234,6 +254,21 @@ class ApiClient implements BackendClient {
     await _tokenStore.clear();
   }
 
+  @override
+  Future<void> setRefreshToken(String token) async {
+    await _tokenStore.writeRefreshToken(token);
+  }
+
+  @override
+  Future<String?> getRefreshToken() async {
+    return _tokenStore.readRefreshToken();
+  }
+
+  @override
+  Future<void> clearRefreshToken() async {
+    await _tokenStore.clearRefreshToken();
+  }
+
   /// Update the base URL at runtime (e.g. from settings).
   void updateBaseUrl(String url) {
     _dio.options.baseUrl = url;
@@ -246,20 +281,134 @@ class ApiClient implements BackendClient {
 // -----------------------------------------------------------------------------
 
 class _AuthInterceptor extends Interceptor {
-  _AuthInterceptor(this._tokenStore);
+  _AuthInterceptor(this._dio, this._tokenStore);
 
+  static const String _authRetryFlag = '__ruh_auth_retry';
+  static const String _refreshRequestFlag = '__ruh_is_refresh_request';
+
+  final Dio _dio;
   final AccessTokenStore _tokenStore;
+  Future<bool>? _refreshInFlight;
+
+  bool _isRefreshRequest(RequestOptions options) {
+    if (options.extra[_refreshRequestFlag] == true) return true;
+    return options.path.endsWith('/api/auth/refresh');
+  }
 
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    if (_isRefreshRequest(options)) {
+      handler.next(options);
+      return;
+    }
+
     final token = await _tokenStore.read();
     if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $token';
     }
     handler.next(options);
+  }
+
+  @override
+  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+    final statusCode = err.response?.statusCode;
+    final shouldRefresh =
+        (statusCode == 401 || statusCode == 403) &&
+        err.requestOptions.extra[_authRetryFlag] != true &&
+        !_isRefreshRequest(err.requestOptions);
+
+    if (!shouldRefresh) {
+      handler.next(err);
+      return;
+    }
+
+    final refreshed = await _attemptTokenRefresh();
+    if (!refreshed) {
+      await _tokenStore.clear();
+      await _tokenStore.clearRefreshToken();
+      handler.next(err);
+      return;
+    }
+
+    final request = err.requestOptions;
+    request.headers['Authorization'] = 'Bearer ${(await _tokenStore.read())}';
+    request.extra[_authRetryFlag] = true;
+
+    try {
+      final response = await _dio.fetch<dynamic>(request);
+      handler.resolve(response);
+    } catch (error) {
+      if (error is DioException) {
+        final refreshStatus = error.response?.statusCode;
+        if (refreshStatus == 401 || refreshStatus == 403) {
+          await _tokenStore.clear();
+          await _tokenStore.clearRefreshToken();
+        }
+        handler.next(error);
+        return;
+      }
+      handler.next(err);
+    }
+  }
+
+  Future<bool> _attemptTokenRefresh() async {
+    if (_refreshInFlight != null) return _refreshInFlight!;
+
+    final completer = Completer<bool>();
+    _refreshInFlight = completer.future;
+
+    try {
+      final refreshToken = await _tokenStore.readRefreshToken();
+      if (refreshToken == null || refreshToken.isEmpty) {
+        completer.complete(false);
+        return false;
+      }
+
+      final response = await _dio.post<dynamic>(
+        '/api/auth/refresh',
+        data: {'refreshToken': refreshToken},
+        options: Options(
+          extra: {_refreshRequestFlag: true},
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      if (response.statusCode != 200 || response.data == null) {
+        completer.complete(false);
+        return false;
+      }
+
+      if (response.data is Map<String, dynamic>) {
+        final responseData = response.data as Map<String, dynamic>;
+        final nextAccessToken = responseData['accessToken'];
+        final nextRefreshToken = responseData['refreshToken'];
+        if (nextAccessToken is String && nextAccessToken.isNotEmpty) {
+          await _tokenStore.write(nextAccessToken);
+        }
+        if (nextRefreshToken is String && nextRefreshToken.isNotEmpty) {
+          await _tokenStore.writeRefreshToken(nextRefreshToken);
+        }
+        completer.complete(true);
+        return true;
+      }
+
+      completer.complete(false);
+      return false;
+    } on DioException {
+      await _tokenStore.clear();
+      await _tokenStore.clearRefreshToken();
+      completer.complete(false);
+      return false;
+    } catch (error) {
+      Log.e('ApiClient', 'Token refresh failed', error);
+      completer.complete(false);
+      return false;
+    } finally {
+      _refreshInFlight = null;
+    }
   }
 }
 

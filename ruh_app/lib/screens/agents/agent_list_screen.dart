@@ -8,6 +8,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../../config/responsive.dart';
 import '../../config/theme.dart';
 import '../../models/marketplace_listing.dart';
+import '../../providers/agent_provider.dart';
 import '../../providers/marketplace_provider.dart';
 import '../../utils/error_formatter.dart';
 import '../../widgets/alive_animations.dart';
@@ -28,6 +29,7 @@ class AgentListScreen extends ConsumerStatefulWidget {
 class _AgentListScreenState extends ConsumerState<AgentListScreen> {
   Timer? _autoRefreshTimer;
   bool _isRefreshing = false;
+  String? _openingAgentId;
 
   @override
   void initState() {
@@ -62,6 +64,48 @@ class _AgentListScreenState extends ConsumerState<AgentListScreen> {
   Future<void> _onRefresh() async {
     ref.invalidate(marketplaceInstalledListingsProvider);
     await ref.read(marketplaceInstalledListingsProvider.future);
+  }
+
+  Future<void> _openInstalledAgent(InstalledMarketplaceListing item) async {
+    final agentId = item.agentId;
+    if (agentId.isEmpty || _openingAgentId != null) {
+      return;
+    }
+
+    setState(() => _openingAgentId = agentId);
+    try {
+      final service = ref.read(agentServiceProvider);
+
+      // Fetch the agent first to check for missing required inputs
+      final agent = await service.getAgent(agentId);
+      if (!mounted) return;
+
+      if (agent != null && agent.hasMissingRequiredInputs) {
+        // Redirect to setup screen instead of launching
+        context.push('/agents/$agentId/setup', extra: agent);
+        return;
+      }
+
+      // No missing inputs — launch directly
+      final launchableAgent = await service.launchAgent(agentId);
+      if (!mounted) return;
+
+      ref.read(selectedAgentProvider.notifier).state = launchableAgent;
+      ref.read(activeSandboxIdProvider.notifier).state =
+          launchableAgent.sandboxIds.isNotEmpty
+              ? launchableAgent.sandboxIds.first
+              : null;
+      context.push('/chat/${launchableAgent.id}');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open agent: ${formatError(e)}')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _openingAgentId = null);
+      }
+    }
   }
 
   @override
@@ -100,7 +144,11 @@ class _AgentListScreenState extends ConsumerState<AgentListScreen> {
         data: (items) => RefreshIndicator(
           onRefresh: _onRefresh,
           color: RuhTheme.primary,
-          child: _WorkspaceBody(items: items),
+          child: _WorkspaceBody(
+            items: items,
+            onOpenAgent: _openInstalledAgent,
+            openingAgentId: _openingAgentId,
+          ),
         ),
         loading: () => const _LoadingSkeleton(),
         error: (err, _) => _ErrorState(
@@ -115,8 +163,14 @@ class _AgentListScreenState extends ConsumerState<AgentListScreen> {
 
 class _WorkspaceBody extends StatelessWidget {
   final List<InstalledMarketplaceListing> items;
+  final Future<void> Function(InstalledMarketplaceListing item) onOpenAgent;
+  final String? openingAgentId;
 
-  const _WorkspaceBody({required this.items});
+  const _WorkspaceBody({
+    required this.items,
+    required this.onOpenAgent,
+    required this.openingAgentId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -159,7 +213,11 @@ class _WorkspaceBody extends StatelessWidget {
         ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          sliver: _InstalledAgentGrid(items: items),
+          sliver: _InstalledAgentGrid(
+            items: items,
+            onOpenAgent: onOpenAgent,
+            openingAgentId: openingAgentId,
+          ),
         ),
       ],
     );
@@ -337,8 +395,14 @@ class _ErrorState extends StatelessWidget {
 
 class _InstalledAgentGrid extends StatelessWidget {
   final List<InstalledMarketplaceListing> items;
+  final Future<void> Function(InstalledMarketplaceListing item) onOpenAgent;
+  final String? openingAgentId;
 
-  const _InstalledAgentGrid({required this.items});
+  const _InstalledAgentGrid({
+    required this.items,
+    required this.onOpenAgent,
+    required this.openingAgentId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -362,7 +426,8 @@ class _InstalledAgentGrid extends StatelessWidget {
             final item = items[index];
             return _InstalledAgentCard(
               item: item,
-              onOpen: () => context.push('/agents/${item.agentId}'),
+              isOpening: openingAgentId == item.agentId,
+              onOpen: () => onOpenAgent(item),
             );
           }, childCount: items.length),
         );
@@ -524,9 +589,14 @@ class _SummaryMetric extends StatelessWidget {
 
 class _InstalledAgentCard extends StatefulWidget {
   final InstalledMarketplaceListing item;
-  final VoidCallback onOpen;
+  final Future<void> Function() onOpen;
+  final bool isOpening;
 
-  const _InstalledAgentCard({required this.item, required this.onOpen});
+  const _InstalledAgentCard({
+    required this.item,
+    required this.onOpen,
+    this.isOpening = false,
+  });
 
   @override
   State<_InstalledAgentCard> createState() => _InstalledAgentCardState();
@@ -544,7 +614,7 @@ class _InstalledAgentCardState extends State<_InstalledAgentCard> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
-        onTap: widget.onOpen,
+        onTap: widget.isOpening ? null : () => widget.onOpen(),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           decoration: BoxDecoration(
@@ -664,12 +734,20 @@ class _InstalledAgentCardState extends State<_InstalledAgentCard> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: widget.onOpen,
-                    icon: const Icon(
-                      LucideIcons.arrowUpRight,
-                      size: IconSizes.sm,
+                    onPressed: widget.isOpening ? null : () => widget.onOpen(),
+                    icon: widget.isOpening
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(
+                            LucideIcons.arrowUpRight,
+                            size: IconSizes.sm,
+                          ),
+                    label: Text(
+                      widget.isOpening ? 'Preparing runtime...' : 'Open chat',
                     ),
-                    label: const Text('Open agent'),
                   ),
                 ),
               ],

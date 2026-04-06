@@ -612,6 +612,190 @@ export const MIGRATIONS: SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_eval_results_agent ON eval_results (agent_id, created_at DESC)`,
     ],
   },
+  {
+    id: '0028_organization_status',
+    statements: [
+      `ALTER TABLE organizations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+      `CREATE INDEX IF NOT EXISTS idx_organizations_status ON organizations (status)`,
+    ],
+  },
+  {
+    id: '0029_billing_control_plane',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS billing_customers (
+        id                           TEXT        PRIMARY KEY,
+        org_id                       TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        stripe_customer_id           TEXT        NOT NULL UNIQUE,
+        billing_email                TEXT        NULL,
+        company_name                 TEXT        NULL,
+        tax_country                  TEXT        NULL,
+        tax_id                       TEXT        NULL,
+        default_payment_method_brand TEXT        NULL,
+        default_payment_method_last4 TEXT        NULL,
+        created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (org_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_billing_customers_org ON billing_customers (org_id)`,
+      `
+      CREATE TABLE IF NOT EXISTS org_entitlements (
+        id                   TEXT        PRIMARY KEY,
+        org_id               TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        listing_id           TEXT        NULL REFERENCES marketplace_listings(id) ON DELETE SET NULL,
+        billing_customer_id  TEXT        NULL REFERENCES billing_customers(id) ON DELETE SET NULL,
+        billing_subscription_id TEXT     NULL,
+        billing_model        TEXT        NOT NULL,
+        billing_status       TEXT        NOT NULL DEFAULT 'active',
+        entitlement_status   TEXT        NOT NULL DEFAULT 'active',
+        seat_capacity        INTEGER     NOT NULL DEFAULT 1,
+        seat_in_use          INTEGER     NOT NULL DEFAULT 0,
+        grace_ends_at        TIMESTAMPTZ NULL,
+        access_starts_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        access_ends_at       TIMESTAMPTZ NULL,
+        created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (org_id, listing_id, billing_model)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_org_entitlements_org ON org_entitlements (org_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_org_entitlements_status ON org_entitlements (entitlement_status, billing_status)`,
+      `
+      CREATE TABLE IF NOT EXISTS billing_subscriptions (
+        id                    TEXT        PRIMARY KEY,
+        org_id                TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        listing_id            TEXT        NULL REFERENCES marketplace_listings(id) ON DELETE SET NULL,
+        entitlement_id        TEXT        NULL REFERENCES org_entitlements(id) ON DELETE SET NULL,
+        stripe_subscription_id TEXT       NOT NULL UNIQUE,
+        stripe_price_id       TEXT        NULL,
+        stripe_product_id     TEXT        NULL,
+        status                TEXT        NOT NULL,
+        quantity              INTEGER     NOT NULL DEFAULT 1,
+        cancel_at_period_end  BOOLEAN     NOT NULL DEFAULT false,
+        current_period_start  TIMESTAMPTZ NULL,
+        current_period_end    TIMESTAMPTZ NULL,
+        trial_ends_at         TIMESTAMPTZ NULL,
+        grace_ends_at         TIMESTAMPTZ NULL,
+        last_synced_at        TIMESTAMPTZ NULL,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_org ON billing_subscriptions (org_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_status ON billing_subscriptions (status, current_period_end)`,
+      `
+      CREATE TABLE IF NOT EXISTS billing_invoices (
+        id                     TEXT        PRIMARY KEY,
+        org_id                 TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        entitlement_id         TEXT        NULL REFERENCES org_entitlements(id) ON DELETE SET NULL,
+        billing_subscription_id TEXT       NULL REFERENCES billing_subscriptions(id) ON DELETE SET NULL,
+        stripe_invoice_id      TEXT        NOT NULL UNIQUE,
+        stripe_subscription_id TEXT        NULL,
+        status                 TEXT        NOT NULL,
+        currency               TEXT        NOT NULL DEFAULT 'usd',
+        amount_due             BIGINT      NOT NULL DEFAULT 0,
+        amount_paid            BIGINT      NOT NULL DEFAULT 0,
+        amount_remaining       BIGINT      NOT NULL DEFAULT 0,
+        hosted_invoice_url     TEXT        NULL,
+        invoice_pdf_url        TEXT        NULL,
+        due_at                 TIMESTAMPTZ NULL,
+        paid_at                TIMESTAMPTZ NULL,
+        last_synced_at         TIMESTAMPTZ NULL,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_billing_invoices_org ON billing_invoices (org_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_billing_invoices_status ON billing_invoices (status, due_at)`,
+      `
+      CREATE TABLE IF NOT EXISTS org_entitlement_overrides (
+        id                  TEXT        PRIMARY KEY,
+        entitlement_id      TEXT        NOT NULL REFERENCES org_entitlements(id) ON DELETE CASCADE,
+        kind                TEXT        NOT NULL,
+        status              TEXT        NOT NULL DEFAULT 'active',
+        reason              TEXT        NOT NULL DEFAULT '',
+        effective_starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        effective_ends_at   TIMESTAMPTZ NULL,
+        created_by          TEXT        NULL REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_org_entitlement_overrides_entitlement ON org_entitlement_overrides (entitlement_id, created_at DESC)`,
+      `
+      CREATE TABLE IF NOT EXISTS billing_events (
+        id              TEXT        PRIMARY KEY,
+        org_id          TEXT        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        entitlement_id  TEXT        NULL REFERENCES org_entitlements(id) ON DELETE SET NULL,
+        source          TEXT        NOT NULL,
+        event_type      TEXT        NOT NULL,
+        status          TEXT        NOT NULL DEFAULT 'received',
+        stripe_event_id TEXT        NULL,
+        payload         JSONB       NOT NULL DEFAULT '{}'::jsonb,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_billing_events_org ON billing_events (org_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_billing_events_entitlement ON billing_events (entitlement_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_billing_events_stripe ON billing_events (stripe_event_id)`,
+    ],
+  },
+  {
+    id: '0030_agent_forge_stage',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS forge_stage TEXT DEFAULT NULL`,
+    ],
+  },
+  {
+    id: '0031_agent_config_versions',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS agent_config_versions (
+        id             TEXT        PRIMARY KEY,
+        agent_id       TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        version_number INTEGER     NOT NULL,
+        snapshot       JSONB       NOT NULL,
+        message        TEXT,
+        created_at     TIMESTAMP   NOT NULL DEFAULT NOW(),
+        created_by     TEXT,
+        UNIQUE (agent_id, version_number)
+      )
+      `,
+      `
+      CREATE INDEX IF NOT EXISTS idx_agent_config_versions_agent
+      ON agent_config_versions (agent_id, version_number DESC)
+      `,
+    ],
+  },
+  {
+    id: '0032_account_lockouts',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS account_lockouts (
+        email           TEXT        PRIMARY KEY,
+        attempt_count   INTEGER     NOT NULL DEFAULT 0,
+        locked_until    TIMESTAMPTZ NULL,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+    ],
+  },
+  {
+    id: '0033_agent_repo_url',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_url TEXT`,
+      `ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS repo_url TEXT`,
+    ],
+  },
+  {
+    id: '0034_agent_repo_fields',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_owner TEXT`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_name TEXT`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_default_branch TEXT DEFAULT 'main'`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_last_pushed_at TIMESTAMPTZ`,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {

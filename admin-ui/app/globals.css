@@ -1,18 +1,93 @@
 @import "tailwindcss";
 
 :root {
-  --primary: #ae00d0;
-  --primary-light: #d946f8;
-  --secondary: #7b5aff;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
-  --bg-default: #fafaf8;
-  --bg-subtle: #f5f5f3;
-  --card-color: #ffffff;
-  --text-primary: #1a1a1a;
-  --text-secondary: #4a4a4a;
-  --text-tertiary: #8a8a8a;
-  --border-default: #e5e5e3;
-  --border-stroke: #d4d4d2;
+  --font-sans: "Satoshi", "Inter", "Segoe UI", sans-serif;
+  --font-display: "Sora", "Satoshi", "Inter", sans-serif;
+  --accent-primary: #ae00d0;
+  --accent-primary-soft: rgba(174, 0, 208, 0.14);
+  --accent-secondary: #7b5aff;
+  --accent-secondary-soft: rgba(123, 90, 255, 0.18);
+  --accent-ink: #12195e;
+  --success: #169b73;
+  --success-soft: rgba(22, 155, 115, 0.15);
+  --warning: #c77700;
+  --warning-soft: rgba(199, 119, 0, 0.15);
+  --danger: #d14478;
+  --danger-soft: rgba(209, 68, 120, 0.15);
+  --primary: var(--accent-primary);
+  --primary-light: #d641eb;
+  --secondary: var(--accent-secondary);
+  --error: var(--danger);
+  --bg-default: #f4f1fb;
+  --bg-subtle: rgba(255, 255, 255, 0.9);
+  --bg-muted: #ece4fb;
+  --card-color: rgba(255, 255, 255, 0.97);
+  --sidebar-bg: linear-gradient(
+    180deg,
+    #12195e 0%,
+    #37207d 48%,
+    #6a22b6 100%
+  );
+  --sidebar-card: rgba(255, 255, 255, 0.14);
+  --text-primary: #18225f;
+  --text-secondary: rgba(24, 34, 95, 0.86);
+  --text-tertiary: rgba(24, 34, 95, 0.7);
+  --text-muted: rgba(24, 34, 95, 0.56);
+  --sidebar-text: rgba(255, 255, 255, 0.96);
+  --sidebar-text-muted: rgba(255, 255, 255, 0.74);
+  --border-default: rgba(18, 25, 94, 0.14);
+  --border-stroke: rgba(18, 25, 94, 0.24);
+  --panel-shadow: 0 20px 48px rgba(42, 24, 103, 0.12);
+  --panel-shadow-strong: 0 26px 70px rgba(28, 18, 83, 0.28);
+}
+
+html {
+  background: var(--bg-default);
+}
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(circle at top right, rgba(174, 0, 208, 0.1), transparent 22rem),
+    radial-gradient(circle at top left, rgba(123, 90, 255, 0.1), transparent 18rem),
+    radial-gradient(circle at bottom left, rgba(18, 25, 94, 0.08), transparent 24rem),
+    var(--bg-default);
+  color: var(--text-primary);
+}
+
+* {
+  border-color: var(--border-default);
+}
+
+::selection {
+  background: rgba(174, 0, 208, 0.22);
+  color: var(--accent-ink);
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(174, 0, 208, 0.14);
+}
+
+.font-display {
+  font-family: var(--font-display);
 }

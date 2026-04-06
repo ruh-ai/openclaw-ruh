@@ -69,7 +69,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         placeholder={placeholder}
         disabled={disabled}
         rows={1}
-        className="flex-1 resize-none bg-transparent text-sm font-satoshi-regular text-text-primary placeholder:text-text-placeholder outline-none min-h-[24px] max-h-[120px] leading-relaxed"
+        className="focus-breathe flex-1 resize-none bg-transparent text-sm font-satoshi-regular text-text-primary placeholder:text-text-placeholder outline-none min-h-[24px] max-h-[120px] leading-relaxed"
       />
       <div className="flex items-center gap-1.5 shrink-0 mb-0.5">
         <button

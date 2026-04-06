@@ -314,7 +314,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        console.log("[forge-chat] finalResult.type:", finalResult.type, "fullContent length:", fullContent.length, "has discovery marker:", fullContent.includes('"type": "discovery"') || fullContent.includes('"type":"discovery"'));
         send("result", finalResult);
 
         controller.close();

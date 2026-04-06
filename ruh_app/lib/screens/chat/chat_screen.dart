@@ -8,6 +8,7 @@ import '../../config/theme.dart';
 import '../../models/agent.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/sandbox_health_provider.dart';
 import '../../utils/error_formatter.dart';
 import '../../widgets/alive_animations.dart';
 import 'tabs/tab_all_chats.dart';
@@ -15,6 +16,7 @@ import 'tabs/tab_mission_control.dart';
 import 'widgets/chat_input.dart';
 import 'widgets/computer_view.dart';
 import 'widgets/message_bubble.dart';
+import 'widgets/runtime_status_banner.dart';
 import 'widgets/task_progress_footer.dart';
 
 /// Manus-style split-pane chat interface.
@@ -26,8 +28,13 @@ import 'widgets/task_progress_footer.dart';
 /// Mobile (<=900px): full-width chat, bottom sheet for Agent's Computer
 class ChatScreen extends ConsumerStatefulWidget {
   final String agentId;
+  final String initialComputerTab;
 
-  const ChatScreen({super.key, required this.agentId});
+  const ChatScreen({
+    super.key,
+    required this.agentId,
+    this.initialComputerTab = 'terminal',
+  });
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -126,14 +133,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           Expanded(
             child: isDesktop
                 ? _DesktopLayout(
+                    agentId: agent.id,
                     sandboxId: activeSandboxId,
                     chatState: chatState,
                     ref: ref,
+                    initialComputerTab: widget.initialComputerTab,
                   )
                 : _MobileLayout(
+                    agentId: agent.id,
                     sandboxId: activeSandboxId,
                     chatState: chatState,
                     ref: ref,
+                    initialComputerTab: widget.initialComputerTab,
                   ),
           ),
         ],
@@ -215,14 +226,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 // ===========================================================================
 
 class _DesktopLayout extends StatelessWidget {
+  final String agentId;
   final String? sandboxId;
   final ChatState? chatState;
   final WidgetRef ref;
+  final String initialComputerTab;
 
   const _DesktopLayout({
+    required this.agentId,
     required this.sandboxId,
     required this.chatState,
     required this.ref,
+    required this.initialComputerTab,
   });
 
   @override
@@ -236,7 +251,12 @@ class _DesktopLayout extends StatelessWidget {
         if (sandboxId != null && chatState != null)
           Expanded(
             flex: 3,
-            child: ComputerView(sandboxId: sandboxId!, chatState: chatState!),
+            child: ComputerView(
+              agentId: agentId,
+              sandboxId: sandboxId!,
+              chatState: chatState!,
+              initialTab: initialComputerTab,
+            ),
           )
         else
           Expanded(flex: 3, child: _EmptyComputerView()),
@@ -250,14 +270,18 @@ class _DesktopLayout extends StatelessWidget {
 // ===========================================================================
 
 class _MobileLayout extends StatelessWidget {
+  final String agentId;
   final String? sandboxId;
   final ChatState? chatState;
   final WidgetRef ref;
+  final String initialComputerTab;
 
   const _MobileLayout({
+    required this.agentId,
     required this.sandboxId,
     required this.chatState,
     required this.ref,
+    required this.initialComputerTab,
   });
 
   @override
@@ -316,8 +340,10 @@ class _MobileLayout extends StatelessWidget {
                 ),
                 Expanded(
                   child: ComputerView(
+                    agentId: agentId,
                     sandboxId: sandboxId!,
                     chatState: chatState!,
+                    initialTab: initialComputerTab,
                   ),
                 ),
               ],
@@ -377,7 +403,7 @@ class _EmptyComputerView extends StatelessWidget {
 // Chat header
 // ===========================================================================
 
-class _ChatHeader extends StatelessWidget {
+class _ChatHeader extends ConsumerWidget {
   final Agent? agent;
   final String? activeSandboxId;
   final ValueChanged<String> onSandboxChanged;
@@ -393,9 +419,15 @@ class _ChatHeader extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final sandboxIds = agent?.sandboxIds ?? [];
+    final healthAsync = activeSandboxId == null
+        ? null
+        : ref.watch(sandboxHealthProvider(activeSandboxId!));
+    final statusSnapshot = activeSandboxId == null
+        ? null
+        : deriveRuntimeStatusSnapshot(healthAsync: healthAsync!);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -457,16 +489,17 @@ class _ChatHeader extends StatelessWidget {
                         Container(
                           width: 6,
                           height: 6,
-                          decoration: const BoxDecoration(
-                            color: RuhTheme.success,
+                          decoration: BoxDecoration(
+                            color: statusSnapshot?.color ?? RuhTheme.success,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          'Online',
+                          statusSnapshot?.label ?? 'Online',
                           style: theme.textTheme.labelSmall?.copyWith(
-                            color: RuhTheme.success,
+                            color:
+                                statusSnapshot?.color ?? RuhTheme.success,
                             fontSize: 11,
                           ),
                         ),
@@ -585,42 +618,19 @@ class _ChatPanel extends ConsumerWidget {
     }
 
     final chatAsync = ref.watch(chatProvider(sandboxId!));
-    final theme = Theme.of(context);
 
     return chatAsync.when(
       data: (chatState) =>
           _ChatContent(sandboxId: sandboxId!, chatState: chatState, ref: ref),
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              LucideIcons.wifiOff,
-              size: 40,
-              color: RuhTheme.textTertiary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Could not connect to agent',
-              style: theme.textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              formatError(err),
-              style: const TextStyle(
-                color: RuhTheme.textTertiary,
-                fontSize: 12,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            TextButton.icon(
-              onPressed: () => ref.invalidate(chatProvider(sandboxId!)),
-              icon: const Icon(LucideIcons.refreshCw, size: IconSizes.sm),
-              label: const Text('Retry'),
-            ),
-          ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: ChatRuntimeStatusBanner(
+            sandboxId: sandboxId!,
+            chatError: formatError(err),
+            onRetryChat: () => ref.invalidate(chatProvider(sandboxId!)),
+          ),
         ),
       ),
     );
@@ -656,34 +666,11 @@ class _ChatContent extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Error banner
-          if (chatState.error != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: RuhTheme.error.withValues(alpha: 0.1),
-              child: Row(
-                children: [
-                  const Icon(
-                    LucideIcons.alertCircle,
-                    size: IconSizes.sm,
-                    color: RuhTheme.error,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      formatError(chatState.error),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: RuhTheme.error,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          ChatRuntimeStatusBanner(
+            sandboxId: sandboxId,
+            chatError: chatState.error,
+            onRetryChat: () => ref.invalidate(chatProvider(sandboxId)),
+          ),
 
           // Messages
           Expanded(

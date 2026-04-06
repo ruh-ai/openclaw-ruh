@@ -5,7 +5,6 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
-import { request } from '../helpers/app';
 import { signAccessToken } from '../../src/auth/tokens';
 import {
   makeAgentRecord,
@@ -14,10 +13,6 @@ import {
   SANDBOX_ID,
   FORGE_SANDBOX_ID,
 } from '../helpers/fixtures';
-
-function devToken() {
-  return signAccessToken({ userId: 'usr-dev-001', email: 'dev@test.dev', role: 'developer', orgId: 'org-001' });
-}
 
 // ── Mock store ────────────────────────────────────────────────────────────────
 
@@ -30,6 +25,8 @@ const mockUpdateSandboxSharedCodex = mock(async () => {});
 const mockWriteAuditEvent = mock(async () => {});
 const mockListAuditEvents = mock(async () => ({ items: [], has_more: false }));
 const mockDockerContainerRunning = mock(async () => true);
+const mockFindSkill = mock((_skillId: string) => null);
+const mockListSkills = mock(() => []);
 
 mock.module('../../src/store', () => ({
   getSandbox: mockGetSandbox,
@@ -55,10 +52,13 @@ mock.module('../../src/docker', () => ({
   buildHomeFileWriteCommand: (relativePath: string, content: string) =>
     `mkdir -p $HOME && printf %s '${content}' > $HOME/${relativePath}`,
   dockerContainerRunning: mockDockerContainerRunning,
-  joinShellArgs: (args: Array<string | number>) => args.map(String).join(' '),
-  normalizePathSegment: (value: string) => value,
+  dockerExec: mock(async () => [true, 'true']),
+  dockerSpawn: mock(async () => [0, '']),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
-  stopAndRemoveContainer: mock(async () => {}),
+  joinShellArgs: (args: Array<string | number>) => args.map(String).join(' '),
+  listManagedSandboxContainers: mock(async () => []),
+  normalizePathSegment: (value: string) => value,
+  parseManagedSandboxContainerList: mock(() => []),
 }));
 
 // ── Mock agentStore ──────────────────────────────────────────────────────────
@@ -82,15 +82,18 @@ const mockGetAgentCredentials = mock(async () => []);
 const mockGetAgentCredentialSummary = mock(async () => []);
 
 mock.module('../../src/agentStore', () => ({
+  initDb: mock(async () => {}),
   getAgent: mockGetAgent,
-  getAgentForCreator: mockGetAgent,
-  getAgentForCreatorInOrg: mockGetAgent,
   listAgents: mockListAgents,
+  listAgentsForCreator: mockListAgents,
+  listAgentsForCreatorInOrg: mockListAgents,
   saveAgent: mockSaveAgent,
   updateAgent: mockUpdateAgent,
   updateAgentConfig: mockUpdateAgentConfig,
   deleteAgent: mockDeleteAgent,
   addSandboxToAgent: mockAddSandboxToAgent,
+  getAgentForCreator: mockGetAgent,
+  getAgentForCreatorInOrg: mockGetAgent,
   removeSandboxFromAgent: mockRemoveSandboxFromAgent,
   setForgeSandbox: mockSetForgeSandbox,
   promoteForgeSandbox: mockPromoteForgeSandbox,
@@ -101,19 +104,14 @@ mock.module('../../src/agentStore', () => ({
   deleteAgentCredential: mockDeleteAgentCredential,
   getAgentCredentials: mockGetAgentCredentials,
   getAgentCredentialSummary: mockGetAgentCredentialSummary,
-}));
-
-mock.module('../../src/orgStore', () => ({
-  getOrg: mock(async () => ({ id: 'org-001', name: 'Test Org', kind: 'developer', created_at: new Date().toISOString() })),
-  listOrgs: mock(async () => []),
-  createOrg: mock(async () => ({})),
-  initDb: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => makeAgentRecord({ sandbox_ids: [SANDBOX_ID] })),
 }));
 
 // ── Mock conversationStore ────────────────────────────────────────────────────
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversations: mock(async () => []),
   listConversationsPage: mock(async () => ({ items: [], has_more: false })),
   createConversation: mock(async () => ({
@@ -137,13 +135,36 @@ mock.module('../../src/sandboxManager', () => ({
     yield ['result', { sandbox_id: FORGE_SANDBOX_ID, gateway_token: 'forge-tok', gateway_port: 18789, standard_url: 'http://localhost:18789' }];
     yield ['log', 'Done'];
   }),
+  PREVIEW_PORTS: [],
   reconfigureSandboxLlm: mock(async () => true),
+  retrofitSandboxToSharedCodex: mock(async () => ({ ok: true })),
+  dockerExec: mock(async () => [true, '']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
   sandboxExec: mock(async () => [0, '']),
 }));
 
 // ── Mock other modules ───────────────────────────────────────────────────────
 
+mock.module('../../src/auth/builderAccess', () => ({
+  requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
+    user,
+    organization: {
+      id: 'org-001',
+      name: 'Developer Org',
+      slug: 'developer-org',
+      kind: 'developer',
+      plan: 'free',
+    },
+  })),
+}));
+
 mock.module('../../src/skillRegistry', () => ({
+  findSkill: mockFindSkill,
+  listSkills: mockListSkills,
   getSkillRegistryRouter: () => {
     const { Router } = require('express');
     return Router();
@@ -152,6 +173,17 @@ mock.module('../../src/skillRegistry', () => ({
 
 // ── Import app after all mocks ──────────────────────────────────────────────
 
+const { request } = await import('../helpers/app.ts?e2eAgentForge');
+
+function developerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'usr-dev-001',
+    email: 'dev@test.dev',
+    role: 'developer',
+    orgId: 'org-001',
+  })}`;
+}
+
 beforeEach(() => {
   mockGetAgent.mockReset();
   mockGetAgent.mockImplementation(async () => makeAgentRecord());
@@ -159,6 +191,10 @@ beforeEach(() => {
   mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
   mockDockerContainerRunning.mockReset();
   mockDockerContainerRunning.mockImplementation(async () => true);
+  mockFindSkill.mockReset();
+  mockFindSkill.mockImplementation((_skillId: string) => null);
+  mockListSkills.mockReset();
+  mockListSkills.mockImplementation(() => []);
   mockSetForgeSandbox.mockReset();
   mockSetForgeSandbox.mockImplementation(async () => makeAgentRecord({ status: 'forging', forge_sandbox_id: FORGE_SANDBOX_ID }));
   mockPromoteForgeSandbox.mockReset();
@@ -182,7 +218,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge`)
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(res.status).toBe(200);
@@ -197,7 +233,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge`)
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(res.status).toBe(200);
@@ -210,7 +246,7 @@ describe('POST /api/agents/:id/forge', () => {
 
     const res = await request()
       .post('/api/agents/nonexistent/forge')
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(res.status).toBe(404);
@@ -227,9 +263,7 @@ describe('GET /api/agents/:id/forge/status', () => {
     );
     mockDockerContainerRunning.mockImplementation(async () => true);
 
-    const res = await request()
-      .get(`/api/agents/${AGENT_ID}/forge/status`)
-      .set('Authorization', `Bearer ${devToken()}`);
+    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`).set('Authorization', developerAuthHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(true);
@@ -242,9 +276,7 @@ describe('GET /api/agents/:id/forge/status', () => {
       makeAgentRecord({ forge_sandbox_id: null })
     );
 
-    const res = await request()
-      .get(`/api/agents/${AGENT_ID}/forge/status`)
-      .set('Authorization', `Bearer ${devToken()}`);
+    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`).set('Authorization', developerAuthHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(false);
@@ -260,9 +292,7 @@ describe('GET /api/agents/:id/forge/status', () => {
     );
     mockDockerContainerRunning.mockImplementation(async () => false);
 
-    const res = await request()
-      .get(`/api/agents/${AGENT_ID}/forge/status`)
-      .set('Authorization', `Bearer ${devToken()}`);
+    const res = await request().get(`/api/agents/${AGENT_ID}/forge/status`).set('Authorization', developerAuthHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(false);
@@ -278,7 +308,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(res.status).toBe(200);
@@ -294,7 +324,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     const res = await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(res.status).toBe(400);
@@ -307,7 +337,7 @@ describe('POST /api/agents/:id/forge/promote', () => {
 
     await request()
       .post(`/api/agents/${AGENT_ID}/forge/promote`)
-      .set('Authorization', `Bearer ${devToken()}`)
+      .set('Authorization', developerAuthHeader())
       .send({});
 
     expect(mockWriteAuditEvent).toHaveBeenCalled();

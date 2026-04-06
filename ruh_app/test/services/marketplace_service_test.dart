@@ -30,6 +30,14 @@ class FakeBackendClient implements BackendClient {
   }
 
   @override
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<Response<T>> post<T>(
     String path, {
     Object? data,
@@ -91,6 +99,15 @@ class FakeBackendClient implements BackendClient {
 
   @override
   Future<void> clearAccessToken() async {}
+
+  @override
+  Future<void> setRefreshToken(String token) async {}
+
+  @override
+  Future<String?> getRefreshToken() async => null;
+
+  @override
+  Future<void> clearRefreshToken() async {}
 }
 
 void main() {

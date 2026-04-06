@@ -6,6 +6,7 @@
  */
 
 import { test, expect, Page, Route } from "@playwright/test";
+import { setupAuth } from "./helpers/auth";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -184,6 +185,9 @@ async function sendMessage(page: Page, text: string) {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe("Task Plan Mode", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
 
   /**
    * TEST 1: Task plan renders from <plan> block in SSE stream
@@ -301,6 +305,9 @@ test.describe("Task Plan Mode", () => {
 });
 
 test.describe("Code Editor Tab", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
 
   /**
    * TEST 5: Code editor tab exists in ComputerView
@@ -372,6 +379,9 @@ test.describe("Code Editor Tab", () => {
 });
 
 test.describe("Auto-Switch Logic", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
 
   /**
    * TEST 8: Auto-switch to browser tab on browser navigation tool
@@ -414,6 +424,9 @@ test.describe("Auto-Switch Logic", () => {
 });
 
 test.describe("Plan tags stripped from display", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
 
   /**
    * TEST 10: Plan XML tags are stripped from the message content

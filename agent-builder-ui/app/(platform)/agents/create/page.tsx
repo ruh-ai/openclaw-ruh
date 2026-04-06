@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback, useMemo } from "react";
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Loader2, CheckCircle2, AlertCircle, MessageSquare, FolderOpen, Rocket, Trash2 } from "lucide-react";
 import { ReviewAgent } from "./_components/review/ReviewAgent";
@@ -36,6 +36,7 @@ import {
   type CreateSessionConfigState,
 } from "./create-session-config";
 import {
+  canPersistReviewOrLaterForgeStage,
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
@@ -242,11 +243,15 @@ function CreateAgentPageContent() {
 
   // v2: each agent gets its own container — resolve its forge sandbox.
   // When a forge sandbox is provisioned, NEVER fall back to the shared architect.
-  const { sandbox: forgeSandbox, error: forgeSandboxError } = useForgeSandbox(
+  const { sandbox: forgeSandbox, loading: forgeSandboxLoading, error: forgeSandboxError } = useForgeSandbox(
     workingAgent?.forgeSandboxId ? workingAgent.id : null
   );
   const hasForgeAgent = Boolean(workingAgent?.forgeSandboxId);
   const effectiveSandbox = hasForgeAgent ? forgeSandbox : architectSandbox;
+  // True while the forge sandbox is expected but not yet available — either
+  // the hook is mid-fetch, the agent record hasn't hydrated yet, or the
+  // sandbox API hasn't returned a ready sandbox.
+  const forgeSandboxPending = hasForgeAgent && !forgeSandbox;
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
@@ -313,13 +318,42 @@ function CreateAgentPageContent() {
 
   useEffect(() => {
     setMode("copilot");
+
     const restoreId = editingAgentId ?? existingAgent?.id ?? null;
     const cachedSession = restoreId ? loadCreateSessionFromCache(restoreId) : null;
     const cachedLifecycle = restoreId ? loadCoPilotLifecycleFromCache(restoreId) : null;
-    const cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
-    const cachedBuilder = cachedSession?.builder ?? null;
+    let cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
+    let cachedBuilder = cachedSession?.builder ?? null;
+
+    // Discard stale caches in two cases:
+    // 1. Agent is active with skills but cache is stuck at an early stage
+    // 2. Agent has no forge sandbox (container never provisioned) — nothing to resume
+    if (cachedCoPilot && existingAgent) {
+      const cachedStage = cachedCoPilot.devStage;
+      const agentHasSkills = (existingAgent.skillGraph ?? []).length > 0 || (existingAgent.skills ?? []).length > 0;
+      const cacheIsStale = (
+        // Case 1: active agent with stale early-stage cache
+        (agentHasSkills && existingAgent.status === "active"
+          && (!cachedStage || cachedStage === "think" || cachedStage === "plan"))
+        // Case 2: forging agent with no sandbox — cache is from a broken session
+        || (existingAgent.status === "forging" && !existingAgent.forgeSandboxId
+          && cachedStage && cachedStage !== "think")
+      );
+      if (cacheIsStale) {
+        cachedCoPilot = null;
+        cachedBuilder = null;
+        if (restoreId) {
+          clearCreateSessionCache(restoreId);
+          clearCoPilotLifecycleCache(restoreId);
+        }
+      }
+    }
 
     const applyRecoveredSession = (agentForResume: SavedAgent | null) => {
+      // Hard reset the copilot store first to prevent previous agent's lifecycle
+      // state from bleeding through during SPA navigation.
+      coPilotStore.reset();
+
       if (agentForResume) {
         initializeFromAgent(agentForResume);
       } else {
@@ -383,6 +417,45 @@ function CreateAgentPageContent() {
     }
 
     if (existingAgent) {
+      // When localStorage cache is empty (new tab), restore from backend creationSession
+      // which contains the full copilot lifecycle state (devStage, statuses, plan, etc.)
+      if (!cachedCoPilot && existingAgent.creationSession) {
+        const session = existingAgent.creationSession as { coPilot?: Partial<CoPilotState>; builder?: Partial<BuilderState> };
+        const backendCoPilot = session.coPilot ?? null;
+        const backendBuilder = session.builder ?? null;
+
+        // Check if the session is stale: if the agent is active with skills but
+        // the session is stuck at an early stage, the session was never updated
+        // past that point. Fall through to createCoPilotSeedFromAgent which
+        // infers lifecycle state from the agent's actual data.
+        const sessionDevStage = backendCoPilot?.devStage;
+        const agentHasSkills = (existingAgent.skillGraph ?? []).length > 0 || (existingAgent.skills ?? []).length > 0;
+        const sessionIsStale = agentHasSkills && existingAgent.status === "active"
+          && (!sessionDevStage || sessionDevStage === "think" || sessionDevStage === "plan");
+
+        if (!sessionIsStale && backendCoPilot) {
+          initializeFromAgent(existingAgent);
+          updateBuilderState(
+            buildResumedBuilderState(
+              restoreId ?? existingAgent.id ?? "draft",
+              existingAgent,
+              backendBuilder,
+              backendCoPilot,
+            ),
+          );
+          coPilotStore.hydrateFromSeed(buildResumedCoPilotSeed(existingAgent, backendCoPilot));
+          // Re-populate localStorage for subsequent reloads
+          if (restoreId) {
+            saveCreateSessionToCache(restoreId, {
+              coPilot: backendCoPilot as CoPilotState,
+              builder: (backendBuilder ?? {}) as BuilderState,
+            });
+          }
+          setHasRestoredSession(true);
+          return;
+        }
+        // Session is stale — fall through to createCoPilotSeedFromAgent
+      }
       applyRecoveredSession(existingAgent);
       return;
     }
@@ -392,8 +465,8 @@ function CreateAgentPageContent() {
       return;
     }
 
-    // Backend fallback: hydrate from creation_session when localStorage is empty
-    const agentForBackendRestore = workingAgent ?? existingAgent ?? null;
+    // Backend fallback for draft agents (no existingAgent, no localStorage)
+    const agentForBackendRestore = workingAgent ?? null;
     if (agentForBackendRestore?.creationSession) {
       const session = agentForBackendRestore.creationSession as { coPilot?: Partial<CoPilotState>; builder?: Partial<BuilderState> };
       const backendCoPilot = session.coPilot ?? null;
@@ -408,7 +481,6 @@ function CreateAgentPageContent() {
         ),
       );
       coPilotStore.hydrateFromSeed(buildResumedCoPilotSeed(agentForBackendRestore, backendCoPilot));
-      // Re-populate localStorage for subsequent reloads
       if (restoreId && backendCoPilot) {
         saveCreateSessionToCache(restoreId, {
           coPilot: backendCoPilot as CoPilotState,
@@ -550,9 +622,7 @@ function CreateAgentPageContent() {
         coPilot: snapshot,
         builder: builderState,
       });
-      if (snapshot.devStage !== "think") {
-        saveCoPilotLifecycleToCache(agentId, snapshot);
-      }
+      saveCoPilotLifecycleToCache(agentId, snapshot);
     }, 300);
 
     return () => window.clearTimeout(timeout);
@@ -560,9 +630,20 @@ function CreateAgentPageContent() {
 
   // Persist full session to backend (2s debounce) so progress survives
   // browser cache clears, device switches, and build-error refreshes.
+  // For existing agents, save only when lifecycle stage changes to avoid
+  // infinite update loops (updateAgentConfig updates the store → re-render → repeat).
+  const lastPersistedStageRef = useRef<string | null>(null);
   useEffect(() => {
     const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
-    if (!agentId || !hasRestoredSession || isCompleting || existingAgent) return;
+    if (!agentId || !hasRestoredSession || isCompleting) return;
+
+    if (existingAgent) {
+      // For existing agents, only persist when devStage changes (stage transitions)
+      // to avoid update loops. The localStorage cache handles frequent saves.
+      const currentStage = coPilotStore.devStage;
+      if (lastPersistedStageRef.current === currentStage) return;
+      lastPersistedStageRef.current = currentStage;
+    }
 
     const timeout = window.setTimeout(() => {
       const snapshot = coPilotStore.snapshot();
@@ -578,6 +659,41 @@ function CreateAgentPageContent() {
 
     return () => window.clearTimeout(timeout);
   });
+
+  // Persist forge_stage to backend immediately on every stage transition.
+  // This is the source of truth for where the creation process is — used by
+  // reconciliation and new-tab restore. Not debounced because stage transitions
+  // are infrequent and critical to persist.
+  const lastSavedForgeStageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
+    if (!agentId || !hasRestoredSession) return;
+
+    const currentStage = coPilotStore.devStage;
+    const skillGraphCount =
+      builderState.skillGraph?.length
+      ?? workingAgent?.skillGraph?.length
+      ?? 0;
+    if (!canPersistReviewOrLaterForgeStage(currentStage, skillGraphCount)) {
+      return;
+    }
+    if (lastSavedForgeStageRef.current === currentStage) return;
+    lastSavedForgeStageRef.current = currentStage;
+
+    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: currentStage }),
+    }).catch(() => { /* best-effort — creationSession is the backup */ });
+  }, [
+    coPilotStore.devStage,
+    editingAgentId,
+    effectiveAgentId,
+    builderState.draftAgentId,
+    builderState.skillGraph,
+    workingAgent?.skillGraph,
+    hasRestoredSession,
+  ]);
 
   const syntheticAgent: SavedAgent = useMemo(() => {
     const effectiveImprovements = builderState.improvements.length > 0 ? builderState.improvements : (workingAgent?.improvements ?? []);
@@ -925,6 +1041,103 @@ function CreateAgentPageContent() {
 
   // ─── Render: CoPilot mode ───────────────────────────────────────────────────
 
+  // Push agent template to GitHub if user has connected their account.
+  // Non-blocking — failures are logged but don't prevent the deploy.
+  const pushAgentToGitHubIfConnected = async (
+    state: ReturnType<typeof coPilotStore.snapshot>,
+    agentName: string,
+  ) => {
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
+      const userRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
+      if (!token || !userRaw) return;
+
+      const user = JSON.parse(userRaw) as { login: string };
+      const slug = agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+      const suffix = Math.random().toString(36).slice(2, 6);
+      const repoName = `${slug || "agent"}-${suffix}`;
+
+      const files: Array<{ path: string; content: string }> = [];
+      files.push({
+        path: "SOUL.md",
+        content: [
+          `# ${agentName}`, "",
+          state.description ? `> ${state.description}` : "",
+          "", "## Rules",
+          ...state.agentRules.map((r: string) => `- ${r}`),
+          "", "## Skills",
+          ...(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`),
+        ].join("\n"),
+      });
+      for (const node of state.skillGraph ?? []) {
+        if (node.skill_md) {
+          files.push({ path: `skills/${node.skill_id}/SKILL.md`, content: node.skill_md });
+        }
+      }
+      files.push({
+        path: ".openclaw/config.yml",
+        content: JSON.stringify({ name: agentName, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2),
+      });
+      files.push({
+        path: "README.md",
+        content: `# ${agentName}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n`,
+      });
+
+      const res = await fetch("/api/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push", token, owner: user.login, repoName, agentName, files }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        console.log(`[GitHub] Agent pushed to ${result.repoUrl}`);
+      } else {
+        console.warn(`[GitHub] Push failed: ${result.error}`);
+      }
+    } catch (err) {
+      console.warn("[GitHub] Push failed:", err);
+    }
+  };
+
+  // Auto-publish to marketplace after saving an agent. Non-blocking — fires and
+  // forgets so Ship completion isn't delayed by marketplace API issues.
+  const autoPublishToMarketplace = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
+    try {
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/marketplace/listings/auto-publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId,
+          title: agentName,
+          summary: agentDescription,
+          description: agentDescription,
+          category: "general",
+        }),
+      });
+      if (res.ok) {
+        console.log(`[Marketplace] Agent "${agentName}" published to marketplace`);
+      } else {
+        console.warn(`[Marketplace] Auto-publish failed: ${res.status}`);
+      }
+    } catch (err) {
+      console.warn("[Marketplace] Auto-publish failed:", err);
+    }
+  }, []);
+
+  // Mark the creation lifecycle as complete and publish to marketplace.
+  // Called at every successful Ship completion path.
+  const finalizeShipCompletion = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
+    // Mark forge_stage as "complete" — this is the source of truth for reconciliation.
+    // The endpoint also promotes agent status to "active".
+    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: "complete" }),
+    }).catch(() => { /* best-effort */ });
+
+    void autoPublishToMarketplace(agentId, agentName, agentDescription);
+  }, [autoPublishToMarketplace]);
+
   const handleCoPilotComplete = useCallback(async (): Promise<boolean> => {
     setIsCompleting(true);
     const state = coPilotStore.snapshot();
@@ -971,14 +1184,21 @@ function CreateAgentPageContent() {
       });
 
       const sandboxIds = savedAgent.sandboxIds ?? [];
-      if (sandboxIds.length > 0) {
+      // Skip the hot-push-and-redirect path for forge agents — they are handled
+      // by the forge-sandbox block below which stays on the page so the Ship
+      // stage UI can orchestrate its multi-step flow (save → deploy → github).
+      const forgeSandbox = savedAgent.forgeSandboxId ?? existingAgent.forgeSandboxId;
+      const nonForgeSandboxIds = forgeSandbox
+        ? sandboxIds.filter((sid) => sid !== forgeSandbox)
+        : sandboxIds;
+      if (nonForgeSandboxIds.length > 0) {
         setHotPushStatus("pushing");
-        setHotPushCount(sandboxIds.length);
+        setHotPushCount(nonForgeSandboxIds.length);
         setHotPushSummary("");
         setHotPushRetryTarget(null);
         try {
           const results = await Promise.all(
-            sandboxIds.map(async (sid) => ({
+            nonForgeSandboxIds.map(async (sid) => ({
               sandboxId: sid,
               result: await pushAgentConfig(sid, savedAgent),
             })),
@@ -1004,16 +1224,38 @@ function CreateAgentPageContent() {
           if (err instanceof Error && err.message.includes("failed")) throw err;
           setHotPushStatus("error");
           setHotPushSummary("Config push failed before all running instances could be updated");
-          setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds });
+          setHotPushRetryTarget({ agentId: existingAgent.id, sandboxIds: nonForgeSandboxIds });
           setIsCompleting(false);
           throw new Error("Config push failed before all running instances could be updated");
         }
         await new Promise((r) => setTimeout(r, 1200));
 
+        // GitHub push — non-blocking
+        try {
+          const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
+          const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
+          if (ghToken && ghUserRaw) {
+            const ghUser = JSON.parse(ghUserRaw) as { login: string };
+            const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+            const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
+            const ghFiles = [
+              { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
+              ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
+              { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
+              { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
+            ];
+            const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
+            const ghResult = await ghRes.json();
+            if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
+            else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
+          }
+        } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
+
         resetBuilderState();
         if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
         if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
         coPilotStore.reset();
+        void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
         router.push("/agents");
         return true;
       }
@@ -1040,9 +1282,29 @@ function CreateAgentPageContent() {
           setIsCompleting(false);
           throw error instanceof Error ? error : new Error(msg);
         }
+        // GitHub push — runs automatically if the user connected their GitHub account.
+        try {
+          const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
+          const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
+          if (ghToken && ghUserRaw) {
+            const ghUser = JSON.parse(ghUserRaw) as { login: string };
+            const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+            const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
+            const ghFiles = [
+              { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
+              ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
+              { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
+              { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
+            ];
+            const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
+            const ghResult = await ghRes.json();
+            if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
+            else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
+          }
+        } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
+
+        void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
         setIsCompleting(false);
-        // Return true — StageShip owns the remaining steps (deploy confirmation,
-        // GitHub export) and will advance to Reflect when all steps complete.
         return true;
       }
 
@@ -1057,6 +1319,7 @@ function CreateAgentPageContent() {
       if (effectiveAgentId) clearCoPilotLifecycleCache(effectiveAgentId);
       if (effectiveAgentId) clearCreateSessionCache(effectiveAgentId);
       coPilotStore.reset();
+      void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
       router.push(resolveImproveAgentCompletionHref(
         existingAgent.id,
         sandboxIds,
@@ -1070,19 +1333,27 @@ function CreateAgentPageContent() {
     // and pushes it to the existing sandbox instead of creating a new one.
     const forgeSandboxId = workingAgent?.forgeSandboxId ?? undefined;
 
-    const agentId = completionKind === "deploy-draft" && builderState.draftAgentId
-      ? (
-          await persistAgentEdits(builderState.draftAgentId, {
+    let agentId: string;
+    try {
+      agentId = completionKind === "deploy-draft" && builderState.draftAgentId
+        ? (
+            await persistAgentEdits(builderState.draftAgentId, {
+              ...finalFields,
+              status: "active",
+              ...(forgeSandboxId ? { forgeSandboxId } : {}),
+            })
+          ).id
+        : await saveAgent({
             ...finalFields,
             status: "active",
             ...(forgeSandboxId ? { forgeSandboxId } : {}),
-          })
-        ).id
-      : await saveAgent({
-          ...finalFields,
-          status: "active",
-          ...(forgeSandboxId ? { forgeSandboxId } : {}),
-        });
+          });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Failed to save agent";
+      setCompletionError(msg);
+      setIsCompleting(false);
+      throw error instanceof Error ? error : new Error(msg);
+    }
 
     const credentialResult = await finalizePendingCredentialDrafts(
       agentId,
@@ -1116,9 +1387,31 @@ function CreateAgentPageContent() {
         setIsCompleting(false);
         throw error instanceof Error ? error : new Error(msg);
       }
+
+      // GitHub push — runs automatically if the user connected their GitHub account.
+      // Non-blocking: failures don't prevent the deploy from succeeding.
+      try {
+        const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
+        const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
+        if (ghToken && ghUserRaw) {
+          const ghUser = JSON.parse(ghUserRaw) as { login: string };
+          const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+          const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
+          const ghFiles = [
+            { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
+            ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
+            { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
+            { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
+          ];
+          const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
+          const ghResult = await ghRes.json();
+          if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
+          else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
+        }
+      } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
+
+      void finalizeShipCompletion(agentId, finalFields.name, finalFields.description);
       setIsCompleting(false);
-      // Return true — StageShip owns the remaining steps (deploy confirmation,
-      // GitHub export) and will advance to Reflect when all steps complete.
       return true;
     }
 
@@ -1133,11 +1426,12 @@ function CreateAgentPageContent() {
     if (agentId) clearCoPilotLifecycleCache(agentId);
     if (agentId) clearCreateSessionCache(agentId);
     coPilotStore.reset();
+    void finalizeShipCompletion(agentId, finalFields.name, finalFields.description);
     router.push(
       buildCreateDeployHref(agentId, deploySummary.readinessLabel === "Ready to deploy"),
     );
     return true;
-  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
+  }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, finalizeShipCompletion, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
   // ── v2 init form: shown when creating a brand-new agent ──────────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {
@@ -1196,6 +1490,26 @@ function CreateAgentPageContent() {
           {showDevMockBar && (
             <DevMockBar coPilotStore={coPilotStore} />
           )}
+          {forgeSandboxPending ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-center">
+                {forgeSandboxLoading ? (
+                  <>
+                    <div className="w-6 h-6 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      Connecting to agent sandbox...
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      {forgeSandboxError ?? "Agent sandbox is not ready yet. It may still be provisioning."}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
           <CoPilotLayout
             existingAgent={workingAgent}
             builderState={builderState}
@@ -1206,6 +1520,7 @@ function CreateAgentPageContent() {
             onCancel={() => router.push("/agents")}
             activeSandbox={effectiveSandbox}
           />
+          )}
         </div>
       </div>
     );
@@ -1443,6 +1758,26 @@ function CreateAgentPageContent() {
 
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div key={modeTransitionKey} className="flex-1 flex flex-col overflow-hidden min-h-0 stage-enter">
+          {forgeSandboxPending ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3 text-center">
+                {forgeSandboxLoading ? (
+                  <>
+                    <div className="w-6 h-6 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      Connecting to agent sandbox...
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-satoshi-medium text-[var(--text-secondary)]">
+                      {forgeSandboxError ?? "Agent sandbox is not ready yet. It may still be provisioning."}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
           <TabChat
             mode={resolveCreatePageChatMode(agentMode)}
             disableBuilderAutosave={isCompleting}
@@ -1454,6 +1789,7 @@ function CreateAgentPageContent() {
             onBuilderStateChange={handleBuilderStateChange}
             onReadyForReview={() => setView("review")}
           />
+          )}
         </div>
         {showWorkspace && workingAgent?.forgeSandboxId && (
           <WorkspacePanel

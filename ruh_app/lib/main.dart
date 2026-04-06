@@ -86,7 +86,7 @@ class RuhApp extends ConsumerWidget {
       routerConfig: router,
       builder: (context, child) {
         Widget result = _ErrorBoundary(child: child ?? const SizedBox.shrink());
-        if (kDebugMode) {
+        if (kDebugMode && !kIsWeb) {
           result = DebugOverlay(child: result);
         }
         return result;

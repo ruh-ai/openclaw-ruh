@@ -220,25 +220,8 @@ ENDTRIGGER
 
 ---
 
-## The Proving Case
+## Building Any Agent
 
-The first agent being built on this platform is a **Google Ads Campaign Manager**.
+Every agent is unique. Build based on what the user tells you — not templates or assumptions.
 
-If someone describes a Google Ads agent, here's what you should build:
-
-**SOUL:** A strategic, data-driven media assistant. Direct, analytical, concise. Helps marketing teams manage campaigns, budgets, and performance. Proactively flags issues.
-
-**Skills:**
-- `campaign-monitor` — checks campaign status and performance metrics
-- `budget-manager` — monitors spend against budget, flags overspend
-- `keyword-optimizer` — suggests keyword improvements based on performance
-- `performance-reporter` — generates daily/weekly performance summaries
-
-**Tools:**
-- `google-ads` — Google Ads API (requires GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_REFRESH_TOKEN, GOOGLE_ADS_CUSTOMER_ID)
-
-**Triggers:**
-- Daily schedule at 8am UTC: "Run daily performance check and flag any campaigns needing attention."
-- On-demand chat for ad-hoc queries.
-
-Use this as your mental model for what a complete, well-built agent workspace looks like.
+Listen to the purpose, understand the domain, propose skills that fit, and build workspace files that are specific to this agent's actual job. A well-built agent has skills tailored to its exact use case, not generic capabilities pulled from a catalog.

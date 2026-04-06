@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   extractRuntimeInputKeys,
   getRuntimeInputDetails,
+  hasMissingRequiredInputs,
   isRuntimeInputFilled,
   mergeRuntimeInputDefinitions,
 } from "./runtime-inputs";
@@ -125,5 +126,115 @@ describe("isRuntimeInputFilled", () => {
         value: "   ",
       }),
     ).toBe(false);
+  });
+
+  test("considers a defaultValue as filled even when value is empty", () => {
+    expect(
+      isRuntimeInputFilled({
+        key: "LOG_LEVEL",
+        label: "Log Level",
+        description: "Logging verbosity",
+        required: true,
+        source: "architect_requirement",
+        value: "",
+        defaultValue: "info",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("hasMissingRequiredInputs", () => {
+  test("returns true when user_required input has no value", () => {
+    expect(
+      hasMissingRequiredInputs({
+        runtimeInputs: [
+          {
+            key: "API_KEY",
+            label: "API Key",
+            description: "Secret key",
+            required: true,
+            source: "architect_requirement",
+            value: "",
+            populationStrategy: "user_required",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("returns false when user_required input has a value", () => {
+    expect(
+      hasMissingRequiredInputs({
+        runtimeInputs: [
+          {
+            key: "API_KEY",
+            label: "API Key",
+            description: "Secret key",
+            required: true,
+            source: "architect_requirement",
+            value: "sk-abc123",
+            populationStrategy: "user_required",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  test("does NOT block on ai_inferred inputs even when empty", () => {
+    expect(
+      hasMissingRequiredInputs({
+        runtimeInputs: [
+          {
+            key: "COMPANY_NAME",
+            label: "Company Name",
+            description: "Name of the company",
+            required: true,
+            source: "architect_requirement",
+            value: "",
+            populationStrategy: "ai_inferred",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  test("does NOT block on static_default inputs even when empty", () => {
+    expect(
+      hasMissingRequiredInputs({
+        runtimeInputs: [
+          {
+            key: "LOG_LEVEL",
+            label: "Log Level",
+            description: "Logging verbosity",
+            required: true,
+            source: "architect_requirement",
+            value: "",
+            populationStrategy: "static_default",
+            defaultValue: "info",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  test("treats missing populationStrategy as user_required (backward compat)", () => {
+    expect(
+      hasMissingRequiredInputs({
+        runtimeInputs: [
+          {
+            key: "OLD_KEY",
+            label: "Old Key",
+            description: "Legacy input",
+            required: true,
+            source: "architect_requirement",
+            value: "",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("returns false when no runtime inputs exist", () => {
+    expect(hasMissingRequiredInputs({ runtimeInputs: [] })).toBe(false);
   });
 });

@@ -678,6 +678,29 @@ h1 {
   animation: soul-orb-breathe 2.5s ease-in-out infinite;
 }
 
+/* ─── Reduced Motion ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .soul-pulse,
+  .soul-pulse-strong,
+  .gradient-drift,
+  .spark,
+  .typewriter-word,
+  .focus-breathe:focus,
+  .stage-enter,
+  .stage-exit,
+  .stage-enter-reverse,
+  .soul-born,
+  .soul-orb {
+    animation: none !important;
+  }
+  .typewriter-word {
+    opacity: 1 !important;
+  }
+  .warmth-hover::before {
+    display: none;
+  }
+}
+
 /* Progress ring for creation phases */
 @keyframes progress-fill {
   from { stroke-dashoffset: var(--progress-from, 100); }

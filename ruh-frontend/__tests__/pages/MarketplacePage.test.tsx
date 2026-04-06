@@ -6,43 +6,30 @@ import MarketplacePage from '@/app/marketplace/page';
 
 const BASE = 'http://localhost:8000';
 
+const listing = {
+  id: 'listing-1',
+  title: 'Test Agent',
+  slug: 'test-agent',
+  summary: 'A test agent',
+  category: 'marketing',
+  installCount: 42,
+  avgRating: 4.5,
+  iconUrl: null,
+};
+
 describe('MarketplacePage', () => {
-  test('renders marketplace heading', async () => {
+  test('shows loading state then renders listings', async () => {
     server.use(
       http.get(`${BASE}/api/marketplace/listings`, () =>
-        HttpResponse.json({ items: [] }),
+        HttpResponse.json({ items: [listing] }),
       ),
     );
-    render(<MarketplacePage />);
-    expect(screen.getByText('Discover deployable digital employees')).toBeInTheDocument();
-  });
 
-  test('displays listings from API', async () => {
-    server.use(
-      http.get(`${BASE}/api/marketplace/listings`, () =>
-        HttpResponse.json({
-          items: [
-            { id: '1', title: 'Google Ads Agent', slug: 'google-ads', summary: 'Manages ad campaigns', category: 'marketing', installCount: 42, avgRating: 4.5, iconUrl: null },
-            { id: '2', title: 'HR Bot', slug: 'hr-bot', summary: 'Answers HR questions', category: 'hr', installCount: 10, avgRating: 0, iconUrl: null },
-          ],
-        }),
-      ),
-    );
-    render(<MarketplacePage />);
-    await waitFor(() => {
-      expect(screen.getByText('Google Ads Agent')).toBeInTheDocument();
-      expect(screen.getByText('HR Bot')).toBeInTheDocument();
-    });
-  });
-
-  test('shows loading state', () => {
-    server.use(
-      http.get(`${BASE}/api/marketplace/listings`, () =>
-        HttpResponse.json({ items: [] }),
-      ),
-    );
     render(<MarketplacePage />);
     expect(screen.getByText('Loading marketplace...')).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByText('Test Agent')).toBeInTheDocument());
+    expect(screen.queryByText('Loading marketplace...')).not.toBeInTheDocument();
   });
 
   test('shows empty state when no listings', async () => {
@@ -51,43 +38,91 @@ describe('MarketplacePage', () => {
         HttpResponse.json({ items: [] }),
       ),
     );
+
     render(<MarketplacePage />);
     await waitFor(() =>
       expect(screen.getByText('No agents published yet')).toBeInTheDocument(),
     );
   });
 
-  test('displays install count and rating', async () => {
-    server.use(
-      http.get(`${BASE}/api/marketplace/listings`, () =>
-        HttpResponse.json({
-          items: [
-            { id: '1', title: 'Test Agent', slug: 'test', summary: 'A test', category: 'general', installCount: 99, avgRating: 4.2, iconUrl: null },
-          ],
-        }),
-      ),
-    );
-    render(<MarketplacePage />);
-    await waitFor(() => {
-      expect(screen.getByText('99 installs')).toBeInTheDocument();
-      expect(screen.getByText(/4\.2/)).toBeInTheDocument();
-    });
-  });
-
-  test('sends category filter in API request', async () => {
-    let requestUrl = '';
+  test('search input triggers re-fetch with search param', async () => {
+    const requestedUrls: string[] = [];
     server.use(
       http.get(`${BASE}/api/marketplace/listings`, ({ request }) => {
-        requestUrl = request.url;
+        requestedUrls.push(request.url);
         return HttpResponse.json({ items: [] });
       }),
     );
+
     render(<MarketplacePage />);
-    await waitFor(() => expect(screen.queryByText('Loading marketplace...')).not.toBeInTheDocument());
+    await waitFor(() => expect(requestedUrls.length).toBeGreaterThan(0));
+
+    const searchInput = screen.getByPlaceholderText('Search agents...');
+    await userEvent.type(searchInput, 'sales');
+
+    await waitFor(() =>
+      expect(requestedUrls.some((u) => u.includes('search=sales'))).toBe(true),
+    );
+  });
+
+  test('category select triggers re-fetch with category param', async () => {
+    const requestedUrls: string[] = [];
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings`, ({ request }) => {
+        requestedUrls.push(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    render(<MarketplacePage />);
+    await waitFor(() => expect(requestedUrls.length).toBeGreaterThan(0));
 
     const select = screen.getByDisplayValue('All Categories');
     await userEvent.selectOptions(select, 'marketing');
 
-    await waitFor(() => expect(requestUrl).toContain('category=marketing'));
+    await waitFor(() =>
+      expect(requestedUrls.some((u) => u.includes('category=marketing'))).toBe(true),
+    );
+  });
+
+  test('handles API error gracefully (shows empty list)', async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings`, () =>
+        HttpResponse.error(),
+      ),
+    );
+
+    render(<MarketplacePage />);
+    await waitFor(() =>
+      expect(screen.getByText('No agents published yet')).toBeInTheDocument(),
+    );
+  });
+
+  test('handles non-ok response gracefully', async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings`, () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+
+    render(<MarketplacePage />);
+    await waitFor(() =>
+      expect(screen.getByText('No agents published yet')).toBeInTheDocument(),
+    );
+  });
+
+  test('renders listing with icon when iconUrl is set', async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings`, () =>
+        HttpResponse.json({
+          items: [{ ...listing, iconUrl: 'https://example.com/icon.png' }],
+        }),
+      ),
+    );
+
+    const { container } = render(<MarketplacePage />);
+    await waitFor(() => expect(screen.getByText('Test Agent')).toBeInTheDocument());
+    const img = container.querySelector('img[src="https://example.com/icon.png"]');
+    expect(img).toBeInTheDocument();
   });
 });

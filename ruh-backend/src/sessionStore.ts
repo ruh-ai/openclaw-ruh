@@ -80,6 +80,16 @@ export async function setActiveOrgId(
   });
 }
 
+export async function clearActiveOrgForOrganization(orgId: string): Promise<number> {
+  return withConn(async (client) => {
+    const result = await client.query(
+      'UPDATE sessions SET active_org_id = NULL WHERE active_org_id = $1',
+      [orgId],
+    );
+    return result.rowCount ?? 0;
+  });
+}
+
 export async function cleanExpiredSessions(): Promise<number> {
   return withConn(async (client) => {
     const result = await client.query('DELETE FROM sessions WHERE expires_at < NOW()');

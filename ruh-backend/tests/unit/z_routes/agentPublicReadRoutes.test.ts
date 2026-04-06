@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { signAccessToken } from '../../src/auth/tokens';
 
 const agentPayload = {
   id: 'agent-1',
@@ -43,7 +44,7 @@ const mockGetAgentForCreator = mock(async () => agentPayload);
 const mockListAgents = mock(async () => [agentPayload]);
 const mockListAgentsForCreator = mock(async () => [agentPayload]);
 
-mock.module('../../../src/store', () => ({
+mock.module('../../src/store', () => ({
   getSandbox: mock(async () => null),
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -53,7 +54,7 @@ mock.module('../../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../../src/conversationStore', () => ({
+mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -65,50 +66,33 @@ mock.module('../../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../../src/agentStore', () => ({
+mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mockListAgents,
   listAgentsForCreator: mockListAgentsForCreator,
-  listAgentsForCreatorInOrg: mock(async () => []),
+  listAgentsForCreatorInOrg: mockListAgentsForCreator,
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
   getAgentForCreator: mockGetAgentForCreator,
-  getAgentForCreatorInOrg: mock(async () => null),
-  getAgentOwnership: mock(async () => null),
+  getAgentForCreatorInOrg: mockGetAgentForCreator,
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
+  deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
-  removeSandboxFromAgent: mock(async () => ({})),
   setForgeSandbox: mock(async () => ({})),
   promoteForgeSandbox: mock(async () => ({})),
   clearForgeSandbox: mock(async () => ({})),
-  deleteAgent: mock(async () => true),
+  removeSandboxFromAgent: mock(async () => ({})),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
-  updatePaperclipMapping: mock(async () => null),
-  getAgentBySandboxId: mock(async () => null),
-  saveAgentCredential: mock(async () => {}),
-  deleteAgentCredential: mock(async () => {}),
   getAgentCredentials: mock(async () => []),
   getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'developer-1',
-      email: 'developer@test.dev',
-      role: 'developer',
-      // orgId intentionally omitted: getActiveOrgKind short-circuits to null
-      // when req.user.orgId is falsy, bypassing orgStore.getOrg entirely
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-}));
-
-mock.module('../../../src/auth/builderAccess', () => ({
+mock.module('../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
     organization: {
@@ -121,18 +105,25 @@ mock.module('../../../src/auth/builderAccess', () => ({
   })),
 }));
 
-mock.module('../../../src/sandboxManager', () => ({
+mock.module('../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../../src/channelManager', () => ({
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+mock.module('../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -141,44 +132,53 @@ mock.module('../../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
-mock.module('../../../src/docker', () => ({
+mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: () => '',
   buildCronRunCommand: () => '',
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
-  dockerSpawn: mock(async () => ({ code: 0, stdout: '', stderr: '' })),
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
   parseManagedSandboxContainerList: mock(() => []),
 }));
 
-mock.module('../../../src/auditStore', () => ({
+mock.module('../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-// orgStore must be mocked so getActiveOrgKind doesn't hit the real DB pool.
-// When req.user.orgId is set (from a previously-registered requireAuth mock),
-// getActiveOrgKind calls orgStore.getOrg — returning null makes it fall through
-// to the developer flow without needing a real database connection.
-mock.module('../../../src/orgStore', () => ({
-  initDb: mock(async () => {}),
-  createOrg: mock(async () => ({})),
-  getOrg: mock(async () => null),
-  listOrgs: mock(async () => []),
-  updateOrg: mock(async () => ({})),
-  deleteOrg: mock(async () => true),
-}));
+const { app } = await import('../../src/app.ts?unitAgentPublicReadRoutes');
 
-const { app } = await import('../../../src/app');
+function developerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'developer-1',
+    email: 'developer@test.dev',
+    role: 'developer',
+    orgId: null,
+  })}`;
+}
 
 type MockReq = {
   method: string;
@@ -288,7 +288,7 @@ async function invokeRoute(method: string, path: string, req: MockReq) {
   await runNext();
   await Promise.race([
     res.done,
-    new Promise((resolve) => setTimeout(resolve, 500)),
+    new Promise((resolve) => setTimeout(resolve, 25)),
   ]);
   return res;
 }
@@ -308,6 +308,7 @@ describe('agent public read routes', () => {
   test('GET /api/agents/:id redacts webhook secret hashes from public trigger metadata', async () => {
     const res = await invokeRoute('GET', '/api/agents/:id', makeReq({
       params: { id: 'agent-1' },
+      headers: { authorization: developerAuthHeader() },
     }));
 
     expect(res.statusCode).toBe(200);
@@ -326,7 +327,9 @@ describe('agent public read routes', () => {
   });
 
   test('GET /api/agents redacts webhook secret hashes from list responses too', async () => {
-    const res = await invokeRoute('GET', '/api/agents', makeReq());
+    const res = await invokeRoute('GET', '/api/agents', makeReq({
+      headers: { authorization: developerAuthHeader() },
+    }));
 
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);

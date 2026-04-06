@@ -1,6 +1,7 @@
 import { ApprovalEvent, ArchitectResponse } from "./types";
 import type { IntermediateUpdate } from "./intermediate-updates";
 import type { OpenClawRequestMode } from "./test-mode";
+import { sendViaGatewayProxy } from "./gateway-ws-adapter";
 
 export interface StreamCallbacks {
   onStatus?: (phase: string, message: string) => void;
@@ -50,8 +51,9 @@ function normalizeSseChunk(chunk: string): string {
 }
 
 /**
- * Send a message to the OpenClaw architect agent via the bridge API.
- * Consumes the SSE stream and returns the final ArchitectResponse.
+ * Send a message to the OpenClaw architect agent.
+ * When a forge sandbox ID is provided, tries the backend WS proxy first
+ * for bidirectional real-time events. Falls back to the HTTP SSE bridge.
  */
 export async function sendToArchitectStreaming(
   sessionId: string,
@@ -59,6 +61,13 @@ export async function sendToArchitectStreaming(
   callbacks?: StreamCallbacks,
   options?: SendToArchitectOptions
 ): Promise<ArchitectResponse> {
+  // WS proxy is built but disabled for now — cross-origin WebSocket from
+  // localhost:3000 to localhost:8000 doesn't send cookies, so JWT auth fails.
+  // TODO: Enable when backend and frontend share the same origin (behind nginx)
+  // or when the proxy supports token-based auth via query param.
+  // See: gateway-ws-adapter.ts, gatewayProxy.ts, use-gateway-ws.ts
+
+  // HTTP SSE bridge (fallback or when no forge sandbox)
   const res = await fetch("/api/openclaw", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -209,8 +218,8 @@ export async function sendToArchitectStreaming(
 
   if (!finalResult) {
     if (accumulatedDeltaText) {
-      console.warn("[SSE] Stream ended without result event, returning partial response from deltas");
-      return { type: "agent_response", content: accumulatedDeltaText } as ArchitectResponse;
+      console.warn("[SSE] Stream ended without result event — treating as error with partial content");
+      throw new Error(`Agent response incomplete: stream ended without a result event. Partial content: ${accumulatedDeltaText.slice(0, 200)}`);
     }
     throw new Error("SSE stream ended without a result event");
   }
@@ -339,8 +348,8 @@ export async function sendToForgeSandboxChat(
 
   if (!finalResult) {
     if (accumulatedDeltaText) {
-      console.warn("[SSE] Forge stream ended without result event, returning partial response from deltas");
-      return { type: "agent_response", content: accumulatedDeltaText } as ArchitectResponse;
+      console.warn("[SSE] Forge stream ended without result event — treating as error with partial content");
+      throw new Error(`Forge chat response incomplete: stream ended without a result event. Partial content: ${accumulatedDeltaText.slice(0, 200)}`);
     }
     throw new Error("Forge chat stream ended without a result event");
   }

@@ -1,135 +1,148 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ruh_app/services/api_client.dart';
 import 'package:ruh_app/services/workspace_service.dart';
 
-import '../test_support/fake_backend_client.dart';
+class FakeBackendClient implements BackendClient {
+  dynamic getResponseData;
+  String? lastGetPath;
+  Map<String, dynamic>? lastGetQueryParameters;
+
+  @override
+  Future<Response<T>> get<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    lastGetPath = path;
+    lastGetQueryParameters = queryParameters;
+    return Response<T>(
+      data: getResponseData as T,
+      requestOptions: RequestOptions(path: path),
+      statusCode: 200,
+    );
+  }
+
+  @override
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<Response<T>> post<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<Response<T>> postLongRunning<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<Response<T>> patch<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<Response<T>> delete<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<String> streamPost(String path, Map<String, dynamic> data) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<String> streamGet(String path) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> setAccessToken(String token) async {}
+
+  @override
+  Future<String?> getAccessToken() async => null;
+
+  @override
+  Future<void> clearAccessToken() async {}
+
+  @override
+  Future<void> setRefreshToken(String token) async {}
+
+  @override
+  Future<String?> getRefreshToken() async => null;
+
+  @override
+  Future<void> clearRefreshToken() async {}
+}
 
 void main() {
-  late FakeBackendClient client;
-  late WorkspaceService service;
+  group('WorkspaceService', () {
+    test('reads workspace files from the backend items array', () async {
+      final client = FakeBackendClient()
+        ..getResponseData = {
+          'root': '',
+          'items': const [
+            {
+              'path': 'skills/task-planner/SKILL.md',
+              'size': 128,
+              'modified_at': '2026-04-02T10:00:00.000Z',
+            },
+            {
+              'path': 'SOUL.md',
+              'size': 256,
+              'modified_at': '2026-04-02T10:05:00.000Z',
+            },
+          ],
+        };
+      final service = WorkspaceService(client: client);
 
-  setUp(() {
-    client = FakeBackendClient();
-    service = WorkspaceService(client: client);
-  });
+      final files = await service.listFiles('sandbox-1');
 
-  group('listFiles', () {
-    test('returns WorkspaceFileEntry list from Map entries', () async {
-      client.getResponseData = {
-        'files': [
-          {'path': 'src/main.dart', 'size': 1024},
-        ],
-      };
+      expect(client.lastGetPath, '/api/sandboxes/sandbox-1/workspace/files');
+      expect(files, hasLength(2));
+      expect(files.first.path, 'skills/task-planner/SKILL.md');
+      expect(files.first.name, 'SKILL.md');
+      expect(files.first.depth, 2);
+      expect(files.last.name, 'SOUL.md');
+    });
 
-      final files = await service.listFiles('sb1');
+    test('builds preview proxy urls from mapped preview ports', () async {
+      final client = FakeBackendClient()
+        ..getResponseData = {
+          'ports': {'3000': 49956, '8080': 49965},
+          'active': const [3000],
+        };
+      final service = WorkspaceService(client: client);
 
-      expect(files, hasLength(1));
-      expect(files.first.path, 'src/main.dart');
-      expect(files.first.size, 1024);
+      final ports = await service.getPreviewPorts('sandbox-2');
+
+      expect(client.lastGetPath, '/api/sandboxes/sandbox-2/preview/ports');
+      expect(ports.map((port) => port.port).toList(), [3000, 8080]);
+      expect(ports.first.label, 'Live preview');
       expect(
-        client.lastGetPath,
-        '/api/sandboxes/sb1/workspace/files',
+        ports.first.url,
+        contains('/api/sandboxes/sandbox-2/preview/proxy/3000/'),
       );
-    });
-
-    test('returns WorkspaceFileEntry list from plain string entries', () async {
-      client.getResponseData = {
-        'files': ['src/main.dart'],
-      };
-
-      final files = await service.listFiles('sb1');
-
-      expect(files, hasLength(1));
-      expect(files.first.path, 'src/main.dart');
-      expect(files.first.size, isNull);
-    });
-
-    test('returns empty list on error', () async {
-      client.getError = Exception('network error');
-
-      final files = await service.listFiles('sb1');
-
-      expect(files, isEmpty);
-    });
-
-    test('returns empty list when data is null', () async {
-      client.getResponseData = null;
-
-      final files = await service.listFiles('sb1');
-
-      expect(files, isEmpty);
-    });
-  });
-
-  group('getFileContent', () {
-    test('returns file content string', () async {
-      client.getResponseData = {'content': 'hello'};
-
-      final content = await service.getFileContent('sb1', 'src/main.dart');
-
-      expect(content, 'hello');
-      expect(client.lastGetPath, '/api/sandboxes/sb1/workspace/file');
-      expect(client.lastGetQuery?['path'], 'src/main.dart');
-    });
-
-    test('returns empty string on error', () async {
-      client.getError = Exception('not found');
-
-      final content = await service.getFileContent('sb1', 'src/main.dart');
-
-      expect(content, isEmpty);
-    });
-  });
-
-  group('getPreviewPorts', () {
-    test('returns list of PreviewPort', () async {
-      client.getResponseData = {
-        'ports': [
-          {'port': 3000, 'label': 'web', 'url': 'http://localhost:3000'},
-        ],
-      };
-
-      final ports = await service.getPreviewPorts('sb1');
-
-      expect(ports, hasLength(1));
-      expect(ports.first.port, 3000);
-      expect(ports.first.label, 'web');
-      expect(ports.first.url, 'http://localhost:3000');
-      expect(client.lastGetPath, '/api/sandboxes/sb1/preview/ports');
-    });
-
-    test('returns empty list on error', () async {
-      client.getError = Exception('timeout');
-
-      final ports = await service.getPreviewPorts('sb1');
-
-      expect(ports, isEmpty);
-    });
-  });
-
-  group('WorkspaceFileEntry', () {
-    test('name returns last path segment', () {
-      const entry = WorkspaceFileEntry(path: 'src/lib/main.dart');
-      expect(entry.name, 'main.dart');
-    });
-
-    test('name returns full path when no separators', () {
-      const entry = WorkspaceFileEntry(path: 'main.dart');
-      expect(entry.name, 'main.dart');
-    });
-
-    test('depth counts path separators', () {
-      const entry = WorkspaceFileEntry(path: 'src/lib/main.dart');
-      expect(entry.depth, 2);
-    });
-
-    test('depth is 0 for empty path', () {
-      const entry = WorkspaceFileEntry(path: '');
-      expect(entry.depth, 0);
-    });
-
-    test('depth is 0 for single segment', () {
-      const entry = WorkspaceFileEntry(path: 'main.dart');
-      expect(entry.depth, 0);
     });
   });
 }

@@ -10,7 +10,10 @@ import { v4 as uuidv4 } from 'uuid';
 import rateLimit from 'express-rate-limit';
 import { hashPassword, verifyPassword } from './auth/passwords';
 import { signAccessToken } from './auth/tokens';
-import { deriveAppAccess, type ActiveMembershipContext } from './auth/appAccess';
+import {
+  deriveSessionAppAccess,
+  type ActiveMembershipContext,
+} from './auth/appAccess';
 import { requireAuth } from './auth/middleware';
 import { httpError } from './utils';
 import { createLogger, createModuleLogger } from '@ruh/logger';
@@ -21,6 +24,7 @@ import * as sessionStore from './sessionStore';
 import * as orgStore from './orgStore';
 import * as organizationMembershipStore from './organizationMembershipStore';
 import * as authIdentityStore from './authIdentityStore';
+import * as accountLockoutStore from './accountLockoutStore';
 
 const logger = createModuleLogger(createLogger({ service: 'ruh-backend' }), 'auth');
 const AUTH_COOKIE_SECURE = process.env.NODE_ENV === 'production';
@@ -83,32 +87,28 @@ function validatePasswordComplexity(password: string): string | null {
   return null;
 }
 
-// ── Account lockout (in-memory, resets on restart — production should use DB) ─
+// ── Account lockout (database-persisted) ────────────────────────────────────
 
-const LOGIN_ATTEMPTS = new Map<string, { count: number; lockedUntil: number }>();
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
-function checkAccountLockout(email: string): void {
-  const record = LOGIN_ATTEMPTS.get(email);
-  if (record && record.lockedUntil > Date.now()) {
-    const minutesLeft = Math.ceil((record.lockedUntil - Date.now()) / 60000);
+async function checkAccountLockout(email: string): Promise<void> {
+  const record = await accountLockoutStore.getLockout(email);
+  if (record && record.lockedUntil && record.lockedUntil > new Date()) {
+    const minutesLeft = Math.ceil((record.lockedUntil.getTime() - Date.now()) / 60000);
     throw httpError(429, `Account locked. Try again in ${minutesLeft} minutes.`);
   }
 }
 
-function recordFailedLogin(email: string): void {
-  const record = LOGIN_ATTEMPTS.get(email) ?? { count: 0, lockedUntil: 0 };
-  record.count += 1;
-  if (record.count >= MAX_ATTEMPTS) {
-    record.lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
-    logger.warn({ email, attempts: record.count }, 'Account locked due to failed login attempts');
+async function recordFailedLogin(email: string): Promise<void> {
+  const result = await accountLockoutStore.recordFailedAttempt(email, MAX_ATTEMPTS, LOCKOUT_DURATION_MS);
+  if (result.locked) {
+    logger.warn({ email, attempts: result.attemptCount }, 'Account locked due to failed login attempts');
   }
-  LOGIN_ATTEMPTS.set(email, record);
 }
 
-function clearFailedLogins(email: string): void {
-  LOGIN_ATTEMPTS.delete(email);
+async function clearFailedLogins(email: string): Promise<void> {
+  await accountLockoutStore.clearLockout(email);
 }
 
 function normalizeEmail(email: string): string {
@@ -142,6 +142,7 @@ function toMembershipResponse(membership: OrganizationMembershipRecord) {
     organizationSlug: membership.organizationSlug,
     organizationKind: membership.organizationKind,
     organizationPlan: membership.organizationPlan,
+    organizationStatus: membership.organizationStatus,
     role: membership.role,
     status: membership.status,
   };
@@ -158,6 +159,7 @@ function toActiveOrganization(record: OrgRecord | OrganizationMembershipRecord |
       slug: record.organizationSlug,
       kind: record.organizationKind,
       plan: record.organizationPlan,
+      status: record.organizationStatus,
     };
   }
   return {
@@ -166,6 +168,7 @@ function toActiveOrganization(record: OrgRecord | OrganizationMembershipRecord |
     slug: record.slug,
     kind: record.kind,
     plan: record.plan,
+    status: record.status,
   };
 }
 
@@ -191,6 +194,7 @@ async function listEffectiveMemberships(user: userStore.UserRecord): Promise<Org
     organizationSlug: org.slug,
     organizationKind: org.kind,
     organizationPlan: org.plan,
+    organizationStatus: org.status,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   }];
@@ -205,7 +209,7 @@ async function buildAuthContext(
   activeMembership: ActiveMembershipContext | null;
   activeOrgId: string | null;
   platformRole: 'platform_admin' | 'user';
-  appAccess: ReturnType<typeof deriveAppAccess>;
+  appAccess: ReturnType<typeof deriveSessionAppAccess>;
 }> {
   const memberships = await listEffectiveMemberships(user);
   const activeMembership =
@@ -225,9 +229,9 @@ async function buildAuthContext(
     activeMembership: activeMembershipResponse,
     activeOrgId: activeMembership?.orgId ?? null,
     platformRole,
-    appAccess: deriveAppAccess({
+    appAccess: deriveSessionAppAccess({
       platformRole,
-      memberships: memberships.map(toMembershipResponse),
+      activeMembership: activeMembershipResponse,
     }),
   };
 }
@@ -368,11 +372,11 @@ router.post('/login', authRateLimiter, asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(rawEmail));
 
   // Check account lockout before DB lookup
-  checkAccountLockout(email);
+  await checkAccountLockout(email);
 
   const user = await userStore.getUserByEmail(email);
   if (!user) {
-    recordFailedLogin(email);
+    await recordFailedLogin(email);
     logger.warn({ email }, 'Failed login attempt — user not found');
     throw httpError(401, 'Invalid email or password');
   }
@@ -384,13 +388,13 @@ router.post('/login', authRateLimiter, asyncHandler(async (req, res) => {
 
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) {
-    recordFailedLogin(email);
+    await recordFailedLogin(email);
     logger.warn({ email }, 'Failed login attempt — wrong password');
     throw httpError(401, 'Invalid email or password');
   }
 
   // Successful login — clear lockout
-  clearFailedLogins(email);
+  await clearFailedLogins(email);
 
   await authIdentityStore.ensureAuthIdentity(user.id, 'local', email);
 
@@ -466,7 +470,7 @@ router.post('/logout', requireAuth, asyncHandler(async (req, res) => {
 
 // ── Switch active organization ───────────────────────────────────────────────
 
-router.post('/switch-org', requireAuth, asyncHandler(async (req, res) => {
+router.post('/switch-org', asyncHandler(async (req, res) => {
   const organizationId = trimOptionalString(req.body.organizationId);
   if (!organizationId) {
     throw httpError(400, 'organizationId is required');
@@ -478,13 +482,13 @@ router.post('/switch-org', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const session = await sessionStore.getSessionByRefreshToken(rawToken);
-  if (!session || session.userId !== req.user!.userId) {
+  if (!session) {
     throw httpError(401, 'Invalid refresh token');
   }
 
-  const user = await userStore.getUserById(req.user!.userId);
-  if (!user) {
-    throw httpError(404, 'User not found');
+  const user = await userStore.getUserById(session.userId);
+  if (!user || user.status !== 'active') {
+    throw httpError(401, 'Account not found or inactive');
   }
 
   const membership = await organizationMembershipStore.getMembershipForUserOrg(user.id, organizationId);
@@ -511,7 +515,10 @@ router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   const session = req.cookies?.refreshToken
     ? await sessionStore.getSessionByRefreshToken(req.cookies.refreshToken)
     : null;
-  const context = await buildAuthContext(user, session?.activeOrgId ?? null);
+  const context = await buildAuthContext(
+    user,
+    session?.activeOrgId ?? req.user!.orgId ?? null,
+  );
 
   res.json({
     id: user.id,
@@ -624,6 +631,8 @@ router.delete('/me', requireAuth, asyncHandler(async (req, res) => {
     await client.query('DELETE FROM api_keys WHERE user_id = $1', [userId]);
     // Agents created by user (set to NULL, don't delete — agents may be in use)
     await client.query('UPDATE agents SET created_by = NULL WHERE created_by = $1', [userId]);
+    // Account lockout data (keyed by email, no FK)
+    await client.query('DELETE FROM account_lockouts WHERE email = $1', [user.email]);
     // Finally delete the user
     await client.query('DELETE FROM users WHERE id = $1', [userId]);
   });

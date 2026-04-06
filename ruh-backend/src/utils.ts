@@ -18,14 +18,33 @@ export function gatewayUrlAndHeaders(
   record: SandboxRecord,
   path: string,
 ): [string, Record<string, string>] {
-  const base = record.signed_url ?? record.standard_url ?? record.dashboard_url ?? '';
+  const localGatewayBase =
+    Number.isFinite(record.gateway_port) && record.gateway_port > 0
+      ? `http://127.0.0.1:${record.gateway_port}`
+      : null;
+  const signed = record.signed_url?.trim() || null;
+  const standard = record.standard_url?.trim() || null;
+  const dashboard = record.dashboard_url?.trim() || null;
+
+  const base = localGatewayBase ?? signed ?? standard ?? dashboard;
+  const usingSignedGateway = !localGatewayBase && Boolean(signed);
   if (!base) throw httpError(503, 'No gateway URL available for this sandbox');
 
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    throw httpError(502, `Malformed gateway URL: ${base}`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw httpError(502, `Unsupported gateway URL protocol: ${parsed.protocol}`);
+  }
+
   const headers: Record<string, string> = {};
-  if (!record.signed_url && record.preview_token) {
+  if (!usingSignedGateway && record.preview_token) {
     headers['X-Daytona-Preview-Token'] = record.preview_token;
   }
-  if (record.gateway_token) {
+  if (!usingSignedGateway && record.gateway_token) {
     headers['Authorization'] = `Bearer ${record.gateway_token}`;
   }
   return [base.replace(/\/$/, '') + path, headers];

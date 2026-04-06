@@ -339,11 +339,13 @@ CREATE TABLE organizations (
   slug       TEXT        NOT NULL UNIQUE,
   kind       TEXT        NOT NULL DEFAULT 'customer',
   plan       TEXT        NOT NULL DEFAULT 'free',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  status     TEXT        NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-`organizations.kind` now distinguishes `developer` and `customer` tenants for multi-tenant auth and ownership.
+`organizations.kind` distinguishes `developer` and `customer` tenants for multi-tenant auth and ownership. `organizations.status` (`active`, `suspended`, `archived`) is now an operational control-plane field that gates builder/customer access and powers admin-org lifecycle actions.
 
 ---
 
@@ -354,13 +356,15 @@ CREATE TABLE sessions (
   id            TEXT        PRIMARY KEY,
   user_id       TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   refresh_token TEXT        NOT NULL UNIQUE,
+  user_agent    TEXT,
+  ip_address    TEXT,
   active_org_id TEXT        REFERENCES organizations(id) ON DELETE SET NULL,
   expires_at    TIMESTAMPTZ NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
-Refresh tokens are raw UUIDs, rotated on each use. `active_org_id` stores the session's current tenant context for refresh rotation, `/api/auth/me`, and org switching. See [[014-auth-system]].
+Refresh tokens are raw UUIDs, rotated on each use. `active_org_id` stores the session's current tenant context for refresh rotation, `/api/auth/me`, org switching, and admin-side org session revocation. See [[014-auth-system]] and [[015-admin-panel]].
 
 ---
 
@@ -779,6 +783,7 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - [[SPEC-deployed-chat-workspace-memory]] — defines the persisted agent-level workspace-memory JSON shape used by deployed chat
 - [[014-auth-system]] — defines the `users`, `organizations`, `sessions`, and `api_keys` tables
 - [[016-marketplace]] — defines the `marketplace_listings`, `marketplace_reviews`, `marketplace_installs`, and `agent_versions` tables
+- [[SPEC-admin-billing-control-plane]] — adds billing mirror, entitlement, override, and billing-event tables for customer-org commercial operations
 - [[SPEC-marketplace-store-parity]] — plans the typed marketplace-item, entitlement, assignment, and customer-inventory schema work needed for store parity
 
 ## Related Learnings
@@ -787,3 +792,29 @@ Always adds `Authorization: Bearer <gateway_token>` if token is set.
 - [[LEARNING-2026-03-30-worker-cost-tracking-agent-id-type-mismatch]] — cost-tracking tables must keep `agent_id` as `TEXT` to match the canonical `agents.id` contract
 - [[LEARNING-2026-03-25-sandbox-delete-conversation-orphans]] — the current schema lets sandbox delete leave orphaned conversation history because `conversations.sandbox_id` is not enforced as a real foreign key
 - [[LEARNING-2026-03-25-agent-sandbox-deployment-integrity-gap]] — agent deployment state currently lives in a JSONB sandbox-id array with no referential integrity or lifecycle metadata, so deploy/undeploy work needs a normalized relation
+
+## Billing control plane tables (2026-04-02)
+
+Related: [[SPEC-admin-billing-control-plane]], [[015-admin-panel]], [[004-api-reference]]
+
+The first billing-control-plane slice added the following platform tables:
+
+- `billing_customers`
+  - One row per organization billing identity.
+  - Stores the Stripe customer ID plus support metadata like billing email, company name, tax info, and default payment-method summary.
+- `billing_subscriptions`
+  - Mirror table for subscription lifecycle state used by admin support tooling.
+  - Stores Stripe subscription/product/price IDs, quantity, cancel-at-period-end, current period, trial/grace windows, and last sync time.
+- `billing_invoices`
+  - Mirror table for invoice visibility in the admin panel.
+  - Stores Stripe invoice/subscription IDs, status, currency, due/paid timestamps, remaining balance, and invoice links.
+- `org_entitlements`
+  - Ruh-owned product access record.
+  - Stores org/listing linkage, billing model, billing status, entitlement status, seat capacity, seat usage, grace window, and access window.
+- `org_entitlement_overrides`
+  - Support override records that intentionally diverge access from the normal billing-derived state.
+  - Used for pause, resume, temporary-access, credit-hold, and seat-comp workflows.
+- `billing_events`
+  - Normalized event log for admin-side billing actions and future Stripe webhook/sync ingestion.
+
+The data model deliberately separates `billing_status` from `entitlement_status` so a customer can be financially `past_due` while still receiving product access during a grace window.
