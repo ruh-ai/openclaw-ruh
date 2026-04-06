@@ -17,28 +17,50 @@ async function log(msg: string) {
 }
 
 async function authenticate(page: Page) {
-  log("Authenticating via API...");
+  log("Authenticating via login form...");
+  await page.goto(`${BASE}/authenticate`);
+  await page.waitForLoadState("networkidle");
 
-  // Login via backend API to get tokens
-  const loginRes = await fetch("http://localhost:8000/api/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: AUTH_EMAIL, password: AUTH_PASSWORD }),
-  });
-  const loginData = await loginRes.json() as { accessToken?: string; refreshToken?: string };
-
-  if (!loginData.accessToken) {
-    throw new Error(`Auth failed: ${JSON.stringify(loginData)}`);
+  // If already authenticated, the page redirects away
+  if (!page.url().includes("/authenticate")) {
+    log("Already authenticated");
+    return;
   }
 
-  // Set auth cookies in the browser context
-  const context = page.context();
-  await context.addCookies([
-    { name: "access_token", value: loginData.accessToken, domain: "localhost", path: "/", httpOnly: true, secure: false, sameSite: "Lax" },
-    { name: "refresh_token", value: loginData.refreshToken!, domain: "localhost", path: "/", httpOnly: true, secure: false, sameSite: "Lax" },
-  ]);
+  // Wait for form to hydrate
+  await page.waitForSelector('input[type="email"]', { timeout: 60_000 });
 
-  log("Auth tokens set via cookies");
+  // Make sure we're on the Login tab (not Register)
+  const loginTab = page.locator('button:has-text("Login")');
+  if (await loginTab.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await loginTab.click();
+    await page.waitForTimeout(500);
+  }
+
+  // Fill all text inputs
+  const emailInput = page.locator('input[type="email"]').first();
+  const passwordInput = page.locator('input[type="password"]').first();
+
+  await emailInput.fill(AUTH_EMAIL);
+  await passwordInput.fill(AUTH_PASSWORD);
+
+  await page.screenshot({ path: "e2e-auth-filled.png" });
+
+  // Click the submit button
+  const submitBtn = page.locator('button[type="submit"]').first();
+  await submitBtn.click();
+
+  // Wait for redirect or error
+  await page.waitForTimeout(5000);
+  log(`Auth result URL: ${page.url()}`);
+
+  if (page.url().includes("/authenticate")) {
+    await page.screenshot({ path: "e2e-auth-failed.png" });
+    // Check for error message
+    const errorText = await page.locator('[class*="error"], [class*="Error"], [role="alert"]').textContent().catch(() => "no error element");
+    log(`Auth error: ${errorText}`);
+    throw new Error("Authentication failed — still on login page");
+  }
 }
 
 async function waitForStoreValue(
@@ -90,8 +112,14 @@ async function runE2E() {
     // ── Step 1: Create Agent ──
     log("=== STEP 1: CREATE AGENT ===");
     await page.goto(`${BASE}/agents`);
-    await page.waitForTimeout(2000);
-    await page.click('text=/Create New Agent/i');
+    await page.waitForTimeout(3000);
+    await page.screenshot({ path: "e2e-agents-page.png" });
+    log(`Agents page URL: ${page.url()}`);
+    log(`Agents page title: ${await page.title()}`);
+
+    // Try multiple selectors for the create button
+    const createBtn = page.locator('button:has-text("Create"), a:has-text("Create"), button:has-text("New Agent"), a:has-text("New Agent")').first();
+    await createBtn.click({ timeout: 10_000 });
     await page.waitForTimeout(2000);
 
     // Fill name and description

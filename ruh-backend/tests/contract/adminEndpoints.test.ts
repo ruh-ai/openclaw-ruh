@@ -4,8 +4,7 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
-import { request } from '../helpers/app';
-import { makeSandboxRecord } from '../helpers/fixtures';
+import { makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
 import { signAccessToken } from '../../src/auth/tokens';
 
 // ── Fake data ────────────────────────────────────────────────────────────────
@@ -92,6 +91,32 @@ mock.module('../../src/sessionStore', () => ({
   cleanExpiredSessions: mock(async () => 0),
 }));
 
+mock.module('../../src/agentStore', () => ({
+  initDb: mock(async () => {}),
+  listAgents: mock(async () => [makeAgentRecord({ sandbox_ids: ['sb-admin-001'] })]),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
+  saveAgent: mock(async () => makeAgentRecord()),
+  getAgent: mock(async () => makeAgentRecord()),
+  getAgentForCreator: mock(async () => makeAgentRecord()),
+  getAgentForCreatorInOrg: mock(async () => makeAgentRecord()),
+  updateAgent: mock(async () => makeAgentRecord()),
+  updateAgentConfig: mock(async () => makeAgentRecord()),
+  deleteAgent: mock(async () => true),
+  addSandboxToAgent: mock(async () => makeAgentRecord()),
+  removeSandboxFromAgent: mock(async () => makeAgentRecord()),
+  setForgeSandbox: mock(async () => makeAgentRecord()),
+  promoteForgeSandbox: mock(async () => makeAgentRecord()),
+  clearForgeSandbox: mock(async () => makeAgentRecord()),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
+}));
+
 mock.module('../../src/store', () => ({
   getSandbox: mock(async () => makeSandboxRecord()),
   listSandboxes: mock(async () => []),
@@ -103,17 +128,30 @@ mock.module('../../src/store', () => ({
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversations: mock(async () => []),
+  listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   appendMessages: mock(async () => true),
   renameConversation: mock(async () => true),
   deleteConversation: mock(async () => true),
   getMessages: mock(async () => []),
+  getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
   initDb: mock(async () => {}),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  PREVIEW_PORTS: [],
+  reconfigureSandboxLlm: mock(async () => ({})),
+  retrofitSandboxToSharedCodex: mock(async () => ({})),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('axios', () => ({
@@ -123,6 +161,8 @@ mock.module('axios', () => ({
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+const { request } = await import('../helpers/app.ts?contractAdminEndpoints');
 
 beforeEach(() => {
   mockListUsers.mockImplementation(async () => ({

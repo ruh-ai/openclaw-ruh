@@ -2,20 +2,26 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, RefreshCw, Play, Trash2 } from "lucide-react";
-import { api, type Goal, type GoalProgress, type TaskLog } from "@/lib/api";
+import { api, type Goal, type GoalBoardLane, type GoalProgress, type TaskLog } from "@/lib/api";
 
 export default function GoalDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [goal, setGoal] = useState<Goal | null>(null);
   const [progress, setProgress] = useState<GoalProgress | null>(null);
-  const [tasks, setTasks] = useState<TaskLog[]>([]);
+  const [boardLane, setBoardLane] = useState<GoalBoardLane | null>(null);
+  const [runs, setRuns] = useState<TaskLog[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
 
   const fetchData = useCallback(() => {
-    Promise.all([api.goals.get(id), api.goals.progress(id), api.goals.tasks(id)])
-      .then(([g, p, t]) => { setGoal(g); setProgress(p); setTasks(t.items); })
+    Promise.all([api.goals.get(id), api.goals.progress(id), api.goals.goalBoard(id), api.goals.tasks(id)])
+      .then(([g, p, board, t]) => {
+        setGoal(g);
+        setProgress(p);
+        setBoardLane(board);
+        setRuns(t.items);
+      })
       .catch((e) => setError(e.message));
   }, [id]);
 
@@ -88,17 +94,59 @@ export default function GoalDetailPage() {
           {/* Linked Tasks */}
           <div className="bg-[var(--card-color)] border border-[var(--border-default)] rounded-xl p-5">
             <h2 className="text-xs font-bold text-[var(--text-primary)] mb-3 uppercase">
-              Tasks ({tasks.length})
+              Board Tasks ({boardLane?.stats.total ?? 0})
             </h2>
-            {tasks.length === 0 ? (
+            {!boardLane || boardLane.tasks.length === 0 ? (
               <p className="text-xs text-[var(--text-tertiary)]">No tasks linked yet. Click "Run Analyst" to decompose this goal.</p>
             ) : (
               <div className="space-y-2">
-                {tasks.map((t) => (
+                {boardLane.tasks.map((task) => (
+                  <div key={task.id} className="py-3 border-b border-[var(--border-default)] last:border-0">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1">
+                        <p className="text-xs font-medium text-[var(--text-primary)]">{task.title}</p>
+                        <p className="text-[10px] text-[var(--text-secondary)] mt-1">{task.description || task.title}</p>
+                      </div>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        task.status === "done" ? "bg-[var(--success)]/10 text-[var(--success)]" :
+                        task.status === "blocked" ? "bg-[var(--error)]/10 text-[var(--error)]" :
+                        task.status === "in_progress" ? "bg-[#3b82f6]/10 text-[#3b82f6]" :
+                        "bg-[var(--bg-subtle)] text-[var(--text-tertiary)]"
+                      }`}>
+                        {task.status}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-[var(--text-tertiary)]">
+                      <span>Planned: {task.plannedAgent || "auto"}</span>
+                      <span>Last execution: {task.lastExecutionAgent || "none"}</span>
+                      <span>Completed by: {task.completedByAgent || "-"}</span>
+                      <span>Runs: {task.runCount}</span>
+                    </div>
+                    {task.blockedReason && (
+                      <p className="mt-2 text-[10px] text-[var(--error)]">{task.blockedReason}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[var(--card-color)] border border-[var(--border-default)] rounded-xl p-5">
+            <h2 className="text-xs font-bold text-[var(--text-primary)] mb-3 uppercase">
+              Execution Runs ({runs.length})
+            </h2>
+            {runs.length === 0 ? (
+              <p className="text-xs text-[var(--text-tertiary)]">No execution runs recorded for this goal yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {runs.map((t) => (
                   <div key={t.id} className="flex items-center justify-between py-2 border-b border-[var(--border-default)] last:border-0">
                     <div className="flex-1">
                       <p className="text-xs text-[var(--text-primary)]">{t.description.slice(0, 100)}</p>
-                      <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5">{t.delegatedTo || "unassigned"}</p>
+                      <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5">
+                        {t.delegatedTo || "unassigned"}
+                        {t.boardTaskId ? ` · board card ${t.boardTaskId.slice(0, 8)}` : ""}
+                      </p>
                     </div>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                       t.status === "completed" ? "bg-[var(--success)]/10 text-[var(--success)]" :

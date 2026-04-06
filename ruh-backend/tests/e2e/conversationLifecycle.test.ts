@@ -4,7 +4,6 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
-import { request } from '../helpers/app';
 import { makeSandboxRecord, makeConversationRecord, SANDBOX_ID, CONV_ID } from '../helpers/fixtures';
 
 // ── Mocked stores ─────────────────────────────────────────────────────────────
@@ -55,9 +54,17 @@ const mockGetMessagesPage = mock(async () => ({
   next_cursor: null,
   has_more: false,
 }));
+const mockGetConversationForSandbox = mock(async (conversationId: string, sandboxId: string) => {
+  const record = await mockGetConversation(conversationId);
+  if (!record || record.sandbox_id !== sandboxId) {
+    return null;
+  }
+  return record;
+});
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mockGetConversation,
+  getConversationForSandbox: mockGetConversationForSandbox,
   listConversations: mockListConversations,
   listConversationsPage: mockListConversationsPage,
   createConversation: mockCreateConversation,
@@ -71,6 +78,16 @@ mock.module('../../src/conversationStore', () => ({
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  PREVIEW_PORTS: [],
+  reconfigureSandboxLlm: mock(async () => ({})),
+  retrofitSandboxToSharedCodex: mock(async () => ({})),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('axios', () => ({
@@ -79,9 +96,18 @@ mock.module('axios', () => ({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+const { request } = await import('../helpers/app.ts?e2eConversationLifecycle');
+
 beforeEach(() => {
   mockGetSandbox.mockImplementation(async () => makeSandboxRecord());
   mockGetConversation.mockImplementation(async () => makeConversationRecord());
+  mockGetConversationForSandbox.mockImplementation(async (conversationId: string, sandboxId: string) => {
+    const record = await mockGetConversation(conversationId);
+    if (!record || record.sandbox_id !== sandboxId) {
+      return null;
+    }
+    return record;
+  });
   mockListConversations.mockImplementation(async () => [makeConversationRecord()]);
   mockListConversationsPage.mockImplementation(async () => ({
     items: [makeConversationRecord()],
@@ -134,6 +160,9 @@ describe('GET /api/sandboxes/:sandbox_id/conversations', () => {
   });
 
   test('returns 400 for an invalid conversation cursor', async () => {
+    mockListConversationsPage.mockImplementationOnce(async () => {
+      throw new Error('Invalid conversation cursor');
+    });
     await request()
       .get(`/api/sandboxes/${SANDBOX_ID}/conversations?cursor=bad-cursor`)
       .expect(400);

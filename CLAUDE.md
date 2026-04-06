@@ -73,6 +73,7 @@ This replaces the old shared architect sandbox. Do not implement any feature tha
 | Fix/extend Telegram or Slack logic | `006-channel-manager.md` |
 | Work on conversations or chat | `007-conversation-store.md` |
 | Work on the agent builder chat UI | `008-agent-builder-ui.md` |
+| Understand the full agent creation lifecycle (all 7 stages) | `specs/SPEC-agent-creation-lifecycle.md` |
 | Work on the developer dashboard UI | `009-ruh-frontend.md` |
 | Change deployment config | `010-deployment.md` |
 | Understand a user journey end-to-end | `011-key-flows.md` |

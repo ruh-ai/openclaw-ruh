@@ -19,17 +19,17 @@ export function AgentHealthCard({
   const barWidth = tasksTotal > 0 ? passRate : 0;
 
   return (
-    <div className="animate-fadeIn bg-[var(--card-color)] rounded-xl border border-[var(--border-default)] p-4">
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-8 h-8 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center">
+    <div className="mission-card animate-fadeIn rounded-[24px] p-4">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--primary)]/12">
           <Bot className="h-4 w-4 text-[var(--primary)]" />
         </div>
         <div>
-          <p className="text-sm font-semibold text-[var(--text-primary)]">{name}</p>
-          <p className="text-[10px] text-[var(--text-tertiary)]">{model}</p>
+          <p className="text-base font-semibold text-[var(--text-primary)]">{name}</p>
+          <p className="text-xs text-[var(--text-tertiary)]">{model}</p>
         </div>
       </div>
-      <div className="flex items-center justify-between text-xs text-[var(--text-secondary)] mb-2">
+      <div className="mb-2 flex items-center justify-between text-xs text-[var(--text-secondary)]">
         <span>{tasksTotal} tasks</span>
         <span>
           <span className="text-[var(--success)]">{tasksPassed}</span>
@@ -46,7 +46,7 @@ export function AgentHealthCard({
           }}
         />
       </div>
-      <p className="text-[10px] text-[var(--text-tertiary)] mt-1 text-right">{passRate}% pass rate</p>
+      <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">{passRate}% pass rate</p>
     </div>
   );
 }

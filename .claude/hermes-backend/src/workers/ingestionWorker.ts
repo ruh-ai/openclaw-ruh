@@ -7,6 +7,7 @@ import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type IngestionJobData, type 
 import { publish } from '../eventBus';
 import * as queueJobStore from '../stores/queueJobStore';
 import * as taskStore from '../stores/taskStore';
+import * as boardTaskStore from '../stores/boardTaskStore';
 import { isAgentAvailable } from '../circuitBreaker';
 import { query } from '../db';
 import { spawn } from 'bun';
@@ -145,6 +146,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
     QUEUE_NAMES.INGESTION,
     async (job: Job<IngestionJobData>) => {
       const { description, source, agentName, priority, timeout, goalId, metadata } = job.data;
+      const boardTaskId = typeof metadata?.boardTaskId === 'string' ? metadata.boardTaskId : undefined;
       console.log(`[hermes:ingestion] Processing: ${description.slice(0, 80)}...`);
 
       // 1. Route to best agent
@@ -184,8 +186,13 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
         delegatedTo: resolvedAgent,
         priority: priorityStr,
         goalId: goalId || undefined,
+        boardTaskId,
         dedupHash: hash,
       });
+
+      if (boardTaskId) {
+        await boardTaskStore.attachTaskLog(boardTaskId, taskLog.id, resolvedAgent);
+      }
 
       // 5. Create queue_job entry
       const queueJobId = uuidv4();
@@ -223,7 +230,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
       // Update queue_job with the BullMQ job ID
       await queueJobStore.updateQueueJob(queueJobId, { jobId: executionJob.id ?? '' });
 
-      publish({ type: 'task', action: 'created', data: { taskLogId: taskLog.id, agent: resolvedAgent, source } });
+      publish({ type: 'task', action: 'created', data: { taskLogId: taskLog.id, boardTaskId, agent: resolvedAgent, source } });
 
       console.log(`[hermes:ingestion] Routed to ${resolvedAgent} (task: ${taskLog.id})`);
       return { taskLogId: taskLog.id, queueJobId, agent: resolvedAgent };

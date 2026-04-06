@@ -7,7 +7,7 @@ mock.module('../../src/db', () => ({
   withConn: async (fn: (c: typeof mockClient) => Promise<unknown>) => fn(mockClient),
 }));
 
-import * as auditStore from '../../src/auditStore';
+const auditStore = await import('../../src/auditStore?unitAuditStore');
 
 beforeEach(() => {
   mockQuery.mockReset();

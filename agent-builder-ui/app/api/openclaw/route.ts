@@ -26,17 +26,11 @@ import type { LifecycleEvent } from "@/lib/openclaw/types";
 
 export const runtime = "nodejs";
 
-const DEFAULT_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
-const DEFAULT_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
-const GATEWAY_ORIGIN =
-  process.env.OPENCLAW_GATEWAY_ORIGIN || "https://clawagentbuilder.ruh.ai";
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const PER_ATTEMPT_TIMEOUT_MS = parseInt(
   process.env.OPENCLAW_TIMEOUT_MS || "180000",
   10
 );
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 2000;
 const AUTH_ME_PATH = "/users/me";
 
 type StreamEventSender = (event: string, data: object) => void;
@@ -78,6 +72,16 @@ class GatewayRetryBoundaryError extends Error {
     this.name = "GatewayRetryBoundaryError";
     this.stage = stage;
   }
+}
+
+function buildMissingForgeSandboxResponse(requestId: string) {
+  return {
+    type: "error" as const,
+    error: "forge_sandbox_required",
+    content:
+      "This builder/test request requires a forge sandbox. Create or resume the agent container before retrying.",
+    request_id: requestId,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +294,7 @@ export async function POST(req: NextRequest) {
                   : []),
                 ...(typeof forge_sandbox_id === "string" && forge_sandbox_id
                   ? ["sandbox:forge"]
-                  : ["sandbox:default"]),
+                  : ["sandbox:missing"]),
               ],
             },
             async (trace) => {
@@ -359,7 +363,7 @@ export async function POST(req: NextRequest) {
                 // ── HTTP chat proxy fallback ──
                 onLifecycleEvent({ phase: "connecting", message: "Connecting to agent..." });
 
-                const sessionKey = `agent:main:${session_id}`;
+                const sessionKey = buildGatewaySessionKey(resolvedAgent, session_id, resolvedMode);
                 const chatRes = await fetch(
                   `${BACKEND_URL}/api/sandboxes/${forge_sandbox_id}/chat`,
                   {
@@ -530,84 +534,72 @@ export async function POST(req: NextRequest) {
                   clearInterval(progressInterval);
                 }
 
-                const rfrMatch = fullContent.match(/```(?:ready_for_review|discovery|architecture_plan)\s*\n?([\s\S]*?)```/) ||
-                  fullContent.match(/```json\s*\n?([\s\S]*?"type"\s*:\s*"(?:ready_for_review|discovery|architecture_plan)"[\s\S]*?)```/) ||
-                  fullContent.match(/\{[\s\S]*"type"\s*:\s*"(?:ready_for_review|discovery|architecture_plan)"[\s\S]*\}/);
+                const parsed = finalizeGatewayResponse(fullContent, {
+                  agentId: resolvedAgent,
+                }) as object;
 
-                if (rfrMatch) {
-                  try {
-                    const jsonStr = rfrMatch[1] || rfrMatch[0];
-                    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+                if (
+                  typeof parsed === "object" &&
+                  parsed !== null &&
+                  (parsed as Record<string, unknown>).type === "ready_for_review"
+                ) {
+                  // Emit skill_created for each node in the skill graph
+                  // so the UI gets real skill events at build completion.
+                  const skillGraph = (parsed as Record<string, unknown>).skill_graph;
+                  const skillNodes =
+                    typeof skillGraph === "object" &&
+                    skillGraph !== null &&
+                    Array.isArray((skillGraph as { nodes?: unknown }).nodes)
+                      ? (skillGraph as { nodes: Array<Record<string, unknown>> }).nodes
+                      : [];
 
-                    // Emit skill_created for each node in the skill graph
-                    // so the UI gets real skill events at build completion.
-                    const nodes = (parsed.skill_graph as Record<string, unknown>)?.nodes;
-                    if (Array.isArray(nodes)) {
-                      for (const node of nodes) {
-                        const n = node as Record<string, unknown>;
-                        const skillId = (n.skill_id as string) || "";
-                        if (skillId) {
-                          send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                        }
-                      }
-                      send("build_progress", {
-                        completed: nodes.length,
-                        total: nodes.length,
-                        currentSkill: null,
-                      });
+                  for (const node of skillNodes) {
+                    const skillId = (node as Record<string, unknown>).skill_id;
+                    if (typeof skillId === "string" && skillId) {
+                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
                     }
+                  }
 
-                    return parsed as object;
-                  } catch { /* fall through */ }
+                  if (skillNodes.length > 0) {
+                    send("build_progress", {
+                      completed: skillNodes.length,
+                      total: skillNodes.length,
+                      currentSkill: null,
+                    });
+                  }
                 }
 
-                return { type: "agent_response", content: fullContent } as object;
+                return parsed;
               }
 
-              // Shared architect gateway: direct WebSocket
-              if (!DEFAULT_GATEWAY_URL) {
-                throw new Error(
-                  "No gateway available. The agent has no forge sandbox and OPENCLAW_GATEWAY_URL is not configured."
-                );
-              }
-              const gateway: GatewayCredentials = {
-                url: DEFAULT_GATEWAY_URL,
-                token: DEFAULT_GATEWAY_TOKEN,
-              };
-
-              const response = await connectWithRetry(
-                session_id,
-                message,
-                resolvedAgent,
-                resolvedMode,
-                typeof soul_override === "string" ? soul_override : undefined,
-                onLifecycleEvent,
-                send,
-                requestId,
-                req.signal,
-                gateway,
-                typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : undefined,
-                trace
-              );
-
-              const responseType =
-                typeof response === "object" &&
-                response !== null &&
-                "type" in response
-                  ? (response as { type?: unknown }).type ?? null
-                  : null;
-
-              trace.update({
-                statusMessage: "Bridge request succeeded",
-                output: { type: responseType },
+              const response = buildMissingForgeSandboxResponse(requestId);
+              onLifecycleEvent({
+                phase: "error",
+                message: "No forge sandbox is available for this agent",
               });
-
-              // Score the request outcome so quality trends appear in Langfuse
-              const isSuccess = responseType !== "error";
+              trace.recordEvent(
+                "openclaw.bridge.shared_path_retired",
+                {
+                  request_id: requestId,
+                  reason: "forge_sandbox_required",
+                },
+                "WARNING"
+              );
+              trace.update({
+                statusMessage: "Bridge request blocked: forge sandbox missing",
+                output: {
+                  type: response.type,
+                  error: response.error,
+                },
+                metadata: {
+                  reason: "forge_sandbox_required",
+                },
+                level: "WARNING",
+              });
               await trace.addScore(
                 "request_success",
-                isSuccess ? 1 : 0,
-                isSuccess ? "Request completed successfully" : "Request ended with an error response"
+                0,
+                "Request blocked because the per-agent forge sandbox is required"
               );
 
               return response;
@@ -705,100 +697,6 @@ export async function POST(req: NextRequest) {
 }
 
 // ---------------------------------------------------------------------------
-// Retry wrapper
-// ---------------------------------------------------------------------------
-
-async function connectWithRetry(
-  sessionId: string,
-  message: string,
-  agentId: string,
-  mode: OpenClawRequestMode,
-  soulOverride: string | undefined,
-  onLifecycleEvent: (evt: LifecycleEvent) => void,
-  onStreamEvent: StreamEventSender,
-  requestId: string,
-  abortSignal?: AbortSignal,
-  gateway?: GatewayCredentials,
-  perAttemptTimeoutMs?: number,
-  trace?: BridgeTraceHandle
-): Promise<object> {
-  const gatewayUrl = gateway?.url || DEFAULT_GATEWAY_URL;
-  const gatewayToken = gateway?.token || DEFAULT_GATEWAY_TOKEN;
-  const gatewayOrigin = gateway?.origin || GATEWAY_ORIGIN;
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      throwIfAborted(abortSignal);
-      onLifecycleEvent({
-        phase: "connecting",
-        message:
-          attempt === 0
-            ? "Connecting to agent..."
-            : `Reconnecting (attempt ${attempt + 1}/${MAX_RETRIES})...`,
-      });
-
-      if (!gatewayUrl) {
-        throw new Error(
-          "OPENCLAW_GATEWAY_URL is not configured. Set it in your .env file."
-        );
-      }
-      return await forwardToGateway(
-        gatewayUrl,
-        sessionId,
-        message,
-        agentId,
-        mode,
-        soulOverride,
-        onLifecycleEvent,
-        onStreamEvent,
-        requestId,
-        abortSignal,
-        gatewayToken,
-        gatewayOrigin,
-        perAttemptTimeoutMs,
-        trace
-      );
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      if (
-        err instanceof AuthError ||
-        err instanceof RequestAbortedError ||
-        (err instanceof GatewayRetryBoundaryError &&
-          err.stage === "post_accept")
-      ) {
-        throw err;
-      }
-
-      console.warn(
-        `[Gateway][${requestId}] Attempt ${attempt + 1}/${MAX_RETRIES} failed:`,
-        lastError.message
-      );
-      trace?.recordEvent(
-        "openclaw.bridge.retry",
-        {
-          attempt: attempt + 1,
-          error: lastError.message,
-        },
-        "WARNING"
-      );
-
-      if (attempt < MAX_RETRIES - 1) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-        onLifecycleEvent({
-          phase: "retrying",
-          message: `Connection lost. Retrying in ${delay / 1000}s...`,
-        });
-        await waitFor(delay, abortSignal);
-      }
-    }
-  }
-
-  throw lastError || new Error("All gateway connection attempts failed");
-}
-
-// ---------------------------------------------------------------------------
 // WebSocket bridge (single attempt)
 // ---------------------------------------------------------------------------
 
@@ -819,11 +717,13 @@ async function forwardToGateway(
   trace?: BridgeTraceHandle
 ): Promise<object> {
   const effectiveTimeout = perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
-  const token = gatewayToken || DEFAULT_GATEWAY_TOKEN;
+  const token = gatewayToken ?? "";
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(gatewayUrl, {
-      headers: { Origin: origin || GATEWAY_ORIGIN },
-    });
+    const ws = origin
+      ? new WebSocket(gatewayUrl, {
+          headers: { Origin: origin },
+        })
+      : new WebSocket(gatewayUrl);
     let chatAccepted = false;
     const timeout = setTimeout(() => {
       rejectOnce(
@@ -1285,23 +1185,4 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new RequestAbortedError();
   }
-}
-
-function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    throwIfAborted(signal);
-
-    const timeout = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      reject(new RequestAbortedError());
-    };
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

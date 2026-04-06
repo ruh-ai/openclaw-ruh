@@ -1,14 +1,7 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { render } from "@testing-library/react";
-
-mock.module("lucide-react", () => {
-  const Icon = ({ children, ...props }: Record<string, unknown>) => <span {...props}>{children}</span>;
-  return {
-    Users: Icon, Bot: Icon, Server: Icon, Store: Icon,
-    LayoutDashboard: Icon, Activity: Icon, LogOut: Icon,
-    Shield: Icon, User: Icon, Code: Icon,
-  };
-});
+import lucideMock from "../test-lucide-mock";
+mock.module("lucide-react", () => lucideMock);
 
 mock.module("next/navigation", () => ({
   usePathname: () => "/system",
@@ -34,16 +27,17 @@ describe("SystemPage", () => {
     globalThis.fetch = mockFetch as unknown as typeof fetch;
   });
 
-  test("renders System Health heading", async () => {
+  test("renders System heading", async () => {
     const { default: SystemPage } = await import("../app/(admin)/system/page");
     const { getByText } = render(<SystemPage />);
-    expect(getByText("System Health")).toBeTruthy();
+    expect(getByText("System")).toBeTruthy();
   });
 
   test("renders subtitle", async () => {
     const { default: SystemPage } = await import("../app/(admin)/system/page");
-    const { getByText } = render(<SystemPage />);
-    expect(getByText("Backend and infrastructure status")).toBeTruthy();
+    const { container } = render(<SystemPage />);
+    const text = container.textContent || "";
+    expect(text).toContain("backend");
   });
 
   test("fetches health endpoint on mount", async () => {

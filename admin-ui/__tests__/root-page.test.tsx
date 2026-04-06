@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, test, mock, beforeEach } from "bun:test";
 
 let redirectTarget: string | null = null;
 
@@ -11,10 +11,15 @@ mock.module("next/navigation", () => ({
   useRouter: () => ({ push: mock(() => {}) }),
 }));
 
+// Import once — the mock is already in place
+const { default: Home } = await import("../app/page");
+
 describe("Home (root page)", () => {
-  test("redirects to /dashboard", async () => {
+  beforeEach(() => {
     redirectTarget = null;
-    const { default: Home } = await import("../app/page");
+  });
+
+  test("redirects to /dashboard", () => {
     try {
       Home();
     } catch {

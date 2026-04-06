@@ -16,8 +16,10 @@ import { evolutionRouter } from './routes/evolutionRoutes';
 import { webhookRouter } from './routes/webhookRoutes';
 import { goalRouter } from './routes/goalRoutes';
 import { poolRouter } from './routes/workerPoolRoutes';
+import { boardTaskRouter } from './routes/boardTaskRoutes';
 import { initSseBridge } from './events/sseManager';
 import * as goalStore from './stores/goalStore';
+import { getAgentRunnerHealth } from './agentRunner';
 
 export const app = express();
 
@@ -32,6 +34,7 @@ app.use('/api/evolution', evolutionRouter);
 app.use('/api/queue/webhooks', webhookRouter);
 app.use('/api/goals', goalRouter);
 app.use('/api/pool', poolRouter);
+app.use('/api/board/tasks', boardTaskRouter);
 
 // Wire event bus → SSE broadcasting
 initSseBridge();
@@ -68,6 +71,11 @@ app.get('/health/deep', asyncHandler(async (_req, res) => {
   checks.workers = wm
     ? { status: 'ok', detail: `${wm.getStatus().workerCount} workers` }
     : { status: 'error', detail: 'Worker manager not initialized' };
+
+  const runner = getAgentRunnerHealth();
+  checks.agentRunner = runner.available
+    ? { status: 'ok', detail: `${runner.selected}:${runner.source}:${runner.path}` }
+    : { status: 'error', detail: runner.error || 'runner unavailable' };
 
   // Agents
   const agents = await agentStore.listAgents();
@@ -256,11 +264,13 @@ app.get('/api/memories/stats', asyncHandler(async (_req, res) => {
 
 // ── Tasks CRUD ──────────────────────────────────────────────
 app.get('/api/tasks', asyncHandler(async (req, res) => {
-  const { status, delegatedTo, sessionId, limit, offset } = req.query;
+  const { status, delegatedTo, sessionId, goalId, boardTaskId, limit, offset } = req.query;
   const result = await taskStore.listTasks({
     status: status as string | undefined,
     delegatedTo: delegatedTo as string | undefined,
     sessionId: sessionId as string | undefined,
+    goalId: goalId as string | undefined,
+    boardTaskId: boardTaskId as string | undefined,
     limit: limit ? parseInt(String(limit), 10) : undefined,
     offset: offset ? parseInt(String(offset), 10) : undefined,
   });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { signAccessToken } from '../../src/auth/tokens';
 
 const mockListSystemEvents = mock(async (filters: Record<string, unknown> = {}) => ({
   items: [{
@@ -82,20 +83,6 @@ async function* fakeSuccessGen(): AsyncGenerator<[string, unknown]> {
 
 const mockCreateSandbox = mock(fakeSuccessGen);
 
-mock.module('../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'user-test-001',
-      email: 'developer@test.dev',
-      role: 'developer',
-      orgId: 'org-test-001',
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-}));
-
 mock.module('../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
@@ -125,19 +112,32 @@ mock.module('../../src/store', () => ({
 
 mock.module('../../src/agentStore', () => ({
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
   getAgentForCreator: mock(async () => mockGetAgent()),
+  getAgentForCreatorInOrg: mock(async () => mockGetAgent()),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
   removeSandboxFromAgent: mock(async () => ({})),
   clearForgeSandbox: mock(async () => {}),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -151,10 +151,13 @@ mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mockCreateSandbox,
   reconfigureSandboxLlm: mock(async () => ({ ok: true, provider: 'openai', model: 'gpt-4o', logs: [] })),
   retrofitSandboxToSharedCodex: mock(async () => ({ ok: true, model: 'openai-codex/gpt-5.4', authSource: 'Codex CLI auth' })),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -166,9 +169,21 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
@@ -177,9 +192,10 @@ mock.module('../../src/docker', () => ({
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
-  listManagedSandboxContainers: mock(async () => []),
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
 }));
 
@@ -188,7 +204,16 @@ mock.module('../../src/auditStore', () => ({
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-const { request, resetStreams } = await import('../helpers/app');
+const { request, resetStreams } = await import('../helpers/app.ts?unitSystemEventsApp');
+
+function developerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'user-test-001',
+    email: 'developer@test.dev',
+    role: 'developer',
+    orgId: 'org-test-001',
+  })}`;
+}
 
 beforeEach(() => {
   resetStreams();
@@ -231,6 +256,7 @@ describe('GET /api/system/events', () => {
   test('returns bounded system events with forwarded query filters', async () => {
     const res = await request()
       .get('/api/system/events')
+      .set('Authorization', developerAuthHeader())
       .query({
         category: 'sandbox.lifecycle',
         action: 'sandbox.create.succeeded',
@@ -258,6 +284,7 @@ describe('GET /api/sandboxes/:sandbox_id/system-events', () => {
   test('forces the sandbox scope when listing events', async () => {
     await request()
       .get('/api/sandboxes/sb-123/system-events')
+      .set('Authorization', developerAuthHeader())
       .query({ category: 'sandbox.lifecycle', limit: '5' })
       .expect(200);
 
@@ -273,6 +300,7 @@ describe('GET /api/agents/:id/system-events', () => {
   test('forces the agent scope when listing events', async () => {
     await request()
       .get('/api/agents/agent-1/system-events')
+      .set('Authorization', developerAuthHeader())
       .query({ level: 'warn', limit: '7' })
       .expect(200);
 
@@ -288,6 +316,7 @@ describe('GET /api/sandboxes/stream/:stream_id', () => {
   test('persists structured lifecycle events with a stable request id across sandbox creation', async () => {
     const createRes = await request()
       .post('/api/sandboxes/create')
+      .set('Authorization', developerAuthHeader())
       .send({ sandbox_name: 'evented-sandbox' })
       .expect(200);
 
@@ -295,6 +324,7 @@ describe('GET /api/sandboxes/stream/:stream_id', () => {
 
     await request()
       .get(`/api/sandboxes/stream/${stream_id}`)
+      .set('Authorization', developerAuthHeader())
       .set('x-request-id', 'req-123')
       .buffer(true)
       .parse((res, callback) => {

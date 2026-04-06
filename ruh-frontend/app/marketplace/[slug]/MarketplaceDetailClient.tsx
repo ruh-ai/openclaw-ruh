@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api/client";
+import { ProvisioningModal } from "@/components/ProvisioningModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -53,6 +54,7 @@ export function MarketplaceDetailClient({ slug }: { slug: string }) {
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [provisioningState, setProvisioningState] = useState<{ agentId: string; streamId: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +129,20 @@ export function MarketplaceDetailClient({ slug }: { slug: string }) {
         throw new Error("Install failed");
       }
 
+      const data = await response.json();
+
+      // V3 agents: provisioning required (clone repo + setup services)
+      if (data.provisioning && data.streamId && data.agentId) {
+        setProvisioningState({ agentId: data.agentId, streamId: data.streamId });
+        setListing((current) =>
+          current
+            ? { ...current, installCount: current.installCount + 1 }
+            : current,
+        );
+        return;
+      }
+
+      // V2 agents: instant install
       setInstalled(true);
       setListing((current) =>
         current
@@ -185,6 +201,23 @@ export function MarketplaceDetailClient({ slug }: { slug: string }) {
   }
 
   return (
+    <>
+    {provisioningState && listing && (
+      <ProvisioningModal
+        agentId={provisioningState.agentId}
+        streamId={provisioningState.streamId}
+        agentName={listing.title}
+        onComplete={() => {
+          setProvisioningState(null);
+          setInstalled(true);
+          setInstalling(false);
+        }}
+        onClose={() => {
+          setProvisioningState(null);
+          setInstalling(false);
+        }}
+      />
+    )}
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(247,228,210,0.9),_transparent_42%),linear-gradient(180deg,_#f8f3ee_0%,_#f7f3ef_48%,_#fbf8f5_100%)] px-6 py-10">
       <div className="mx-auto max-w-6xl">
         <Link
@@ -327,5 +360,6 @@ export function MarketplaceDetailClient({ slug }: { slug: string }) {
         </section>
       </div>
     </div>
+    </>
   );
 }

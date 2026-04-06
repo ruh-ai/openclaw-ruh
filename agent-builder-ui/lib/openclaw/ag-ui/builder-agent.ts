@@ -527,30 +527,44 @@ interface ThinkMarkerEvent {
 
 function extractThinkMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
   const events: ThinkMarkerEvent[] = [];
-  const searchText = text.slice(lastCheckedOffset);
+  // Search from a safe offset — back up to catch tags that span delta boundaries.
+  // Tags are at most ~200 chars, so backing up 250 is safe.
+  const safeOffset = Math.max(0, lastCheckedOffset - 250);
+  const searchText = text.slice(safeOffset);
+  const seenKeys = new Set<string>();
+
+  let maxMatchEnd = 0;
 
   for (const match of searchText.matchAll(THINK_STEP_RE)) {
-    events.push({
-      name: "think_step",
-      value: { step: match[1], status: match[2] },
-    });
+    const key = `step:${match[1]}:${match[2]}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      events.push({ name: "think_step", value: { step: match[1], status: match[2] } });
+    }
+    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
   }
 
   for (const match of searchText.matchAll(THINK_FINDING_RE)) {
-    events.push({
-      name: "think_research_finding",
-      value: { title: match[1], summary: match[2], source: match[3] || undefined },
-    });
+    const key = `finding:${match[1]}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      events.push({ name: "think_research_finding", value: { title: match[1], summary: match[2], source: match[3] || undefined } });
+    }
+    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
   }
 
   for (const match of searchText.matchAll(THINK_DOC_RE)) {
-    events.push({
-      name: "think_document_ready",
-      value: { docType: match[1], path: match[2] },
-    });
+    const key = `doc:${match[1]}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      events.push({ name: "think_document_ready", value: { docType: match[1], path: match[2] } });
+    }
+    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
   }
 
-  return { events, newOffset: text.length };
+  // Only advance offset past the last confirmed match — don't skip unmatched partial tags
+  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
+  return { events, newOffset };
 }
 
 // ─── Plan marker detection ──────────────────────────────────────────────────
@@ -565,7 +579,11 @@ const PLAN_COMPLETE_RE = /<plan_complete\s*\/>/g;
 
 function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
   const events: ThinkMarkerEvent[] = [];
-  const searchText = text.slice(lastCheckedOffset);
+  // Back up to catch tags that span delta boundaries (plan JSON markers can be large)
+  const safeOffset = Math.max(0, lastCheckedOffset - 2000);
+  const searchText = text.slice(safeOffset);
+  const seenKeys = new Set<string>();
+  let maxMatchEnd = 0;
 
   const jsonMarkers: Array<{ re: RegExp; name: string; key: string }> = [
     { re: PLAN_SKILLS_RE, name: "plan_skills", key: "skills" },
@@ -579,9 +597,13 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
   for (const { re, name, key } of jsonMarkers) {
     re.lastIndex = 0;
     for (const match of searchText.matchAll(re)) {
+      const dedupeKey = `${name}:${match[1].slice(0, 50)}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
       try {
         const parsed = JSON.parse(match[1]);
         events.push({ name, value: { [key]: parsed } });
+        maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
       } catch {
         // Skip malformed JSON in markers
       }
@@ -589,11 +611,15 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
   }
 
   PLAN_COMPLETE_RE.lastIndex = 0;
-  if (PLAN_COMPLETE_RE.test(searchText)) {
+  const completeMatch = PLAN_COMPLETE_RE.exec(searchText);
+  if (completeMatch && !seenKeys.has("plan_complete")) {
+    seenKeys.add("plan_complete");
     events.push({ name: "plan_complete", value: {} });
+    maxMatchEnd = Math.max(maxMatchEnd, (completeMatch.index ?? 0) + completeMatch[0].length);
   }
 
-  return { events, newOffset: text.length };
+  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
+  return { events, newOffset };
 }
 
 // ─── Config ─────────────────────────────────────────────────────────────────

@@ -3,8 +3,25 @@ import { asyncHandler, httpError } from '../utils';
 import { getQueue, QUEUE_NAMES, type AnalystJobData } from '../queues/definitions';
 import * as goalStore from '../stores/goalStore';
 import * as taskStore from '../stores/taskStore';
+import * as boardTaskStore from '../stores/boardTaskStore';
 
 export const goalRouter = Router();
+
+function buildGoalLane(goal: goalStore.Goal, tasks: boardTaskStore.BoardTask[]) {
+  const stats = {
+    total: tasks.length,
+    todo: tasks.filter((task) => task.status === 'todo').length,
+    inProgress: tasks.filter((task) => task.status === 'in_progress').length,
+    blocked: tasks.filter((task) => task.status === 'blocked').length,
+    done: tasks.filter((task) => task.status === 'done').length,
+  };
+
+  return {
+    goal,
+    stats,
+    tasks,
+  };
+}
 
 // List goals
 goalRouter.get('/', asyncHandler(async (req, res) => {
@@ -16,6 +33,28 @@ goalRouter.get('/', asyncHandler(async (req, res) => {
     offset: offset ? parseInt(String(offset), 10) : undefined,
   });
   res.json(result);
+}));
+
+goalRouter.get('/board', asyncHandler(async (req, res) => {
+  const { status, priority, limit, offset } = req.query;
+  const goals = await goalStore.listGoals({
+    status: status as string | undefined,
+    priority: priority as string | undefined,
+    limit: limit ? parseInt(String(limit), 10) : undefined,
+    offset: offset ? parseInt(String(offset), 10) : undefined,
+  });
+
+  const goalIds = goals.items.map((goal) => goal.id);
+  const boardTasks = goalIds.length > 0
+    ? await boardTaskStore.listBoardTasks({ goalIds, limit: 1000 })
+    : { items: [], total: 0 };
+
+  const items = goals.items.map((goal) => buildGoalLane(
+    goal,
+    boardTasks.items.filter((task) => task.goalId === goal.id),
+  ));
+
+  res.json({ items, totalGoals: goals.total, totalTasks: boardTasks.total });
 }));
 
 // Create goal
@@ -31,6 +70,12 @@ goalRouter.post('/', asyncHandler(async (req, res) => {
     acceptanceCriteria,
   });
   res.status(201).json(goal);
+}));
+
+goalRouter.get('/:id/board', asyncHandler(async (req, res) => {
+  const goal = await goalStore.getGoal(req.params.id);
+  const tasks = await boardTaskStore.listBoardTasks({ goalId: goal.id, limit: 500 });
+  res.json(buildGoalLane(goal, tasks.items));
 }));
 
 // Get goal detail

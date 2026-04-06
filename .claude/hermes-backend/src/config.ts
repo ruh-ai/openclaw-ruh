@@ -1,4 +1,5 @@
 import path from 'path';
+import { getSelectedAgentRunner, type AgentRunnerKind } from './agentRunner';
 
 export interface HermesConfig {
   databaseUrl: string;
@@ -15,13 +16,14 @@ export interface HermesConfig {
   strategistIntervalMs: number;   // strategist self-assessment schedule
   projectRoot: string;            // cwd for agent subprocesses
   agentsDir: string;              // path to .claude/agents/
-  claudeCliPath: string;          // path to claude binary
+  defaultAgentRunner: AgentRunnerKind;
 }
 
 export function getConfig(): HermesConfig {
   const databaseUrl = process.env.DATABASE_URL || 'postgresql://openclaw:changeme@localhost:5432/hermes';
   const port = parseInt(process.env.PORT || '8100', 10);
   const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3333').split(',').map(s => s.trim());
+  const selectedRunner = getSelectedAgentRunner().kind;
 
   // Resolve project root: walk up from hermes-backend to repo root
   const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, '../../..');
@@ -41,6 +43,6 @@ export function getConfig(): HermesConfig {
     strategistIntervalMs: parseInt(process.env.STRATEGIST_INTERVAL_MS || '28800000', 10),   // 8h
     projectRoot,
     agentsDir,
-    claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',
+    defaultAgentRunner: selectedRunner,
   });
 }

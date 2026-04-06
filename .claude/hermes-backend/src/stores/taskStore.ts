@@ -16,6 +16,7 @@ export interface TaskLog {
   priority: string;
   durationMs: number | null;
   goalId: string | null;
+  boardTaskId: string | null;
   createdAt: string;
 }
 
@@ -34,6 +35,7 @@ function serialize(row: Record<string, unknown>): TaskLog {
     priority: row.priority ? String(row.priority) : 'normal',
     durationMs: row.duration_ms != null ? Number(row.duration_ms) : null,
     goalId: row.goal_id ? String(row.goal_id) : null,
+    boardTaskId: row.board_task_id ? String(row.board_task_id) : null,
     createdAt: String(row.created_at),
   };
 }
@@ -43,6 +45,7 @@ export async function listTasks(filters?: {
   delegatedTo?: string;
   sessionId?: string;
   goalId?: string;
+  boardTaskId?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ items: TaskLog[]; total: number }> {
@@ -55,6 +58,7 @@ export async function listTasks(filters?: {
     if (filters?.delegatedTo) { conditions.push(`delegated_to = $${idx++}`); params.push(filters.delegatedTo); }
     if (filters?.sessionId) { conditions.push(`session_id = $${idx++}`); params.push(filters.sessionId); }
     if (filters?.goalId) { conditions.push(`goal_id = $${idx++}`); params.push(filters.goalId); }
+    if (filters?.boardTaskId) { conditions.push(`board_task_id = $${idx++}`); params.push(filters.boardTaskId); }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = filters?.limit ?? 50;
@@ -79,15 +83,16 @@ export async function createTask(data: {
   parentTaskId?: string;
   priority?: string;
   goalId?: string;
+  boardTaskId?: string;
   dedupHash?: string;
 }): Promise<TaskLog> {
   return withConn(async (client) => {
     const id = uuidv4();
     const priority = data.priority || 'normal';
     const result = await client.query(
-      `INSERT INTO task_logs (id, description, status, delegated_to, session_id, parent_task_id, priority, goal_id, dedup_hash)
-       VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [id, data.description, data.delegatedTo || null, data.sessionId || null, data.parentTaskId || null, priority, data.goalId || null, data.dedupHash || null],
+      `INSERT INTO task_logs (id, description, status, delegated_to, session_id, parent_task_id, priority, goal_id, board_task_id, dedup_hash)
+       VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [id, data.description, data.delegatedTo || null, data.sessionId || null, data.parentTaskId || null, priority, data.goalId || null, data.boardTaskId || null, data.dedupHash || null],
     );
     return serialize(result.rows[0]);
   });

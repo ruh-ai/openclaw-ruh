@@ -6,22 +6,35 @@
  */
 
 import type { CoPilotState } from "./copilot-state";
+import type { StageStatus } from "./types";
 
 const CACHE_PREFIX = "openclaw-copilot-lifecycle-";
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 4;
 
 /** Lifecycle fields worth persisting across page reloads. */
 const LIFECYCLE_KEYS = [
   "devStage",
   "maxUnlockedDevStage",
   "thinkStatus",
+  "userTriggeredThink",
+  "thinkRunId",
+  "lastDispatchedThinkRunId",
   "planStatus",
+  "userTriggeredPlan",
+  "planRunId",
+  "lastDispatchedPlanRunId",
   "buildStatus",
+  "userTriggeredBuild",
+  "buildRunId",
   "evalStatus",
   "deployStatus",
   "architecturePlan",
   "buildReport",
   "evalTasks",
+  "agentSandboxId",
+  "discoveryDocuments",
+  "sessionId",
+  "buildManifest",
 ] as const;
 
 type LifecycleKey = (typeof LIFECYCLE_KEYS)[number];
@@ -30,6 +43,57 @@ interface CachedLifecycle {
   version: number;
   timestamp: number;
   data: Pick<CoPilotState, LifecycleKey>;
+}
+
+function sanitizeRestoredLifecycleTrigger(seed: Partial<CoPilotState>): Partial<CoPilotState> {
+  const sanitized: Partial<CoPilotState> = { ...seed };
+
+  const thinkStatus = (seed.thinkStatus as StageStatus | undefined) ?? "idle";
+  if (
+    sanitized.userTriggeredThink &&
+    (seed.devStage !== "think" ||
+      thinkStatus !== "generating" ||
+      !seed.thinkRunId ||
+      (seed.lastDispatchedThinkRunId != null && seed.lastDispatchedThinkRunId === seed.thinkRunId))
+  ) {
+    sanitized.userTriggeredThink = false;
+    sanitized.thinkRunId = null;
+  }
+
+  const planStatus = (seed.planStatus as StageStatus | undefined) ?? "idle";
+  if (
+    sanitized.userTriggeredPlan &&
+    (seed.devStage !== "plan" ||
+      planStatus !== "generating" ||
+      !seed.planRunId ||
+      (seed.lastDispatchedPlanRunId != null && seed.lastDispatchedPlanRunId === seed.planRunId))
+  ) {
+    sanitized.userTriggeredPlan = false;
+    sanitized.planRunId = null;
+  }
+
+  // A "building" status from a previous session means the build was interrupted.
+  // Reset to "failed" so the UI shows a retry button instead of a stale spinner.
+  if (sanitized.buildStatus === ("building" as StageStatus)) {
+    sanitized.buildStatus = "failed" as StageStatus;
+    sanitized.userTriggeredBuild = false;
+    sanitized.buildRunId = null;
+  }
+
+  // Same for "generating" think/plan — an interrupted generation should show retry.
+  // On restore, any "generating" status is stale because the SSE/WS connection is gone.
+  if (sanitized.thinkStatus === ("generating" as StageStatus)) {
+    sanitized.thinkStatus = "failed" as StageStatus;
+    sanitized.userTriggeredThink = false;
+    sanitized.thinkRunId = null;
+  }
+  if (sanitized.planStatus === ("generating" as StageStatus)) {
+    sanitized.planStatus = "failed" as StageStatus;
+    sanitized.userTriggeredPlan = false;
+    sanitized.planRunId = null;
+  }
+
+  return sanitized;
 }
 
 export function saveCoPilotLifecycleToCache(
@@ -67,7 +131,7 @@ export function loadCoPilotLifecycleFromCache(
       localStorage.removeItem(CACHE_PREFIX + agentId);
       return null;
     }
-    return entry.data;
+    return sanitizeRestoredLifecycleTrigger(entry.data);
   } catch {
     return null;
   }

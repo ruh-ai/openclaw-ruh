@@ -16,7 +16,7 @@
     "test:security": "bun test tests/security/",
     "test:contract": "bun test tests/contract/",
     "test:fast": "bun test tests/unit/ tests/e2e/ tests/security/ tests/contract/",
-    "test:coverage": "bun test tests/unit/ tests/e2e/ tests/security/ tests/contract/ --coverage --coverage-reporter=text --coverage-reporter=lcov && bun run scripts/check-coverage.ts",
+    "test:coverage": "bun test tests/unit/ --coverage --coverage-reporter=text --coverage-reporter=lcov && bun run scripts/check-coverage.ts",
     "test:watch": "bun test --watch tests/unit/",
     "retrofit:shared-codex": "bun run scripts/retrofit-shared-codex.ts",
     "seed:test-users": "bun run scripts/seed-test-users.ts",

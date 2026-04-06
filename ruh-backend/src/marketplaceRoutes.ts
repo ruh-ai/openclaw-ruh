@@ -23,6 +23,8 @@ import {
 } from "./marketplaceRuntime";
 import * as store from "./store";
 import { stopAndRemoveContainer } from "./sandboxManager";
+import { streams as _streams } from "./streamRegistry";
+import { v4 as uuidv4 } from "uuid";
 
 function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
@@ -165,6 +167,7 @@ router.post(
       iconUrl,
       screenshots,
       version,
+      repoUrl,
     } = req.body;
 
     if (!agentId || !title) {
@@ -197,6 +200,13 @@ router.post(
       );
     }
 
+    // If no repoUrl provided, try to get it from the source agent
+    let effectiveRepoUrl = repoUrl;
+    if (!effectiveRepoUrl) {
+      const sourceAgent = await agentStore.getAgent(String(agentId));
+      effectiveRepoUrl = sourceAgent?.repo_url ?? null;
+    }
+
     const listing = await marketplaceStore.createListing({
       agentId,
       publisherId: req.user!.userId,
@@ -209,6 +219,7 @@ router.post(
       iconUrl,
       screenshots,
       version,
+      repoUrl: effectiveRepoUrl,
     });
 
     res.status(201).json(listing);
@@ -504,6 +515,31 @@ router.post(
 
     await marketplaceStore.incrementInstallCount(req.params.id);
 
+    // V3 agents with repo_url: trigger sandbox provisioning with clone + setup
+    const repoUrl = sourceVersion.snapshot.repoUrl;
+    if (repoUrl) {
+      const kebabName = installedAgent.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+      const streamId = uuidv4();
+      _streams.set(streamId, {
+        status: "pending",
+        request: {
+          sandbox_name: `install-${kebabName}`,
+          forge_agent_id: installedAgent.id,
+          reproduce_repo_url: repoUrl,
+          run_agent_setup: true,
+        },
+      });
+
+      res.status(201).json({
+        ...install,
+        agentId: installedAgent.id,
+        streamId,
+        provisioning: true,
+      });
+      return;
+    }
+
+    // V2 agents (no repo_url): instant install from snapshot
     res.status(201).json({
       ...install,
       agentId: installedAgent.id,

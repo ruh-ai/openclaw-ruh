@@ -189,6 +189,58 @@ describe("create-session-cache", () => {
     );
   });
 
+  test("loadCreateSessionFromCache sanitizes stale think trigger when restored stage is not think", () => {
+    storage.set("openclaw-create-session-agent-1", JSON.stringify({
+      version: 1,
+      timestamp: Date.now(),
+      coPilot: {
+        devStage: "plan",
+        thinkStatus: "generating",
+        userTriggeredThink: true,
+        thinkRunId: "think-run-1",
+        lastDispatchedThinkRunId: null,
+      },
+      builder: {},
+    }));
+
+    const loaded = loadCreateSessionFromCache("agent-1");
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        coPilot: expect.objectContaining({
+          userTriggeredThink: false,
+          thinkRunId: null,
+        }),
+      }),
+    );
+  });
+
+  test("loadCreateSessionFromCache sanitizes stale plan trigger when restored stage is not plan", () => {
+    storage.set("openclaw-create-session-agent-1", JSON.stringify({
+      version: 1,
+      timestamp: Date.now(),
+      coPilot: {
+        devStage: "think",
+        planStatus: "generating",
+        userTriggeredPlan: true,
+        planRunId: "plan-run-1",
+        lastDispatchedPlanRunId: null,
+      },
+      builder: {},
+    }));
+
+    const loaded = loadCreateSessionFromCache("agent-1");
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        coPilot: expect.objectContaining({
+          userTriggeredPlan: false,
+          planRunId: null,
+        }),
+      }),
+    );
+  });
+
   test("clear removes the cached session", () => {
     saveCreateSessionToCache("agent-1", {
       coPilot: {
@@ -280,6 +332,87 @@ describe("create-session-cache", () => {
       channels: [],
       runtimeInputs: agent.runtimeInputs,
     }));
+  });
+
+  test("buildResumedCoPilotSeed clears stale think trigger when status is not generating", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      userTriggeredThink: true,
+      thinkStatus: "ready",
+      thinkRunId: "think-run-1",
+      lastDispatchedThinkRunId: null,
+    });
+
+    expect(resumed.userTriggeredThink).toBe(false);
+    expect(resumed.thinkRunId).toBeNull();
+    expect(resumed.thinkStatus).toBe("ready");
+  });
+
+  test("buildResumedCoPilotSeed keeps think trigger while request is active and not yet dispatched", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      devStage: "think",
+      thinkStatus: "generating",
+      userTriggeredThink: true,
+      thinkRunId: "think-run-1",
+      lastDispatchedThinkRunId: null,
+    });
+
+    expect(resumed.userTriggeredThink).toBe(true);
+    expect(resumed.thinkRunId).toBe("think-run-1");
+  });
+
+  test("buildResumedCoPilotSeed clears stale think trigger when stage is not think", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      devStage: "plan",
+      thinkStatus: "generating",
+      userTriggeredThink: true,
+      thinkRunId: "think-run-1",
+      lastDispatchedThinkRunId: null,
+    });
+
+    expect(resumed.userTriggeredThink).toBe(false);
+    expect(resumed.thinkRunId).toBeNull();
+  });
+
+  test("buildResumedCoPilotSeed clears stale plan trigger when run was already dispatched", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      userTriggeredPlan: true,
+      thinkStatus: "ready",
+      planStatus: "generating",
+      planRunId: "plan-run-1",
+      lastDispatchedPlanRunId: "plan-run-1",
+    });
+
+    expect(resumed.userTriggeredPlan).toBe(false);
+    expect(resumed.planRunId).toBeNull();
+    expect(resumed.planStatus).toBe("generating");
+  });
+
+  test("buildResumedCoPilotSeed keeps plan trigger while plan is generating and not yet dispatched", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      devStage: "plan",
+      thinkStatus: "ready",
+      planStatus: "generating",
+      userTriggeredPlan: true,
+      planRunId: "plan-run-1",
+      lastDispatchedPlanRunId: null,
+    });
+
+    expect(resumed.userTriggeredPlan).toBe(true);
+    expect(resumed.planRunId).toBe("plan-run-1");
+  });
+
+  test("buildResumedCoPilotSeed clears stale plan trigger when stage is not plan", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      devStage: "think",
+      thinkStatus: "ready",
+      planStatus: "generating",
+      userTriggeredPlan: true,
+      planRunId: "plan-run-1",
+      lastDispatchedPlanRunId: null,
+    });
+
+    expect(resumed.userTriggeredPlan).toBe(false);
+    expect(resumed.planRunId).toBeNull();
   });
 
   test("buildResumedBuilderState prefers the persisted forge sandbox while restoring cached work", () => {

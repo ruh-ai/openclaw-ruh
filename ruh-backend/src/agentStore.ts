@@ -28,6 +28,11 @@ const AGENT_SELECT_COLUMNS = `
   paperclip_company_id,
   paperclip_workers,
   creation_session,
+  repo_url,
+  repo_owner,
+  repo_name,
+  repo_default_branch,
+  repo_last_pushed_at,
   created_at,
   updated_at
 `;
@@ -56,6 +61,12 @@ export interface AgentRuntimeInputRecord {
   required: boolean;
   source: 'architect_requirement' | 'skill_requirement';
   value: string;
+  populationStrategy?: 'user_required' | 'ai_inferred' | 'static_default';
+  inputType?: string;
+  defaultValue?: string;
+  example?: string;
+  options?: string[];
+  group?: string;
 }
 
 export interface AgentDiscoveryDocumentSectionRecord {
@@ -120,6 +131,7 @@ export interface AgentCredentialSummary {
 }
 
 export type AgentStatus = 'active' | 'draft' | 'forging';
+export type AgentForgeStage = 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'complete';
 
 export interface PaperclipWorkerRecord {
   worker_id: string;
@@ -139,6 +151,7 @@ export interface AgentRecord {
   status: AgentStatus;
   sandbox_ids: string[];
   forge_sandbox_id: string | null;
+  forge_stage: AgentForgeStage | null;
   skill_graph: unknown | null;
   workflow: unknown | null;
   agent_rules: string[];
@@ -152,6 +165,11 @@ export interface AgentRecord {
   paperclip_company_id: string | null;
   paperclip_workers: PaperclipWorkerRecord[];
   creation_session: unknown | null;
+  repo_url: string | null;
+  repo_owner: string | null;
+  repo_name: string | null;
+  repo_default_branch: string;
+  repo_last_pushed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -321,6 +339,7 @@ export async function updateAgent(
     status?: AgentStatus;
     channels?: AgentChannelRecord[];
     forge_sandbox_id?: string;
+    forge_stage?: AgentForgeStage | null;
   },
 ): Promise<AgentRecord | null> {
   const sets: string[] = [];
@@ -335,6 +354,7 @@ export async function updateAgent(
   if (patch.status !== undefined) { sets.push(`status = $${idx++}`); vals.push(patch.status); }
   if (patch.channels !== undefined) { sets.push(`channels = $${idx++}`); vals.push(JSON.stringify(patch.channels)); }
   if (patch.forge_sandbox_id !== undefined) { sets.push(`forge_sandbox_id = $${idx++}`); vals.push(patch.forge_sandbox_id); }
+  if (patch.forge_stage !== undefined) { sets.push(`forge_stage = $${idx++}`); vals.push(patch.forge_stage); }
 
   if (sets.length === 0) return getAgent(id);
 
@@ -363,6 +383,11 @@ export async function updateAgentConfig(
     channels?: AgentChannelRecord[];
     discoveryDocuments?: AgentDiscoveryDocumentsRecord | null;
     creationSession?: unknown;
+    repoUrl?: string | null;
+    repoOwner?: string | null;
+    repoName?: string | null;
+    repoDefaultBranch?: string | null;
+    repoLastPushedAt?: string | null;
   },
 ): Promise<AgentRecord | null> {
   const sets: string[] = [];
@@ -379,6 +404,11 @@ export async function updateAgentConfig(
   if (config.channels !== undefined) { sets.push(`channels = $${idx++}`); vals.push(JSON.stringify(config.channels)); }
   if (config.discoveryDocuments !== undefined) { sets.push(`discovery_documents = $${idx++}`); vals.push(config.discoveryDocuments ? JSON.stringify(config.discoveryDocuments) : null); }
   if (config.creationSession !== undefined) { sets.push(`creation_session = $${idx++}`); vals.push(config.creationSession ? JSON.stringify(config.creationSession) : null); }
+  if (config.repoUrl !== undefined) { sets.push(`repo_url = $${idx++}`); vals.push(config.repoUrl ?? null); }
+  if (config.repoOwner !== undefined) { sets.push(`repo_owner = $${idx++}`); vals.push(config.repoOwner ?? null); }
+  if (config.repoName !== undefined) { sets.push(`repo_name = $${idx++}`); vals.push(config.repoName ?? null); }
+  if (config.repoDefaultBranch !== undefined) { sets.push(`repo_default_branch = $${idx++}`); vals.push(config.repoDefaultBranch ?? 'main'); }
+  if (config.repoLastPushedAt !== undefined) { sets.push(`repo_last_pushed_at = $${idx++}`); vals.push(config.repoLastPushedAt ?? null); }
 
   if (sets.length === 0) return getAgent(id);
 
@@ -562,9 +592,15 @@ function serialize(row: Record<string, unknown>): AgentRecord {
   row['workspace_memory'] = normalizeWorkspaceMemory(row['workspace_memory']);
   // Normalize forge_sandbox_id: null if not present or not a string
   row['forge_sandbox_id'] = typeof row['forge_sandbox_id'] === 'string' ? row['forge_sandbox_id'] : null;
+  row['forge_stage'] = typeof row['forge_stage'] === 'string' ? row['forge_stage'] : null;
   row['paperclip_company_id'] = typeof row['paperclip_company_id'] === 'string' ? row['paperclip_company_id'] : null;
   row['paperclip_workers'] = normalizePaperclipWorkers(row['paperclip_workers']);
   row['creation_session'] = (typeof row['creation_session'] === 'object' && row['creation_session'] !== null) ? row['creation_session'] : null;
+  row['repo_url'] = typeof row['repo_url'] === 'string' ? row['repo_url'] : null;
+  row['repo_owner'] = typeof row['repo_owner'] === 'string' ? row['repo_owner'] : null;
+  row['repo_name'] = typeof row['repo_name'] === 'string' ? row['repo_name'] : null;
+  row['repo_default_branch'] = typeof row['repo_default_branch'] === 'string' ? row['repo_default_branch'] : 'main';
+  row['repo_last_pushed_at'] = row['repo_last_pushed_at'] ? String(row['repo_last_pushed_at']) : null;
   return row as unknown as AgentRecord;
 }
 
@@ -615,6 +651,12 @@ function normalizeRuntimeInputs(value: unknown): AgentRuntimeInputRecord[] {
           ? item.source
           : 'architect_requirement',
       value: typeof item.value === 'string' ? item.value : '',
+      ...(typeof item.populationStrategy === 'string' ? { populationStrategy: item.populationStrategy as AgentRuntimeInputRecord['populationStrategy'] } : {}),
+      ...(typeof item.inputType === 'string' ? { inputType: item.inputType } : {}),
+      ...(typeof item.defaultValue === 'string' ? { defaultValue: item.defaultValue } : {}),
+      ...(typeof item.example === 'string' ? { example: item.example } : {}),
+      ...(Array.isArray(item.options) ? { options: item.options.map(String) } : {}),
+      ...(typeof item.group === 'string' ? { group: item.group } : {}),
     }))
     .filter((item) => item.key);
 }
@@ -887,4 +929,130 @@ export async function getAgentCredentialSummary(
     hasCredentials: true,
     createdAt: c.createdAt,
   }));
+}
+
+// ─── Agent config versioning ──────────────────────────────────────────────────
+
+export interface AgentConfigVersionRecord {
+  id: string;
+  agent_id: string;
+  version_number: number;
+  snapshot: unknown;
+  message: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+export async function createAgentConfigVersion(
+  agentId: string,
+  snapshot: unknown,
+  message?: string,
+  createdBy?: string,
+): Promise<AgentConfigVersionRecord> {
+  const id = uuidv4();
+  return withConn(async (client) => {
+    // Auto-increment version_number within the agent scope
+    const res = await client.query(
+      `INSERT INTO agent_config_versions (id, agent_id, version_number, snapshot, message, created_by)
+       VALUES (
+         $1, $2,
+         COALESCE((SELECT MAX(version_number) FROM agent_config_versions WHERE agent_id = $2), 0) + 1,
+         $3, $4, $5
+       )
+       RETURNING id, agent_id, version_number, snapshot, message, created_at, created_by`,
+      [id, agentId, JSON.stringify(snapshot), message ?? null, createdBy ?? null],
+    );
+    return serializeConfigVersion(res.rows[0]);
+  });
+}
+
+export async function listAgentConfigVersions(
+  agentId: string,
+  limit = 20,
+): Promise<AgentConfigVersionRecord[]> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT id, agent_id, version_number, snapshot, message, created_at, created_by
+       FROM agent_config_versions
+       WHERE agent_id = $1
+       ORDER BY version_number DESC
+       LIMIT $2`,
+      [agentId, Math.min(Math.max(Number(limit), 1), 100)],
+    );
+    return res.rows.map(serializeConfigVersion);
+  });
+}
+
+export async function getAgentConfigVersion(
+  agentId: string,
+  versionNumber: number,
+): Promise<AgentConfigVersionRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT id, agent_id, version_number, snapshot, message, created_at, created_by
+       FROM agent_config_versions
+       WHERE agent_id = $1 AND version_number = $2`,
+      [agentId, versionNumber],
+    );
+    return res.rows.length > 0 ? serializeConfigVersion(res.rows[0]) : null;
+  });
+}
+
+export async function rollbackAgentToConfigVersion(
+  agentId: string,
+  versionNumber: number,
+): Promise<AgentRecord | null> {
+  const version = await getAgentConfigVersion(agentId, versionNumber);
+  if (!version) return null;
+
+  const snap = version.snapshot as Record<string, unknown>;
+
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  let idx = 1;
+
+  const fields: Array<[string, string]> = [
+    ['skill_graph', 'skillGraph'],
+    ['workflow', 'workflow'],
+    ['agent_rules', 'agentRules'],
+    ['runtime_inputs', 'runtimeInputs'],
+    ['tool_connections', 'toolConnections'],
+    ['triggers', 'triggers'],
+    ['discovery_documents', 'discoveryDocuments'],
+  ];
+
+  for (const [col, key] of fields) {
+    if (snap[key] !== undefined) {
+      sets.push(`${col} = $${idx++}`);
+      vals.push(snap[key] !== null ? JSON.stringify(snap[key]) : null);
+    }
+  }
+
+  if (sets.length === 0) return getAgent(agentId);
+
+  sets.push(`updated_at = NOW()`);
+  vals.push(agentId);
+
+  await withConn(async (client) => {
+    await client.query(
+      `UPDATE agents SET ${sets.join(', ')} WHERE id = $${idx}`,
+      vals,
+    );
+  });
+  return getAgent(agentId);
+}
+
+function serializeConfigVersion(row: Record<string, unknown>): AgentConfigVersionRecord {
+  if (row['created_at'] instanceof Date) {
+    row['created_at'] = row['created_at'].toISOString();
+  }
+  return {
+    id: String(row['id']),
+    agent_id: String(row['agent_id']),
+    version_number: Number(row['version_number']),
+    snapshot: row['snapshot'],
+    message: row['message'] ? String(row['message']) : null,
+    created_at: String(row['created_at']),
+    created_by: row['created_by'] ? String(row['created_by']) : null,
+  };
 }

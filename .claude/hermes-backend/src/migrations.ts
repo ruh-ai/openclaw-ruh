@@ -235,6 +235,88 @@ const MIGRATIONS = [
       `CREATE INDEX IF NOT EXISTS idx_task_logs_cost ON task_logs(cost_usd) WHERE cost_usd > 0`,
     ],
   },
+  {
+    id: '0008_goal_task_board',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS board_tasks (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'blocked', 'done')),
+        priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('critical', 'high', 'normal', 'low')),
+        planned_agent TEXT,
+        completed_by_agent TEXT,
+        last_execution_agent TEXT,
+        current_task_log_id TEXT REFERENCES task_logs(id),
+        latest_task_log_id TEXT REFERENCES task_logs(id),
+        blocked_reason TEXT,
+        source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'analyst', 'api', 'legacy')),
+        dedup_fingerprint TEXT DEFAULT '',
+        run_count INTEGER NOT NULL DEFAULT 0,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_board_tasks_goal ON board_tasks(goal_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_board_tasks_status ON board_tasks(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_board_tasks_agent ON board_tasks(planned_agent)`,
+      `ALTER TABLE task_logs ADD COLUMN IF NOT EXISTS board_task_id TEXT REFERENCES board_tasks(id) ON DELETE SET NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_task_logs_board_task ON task_logs(board_task_id)`,
+      `INSERT INTO board_tasks (
+        id,
+        goal_id,
+        title,
+        description,
+        status,
+        priority,
+        planned_agent,
+        completed_by_agent,
+        last_execution_agent,
+        current_task_log_id,
+        latest_task_log_id,
+        blocked_reason,
+        source,
+        dedup_fingerprint,
+        run_count,
+        completed_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        'legacy-' || tl.id,
+        tl.goal_id,
+        LEFT(tl.description, 120),
+        tl.description,
+        CASE
+          WHEN tl.status = 'completed' THEN 'done'
+          WHEN tl.status = 'failed' THEN 'blocked'
+          WHEN tl.status IN ('pending', 'running') THEN 'in_progress'
+          ELSE 'todo'
+        END,
+        COALESCE(tl.priority, 'normal'),
+        tl.delegated_to,
+        CASE WHEN tl.status = 'completed' THEN tl.delegated_to ELSE NULL END,
+        tl.delegated_to,
+        CASE WHEN tl.status IN ('pending', 'running') THEN tl.id ELSE NULL END,
+        tl.id,
+        CASE WHEN tl.status = 'failed' THEN tl.error ELSE NULL END,
+        'legacy',
+        'legacy-' || tl.id,
+        1,
+        tl.completed_at,
+        tl.created_at,
+        NOW()
+      FROM task_logs tl
+      WHERE tl.goal_id IS NOT NULL
+        AND tl.board_task_id IS NULL
+      ON CONFLICT (id) DO NOTHING`,
+      `UPDATE task_logs
+       SET board_task_id = 'legacy-' || id
+       WHERE goal_id IS NOT NULL
+         AND board_task_id IS NULL`,
+    ],
+  },
 ];
 
 async function applyMemoryFtsIndex(): Promise<void> {

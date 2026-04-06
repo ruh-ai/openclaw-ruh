@@ -183,16 +183,26 @@ describe("consumeSkillGraphReady", () => {
     expect(store.setDevStage).toHaveBeenCalledWith("review");
   });
 
-  test("advances to review from think stage (architect one-shot response)", () => {
-    const deps = createMockDeps(); // devStage defaults to "think"
+  test("does not advance before build has actually started", () => {
+    const store = {
+      setDiscoveryDocuments: mock(() => {}),
+      setThinkStatus: mock(() => {}),
+      setDevStage: mock(() => {}),
+      setPhase: mock(() => {}),
+      setArchitecturePlan: mock(() => {}),
+      setPlanStatus: mock(() => {}),
+      setBuildStatus: mock(() => {}),
+      devStage: "plan" as const,
+    };
+    const deps = createMockDeps({ coPilotStore: store });
 
     consumeSkillGraphReady(
       { skillGraph: [{ skill_id: "s1" }], content: "Done." },
       deps,
     );
 
-    expect(deps.coPilotStore!.setBuildStatus).toHaveBeenCalledWith("done");
-    expect(deps.coPilotStore!.setDevStage).toHaveBeenCalledWith("review");
+    expect(store.setBuildStatus).not.toHaveBeenCalled();
+    expect(store.setDevStage).not.toHaveBeenCalled();
   });
 
   test("does not advance when already past review", () => {

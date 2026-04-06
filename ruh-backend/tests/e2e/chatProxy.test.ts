@@ -5,7 +5,6 @@
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import { Readable } from 'node:stream';
-import { request } from '../helpers/app';
 import {
   makeConversationRecord,
   makeSandboxRecord,
@@ -64,7 +63,11 @@ mock.module('../../src/docker', () => ({
   buildHomeFileWriteCommand: (relativePath: string, content: string) =>
     `mkdir -p $HOME && printf %s '${content}' > $HOME/${relativePath}`,
   dockerContainerRunning: mockDockerContainerRunning,
+  dockerExec: mock(async () => [true, '']),
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: Array<string | number>) => args.map(String).join(' '),
+  listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
 }));
 
@@ -84,12 +87,15 @@ const mockGetMessages = mock(async () => []);
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mockGetConversation,
+  getConversationForSandbox: mockGetConversation,
   listConversations: mockListConversations,
   createConversation: mockCreateConversation,
   appendMessages: mockAppendMessages,
   renameConversation: mockRenameConversation,
   deleteConversation: mockDeleteConversation,
   getMessages: mockGetMessages,
+  listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
+  getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
   initDb: mock(async () => {}),
 }));
 
@@ -110,17 +116,21 @@ const mockRetrofitSandboxToSharedCodex = mock(async () => ({
   authSource: 'Codex CLI auth',
   logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
 }));
-const mockDockerExec = mock(async () => [true, '']);
+const mockDockerExec = mock(async () => [true, 'true']);
 const mockEnsureInteractiveRuntimeServices = mock(async () => {});
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  PREVIEW_PORTS: [],
   reconfigureSandboxLlm: mockReconfigureSandboxLlm,
   retrofitSandboxToSharedCodex: mockRetrofitSandboxToSharedCodex,
   dockerExec: mockDockerExec,
   ensureInteractiveRuntimeServices: mockEnsureInteractiveRuntimeServices,
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 // ── Mock axios ────────────────────────────────────────────────────────────────
@@ -135,6 +145,8 @@ mock.module('axios', () => ({
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+const { request } = await import('../helpers/app.ts?e2eChatProxy');
 
 beforeEach(() => {
   mockAxiosGet.mockReset();
@@ -173,7 +185,7 @@ beforeEach(() => {
   mockEnsureInteractiveRuntimeServices.mockReset();
   mockEnsureInteractiveRuntimeServices.mockImplementation(async () => {});
   mockDockerExec.mockReset();
-  mockDockerExec.mockImplementation(async () => [true, '']);
+  mockDockerExec.mockImplementation(async () => [true, 'true']);
   mockRetrofitSandboxToSharedCodex.mockImplementation(async () => ({
     ok: true,
     sandboxId: SANDBOX_ID,

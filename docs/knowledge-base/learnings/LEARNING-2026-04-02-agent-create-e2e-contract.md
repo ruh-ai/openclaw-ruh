@@ -57,6 +57,7 @@ During a live Playwright pass against the local `agent-builder-ui`, the full `/a
   5. transition into Co-Pilot with `Draft saved`
   6. first architect prompt entering `Connecting` / `Thinking`
   7. eventual Think-stage PRD/TRD generation
+- Mocked Playwright suites should mirror that same entry contract as closely as possible. If a spec opens blank `/agents/create` and immediately asserts chat inputs, review controls, or mode toggles, it is testing the retired pre-forge contract and should be rewritten or removed.
 - Browser tests that exercise the real forge path should budget for forge provisioning variability instead of assuming mock-speed transitions. The fixed prebuilt-image path is much faster locally, but the test contract still needs an explicit long timeout and milestone-based waits.
 - The dashboard startup warning should disappear after the sandbox image is rebuilt from the fixed Dockerfile. If it reappears, inspect the built image first rather than the builder UI.
 - The forge WebSocket auth fallback is a separate local transport issue from the dashboard runtime fix. Treat it as an observed local-dev behavior until the gateway auth path is explicitly hardened or made fully secure-context compatible.

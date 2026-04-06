@@ -572,15 +572,12 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   hydrateFromSeed: (seed) => set((prev) => {
     const initial = createInitialState();
 
-    // Only preserve in-flight lifecycle state when re-hydrating the SAME agent
-    // (e.g. existingAgent reference change or isRouteAgentHydrated flipping).
-    // When switching to a different agent, the previous agent's lifecycle must
-    // NOT bleed through — otherwise Agent B inherits Agent A's "done" statuses.
-    const isSameAgent =
-      seed.name !== undefined &&
-      seed.name === prev.name &&
-      seed.description !== undefined &&
-      seed.description === prev.description;
+    // Lifecycle preserve: when re-hydrating the SAME agent (e.g. from cache after
+    // refresh), keep any lifecycle state that has progressed past initial.
+    // Cross-agent leaks are prevented by the caller: page.tsx calls reset() before
+    // hydrateFromSeed, and the cache is keyed by agentId. The seed is always for
+    // the correct agent — no name/sessionId comparison needed.
+    const isSameAgent = seed.name !== undefined && seed.name === prev.name;
 
     const LIFECYCLE_KEYS: (keyof CoPilotState)[] = [
       "thinkStatus", "userTriggeredThink", "planStatus", "userTriggeredPlan", "buildStatus", "userTriggeredBuild",

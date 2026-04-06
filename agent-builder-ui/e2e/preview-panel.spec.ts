@@ -6,6 +6,7 @@
  */
 
 import { test, expect, Page, Route } from "@playwright/test";
+import { setupAuth } from "./helpers/auth";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -147,19 +148,30 @@ async function mockApis(page: Page, chatSseBody: string, activePorts: number[] =
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test.describe("Preview Panel", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuth(page);
+  });
+
   test("shows 'No dev servers detected' when no ports are active", async ({ page }) => {
     await seedAgent(page);
-    const chatBody = sseStreamWithServerUrl(9999); // Port not in PREVIEW_PORTS
+    // Use a neutral SSE body with no port URL so the regex parser does not
+    // detect any preview ports — this keeps the preview panel in the empty state.
+    const chatBody = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "I will look into this." } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n");
     await mockApis(page, chatBody, []); // No active ports
 
-    await page.goto(`http://localhost:3001/agents/${AGENT_ID}/chat`);
+    await page.goto(`http://localhost:3000/agents/${AGENT_ID}/chat`);
     await page.waitForSelector("text=Preview Test Agent", { timeout: 10000 });
 
-    // Click the Preview tab
+    // Click the Preview tab — triggers onPreviewStart auto-message using the neutral SSE.
+    // Port fetch returns empty, so the empty state should appear.
     await page.click('button:has-text("Preview")');
 
-    // Should show the empty state
-    await expect(page.locator("text=No dev servers detected")).toBeVisible({ timeout: 5000 });
+    // Should show the empty state once the port fetch resolves
+    await expect(page.locator("text=No dev servers detected")).toBeVisible({ timeout: 8000 });
     await expect(page.locator("text=Check again")).toBeVisible();
   });
 
@@ -168,7 +180,7 @@ test.describe("Preview Panel", () => {
     const chatBody = sseStreamWithServerUrl(8080);
     await mockApis(page, chatBody, [8080]); // Port 8080 is active
 
-    await page.goto(`http://localhost:3001/agents/${AGENT_ID}/chat`);
+    await page.goto(`http://localhost:3000/agents/${AGENT_ID}/chat`);
     await page.waitForSelector("text=Preview Test Agent", { timeout: 10000 });
 
     // Send a message to trigger the SSE stream
@@ -183,7 +195,12 @@ test.describe("Preview Panel", () => {
 
   test("Check again button triggers port refresh", async ({ page }) => {
     await seedAgent(page);
-    const chatBody = sseStreamWithServerUrl(3000);
+    // Neutral SSE body — no port URL so no port is auto-detected
+    const chatBody = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "I will look into this." } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n");
 
     let callCount = 0;
     await mockApis(page, chatBody, []);
@@ -198,12 +215,12 @@ test.describe("Preview Panel", () => {
       });
     });
 
-    await page.goto(`http://localhost:3001/agents/${AGENT_ID}/chat`);
+    await page.goto(`http://localhost:3000/agents/${AGENT_ID}/chat`);
     await page.waitForSelector("text=Preview Test Agent", { timeout: 10000 });
 
-    // Click Preview tab
+    // Click Preview tab — triggers auto-message with neutral SSE; ports API returns empty
     await page.click('button:has-text("Preview")');
-    await page.waitForSelector("text=Check again", { timeout: 5000 });
+    await page.waitForSelector("text=Check again", { timeout: 8000 });
 
     const countBefore = callCount;
     await page.click("text=Check again");
@@ -218,7 +235,7 @@ test.describe("Preview Panel", () => {
     const chatBody = sseStreamWithServerUrl(8080);
     await mockApis(page, chatBody, [8080]);
 
-    await page.goto(`http://localhost:3001/agents/${AGENT_ID}/chat`);
+    await page.goto(`http://localhost:3000/agents/${AGENT_ID}/chat`);
     await page.waitForSelector("text=Preview Test Agent", { timeout: 10000 });
 
     // Click Preview tab

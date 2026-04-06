@@ -91,20 +91,60 @@ When the deployed agent has saved workspace memory and the operator starts a bra
 
 **UI path:** agent-builder-ui → /agents/create
 
+**Lifecycle:** think → plan → build → review → test → ship → reflect (7-stage state machine per [[SPEC-agent-creation-v3-build-pipeline]])
+
+### v4 Harness Pipeline (Think → Plan → Build)
+
+```
+Think phase (multi-step research):
+  1. User submits agent description → THINK_SYSTEM_INSTRUCTION activates
+  2. Architect researches domain (browser, terminal, ClawHub search)
+  3. Emits <think_research_finding> markers → UI shows finding cards
+  4. Writes research-brief.md → .openclaw/discovery/research-brief.md
+  5. Writes PRD.md → .openclaw/discovery/PRD.md
+  6. Writes TRD.md → .openclaw/discovery/TRD.md
+  7. Emits <think_document_ready> for each → UI marks thinkStep complete
+  8. User reviews and approves PRD/TRD
+
+Plan phase (structural decisions):
+  1. PLAN_SYSTEM_INSTRUCTION reads PRD/TRD from workspace
+  2. Architect emits incremental decisions via markers:
+     <plan_skills>, <plan_workflow>, <plan_data_schema>,
+     <plan_api_endpoints>, <plan_dashboard_pages>,
+     <plan_env_vars>, <plan_complete>
+  3. Each marker → event-consumer-map updates architecturePlan incrementally
+  4. Writes architecture.json → .openclaw/plan/architecture.json
+  5. Writes PLAN.md → .openclaw/plan/PLAN.md
+  6. User reviews and approves plan
+
+Build phase (v4 orchestrator):
+  1. CoPilotLayout.handlePlanApproved() persists plan to workspace
+  2. runBuildPipeline(sandboxId, callbacks, { plan, agentName })
+  3. Scaffold task (deterministic, no LLM) → package.json, Dockerfile, etc.
+  4. Identity specialist → SOUL.md, AGENTS.md
+  5. Database specialist → migrations, types (if plan has dataSchema)
+  6. Backend + Skills specialists (parallel) → routes, handlers
+  7. Dashboard specialist → pages, hooks (if plan has dashboardPages)
+  8. build-validator.ts checks plan coverage + file existence
+  9. Manifest write-through: build-manifest.json updated per task
+  10. Merge workspace-copilot/ → workspace/
+```
+
+### Message Flow (all phases)
+
 ```
 1. User navigates to /agents/create
 2. useOpenClawChat initializes with greeting message
 3. User types: "I want a daily news summarizer that posts to Slack"
-4. sendMessage() → POST /api/openclaw { session_id, request_id, message, agent: "architect" }
-5. Bridge route opens WebSocket to OPENCLAW_GATEWAY_URL:
-   a. Receives connect.challenge
-   b. Sends connect { role: "operator", auth: { token } }
-   c. Receives hello-ok
-   d. Sends chat.send { sessionKey, message, idempotencyKey: request_id }
-   e. Collects agent lifecycle events → SSE status events to client
-   f. If the gateway asks for `exec.approval.requested`, the bridge auto-allows only a narrow safe inspection set; other requests emit `approval_required` / `approval_denied` and fail closed
-   g. Receives chat { state: "final" } → finalizeResponse()
-   h. If transport drops before `chat.send` acknowledgement, the bridge may retry with the same `request_id`; if transport drops after acknowledgement, the bridge fails closed with a typed error instead of resending the run
+4. sendMessage() → POST /api/openclaw { session_id, request_id, message, agent: "architect", forge_sandbox_id }
+5. Per [[SPEC-openclaw-bridge-forge-required]], the bridge now routes only through the agent's own forge sandbox:
+   a. If `forge_sandbox_id` is missing, the route fails closed with `forge_sandbox_not_ready` and does not revive the retired shared architect gateway
+   b. If the forge sandbox exists, the route resolves its gateway from the backend record
+   c. The bridge opens a direct WebSocket to that forge gateway, receives `connect.challenge`, sends `connect { role: "operator", auth: { token } }`, then sends `chat.send { sessionKey, message, idempotencyKey: request_id }`
+   d. The bridge collects lifecycle/tool/workspace events → SSE status events to client
+   e. If the gateway asks for `exec.approval.requested`, the bridge auto-allows only a narrow safe inspection set; other requests emit `approval_required` / `approval_denied` and fail closed
+   f. If the direct forge WebSocket path fails before completion, the route may fall back to the forge sandbox HTTP chat proxy; it does not switch to a shared architect sandbox
+   g. Receives chat { state: "final" } or HTTP stream completion → finalizeResponse()
 6. Response parsed as ArchitectResponse:
    - type: "clarification" → asks follow-up questions
    - type: "ready_for_review" → skillGraph + workflow extracted
@@ -286,3 +326,5 @@ For broader lifecycle drift, use `GET /api/admin/sandboxes/reconcile` with the a
 - [[LEARNING-2026-03-30-build-stage-architecture-plan-handoff]] — plan-to-build handoff must pass the approved architecture plan as a first-class build input
 - [[LEARNING-2026-03-31-copilot-built-skill-hydration]] — direct forge build path must derive `builtSkillIds` from `skill_md` so lifecycle UI stays truthful
 - [[LEARNING-2026-04-02-agent-create-e2e-contract]] — live `/agents/create` requires auth redirect, forge provisioning, delayed Co-Pilot handoff, and a visible `Connecting` phase before the first architect turn settles
+- [[SPEC-agent-creation-v3-build-pipeline]] — Next-gen creation pipeline: workspace-persistent Think/Plan, task-graph Build with specialist sub-agents, deployable template repos
+- [[SPEC-agent-as-project]] — Agent-as-project lifecycle: persistent repo, branch-based improvements, PR-driven reviews

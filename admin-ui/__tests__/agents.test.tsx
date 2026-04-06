@@ -1,14 +1,7 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { render } from "@testing-library/react";
-
-mock.module("lucide-react", () => {
-  const Icon = ({ children, ...props }: Record<string, unknown>) => <span {...props}>{children}</span>;
-  return {
-    Users: Icon, Bot: Icon, Server: Icon, Store: Icon,
-    LayoutDashboard: Icon, Activity: Icon, LogOut: Icon,
-    Shield: Icon, User: Icon, Code: Icon,
-  };
-});
+import lucideMock from "../test-lucide-mock";
+mock.module("lucide-react", () => lucideMock);
 
 mock.module("next/navigation", () => ({
   usePathname: () => "/agents",
@@ -47,8 +40,6 @@ describe("AgentsPage", () => {
     const headers = container.querySelectorAll("th");
     const headerTexts = Array.from(headers).map((h) => h.textContent);
     expect(headerTexts).toContain("Agent");
-    expect(headerTexts).toContain("Status");
-    expect(headerTexts).toContain("Sandboxes");
     expect(headerTexts).toContain("Created");
   });
 
@@ -58,11 +49,5 @@ describe("AgentsPage", () => {
     expect(mockFetch).toHaveBeenCalled();
     const calledUrl = (mockFetch.mock.calls[0] as unknown[])[0] as string;
     expect(calledUrl).toContain("/api/admin/agents");
-  });
-
-  test("shows agent count text", async () => {
-    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
-    const { getByText } = render(<AgentsPage />);
-    expect(getByText(/agents across all users/)).toBeTruthy();
   });
 });

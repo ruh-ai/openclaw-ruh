@@ -2,11 +2,38 @@
 
 import Image from "next/image";
 import { useWizard } from "./WizardContext";
-import { TemplatePicker } from "./TemplatePicker";
+import { TemplatePicker, type BackendTemplateFull } from "./TemplatePicker";
 import { toast } from "sonner";
+import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
+import type { ArchitecturePlan } from "@/lib/openclaw/types";
+
+/** Convert the simpler backend template plan to the full ArchitecturePlan shape. */
+function toArchitecturePlan(
+  backendPlan: BackendTemplateFull["architecturePlan"],
+): ArchitecturePlan {
+  return {
+    soulContent: backendPlan.soulContent,
+    skills: backendPlan.skills.map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: "",
+      dependencies: [],
+      envVars: [],
+      skillMd: s.skill_md,
+    })),
+    workflow: { steps: backendPlan.skills.map((s) => ({ skillId: s.id, parallel: false })) },
+    integrations: [],
+    triggers: backendPlan.triggers.map((t) => ({ id: t, type: "manual" as const, config: "", description: t })),
+    channels: [],
+    envVars: [],
+    subAgents: [],
+    missionControl: null,
+  };
+}
 
 export function PhasePurpose() {
   const { state, applyTemplate, clearTemplate, updatePurpose } = useWizard();
+  const setArchitecturePlan = useCoPilotStore((s) => s.setArchitecturePlan);
 
   return (
     <div className="flex-1 overflow-y-auto px-6 md:px-8 py-6">
@@ -29,8 +56,11 @@ export function PhasePurpose() {
         {/* Template picker */}
         <TemplatePicker
           selectedId={state.templateId}
-          onSelect={(template) => {
+          onSelect={(template, backendPlan) => {
             applyTemplate(template);
+            if (backendPlan) {
+              setArchitecturePlan(toArchitecturePlan(backendPlan));
+            }
             toast.success(`Template applied: ${template.name}`);
           }}
           onBlankSlate={() => {

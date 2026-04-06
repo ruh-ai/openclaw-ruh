@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { withConn } from '../db';
 import { httpError } from '../utils';
+import { getEffectiveQueueJobStatus } from '../queueJobState';
 
 export interface QueueJob {
   id: string;
@@ -23,6 +24,11 @@ export interface QueueJob {
 }
 
 function serialize(row: Record<string, unknown>): QueueJob {
+  const rawQueueStatus = String(row.status);
+  const effectiveStatus = typeof row.effective_status === 'string'
+    ? String(row.effective_status)
+    : getEffectiveQueueJobStatus(rawQueueStatus, typeof row.task_status === 'string' ? String(row.task_status) : null);
+
   return {
     id: String(row.id),
     queueName: String(row.queue_name),
@@ -30,7 +36,7 @@ function serialize(row: Record<string, unknown>): QueueJob {
     taskLogId: row.task_log_id ? String(row.task_log_id) : null,
     agentName: row.agent_name ? String(row.agent_name) : null,
     priority: Number(row.priority ?? 5),
-    status: String(row.status),
+    status: effectiveStatus,
     source: String(row.source ?? 'api'),
     prompt: row.prompt ? String(row.prompt) : null,
     resultJson: row.result_json ?? null,
@@ -105,7 +111,19 @@ export async function updateQueueJob(id: string, patch: {
 
 export async function getQueueJob(id: string): Promise<QueueJob> {
   return withConn(async (client) => {
-    const result = await client.query('SELECT * FROM queue_jobs WHERE id = $1', [id]);
+    const result = await client.query(`
+      SELECT
+        q.*,
+        t.status as task_status,
+        CASE
+          WHEN q.status IN ('waiting', 'active') AND t.status = 'completed' THEN 'completed'
+          WHEN q.status IN ('waiting', 'active') AND t.status = 'failed' THEN 'failed'
+          ELSE q.status
+        END as effective_status
+      FROM queue_jobs q
+      LEFT JOIN task_logs t ON t.id = q.task_log_id
+      WHERE q.id = $1
+    `, [id]);
     if (!result.rows[0]) throw httpError(404, 'Queue job not found');
     return serialize(result.rows[0]);
   });
@@ -125,7 +143,7 @@ export async function listQueueJobs(filters?: {
     let idx = 1;
 
     if (filters?.queueName) { conditions.push(`queue_name = $${idx++}`); params.push(filters.queueName); }
-    if (filters?.status) { conditions.push(`status = $${idx++}`); params.push(filters.status); }
+    if (filters?.status) { conditions.push(`effective_status = $${idx++}`); params.push(filters.status); }
     if (filters?.agentName) { conditions.push(`agent_name = $${idx++}`); params.push(filters.agentName); }
     if (filters?.source) { conditions.push(`source = $${idx++}`); params.push(filters.source); }
 
@@ -133,11 +151,29 @@ export async function listQueueJobs(filters?: {
     const limit = filters?.limit ?? 50;
     const offset = filters?.offset ?? 0;
 
-    const countResult = await client.query(`SELECT COUNT(*) FROM queue_jobs ${where}`, params);
+    const cte = `
+      WITH queue_jobs_view AS (
+        SELECT
+          q.*,
+          t.status as task_status,
+          CASE
+            WHEN q.status IN ('waiting', 'active') AND t.status = 'completed' THEN 'completed'
+            WHEN q.status IN ('waiting', 'active') AND t.status = 'failed' THEN 'failed'
+            ELSE q.status
+          END as effective_status
+        FROM queue_jobs q
+        LEFT JOIN task_logs t ON t.id = q.task_log_id
+      )
+    `;
+
+    const countResult = await client.query(`${cte} SELECT COUNT(*) FROM queue_jobs_view ${where}`, params);
     const total = parseInt(String(countResult.rows[0].count), 10);
 
     const result = await client.query(
-      `SELECT * FROM queue_jobs ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      `${cte}
+       SELECT * FROM queue_jobs_view ${where}
+       ORDER BY created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset],
     );
 
@@ -148,13 +184,24 @@ export async function listQueueJobs(filters?: {
 export async function getQueueStats(): Promise<Record<string, { waiting: number; active: number; completed: number; failed: number }>> {
   return withConn(async (client) => {
     const result = await client.query(`
+      WITH queue_jobs_view AS (
+        SELECT
+          q.queue_name,
+          CASE
+            WHEN q.status IN ('waiting', 'active') AND t.status = 'completed' THEN 'completed'
+            WHEN q.status IN ('waiting', 'active') AND t.status = 'failed' THEN 'failed'
+            ELSE q.status
+          END as effective_status
+        FROM queue_jobs q
+        LEFT JOIN task_logs t ON t.id = q.task_log_id
+      )
       SELECT
         queue_name,
-        COUNT(*) FILTER (WHERE status = 'waiting') as waiting,
-        COUNT(*) FILTER (WHERE status = 'active') as active,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(*) FILTER (WHERE status = 'failed') as failed
-      FROM queue_jobs
+        COUNT(*) FILTER (WHERE effective_status = 'waiting') as waiting,
+        COUNT(*) FILTER (WHERE effective_status = 'active') as active,
+        COUNT(*) FILTER (WHERE effective_status = 'completed') as completed,
+        COUNT(*) FILTER (WHERE effective_status = 'failed') as failed
+      FROM queue_jobs_view
       GROUP BY queue_name
     `);
 

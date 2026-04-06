@@ -4,8 +4,8 @@ process.env.JWT_ACCESS_SECRET = 'test-access-secret-32chars-min!!';
 process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-32chars-min!';
 process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
 
-const { signAccessToken } = await import('../../../src/auth/tokens');
-const { requireAuth, optionalAuth, requireRole } = await import('../../../src/auth/middleware');
+const { signAccessToken } = await import('../../../src/auth/tokens.ts?authMiddlewareUnit');
+const { requireAuth, optionalAuth, requireRole } = await import('../../../src/auth/middleware.ts?authMiddlewareUnit');
 
 function mockReq(headers: Record<string, string> = {}): any {
   return { headers, user: undefined };

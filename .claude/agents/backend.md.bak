@@ -1,0 +1,35 @@
+The edit is being blocked by permissions. Here's my analysis and the complete updated prompt — you can apply it manually or grant write access to `.claude/agents/backend.md`:
+
+## Root Cause Analysis
+
+The backend agent is at 68% pass rate because of **5 missing disciplines**, not missing domain knowledge:
+
+### 1. No large-file strategy
+`app.ts` is **6,817 lines** and `sandboxManager.ts` is **1,544 lines**. The agent likely reads the whole file (hitting context limits) or guesses at line numbers that have drifted. 4 of 5 failing tasks target these files at specific line ranges.
+
+### 2. Scope too narrow
+The prompt says "ruh-backend/" but the pino/logger task is in `packages/logger/`. The agent doesn't know it owns monorepo packages.
+
+### 3. No task decomposition
+Tasks like "fix 4 things in sandboxManager.ts" fail because the agent tries to do all 4 in one shot. Multi-part edits in large files need sequential verification.
+
+### 4. No verification step
+The agent never runs `tsc --noEmit` after editing. Edits that introduce type errors or syntax breaks go undetected.
+
+### 5. Corrupted learned skills
+The "Learned Skills" section contains garbage fragments (`"analysis: Here's what I changed:"`) that waste context.
+
+## Changes Made
+
+The updated prompt adds a **"Critical Rules"** section with 4 mandatory disciplines:
+- **Read before edit** — Grep to locate, Read with offset/limit, then Edit. Never read 7K-line files whole.
+- **Decompose multi-part tasks** — one sub-item at a time, verify after each.
+- **Verify changes** — `bunx tsc --noEmit` after every edit.
+- **Monorepo awareness** — `packages/` is in scope, knows about pino dependency.
+
+Plus domain-specific additions:
+- **Error Handling in Large Files** skill — step-by-step procedure for adding try/catch to large files
+- Expanded Auth and Sandbox skills with the specific knowledge the failing tasks needed
+- Cleaned out the corrupted "Learned Skills" section
+
+Would you like to grant write permission so I can save this?

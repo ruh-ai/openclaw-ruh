@@ -5,7 +5,6 @@
  */
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
-import { request } from '../helpers/app';
 import { makeSandboxRecord } from '../helpers/fixtures';
 
 // ── Fake data ────────────────────────────────────────────────────────────────
@@ -40,6 +39,7 @@ function makeFakeOrg(overrides: Record<string, unknown> = {}) {
     slug: 'contract-org',
     kind: 'customer',
     plan: 'free',
+    status: 'active',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -59,6 +59,16 @@ let usersById = new Map<string, ReturnType<typeof makeFakeUser>>();
 let orgsById = new Map<string, ReturnType<typeof makeFakeOrg>>();
 let memberships: Array<Record<string, unknown>> = [];
 let sessionsByRefreshToken = new Map<string, Record<string, unknown>>();
+
+function withActiveOrgStatus(membership: Record<string, unknown>) {
+  return {
+    ...membership,
+    organizationStatus:
+      membership.organizationStatus
+      ?? orgsById.get(String(membership.orgId ?? ''))?.status
+      ?? 'active',
+  };
+}
 
 mock.module('../../src/userStore', () => ({
   getUserByEmail: mockGetUserByEmail,
@@ -149,17 +159,39 @@ mock.module('../../src/store', () => ({
 
 mock.module('../../src/conversationStore', () => ({
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversations: mock(async () => []),
+  listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   appendMessages: mock(async () => true),
   renameConversation: mock(async () => true),
   deleteConversation: mock(async () => true),
   getMessages: mock(async () => []),
+  getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
   initDb: mock(async () => {}),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: mock((sandboxId: string) => `openclaw-${sandboxId}`),
+  PREVIEW_PORTS: [],
+  reconfigureSandboxLlm: mock(async () => ({
+    configPath: '/tmp/config.json',
+    configuredModel: 'openai/gpt-5.1',
+    healthStatus: 'healthy',
+    result: 'success',
+  })),
+  restartGateway: mock(async () => {}),
+  retrofitSandboxToSharedCodex: mock(async () => ({
+    success: true,
+    runtimePath: '/workspace/.codex',
+    codexHome: '/workspace/.codex/home',
+  })),
+  sandboxExec: mock(async () => [0, '']),
+  stopAndRemoveContainer: mock(async () => {}),
+  waitForGateway: mock(async () => true),
 }));
 
 mock.module('axios', () => ({
@@ -168,7 +200,13 @@ mock.module('axios', () => ({
   post: mock(async () => ({})),
 }));
 
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 // ─────────────────────────────────────────────────────────────────────────────
+
+const { request } = await import('../helpers/app.ts?contractAuthEndpoints');
 
 beforeEach(() => {
   const baseUser = makeFakeUser();
@@ -240,11 +278,15 @@ beforeEach(() => {
     return membership;
   });
   mockListMembershipsForUser.mockImplementation(async (userId: string) =>
-    memberships.filter((membership) => membership.userId === userId),
+    memberships
+      .filter((membership) => membership.userId === userId)
+      .map(withActiveOrgStatus),
   );
-  mockGetMembershipForUserOrg.mockImplementation(async (userId: string, orgId: string) =>
-    memberships.find((membership) => membership.userId === userId && membership.orgId === orgId) ?? null,
-  );
+  mockGetMembershipForUserOrg.mockImplementation(async (userId: string, orgId: string) => {
+    const membership =
+      memberships.find((record) => record.userId === userId && record.orgId === orgId) ?? null;
+    return membership ? withActiveOrgStatus(membership) : null;
+  });
 
   mockCreateSession.mockImplementation(async (
     userId: string,
@@ -795,10 +837,10 @@ describe('GET /api/auth/me — response contract', () => {
 describe('Auth error responses — shape contract', () => {
   test('route-level errors include a detail string', async () => {
     // httpError errors go through the Express error handler which returns { detail }
-    const responses = await Promise.all([
-      request().post('/api/auth/register').send({}),
-      request().post('/api/auth/login').send({}),
-    ]);
+    const responses = [
+      await request().post('/api/auth/register').send({ email: '', password: '' }),
+      await request().post('/api/auth/login').send({ email: '', password: '' }),
+    ];
 
     for (const res of responses) {
       expect(res.status).toBeGreaterThanOrEqual(400);

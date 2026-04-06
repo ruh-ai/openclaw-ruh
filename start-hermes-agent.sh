@@ -15,4 +15,4 @@ fi
 echo "[hermes] Starting Claude Code with Hermes agent (skip-permissions mode)..."
 cd "$SCRIPT_DIR"
 
-claude --agent .claude/agents/hermes.md --dangerously-skip-permissions "$@"
+claude --agent .claude/agents/hermes.md --dangerously-skip-permissions --remote-control "$@"

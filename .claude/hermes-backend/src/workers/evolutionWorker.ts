@@ -1,5 +1,4 @@
 import { Worker, type Job } from 'bullmq';
-import { spawn } from 'bun';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,6 +7,7 @@ import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type EvolutionJobData, type FactoryJobData, type IngestionJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
 import { query } from '../db';
+import { spawnAgentProcess } from './subprocess';
 
 /**
  * Query agent performance trends from PostgreSQL.
@@ -197,7 +197,7 @@ async function refineAgent(agentName: string, failureContext?: string): Promise<
     .map(r => `- Task: ${r.description}\n  Error: ${r.error || 'none'}`)
     .join('\n');
 
-  // Spawn Claude (hermes) to analyze and propose refinement
+  // Spawn the selected runner (using Hermes) to analyze and propose refinement
   const refinementPrompt = `You are analyzing agent "${agentName}" which has been failing.
 
 ## Current Agent Prompt
@@ -219,20 +219,19 @@ ${failureContext || 'None'}
 Be surgical — add the minimum instructions needed to prevent these specific failures. Do not remove existing instructions.`;
 
   const hermesPath = path.join(config.agentsDir, 'hermes.md');
-  const proc = spawn({
-    cmd: [config.claudeCliPath, '--agent', hermesPath, '--print', '--dangerously-skip-permissions'],
-    stdin: new Blob([refinementPrompt]),
-    stdout: 'pipe',
-    stderr: 'pipe',
-    cwd: config.projectRoot,
+  const result = await spawnAgentProcess({
+    jobId: `refine-${agentName}-${uuidv4().slice(0, 8)}`,
+    agentPath: hermesPath,
+    prompt: refinementPrompt,
+    timeout: config.executionTimeout,
+    dangerouslySkipPermissions: true,
   });
 
-  const exitCode = await proc.exited;
-  const output = await new Response(proc.stdout).text();
-
-  if (exitCode !== 0 || !output.trim()) {
-    return { refined: false, reason: 'Refinement subprocess failed' };
+  if (!result.success || !result.stdout.trim()) {
+    return { refined: false, reason: result.stderr || 'Refinement subprocess failed' };
   }
+
+  const output = result.stdout;
 
   // Backup and write the refined prompt
   const backupPath = `${agentPath}.bak`;

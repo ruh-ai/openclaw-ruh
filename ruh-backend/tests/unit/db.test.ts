@@ -48,7 +48,7 @@ mock.module('pg', () => ({
   },
 }));
 
-const db = await import('../../src/db');
+const db = await import('../../src/db?unitDb');
 
 describe('db connection helper', () => {
   beforeEach(() => {

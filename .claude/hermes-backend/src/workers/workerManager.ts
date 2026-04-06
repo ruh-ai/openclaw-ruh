@@ -14,6 +14,16 @@ import * as goalStore from '../stores/goalStore';
 import * as scheduledTaskStore from '../stores/scheduledTaskStore';
 import { publish } from '../eventBus';
 
+export async function shouldRunBuiltInSchedule(scheduleName: string): Promise<boolean> {
+  try {
+    const schedule = await scheduledTaskStore.getScheduledTaskByName(scheduleName);
+    return schedule?.enabled ?? true;
+  } catch (err) {
+    console.warn(`[hermes:workers] Could not read built-in schedule "${scheduleName}", defaulting to enabled`, err);
+    return true;
+  }
+}
+
 export class WorkerManager {
   private workerMap = new Map<string, Worker>();
   private running = false;
@@ -197,6 +207,11 @@ export class WorkerManager {
   private _registerAnalystSweep(intervalMs: number): void {
     const sweep = async () => {
       try {
+        if (!(await shouldRunBuiltInSchedule('analyst-sweep'))) {
+          console.log('[hermes:workers] Analyst sweep skipped because the schedule is disabled');
+          return;
+        }
+
         const goals = await goalStore.listGoals({ status: 'active', limit: 50 });
         const analystQueue = getQueue(QUEUE_NAMES.ANALYST);
 
@@ -232,6 +247,11 @@ export class WorkerManager {
   private _registerStrategist(intervalMs: number): void {
     const run = async () => {
       try {
+        if (!(await shouldRunBuiltInSchedule('strategist-assessment'))) {
+          console.log('[hermes:workers] Strategist skipped because the schedule is disabled');
+          return;
+        }
+
         const { runStrategist } = await import('./strategistWorker');
         const result = await runStrategist();
         console.log(`[hermes:workers] Strategist: "${result.assessment.slice(0, 80)}..." — ${result.goalsCreated} goals, ${result.followups} follow-ups`);

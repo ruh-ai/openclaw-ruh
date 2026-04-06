@@ -189,6 +189,70 @@ describe('upsertOrgEntitlement', () => {
     expect(entitlement.seatCapacity).toBe(10);
     expect((mockQuery.mock.calls[1]?.[0] as string)).toContain('INSERT INTO org_entitlements');
   });
+
+  test('updates an existing org entitlement when the org/listing/model tuple already exists', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ id: 'ent-existing-1' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'ent-existing-1',
+          org_id: 'org-1',
+          listing_id: 'listing-1',
+          billing_customer_id: 'bc-1',
+          billing_subscription_id: 'bs-1',
+          billing_model: 'subscription',
+          billing_status: 'grace_period',
+          entitlement_status: 'override_active',
+          seat_capacity: 15,
+          seat_in_use: 4,
+          grace_ends_at: '2026-04-30T00:00:00Z',
+          access_starts_at: '2026-04-02T00:00:00Z',
+          access_ends_at: '2026-05-02T00:00:00Z',
+          created_at: '2026-04-02T00:00:00Z',
+          updated_at: '2026-04-03T00:00:00Z',
+        }],
+        rowCount: 1,
+      });
+
+    const entitlement = await billingStore.upsertOrgEntitlement({
+      orgId: 'org-1',
+      listingId: 'listing-1',
+      billingCustomerId: 'bc-1',
+      billingSubscriptionId: 'bs-1',
+      billingModel: 'subscription',
+      billingStatus: 'grace_period',
+      entitlementStatus: 'override_active',
+      seatCapacity: 15,
+      seatInUse: 4,
+      graceEndsAt: '2026-04-30T00:00:00Z',
+      accessStartsAt: '2026-04-02T00:00:00Z',
+      accessEndsAt: '2026-05-02T00:00:00Z',
+    });
+
+    expect(entitlement.id).toBe('ent-existing-1');
+    expect(entitlement.billingStatus).toBe('grace_period');
+    expect(entitlement.entitlementStatus).toBe('override_active');
+    expect((mockQuery.mock.calls[0]?.[0] as string)).toContain('WHERE org_id = $1 AND listing_id = $2 AND billing_model = $3');
+    expect((mockQuery.mock.calls[1]?.[0] as string)).toContain('UPDATE org_entitlements');
+    expect(mockQuery.mock.calls[1]?.[1]).toEqual([
+      'ent-existing-1',
+      'org-1',
+      'listing-1',
+      'bc-1',
+      'bs-1',
+      'subscription',
+      'grace_period',
+      'override_active',
+      15,
+      4,
+      '2026-04-30T00:00:00Z',
+      '2026-04-02T00:00:00Z',
+      '2026-05-02T00:00:00Z',
+    ]);
+  });
 });
 
 describe('createOrgEntitlementOverride', () => {
@@ -254,5 +318,56 @@ describe('listOrgBillingSummary', () => {
     expect(summary.entitlements).toEqual([]);
     expect(summary.overrides).toEqual([]);
     expect(summary.events).toEqual([]);
+  });
+});
+
+describe('recordBillingEvent', () => {
+  test('persists a billing event with default status and serialized payload', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 'billing-test-uuid',
+        org_id: 'org-1',
+        entitlement_id: 'ent-1',
+        source: 'stripe',
+        event_type: 'invoice.payment_failed',
+        status: 'received',
+        stripe_event_id: 'evt_123',
+        payload: { invoiceId: 'in_123', attempts: 2 },
+        created_at: '2026-04-02T00:00:00Z',
+      }],
+      rowCount: 1,
+    });
+
+    const event = await billingStore.recordBillingEvent({
+      orgId: 'org-1',
+      entitlementId: 'ent-1',
+      source: 'stripe',
+      eventType: 'invoice.payment_failed',
+      stripeEventId: 'evt_123',
+      payload: { invoiceId: 'in_123', attempts: 2 },
+    });
+
+    expect(event).toEqual({
+      id: 'billing-test-uuid',
+      orgId: 'org-1',
+      entitlementId: 'ent-1',
+      source: 'stripe',
+      eventType: 'invoice.payment_failed',
+      status: 'received',
+      stripeEventId: 'evt_123',
+      payload: { invoiceId: 'in_123', attempts: 2 },
+      createdAt: '2026-04-02T00:00:00Z',
+    });
+    expect((mockQuery.mock.calls[0]?.[0] as string)).toContain('INSERT INTO billing_events');
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual([
+      'billing-test-uuid',
+      'org-1',
+      'ent-1',
+      'stripe',
+      'invoice.payment_failed',
+      'received',
+      'evt_123',
+      JSON.stringify({ invoiceId: 'in_123', attempts: 2 }),
+    ]);
   });
 });

@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem } from "@/lib/openclaw/copilot-state";
+import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem, type PlanActivityItem } from "@/lib/openclaw/copilot-state";
 import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
 import {
   Lightbulb,
@@ -1145,27 +1145,62 @@ const PLAN_MILESTONES = [
   { id: "assemble", label: "Assemble", icon: Target },
 ] as const;
 
-function PlanActivityPanel() {
+function PlanActivityPanel({
+  planActivity,
+  planStep,
+}: {
+  planActivity: PlanActivityItem[];
+  planStep?: string;
+}) {
   const elapsed = useElapsedTime(true);
+  const feedRef = useRef<HTMLDivElement>(null);
 
-  // Time-based milestone progression
+  // Auto-scroll feed
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+  }, [planActivity.length]);
+
+  // Determine active milestone — prefer real planStep, fall back to time
+  const MILESTONE_MAP: Record<string, number> = {
+    skills: 1, workflow: 2, data: 3, api: 3, dashboard: 4, envvars: 4, complete: 5,
+  };
   let activeMilestone = 0;
-  if (elapsed >= 55) activeMilestone = 5;
-  else if (elapsed >= 35) activeMilestone = 4;
-  else if (elapsed >= 25) activeMilestone = 3;
-  else if (elapsed >= 15) activeMilestone = 2;
-  else if (elapsed >= 8) activeMilestone = 1;
+  if (planStep && planStep !== "idle" && MILESTONE_MAP[planStep] !== undefined) {
+    activeMilestone = MILESTONE_MAP[planStep];
+  } else if (planActivity.length > 0) {
+    // Derive from last activity event
+    const lastType = planActivity[planActivity.length - 1].type;
+    const typeMap: Record<string, number> = {
+      skills: 1, workflow: 2, data_schema: 3, api_endpoints: 3, dashboard_pages: 4, env_vars: 4, complete: 5,
+    };
+    activeMilestone = typeMap[lastType] ?? 0;
+  } else {
+    // Time-based fallback
+    if (elapsed >= 55) activeMilestone = 5;
+    else if (elapsed >= 35) activeMilestone = 4;
+    else if (elapsed >= 25) activeMilestone = 3;
+    else if (elapsed >= 15) activeMilestone = 2;
+    else if (elapsed >= 8) activeMilestone = 1;
+  }
 
   const maxMilestoneRef = useRef(0);
   if (activeMilestone > maxMilestoneRef.current) maxMilestoneRef.current = activeMilestone;
   const maxReached = maxMilestoneRef.current;
 
-  let currentPhase = PLAN_PHASES[0];
-  for (const phase of PLAN_PHASES) {
-    if (elapsed >= phase.at) currentPhase = phase;
+  // Phase label — use real activity or time-based
+  const lastActivity = planActivity.length > 0 ? planActivity[planActivity.length - 1] : null;
+  let displayLabel = "Analyzing requirements documents...";
+  if (lastActivity) {
+    displayLabel = lastActivity.label;
+  } else {
+    for (const phase of PLAN_PHASES) {
+      if (elapsed >= phase.at) displayLabel = phase.label;
+    }
   }
 
-  const { Svg } = currentPhase;
+  // Stats
+  const totalDecisions = planActivity.length;
+  const skillCount = planActivity.find((a) => a.type === "skills")?.count ?? 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -1213,13 +1248,11 @@ function PlanActivityPanel() {
         </div>
       </div>
 
-      {/* ── Hero: Animation + Current Action ──────────────────── */}
-      <div className="shrink-0 flex flex-col items-center gap-2 px-4 pb-2">
-        <div key={currentPhase.at} className="typewriter-word">
-          <Svg />
-        </div>
-        <p key={currentPhase.label} className="text-xs font-satoshi-medium text-[var(--text-secondary)] typewriter-word text-center">
-          {currentPhase.label}
+      {/* ── Current Action Label ──────────────────────────────── */}
+      <div className="shrink-0 flex items-center justify-center gap-2 px-4 py-3">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--primary)]" />
+        <p className="text-xs font-satoshi-medium text-[var(--text-secondary)] text-center">
+          {displayLabel}
         </p>
       </div>
 
@@ -1228,16 +1261,20 @@ function PlanActivityPanel() {
         <div className="flex items-center gap-1.5">
           <Map className="h-3 w-3 text-[var(--primary)]" />
           <span className="text-[10px] font-mono text-[var(--text-secondary)]">
-            architecture
+            {totalDecisions} decision{totalDecisions !== 1 ? "s" : ""}
           </span>
         </div>
-        <div className="w-px h-3 bg-[var(--border-stroke)]" />
-        <div className="flex items-center gap-1.5">
-          <Compass className="h-3 w-3 text-[var(--primary)]" />
-          <span className="text-[10px] font-mono text-[var(--text-secondary)]">
-            {maxReached}/{PLAN_MILESTONES.length} areas
-          </span>
-        </div>
+        {skillCount > 0 && (
+          <>
+            <div className="w-px h-3 bg-[var(--border-stroke)]" />
+            <div className="flex items-center gap-1.5">
+              <Zap className="h-3 w-3 text-[var(--primary)]" />
+              <span className="text-[10px] font-mono text-[var(--text-secondary)]">
+                {skillCount} skill{skillCount !== 1 ? "s" : ""}
+              </span>
+            </div>
+          </>
+        )}
         <div className="w-px h-3 bg-[var(--border-stroke)]" />
         <div className="flex items-center gap-1.5">
           <Timer className="h-3 w-3 text-[var(--text-tertiary)]" />
@@ -1247,17 +1284,39 @@ function PlanActivityPanel() {
         </div>
       </div>
 
-      {/* ── Status Feed ──────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
-        <div className="flex items-center gap-2 py-2 text-[10px] text-[var(--text-tertiary)]">
-          <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
-          <span className="text-[10px] font-mono text-[var(--primary)]">
-            The architect is designing skills, integrations, and triggers from your requirements...
-          </span>
-        </div>
-        <p className="text-[10px] font-mono text-[var(--text-tertiary)] pl-5">
-          Usually takes 20–60 seconds
-        </p>
+      {/* ── Live Activity Feed ────────────────────────────────── */}
+      <div ref={feedRef} className="flex-1 overflow-y-auto px-4 py-2 space-y-1.5">
+        {planActivity.length === 0 ? (
+          <div className="flex items-center gap-2 py-2">
+            <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
+            <span className="text-[10px] font-mono text-[var(--primary)]">
+              Waiting for architect decisions...
+            </span>
+          </div>
+        ) : (
+          planActivity.map((item) => {
+            const iconMap: Record<string, typeof Zap> = {
+              skills: Zap, workflow: GitBranch, data_schema: Database,
+              api_endpoints: Wrench, dashboard_pages: Compass, env_vars: Lock, complete: Target,
+            };
+            const Icon = iconMap[item.type] ?? Compass;
+            return (
+              <div key={item.id} className="flex items-start gap-2 py-1 stage-enter">
+                <Icon className="h-3 w-3 text-[var(--primary)] shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[10px] font-satoshi-medium text-[var(--text-primary)]">
+                    {item.label}
+                  </p>
+                  {item.count > 0 && (
+                    <p className="text-[9px] font-mono text-[var(--text-tertiary)]">
+                      {item.count} item{item.count !== 1 ? "s" : ""}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -1631,6 +1690,7 @@ export function LifecycleStepRenderer({
           <StageThinkPlaceholder
             store={store}
             onDiscoveryComplete={onDiscoveryComplete}
+            sandboxId={store.agentSandboxId}
           />
         )}
         {devStage === "plan" && (
@@ -1717,6 +1777,7 @@ export function LifecycleStepRenderer({
         {devStage === "ship" && (
           <StageShip
             store={store}
+            agentId={agentId}
             onComplete={onComplete}
             canComplete={canComplete}
             isCompleting={isCompleting}
@@ -1751,15 +1812,81 @@ export function LifecycleStepRenderer({
 function StageThinkPlaceholder({
   store,
   onDiscoveryComplete,
+  sandboxId,
 }: {
   store: CoPilotState & CoPilotActions;
   onDiscoveryComplete?: () => void;
+  sandboxId?: string | null;
 }) {
   // While generating, show the animated Think activity panel instead of a
   // static "Preparing documents..." text box.
   if (store.thinkStatus === "generating") {
     return <ThinkActivityPanel thinkActivity={store.thinkActivity} thinkStep={store.thinkStep} researchFindings={store.researchFindings} />;
   }
+
+  // New XML flow: workspace paths are set but in-memory documents are not.
+  // Read the files from workspace and hydrate discoveryDocuments so StepDiscovery
+  // can show the full PRD/TRD with tabs, editing, and the original approval UI.
+  const hasWorkspaceDocs = store.prdPath && store.trdPath;
+  const [loadingDocs, setLoadingDocs] = useState(false);
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      store.thinkStatus === "ready" &&
+      hasWorkspaceDocs &&
+      !store.discoveryDocuments &&
+      !loadingDocs &&
+      !hydratedRef.current
+    ) {
+      hydratedRef.current = true;
+      setLoadingDocs(true);
+
+      // Read PRD and TRD from the workspace and parse into DiscoveryDocuments
+      import("@/lib/openclaw/workspace-writer").then(({ readWorkspaceFile }) => {
+        const effectiveSandboxId = sandboxId || store.agentSandboxId;
+        if (!effectiveSandboxId) { setLoadingDocs(false); return; }
+
+        Promise.all([
+          readWorkspaceFile(effectiveSandboxId, store.prdPath!),
+          readWorkspaceFile(effectiveSandboxId, store.trdPath!),
+        ]).then(([prdContent, trdContent]) => {
+          if (prdContent && trdContent) {
+            // Parse markdown into sections (split by ## headings)
+            const parseSections = (md: string) => {
+              const lines = md.split("\n");
+              const title = lines[0]?.replace(/^#\s+/, "") ?? "Document";
+              const sections: Array<{ heading: string; content: string }> = [];
+              let currentHeading = "";
+              let currentContent: string[] = [];
+
+              for (const line of lines.slice(1)) {
+                if (line.startsWith("## ")) {
+                  if (currentHeading) {
+                    sections.push({ heading: currentHeading, content: currentContent.join("\n").trim() });
+                  }
+                  currentHeading = line.replace(/^##\s+/, "");
+                  currentContent = [];
+                } else {
+                  currentContent.push(line);
+                }
+              }
+              if (currentHeading) {
+                sections.push({ heading: currentHeading, content: currentContent.join("\n").trim() });
+              }
+              return { title, sections };
+            };
+
+            store.setDiscoveryDocuments({
+              prd: parseSections(prdContent),
+              trd: parseSections(trdContent),
+            });
+          }
+          setLoadingDocs(false);
+        }).catch(() => setLoadingDocs(false));
+      }).catch(() => setLoadingDocs(false));
+    }
+  }, [store.thinkStatus, hasWorkspaceDocs, store.discoveryDocuments, loadingDocs, sandboxId, store.agentSandboxId, store.prdPath, store.trdPath, store]);
 
   // Once documents are ready (or idle/error), delegate to StepDiscovery.
   const effectiveStatus = store.discoveryDocuments ? "ready" as const
@@ -1799,13 +1926,30 @@ function StagePlan({
   store: CoPilotState & CoPilotActions;
   onPlanApproved?: () => void;
 }) {
-  const plan = store.architecturePlan;
+  const rawPlan = store.architecturePlan;
   const status = store.planStatus;
 
-  // Waiting for architect to generate the plan — show the full activity panel
+  // Defensive: normalize plan fields to prevent crashes from missing arrays
+  const plan = rawPlan ? {
+    ...rawPlan,
+    skills: rawPlan.skills ?? [],
+    workflow: rawPlan.workflow ?? { steps: [] },
+    integrations: rawPlan.integrations ?? [],
+    triggers: rawPlan.triggers ?? [],
+    channels: rawPlan.channels ?? [],
+    envVars: rawPlan.envVars ?? [],
+    subAgents: rawPlan.subAgents ?? [],
+    missionControl: rawPlan.missionControl ?? null,
+    dataSchema: rawPlan.dataSchema ?? null,
+    apiEndpoints: rawPlan.apiEndpoints ?? [],
+    dashboardPages: rawPlan.dashboardPages ?? [],
+    vectorCollections: rawPlan.vectorCollections ?? [],
+  } : null;
+
+  // Waiting for architect to generate the plan — show the live activity panel
   const planLoading = status === "generating" || (status === "idle" && !plan);
   if (planLoading) {
-    return <PlanActivityPanel />;
+    return <PlanActivityPanel planActivity={store.planActivity} planStep={store.planStep} />;
   }
 
   // Plan generation failed — show error with retry
@@ -3585,11 +3729,13 @@ const SHIP_STEPS: ShipStepConfig[] = [
 
 function StageShip({
   store,
+  agentId,
   onComplete,
   canComplete = false,
   isCompleting = false,
 }: {
   store: CoPilotState & CoPilotActions;
+  agentId?: string | null;
   onComplete?: () => void | Promise<boolean>;
   canComplete?: boolean;
   isCompleting?: boolean;
@@ -3724,84 +3870,25 @@ function StageShip({
 
     setStepStatuses((prev) => ({ ...prev, github: "running" }));
     try {
-      const [owner, repoName] = githubRepo.includes("/")
-        ? [githubRepo.split("/")[0], githubRepo.split("/").slice(1).join("/")]
-        : [ghUserRef.current?.login ?? "", githubRepo];
+      const token = ghTokenRef.current;
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-      // Build agent files for the repo
-      const files: Array<{ path: string; content: string }> = [];
-
-      // SOUL.md
-      files.push({
-        path: "SOUL.md",
-        content: [
-          `# ${store.name || "Agent"}`,
-          "",
-          store.description ? `> ${store.description}` : "",
-          "",
-          "## Rules",
-          ...store.agentRules.map((r) => `- ${r}`),
-          "",
-          "## Skills",
-          ...(store.skillGraph ?? []).map((s) => `- **${s.name}**: ${s.description ?? ""}`),
-        ].join("\n"),
-      });
-
-      // Skill files
-      for (const node of store.skillGraph ?? []) {
-        if (node.skill_md) {
-          files.push({ path: `skills/${node.skill_id}/SKILL.md`, content: node.skill_md });
-        }
+      if (!agentId) {
+        throw new Error("No agent ID — cannot ship.");
       }
 
-      // Config
-      files.push({
-        path: ".openclaw/config.yml",
-        content: JSON.stringify({
-          name: store.name,
-          description: store.description,
-          skills: (store.skillGraph ?? []).map((s) => s.skill_id),
-          triggers: store.triggers.map((t) => ({ id: t.id, kind: t.kind, title: t.title })),
-          channels: store.channels.map((c) => c.kind),
-          runtimeInputs: store.runtimeInputs.map((r) => ({
-            key: r.key, required: r.required, label: r.label,
-          })),
-        }, null, 2),
-      });
+      // Ship via persistent repo endpoint.
+      // First ship: creates repo under the token owner's account.
+      // Subsequent ships: pushes to the same repo.
+      console.log("[Ship]", { agentId, repo: githubRepo, tokenPrefix: token?.slice(0, 8) });
 
-      // README
-      files.push({
-        path: "README.md",
-        content: [
-          `# ${store.name || "Agent"}`,
-          "",
-          `> ${store.description || "AI agent built with Ruh.ai"}`,
-          "",
-          "## Structure",
-          "- `SOUL.md` — Agent personality, rules, and mission",
-          "- `skills/` — Agent skills (one directory per skill)",
-          "- `.openclaw/config.yml` — Runtime configuration",
-          "",
-          "## Deploy",
-          "```bash",
-          "openclaw deploy .",
-          "```",
-          "",
-          `Built with [Ruh.ai](https://ruh.ai)`,
-        ].join("\n"),
-      });
-
-      // Push via server-side proxy to avoid CORS issues with GitHub API
-      const pushRes = await fetch("/api/github", {
+      const pushRes = await fetch(`${API_BASE}/api/agents/${agentId}/ship`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          action: "push",
-          token,
-          owner,
-          repoName,
-          agentName: store.name || "Agent",
-          files,
+          githubToken: token,
+          commitMessage: `ship: ${store.name || "agent"} template`,
         }),
       });
       const result = await pushRes.json();
@@ -3811,11 +3898,11 @@ function StageShip({
         setGithubRepoUrl(result.repoUrl);
       } else {
         setStepStatuses((prev) => ({ ...prev, github: "failed" }));
-        setGithubError(result.error ?? "GitHub export failed");
+        setGithubError(result.error ?? "GitHub push failed");
       }
     } catch (err) {
       setStepStatuses((prev) => ({ ...prev, github: "failed" }));
-      setGithubError(err instanceof Error ? err.message : "GitHub export failed");
+      setGithubError(err instanceof Error ? err.message : "GitHub push failed");
     }
 
     store.setDeployStatus("done");

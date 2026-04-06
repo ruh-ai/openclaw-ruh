@@ -10,6 +10,7 @@ import { describe, expect, test, beforeEach } from "bun:test";
 import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
+  getTestStageContainerState,
   getStageInputPlaceholder,
   isLifecycleStageDone,
   isLifecycleStageUnlocked,
@@ -133,6 +134,22 @@ describe("isStageDone", () => {
     expect(isLifecycleStageDone("build", "review")).toBe(true);
     expect(isLifecycleStageDone("review", "review")).toBe(false);
   });
+
+  test("review can be active without auto-marking think, plan, and build done", () => {
+    const statuses = {
+      devStage: "review" as AgentDevStage,
+      thinkStatus: "idle" as StageStatus,
+      planStatus: "idle" as StageStatus,
+      buildStatus: "idle" as StageStatus,
+      evalStatus: "idle" as StageStatus,
+      deployStatus: "idle" as StageStatus,
+    };
+
+    expect(isLifecycleStageDone("think", "review", statuses)).toBe(false);
+    expect(isLifecycleStageDone("plan", "review", statuses)).toBe(false);
+    expect(isLifecycleStageDone("build", "review", statuses)).toBe(false);
+    expect(isLifecycleStageDone("review", "review", statuses)).toBe(false);
+  });
 });
 
 // ─── isAnyStageLoading (stepper guard — fix #16) ─────────────────────────
@@ -152,6 +169,25 @@ describe("isAnyStageLoading", () => {
 
   test("returns true when deploy is running", () => {
     expect(isAnyStageLoading({ ...IDLE_STATUSES, deployStatus: "running" })).toBe(true);
+  });
+});
+
+describe("getTestStageContainerState", () => {
+  test("returns explicit container-not-ready state without a sandbox", () => {
+    const state = getTestStageContainerState(null);
+
+    expect(state.hasRealContainer).toBe(false);
+    expect(state.state).toBe("container-not-ready");
+    expect(state.label).toBe("Container not ready");
+    expect(state.description).toContain("Agent workspace is not ready yet");
+  });
+
+  test("returns ready state when the sandbox exists", () => {
+    const state = getTestStageContainerState("sandbox-123");
+
+    expect(state.hasRealContainer).toBe(true);
+    expect(state.state).toBe("ready");
+    expect(state.label).toBe("Container ready");
   });
 });
 

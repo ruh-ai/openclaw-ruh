@@ -25,8 +25,15 @@ const makeMockState = (overrides = {}) =>
     devStage: "review",
     maxUnlockedDevStage: "review",
     thinkStatus: "approved",
+    userTriggeredThink: false,
+    thinkRunId: "think-run-123",
+    lastDispatchedThinkRunId: "think-run-123",
     planStatus: "approved",
+    userTriggeredPlan: false,
+    planRunId: "plan-run-456",
+    lastDispatchedPlanRunId: "plan-run-456",
     buildStatus: "done",
+    userTriggeredBuild: false,
     evalStatus: "idle",
     deployStatus: "idle",
     architecturePlan: null,
@@ -48,6 +55,8 @@ describe("copilot-lifecycle-cache", () => {
     expect(loaded!.maxUnlockedDevStage).toBe("review");
     expect(loaded!.buildStatus).toBe("done");
     expect(loaded!.thinkStatus).toBe("approved");
+    expect(loaded!.lastDispatchedThinkRunId).toBe("think-run-123");
+    expect(loaded!.lastDispatchedPlanRunId).toBe("plan-run-456");
   });
 
   test("returns null for unknown agent ID", () => {
@@ -64,7 +73,7 @@ describe("copilot-lifecycle-cache", () => {
   test("expired entries (>2h) return null", () => {
     // Manually write an expired entry
     const entry = {
-      version: 1,
+      version: 2,
       timestamp: Date.now() - 3 * 60 * 60 * 1000, // 3 hours ago
       data: { devStage: "ship" },
     };
@@ -85,5 +94,66 @@ describe("copilot-lifecycle-cache", () => {
     };
     storage.set("openclaw-copilot-lifecycle-agent-5", JSON.stringify(entry));
     expect(loadCoPilotLifecycleFromCache("agent-5")).toBeNull();
+  });
+
+  test("sanitizes stale think trigger when think stage is not active", () => {
+    const entry = {
+      version: 4,
+      timestamp: Date.now(),
+      data: {
+        ...makeMockState(),
+        devStage: "plan",
+        thinkStatus: "generating",
+        userTriggeredThink: true,
+        thinkRunId: "think-run-stale",
+        lastDispatchedThinkRunId: null,
+      },
+    };
+    storage.set("openclaw-copilot-lifecycle-agent-6", JSON.stringify(entry));
+
+    const loaded = loadCoPilotLifecycleFromCache("agent-6");
+    expect(loaded?.userTriggeredThink).toBe(false);
+    expect(loaded?.thinkRunId).toBeNull();
+  });
+
+  test("sanitizes stale think trigger when already dispatched", () => {
+    const entry = {
+      version: 4,
+      timestamp: Date.now(),
+      data: {
+        ...makeMockState(),
+        devStage: "think",
+        thinkStatus: "generating",
+        userTriggeredThink: true,
+        thinkRunId: "think-run-123",
+        lastDispatchedThinkRunId: "think-run-123",
+      },
+    };
+    storage.set("openclaw-copilot-lifecycle-agent-7", JSON.stringify(entry));
+
+    const loaded = loadCoPilotLifecycleFromCache("agent-7");
+    expect(loaded?.userTriggeredThink).toBe(false);
+    expect(loaded?.thinkRunId).toBeNull();
+  });
+
+  test("keeps userTriggeredPlan only when plan stage is actively generating and undispatched", () => {
+    const entry = {
+      version: 4,
+      timestamp: Date.now(),
+      data: {
+        ...makeMockState(),
+        devStage: "plan",
+        thinkStatus: "done",
+        planStatus: "generating",
+        userTriggeredPlan: true,
+        planRunId: "plan-run-456",
+        lastDispatchedPlanRunId: null,
+      },
+    };
+    storage.set("openclaw-copilot-lifecycle-agent-8", JSON.stringify(entry));
+
+    const loaded = loadCoPilotLifecycleFromCache("agent-8");
+    expect(loaded?.userTriggeredPlan).toBe(true);
+    expect(loaded?.planRunId).toBe("plan-run-456");
   });
 });

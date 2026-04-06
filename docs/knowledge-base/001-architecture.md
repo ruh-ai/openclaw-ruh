@@ -176,3 +176,4 @@ See [[010-deployment]] for full list. Key ones:
 | `OPENCLAW_GATEWAY_URL` | agent-builder-ui | WebSocket URL for architect agent |
 | `OPENCLAW_GATEWAY_TOKEN` | agent-builder-ui | Auth token for the gateway transport, separate from model auth |
 | `NEXT_PUBLIC_API_URL` | ruh-frontend | Backend URL from browser |
+- [[SPEC-agent-as-project]] — Agent-as-project lifecycle: persistent repo, branch-based improvements, PR-driven reviews

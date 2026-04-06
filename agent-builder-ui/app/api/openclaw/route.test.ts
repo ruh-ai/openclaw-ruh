@@ -16,6 +16,7 @@ const scenario = {
   chatSendParams: [] as Array<Record<string, unknown>>,
   approvalResolutions: [] as Array<Record<string, unknown>>,
   finalMessage: "Finished",
+  allowForgeHttpFallback: false,
   wsConstructed: 0,
   authStatus: 200,
   authFetches: [] as Array<{ url: string; authorization: string | null }>,
@@ -285,6 +286,8 @@ process.env.OPENCLAW_GATEWAY_TOKEN = "token";
 process.env.OPENCLAW_TIMEOUT_MS = "180000";
 process.env.NEXT_PUBLIC_API_URL = "http://backend.test";
 
+const defaultForgeSandboxId = "sandbox-123";
+
 const realSetTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 
@@ -295,6 +298,7 @@ beforeEach(() => {
   scenario.chatSendParams = [];
   scenario.approvalResolutions = [];
   scenario.finalMessage = "Finished";
+  scenario.allowForgeHttpFallback = false;
   scenario.wsConstructed = 0;
   scenario.authStatus = 200;
   scenario.authFetches = [];
@@ -304,17 +308,57 @@ beforeEach(() => {
       init?.headers && typeof init.headers === "object" && "Authorization" in init.headers
         ? String((init.headers as Record<string, unknown>).Authorization)
         : null;
-    scenario.authFetches.push({ url, authorization });
 
-    return new Response(
-      scenario.authStatus === 200
-        ? JSON.stringify({ id: "user-1" })
-        : JSON.stringify({ error: "unauthorized" }),
-      {
-        status: scenario.authStatus,
-        headers: { "content-type": "application/json" },
-      },
-    );
+    if (url === "http://backend.test/users/me") {
+      scenario.authFetches.push({ url, authorization });
+
+      return new Response(
+        scenario.authStatus === 200
+          ? JSON.stringify({ id: "user-1" })
+          : JSON.stringify({ error: "unauthorized" }),
+        {
+          status: scenario.authStatus,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+
+    const sandboxMatch = url.match(/^http:\/\/backend\.test\/api\/sandboxes\/([^/]+)$/);
+    if (sandboxMatch) {
+      return new Response(
+        JSON.stringify({
+          id: sandboxMatch[1],
+          standard_url: "http://sandbox.test",
+          gateway_token: "token",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+
+    if (url === "http://sandbox.test") {
+      return new Response("ok", { status: 200 });
+    }
+
+    if (
+      scenario.allowForgeHttpFallback &&
+      /^http:\/\/backend\.test\/api\/sandboxes\/[^/]+\/chat$/.test(url)
+    ) {
+      return new Response(
+        `data: ${JSON.stringify({
+          choices: [{ delta: { content: scenario.finalMessage } }],
+        })}\n` +
+          "data: [DONE]\n",
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
   }) as typeof fetch;
   globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) => {
     if ((timeout ?? 0) < 10_000) {
@@ -391,6 +435,7 @@ describe("POST /api/openclaw auth boundary", () => {
         body: JSON.stringify({
           session_id: "session-auth-ok",
           message: "Build an agent",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -407,9 +452,59 @@ describe("POST /api/openclaw auth boundary", () => {
   });
 });
 
-describe("POST /api/openclaw retry safety", () => {
-  test("retries pre-ack failures with the same logical request id", async () => {
+describe("POST /api/openclaw forge requirement", () => {
+  test("fails closed without forge_sandbox_id and never opens the retired shared gateway", async () => {
     scenario.attempts = ["pre_ack_fail", "success"];
+
+    const response = await POST(
+      new Request("http://localhost/api/openclaw", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "accessToken=token-123",
+          origin: "http://localhost",
+        },
+        body: JSON.stringify({
+          session_id: "session-no-forge",
+          message: "Build an agent",
+          request_id: "req-no-forge",
+        }),
+      }) as any
+    );
+
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(extractEventPayloads(body, "status")).toEqual([
+      expect.objectContaining({
+        phase: "error",
+        message: "Agent workspace is not ready yet",
+      }),
+    ]);
+    expect(extractResultEvent(body)).toEqual(
+      expect.objectContaining({
+        type: "error",
+        error: "forge_sandbox_not_ready",
+        request_id: "req-no-forge",
+        content: expect.stringContaining("retired shared architect gateway"),
+      }),
+    );
+    expect(scenario.authFetches).toEqual([
+      {
+        url: "http://backend.test/users/me",
+        authorization: "Bearer token-123",
+      },
+    ]);
+    expect(scenario.chatSendParams).toHaveLength(0);
+    expect(scenario.wsConstructed).toBe(0);
+  });
+});
+
+describe("POST /api/openclaw retry safety", () => {
+  test("falls back after a pre-ack forge gateway failure without opening a second socket", async () => {
+    scenario.attempts = ["pre_ack_fail"];
+    scenario.allowForgeHttpFallback = true;
+    scenario.finalMessage = "Recovered through forge HTTP fallback";
 
     const response = await POST(
       new Request("http://localhost/api/openclaw", {
@@ -423,17 +518,22 @@ describe("POST /api/openclaw retry safety", () => {
           session_id: "session-1",
           message: "Build an agent",
           request_id: "req-123",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
 
-    await response.text();
+    const body = await response.text();
 
-    expect(scenario.chatSendParams).toHaveLength(2);
-    expect(scenario.chatSendParams.map((params) => params.idempotencyKey)).toEqual([
-      "req-123",
-      "req-123",
-    ]);
+    expect(scenario.chatSendParams).toHaveLength(1);
+    expect(scenario.chatSendParams[0]?.idempotencyKey).toBe("req-123");
+    expect(extractResultEvent(body)).toEqual(
+      expect.objectContaining({
+        type: "agent_response",
+        content: "Recovered through forge HTTP fallback",
+      }),
+    );
+    expect(scenario.wsConstructed).toBe(1);
   });
 
   test("does not resend chat.send after the gateway already acknowledged the run", async () => {
@@ -451,6 +551,7 @@ describe("POST /api/openclaw retry safety", () => {
           session_id: "session-2",
           message: "Build an agent",
           request_id: "req-post-ack",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -489,6 +590,7 @@ describe("POST /api/openclaw retry safety", () => {
           session_id: "session-tools",
           message: "Research GitHub integration options",
           request_id: "req-tools",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -519,6 +621,7 @@ describe("POST /api/openclaw retry safety", () => {
           session_id: "session-allowlist",
           message: "Inspect the repo",
           request_id: "req-allowlist",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -561,6 +664,7 @@ describe("POST /api/openclaw retry safety", () => {
           session_id: "session-deny",
           message: "Patch the repo",
           request_id: "req-deny",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -612,6 +716,7 @@ describe("Copilot mode approval policy", () => {
           message: "Create a skill file",
           request_id: "req-copilot-write",
           mode: "copilot",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -650,6 +755,7 @@ describe("Copilot mode approval policy", () => {
           message: "Deploy to production",
           request_id: "req-copilot-deploy",
           mode: "copilot",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -690,6 +796,7 @@ describe("Bridge delta streaming", () => {
           session_id: "session-delta",
           message: "Say hello",
           request_id: "req-delta",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -711,7 +818,7 @@ describe("Bridge delta streaming", () => {
     }
   });
 
-  test("emits ordered intermediate SSE events on the shared architect path", async () => {
+  test("emits ordered intermediate SSE events on the forge gateway path", async () => {
     scenario.attempts = ["success_with_intermediate_hints"];
 
     const response = await POST(
@@ -726,6 +833,7 @@ describe("Bridge delta streaming", () => {
           session_id: "session-intermediate",
           message: "Build a Google Ads optimizer",
           request_id: "req-intermediate",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -805,6 +913,7 @@ Let me know if you'd like to adjust anything!`;
           session_id: "session-yaml-skill",
           message: "Build me a Google Ads agent",
           request_id: "req-yaml-skill",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -843,6 +952,7 @@ nodes:
           session_id: "session-yaml-nodes",
           message: "Build agent",
           request_id: "req-yaml-nodes",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );
@@ -875,6 +985,7 @@ database:
           session_id: "session-yaml-nosg",
           message: "Show config",
           request_id: "req-yaml-nosg",
+          forge_sandbox_id: defaultForgeSandboxId,
         }),
       }) as any
     );

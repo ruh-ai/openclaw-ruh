@@ -103,6 +103,16 @@ class Agent {
   /// Number of sandboxes currently associated with this agent.
   int get deploymentCount => sandboxIds.length;
 
+  /// Whether the agent has user_required runtime inputs that lack values.
+  bool get hasMissingRequiredInputs => runtimeInputs.any(
+    (input) => input.required && input.isUserRequired && !input.isFilled,
+  );
+
+  /// The user_required inputs that still need values.
+  List<AgentRuntimeInput> get missingRequiredInputs => runtimeInputs
+      .where((input) => input.required && input.isUserRequired && !input.isFilled)
+      .toList();
+
   static List<String> _stringList(dynamic value) {
     if (value is List) {
       return value.map((e) => e.toString()).toList();
@@ -120,14 +130,43 @@ class AgentRuntimeInput {
   final String label;
   final String description;
   final bool required;
-  final String value;
+  final String source;
+  String value;
 
-  const AgentRuntimeInput({
+  /// How this variable should be populated:
+  /// - `user_required` — secrets/credentials only the user can provide
+  /// - `ai_inferred` — values the AI can suggest from agent context
+  /// - `static_default` — values with hardcoded defaults
+  final String populationStrategy;
+
+  /// UI control type: text, boolean, number, select.
+  final String inputType;
+
+  /// Sensible default value.
+  final String? defaultValue;
+
+  /// Realistic example value shown as placeholder.
+  final String? example;
+
+  /// Fixed choices for select-type inputs.
+  final List<String>? options;
+
+  /// Category for grouping related inputs.
+  final String? group;
+
+  AgentRuntimeInput({
     required this.key,
     this.label = '',
     this.description = '',
     this.required = false,
+    this.source = 'architect_requirement',
     this.value = '',
+    this.populationStrategy = 'user_required',
+    this.inputType = 'text',
+    this.defaultValue,
+    this.example,
+    this.options,
+    this.group,
   });
 
   factory AgentRuntimeInput.fromJson(Map<String, dynamic> json) {
@@ -136,9 +175,42 @@ class AgentRuntimeInput {
       label: json['label'] as String? ?? '',
       description: json['description'] as String? ?? '',
       required: json['required'] as bool? ?? false,
+      source: json['source'] as String? ?? 'architect_requirement',
       value: json['value'] as String? ?? '',
+      populationStrategy: json['populationStrategy'] as String? ?? 'user_required',
+      inputType: json['inputType'] as String? ?? 'text',
+      defaultValue: json['defaultValue'] as String?,
+      example: json['example'] as String?,
+      options: (json['options'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      group: json['group'] as String?,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'key': key,
+    'label': label,
+    'description': description,
+    'required': required,
+    'source': source,
+    'value': value,
+    'populationStrategy': populationStrategy,
+    'inputType': inputType,
+    if (defaultValue != null) 'defaultValue': defaultValue,
+    if (example != null) 'example': example,
+    if (options != null) 'options': options,
+    if (group != null) 'group': group,
+  };
+
+  /// Whether this input has an effective value (explicit or default).
+  bool get isFilled =>
+      value.trim().isNotEmpty || (defaultValue?.trim().isNotEmpty ?? false);
+
+  /// Whether this is a user-required credential.
+  bool get isUserRequired => populationStrategy == 'user_required';
+
+  /// The effective display value (explicit value or default).
+  String get effectiveValue =>
+      value.trim().isNotEmpty ? value : (defaultValue ?? '');
 }
 
 /// A tool connection configured for the agent.

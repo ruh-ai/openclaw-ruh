@@ -74,9 +74,20 @@ class _AgentListScreenState extends ConsumerState<AgentListScreen> {
 
     setState(() => _openingAgentId = agentId);
     try {
-      final launchableAgent = await ref.read(agentServiceProvider).launchAgent(
-            agentId,
-          );
+      final service = ref.read(agentServiceProvider);
+
+      // Fetch the agent first to check for missing required inputs
+      final agent = await service.getAgent(agentId);
+      if (!mounted) return;
+
+      if (agent != null && agent.hasMissingRequiredInputs) {
+        // Redirect to setup screen instead of launching
+        context.push('/agents/$agentId/setup', extra: agent);
+        return;
+      }
+
+      // No missing inputs — launch directly
+      final launchableAgent = await service.launchAgent(agentId);
       if (!mounted) return;
 
       ref.read(selectedAgentProvider.notifier).state = launchableAgent;

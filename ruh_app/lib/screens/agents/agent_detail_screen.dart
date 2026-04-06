@@ -89,6 +89,12 @@ class _AgentDetailScreenState extends ConsumerState<AgentDetailScreen> {
     final agent = _agent;
     if (agent == null || _isLaunching) return;
 
+    // Gate: check for missing required inputs before launching
+    if (agent.hasMissingRequiredInputs) {
+      context.push('/agents/${agent.id}/setup', extra: agent);
+      return;
+    }
+
     setState(() => _isLaunching = true);
     try {
       final launchableAgent = await ref

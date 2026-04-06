@@ -1,11 +1,23 @@
-import { describe, expect, test } from 'bun:test';
-import { hashPassword, verifyPassword } from '../../../src/auth/passwords';
+import { describe, expect, mock, test } from 'bun:test';
+
+const mockHash = async (value: string) => `hashed:${value}`;
+const mockCompare = async (value: string, hashedValue: string) => hashedValue === `hashed:${value}`;
+
+mock.module('bcryptjs', () => ({
+  default: {
+    hash: mockHash,
+    compare: mockCompare,
+  },
+  hash: mockHash,
+  compare: mockCompare,
+}));
+
+const { hashPassword, verifyPassword } = await import('../../../src/auth/passwords.ts?authPasswordsUnit');
 
 describe('passwords', () => {
-  test('hashPassword returns a bcrypt hash', async () => {
+  test('hashPassword delegates to bcrypt.hash', async () => {
     const hash = await hashPassword('test123');
-    expect(hash).toMatch(/^\$2[aby]?\$/);
-    expect(hash.length).toBeGreaterThan(50);
+    expect(hash).toBe('hashed:test123');
   });
 
   test('verifyPassword returns true for correct password', async () => {

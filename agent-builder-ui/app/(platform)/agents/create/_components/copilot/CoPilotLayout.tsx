@@ -357,6 +357,13 @@ export function CoPilotLayout({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSandbox?.sandbox_id]);
 
+  // Set agentSandboxId early so workspace reads work during Think/Plan (not just Build)
+  useEffect(() => {
+    if (activeSandbox?.sandbox_id && !coPilotStore.agentSandboxId) {
+      coPilotStore.setAgentSandboxId(activeSandbox.sandbox_id);
+    }
+  }, [activeSandbox?.sandbox_id, coPilotStore.agentSandboxId, coPilotStore]);
+
   // ── Step 2: When discovery is complete/skipped, trigger skill generation ──
   const buildRetryCountRef = useRef(0);
   const MAX_BUILD_RETRIES = 2;

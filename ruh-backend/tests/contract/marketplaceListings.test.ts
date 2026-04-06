@@ -10,7 +10,6 @@ process.env.JWT_REFRESH_SECRET =
   process.env.JWT_REFRESH_SECRET || "test-refresh-secret";
 
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { request } from "../helpers/app";
 import { makeSandboxRecord } from "../helpers/fixtures";
 import { signAccessToken } from "../../src/auth/tokens";
 
@@ -126,17 +125,30 @@ mock.module("../../src/store", () => ({
 
 mock.module("../../src/conversationStore", () => ({
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversations: mock(async () => []),
+  listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   appendMessages: mock(async () => true),
   renameConversation: mock(async () => true),
   deleteConversation: mock(async () => true),
   getMessages: mock(async () => []),
+  getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
   initDb: mock(async () => {}),
 }));
 
 mock.module("../../src/sandboxManager", () => ({
   createOpenclawSandbox: mock(async function* () {}),
+  PREVIEW_PORTS: [],
+  reconfigureSandboxLlm: mock(async () => ({})),
+  retrofitSandboxToSharedCodex: mock(async () => ({})),
+  dockerExec: mock(async () => [true, "true"]),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
+  stopAndRemoveContainer: mock(async () => {}),
+  restartGateway: mock(async () => [true, ""]),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, ""]),
 }));
 
 mock.module("axios", () => ({
@@ -146,6 +158,8 @@ mock.module("axios", () => ({
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+const { request } = await import("../helpers/app.ts?contractMarketplaceListings");
 
 beforeEach(() => {
   mockListPublished.mockImplementation(async () => ({

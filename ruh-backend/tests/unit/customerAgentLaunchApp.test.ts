@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { signAccessToken } from '../../src/auth/tokens';
 
 import { AGENT_ID, SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
 
@@ -30,6 +31,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -42,6 +44,7 @@ mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
   listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
   getAgentForCreator: mock(async () => null),
@@ -55,20 +58,12 @@ mock.module('../../src/agentStore', () => ({
   clearForgeSandbox: mock(async () => ({})),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
-}));
-
-mock.module('../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'customer-user-1',
-      email: 'prasanjit@ruh.ai',
-      role: 'end_user',
-      orgId: 'org-customer-1',
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  removeSandboxFromAgent: mock(async () => ({})),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/auth/customerAccess', () => ({
@@ -112,6 +107,7 @@ mock.module('../../src/sandboxManager', () => ({
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mockRestartGateway,
   waitForGateway: mockWaitForGateway,
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -120,11 +116,21 @@ mock.module('../../src/channelManager', () => ({
   configureChannels: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  markBackendReady: mock(() => {}),
-  markBackendNotReady: mock(() => {}),
-  getBackendReadiness: mock(() => ({ status: 'ready', reason: null, timestamp: Date.now() })),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: mock(() => 'echo ok'),
@@ -134,6 +140,7 @@ mock.module('../../src/docker', () => ({
   dockerContainerRunning: mockDockerContainerRunning,
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: unknown[]) => args.map(String).join(' '),
   listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
@@ -152,7 +159,16 @@ mock.module('axios', () => ({
   post: mock(async () => ({ status: 200, data: {} })),
 }));
 
-const { request, resetStreams } = await import('../helpers/app');
+const { request, resetStreams } = await import('../helpers/app.ts?unitCustomerAgentLaunchApp');
+
+function customerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'customer-user-1',
+    email: 'prasanjit@ruh.ai',
+    role: 'end_user',
+    orgId: 'org-customer-1',
+  })}`;
+}
 
 beforeEach(() => {
   mockGetSandbox.mockReset();
@@ -180,34 +196,39 @@ beforeEach(() => {
 });
 
 describe('POST /api/agents/:id/launch', () => {
-  test('repairs an existing runtime when the gateway is down', async () => {
+  test('repairs unhealthy runtimes and reuses healthy ones without another restart', async () => {
     mockWaitForGateway
       .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => true);
 
-    const res = await request().post(`/api/agents/${AGENT_ID}/launch`).send({});
+    const repairedRes = await request().post(`/api/agents/${AGENT_ID}/launch`).set('Authorization', customerAuthHeader()).send({});
 
-    expect(res.status).toBe(200);
+    expect(repairedRes.status).toBe(200);
     expect(mockEnsureInteractiveRuntimeServices).toHaveBeenCalledWith(
       `openclaw-${SANDBOX_ID}`,
     );
     expect(mockRestartGateway).toHaveBeenCalledWith(`openclaw-${SANDBOX_ID}`);
-    expect(res.body).toMatchObject({
+    expect(repairedRes.body).toMatchObject({
       launched: false,
       sandboxId: SANDBOX_ID,
       agent: { id: AGENT_ID, sandbox_ids: [SANDBOX_ID] },
     });
-  });
+    mockWaitForGateway.mockReset();
+    mockWaitForGateway.mockImplementation(async () => true);
+    mockRestartGateway.mockReset();
+    mockRestartGateway.mockImplementation(async () => {});
+    mockEnsureInteractiveRuntimeServices.mockReset();
+    mockEnsureInteractiveRuntimeServices.mockImplementation(async () => {});
+    mockSandboxManagerDockerExec.mockReset();
+    mockSandboxManagerDockerExec.mockImplementation(async () => [true, 'true']);
 
-  test('reuses an already healthy runtime without restarting it', async () => {
-    const res = await request().post(`/api/agents/${AGENT_ID}/launch`).send({});
+    const reusedRes = await request().post(`/api/agents/${AGENT_ID}/launch`).set('Authorization', customerAuthHeader()).send({});
 
-    expect(res.status).toBe(200);
+    expect(reusedRes.status).toBe(200);
     expect(mockEnsureInteractiveRuntimeServices).toHaveBeenCalledWith(
       `openclaw-${SANDBOX_ID}`,
     );
-    expect(mockRestartGateway).not.toHaveBeenCalled();
-    expect(res.body).toMatchObject({
+    expect(reusedRes.body).toMatchObject({
       launched: false,
       sandboxId: SANDBOX_ID,
     });

@@ -55,6 +55,29 @@ describe("copilot-state", () => {
     expect(useCoPilotStore.getState().maxUnlockedDevStage).toBe("review");
   });
 
+  test("preserves dispatched think/plan run IDs through same-agent hydration", () => {
+    const store = useCoPilotStore;
+    store.getState().reset();
+    store.setState({
+      name: "Google Ads Agent",
+      description: "Drive campaign optimization",
+      thinkRunId: "think-run-1",
+      lastDispatchedThinkRunId: "think-run-1",
+      planRunId: "plan-run-1",
+      lastDispatchedPlanRunId: "plan-run-1",
+    });
+
+    store.getState().hydrateFromSeed({
+      name: "Google Ads Agent",
+      description: "Drive campaign optimization",
+      thinkRunId: "think-run-1",
+      planRunId: "plan-run-1",
+    });
+
+    expect(store.getState().lastDispatchedThinkRunId).toBe("think-run-1");
+    expect(store.getState().lastDispatchedPlanRunId).toBe("plan-run-1");
+  });
+
   test("setSkillGraph marks nodes with skill_md as built", () => {
     useCoPilotStore.getState().reset();
     useCoPilotStore.getState().setSkillGraph(
@@ -84,6 +107,34 @@ describe("copilot-state", () => {
       "slack-alert-send",
     ]);
     expect(useCoPilotStore.getState().builtSkillIds).toEqual(["inventory-monitor"]);
+  });
+
+  test("markThinkRunDispatched and markPlanRunDispatched track run IDs", () => {
+    useCoPilotStore.getState().reset();
+    useCoPilotStore.setState({
+      thinkRunId: "think-keep",
+      planRunId: "plan-keep",
+      lastDispatchedThinkRunId: "think-123",
+      lastDispatchedPlanRunId: "plan-456",
+    });
+
+    useCoPilotStore.getState().setUserTriggeredThink(true);
+    useCoPilotStore.getState().setUserTriggeredPlan(true);
+
+    expect(useCoPilotStore.getState().lastDispatchedThinkRunId).toBeNull();
+    expect(useCoPilotStore.getState().lastDispatchedPlanRunId).toBeNull();
+
+    useCoPilotStore.getState().markThinkRunDispatched("think-123");
+    useCoPilotStore.getState().markPlanRunDispatched("plan-456");
+
+    expect(useCoPilotStore.getState().lastDispatchedThinkRunId).toBe("think-123");
+    expect(useCoPilotStore.getState().lastDispatchedPlanRunId).toBe("plan-456");
+
+    useCoPilotStore.getState().markThinkRunDispatched(null);
+    useCoPilotStore.getState().markPlanRunDispatched(null);
+
+    expect(useCoPilotStore.getState().lastDispatchedThinkRunId).toBeNull();
+    expect(useCoPilotStore.getState().lastDispatchedPlanRunId).toBeNull();
   });
 });
 

@@ -50,7 +50,8 @@ import * as systemEventStore from './systemEventStore';
 import * as webhookDeliveryStore from './webhookDeliveryStore';
 import * as billingStore from './billingStore';
 import { resolveEntitlementAccess } from './billing/entitlementState';
-import { findSkill, listSkills } from './skillRegistry';
+import { findSkill, listSkills, searchSkills, publishSkill, registryStats } from './skillRegistry';
+import { listTemplates, getTemplate, searchTemplates, listCategories } from './templateRegistry';
 import * as paperclipOrchestrator from './paperclipOrchestrator';
 import { getBackendReadiness } from './backendReadiness';
 import { getSandboxConversationRecord } from './conversationAccess';
@@ -78,6 +79,7 @@ import {
   createWorkspaceHandoffCommand,
   createWorkspaceListCommand,
   createWorkspaceReadCommand,
+  createWorkspaceStatusCommand,
   normalizeWorkspaceRelativePath,
 } from "./workspaceFiles";
 import {
@@ -212,14 +214,10 @@ app.use('/api/auth', authRouter);
 app.use('/api/marketplace', marketplaceRouter);
 app.use('/api/agents/:agentId', createCostRouter());
 
-// In-memory store for active creation streams (exported for test cleanup)
-export interface StreamEntry {
-  status: 'pending' | 'running' | 'done' | 'error';
-  request: Record<string, unknown>;
-  result?: Record<string, unknown>;
-  error?: string;
-}
-export const _streams = new Map<string, StreamEntry>();
+// In-memory store for active creation streams (shared registry, exported for test cleanup)
+import { streams as _sharedStreams, type StreamEntry } from './streamRegistry';
+export type { StreamEntry };
+export const _streams = _sharedStreams;
 
 interface ConfigureAgentStepResult {
   kind: 'soul' | 'skill' | 'cron' | 'mcp' | 'runtime_env' | 'webhook';
@@ -2167,14 +2165,76 @@ app.delete('/api/sandboxes/:sandbox_id', asyncHandler(async (req, res) => {
 
 // ── Agents CRUD ──────────────────────────────────────────────────────────────
 
-app.get('/api/skills', asyncHandler(async (_req, res) => {
-  res.json(listSkills());
+app.get('/api/skills', asyncHandler(async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (q) {
+    res.json(searchSkills(q));
+  } else {
+    res.json(listSkills());
+  }
+}));
+
+app.get('/api/skills/stats', asyncHandler(async (_req, res) => {
+  res.json(registryStats());
 }));
 
 app.get('/api/skills/:skill_id', asyncHandler(async (req, res) => {
   const skill = findSkill(req.params.skill_id);
   if (!skill) throw httpError(404, 'Skill not found');
   res.json(skill);
+}));
+
+app.post('/api/skills', requireAuth, asyncHandler(async (req, res) => {
+  const { skill_id, name, description, tags, skill_md, agent_id } = req.body as {
+    skill_id: string; name: string; description: string;
+    tags: string[]; skill_md: string; agent_id?: string;
+  };
+  if (!skill_id || !name || !skill_md) {
+    throw httpError(400, 'skill_id, name, and skill_md are required');
+  }
+  const added = publishSkill({
+    skill_id, name,
+    description: description || name,
+    tags: Array.isArray(tags) ? tags : [],
+    skill_md,
+    source: 'community',
+    publishedBy: typeof agent_id === 'string' ? agent_id : undefined,
+  });
+  res.status(added ? 201 : 200).json({ ok: true, added, skill_id });
+}));
+
+// ── Agent Templates ───────────────────────────────────────────────────────────
+// Public — no auth required. Templates are read-only seed data.
+
+app.get('/api/templates', asyncHandler(async (req, res) => {
+  const category = typeof req.query.category === 'string' ? req.query.category.trim() : undefined;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+  let results;
+  if (q) {
+    results = searchTemplates(q);
+    if (category) {
+      const cat = category.toLowerCase();
+      results = results.filter((t) => t.category.toLowerCase() === cat);
+    }
+  } else {
+    results = listTemplates(category);
+  }
+
+  // Strip architecturePlan from the list response to keep payloads small.
+  // Callers fetch the full template via GET /api/templates/:id before deploy.
+  const lightweight = results.map(({ architecturePlan: _plan, ...rest }) => rest);
+  res.json(lightweight);
+}));
+
+app.get('/api/templates/categories', asyncHandler(async (_req, res) => {
+  res.json(listCategories());
+}));
+
+app.get('/api/templates/:id', asyncHandler(async (req, res) => {
+  const template = getTemplate(req.params.id);
+  if (!template) throw httpError(404, 'Template not found');
+  res.json(template);
 }));
 
 async function getAgentRecord(agentId: string): Promise<agentStore.AgentRecord> {
@@ -2364,6 +2424,19 @@ app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) =>
     throw httpError(404, 'Agent not found');
   }
 
+  // Validate that required user_required inputs have values
+  const missingInputs = (agent.runtime_inputs ?? []).filter(
+    (input: { required?: boolean; populationStrategy?: string; value?: string; defaultValue?: string }) =>
+      input.required &&
+      (input.populationStrategy ?? 'user_required') === 'user_required' &&
+      !(input.value?.trim()) &&
+      !(input.defaultValue?.trim()),
+  );
+  if (missingInputs.length > 0) {
+    const keys = missingInputs.map((i: { key: string }) => i.key).join(', ');
+    throw httpError(400, `Missing required configuration: ${keys}. Please complete setup first.`);
+  }
+
   const activeSandbox = await resolveActiveSandboxForAgent(agent);
   if (activeSandbox) {
     const readySandbox = await ensureLaunchableSandboxRuntime(activeSandbox);
@@ -2437,9 +2510,29 @@ app.post('/api/agents/:id/launch', requireAuth, asyncHandler(async (req, res) =>
 }));
 
 app.patch('/api/agents/:id', requireAuth, asyncHandler(async (req, res) => {
-  await getOwnedAgentRecord(req, req.params.id);
+  const existing = await getOwnedAgentRecord(req, req.params.id);
   const body = validateAgentMetadataPatchBody(req.body);
   const updated = await agentStore.updateAgent(req.params.id, body);
+
+  // Auto-snapshot a config version whenever the agent becomes active
+  if (body.status === 'active' && existing.status !== 'active' && updated) {
+    const snapshot = {
+      skillGraph: updated.skill_graph,
+      workflow: updated.workflow,
+      agentRules: updated.agent_rules,
+      runtimeInputs: updated.runtime_inputs,
+      toolConnections: updated.tool_connections,
+      triggers: updated.triggers,
+      discoveryDocuments: updated.discovery_documents,
+    };
+    agentStore.createAgentConfigVersion(
+      updated.id,
+      snapshot,
+      'Auto-snapshot on activation',
+      req.user!.userId,
+    ).catch(() => {});
+  }
+
   res.json(updated ? redactAgentWebhookSecrets(updated) : updated);
 }));
 
@@ -2562,6 +2655,348 @@ app.delete('/api/agents/:id/eval-results/:evalId', requireAuth, asyncHandler(asy
   res.json({ deleted: req.params.evalId });
 }));
 
+// ── Clone / Fork Agent ────────────────────────────────────────────────────────
+
+app.post('/api/agents/:id/clone', requireAuth, asyncHandler(async (req, res) => {
+  const source = await getOwnedAgentRecord(req, req.params.id);
+  const builder = await requireBuilderContext(req);
+
+  const clone = await agentStore.saveAgent({
+    name: `${source.name} (Copy)`,
+    avatar: source.avatar,
+    description: source.description,
+    skills: source.skills,
+    triggerLabel: source.trigger_label,
+    status: 'draft',
+    skillGraph: source.skill_graph,
+    workflow: source.workflow,
+    agentRules: source.agent_rules,
+    runtimeInputs: source.runtime_inputs,
+    toolConnections: source.tool_connections,
+    triggers: source.triggers,
+    discoveryDocuments: source.discovery_documents,
+    createdBy: req.user!.userId,
+    orgId: builder.organization.id,
+  });
+
+  await recordAuditEvent(req, {
+    action_type: 'agent.clone',
+    target_type: 'agent',
+    target_id: clone.id,
+    outcome: 'success',
+    details: { source_agent_id: source.id },
+  });
+
+  res.status(201).json(redactAgentWebhookSecrets(clone));
+}));
+
+// ── Infer Runtime Input Values (AI auto-population) ─────────────────────────
+
+async function inferInputValues(
+  agentName: string,
+  agentDescription: string,
+  variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>,
+): Promise<Record<string, string>> {
+  const config = getConfig();
+
+  if (!variables?.length) return {};
+
+  const apiKey = config.openrouterApiKey || config.anthropicApiKey || config.openaiApiKey;
+  if (!apiKey) return {};
+
+  const variablesList = variables
+    .map((v) => `- ${v.key} (${v.label}): ${v.description}${v.example ? ` Example: ${v.example}` : ''}${v.options?.length ? ` Options: ${v.options.join(', ')}` : ''}`)
+    .join('\n');
+
+  const prompt = `Given this AI agent:
+- Name: ${agentName}
+- Description: ${agentDescription || 'No description'}
+
+Suggest realistic, sensible values for these configuration variables. These are NOT secrets — they are behavioral settings, preferences, and metadata that can be inferred from the agent's purpose.
+
+Variables:
+${variablesList}
+
+Respond with ONLY a JSON object mapping variable keys to suggested values. No explanation, no markdown fences.
+Example: {"TIMEZONE": "America/New_York", "COMPANY_NAME": "Acme Corp"}`;
+
+  let values: Record<string, string> = {};
+
+  if (config.openrouterApiKey) {
+    const resp = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+      model: 'anthropic/claude-haiku',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openrouterApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.choices?.[0]?.message?.content ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  } else if (config.anthropicApiKey) {
+    const resp = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+    }, {
+      headers: {
+        'x-api-key': config.anthropicApiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.content?.[0]?.text ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  } else if (config.openaiApiKey) {
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openaiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    });
+    const text = resp.data?.choices?.[0]?.message?.content ?? '{}';
+    values = JSON.parse(text.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+  }
+
+  // Only return values for keys that were requested
+  const filtered: Record<string, string> = {};
+  for (const v of variables) {
+    if (values[v.key] !== undefined) {
+      filtered[v.key] = String(values[v.key]);
+    }
+  }
+  return filtered;
+}
+
+// Per-agent route (setup page — agent already exists)
+app.post('/api/agents/:id/infer-inputs', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+
+  const { variables } = req.body as {
+    variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>;
+  };
+
+  try {
+    const values = await inferInputValues(agent.name, agent.description ?? '', variables ?? []);
+    res.json({ values });
+  } catch (err) {
+    appLogger.warn(`infer-inputs LLM call failed: ${(err as Error).message}`);
+    res.json({ values: {} });
+  }
+}));
+
+// Generic route (creation flow — agent not yet saved)
+app.post('/api/infer-inputs', requireAuth, asyncHandler(async (req, res) => {
+  const { agentName, agentDescription, variables } = req.body as {
+    agentName: string;
+    agentDescription: string;
+    variables: Array<{ key: string; label: string; description: string; example?: string; options?: string[] }>;
+  };
+
+  if (!agentName) {
+    res.status(400).json({ error: 'agentName is required' });
+    return;
+  }
+
+  try {
+    const values = await inferInputValues(agentName, agentDescription ?? '', variables ?? []);
+    res.json({ values });
+  } catch (err) {
+    appLogger.warn(`infer-inputs LLM call failed: ${(err as Error).message}`);
+    res.json({ values: {} });
+  }
+}));
+
+// ── Agent Config Versioning ───────────────────────────────────────────────────
+
+app.post('/api/agents/:id/versions', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const message = typeof req.body?.message === 'string' ? req.body.message : undefined;
+
+  const snapshot = {
+    skillGraph: agent.skill_graph,
+    workflow: agent.workflow,
+    agentRules: agent.agent_rules,
+    runtimeInputs: agent.runtime_inputs,
+    toolConnections: agent.tool_connections,
+    triggers: agent.triggers,
+    discoveryDocuments: agent.discovery_documents,
+  };
+
+  const version = await agentStore.createAgentConfigVersion(
+    agent.id,
+    snapshot,
+    message,
+    req.user!.userId,
+  );
+  res.status(201).json(version);
+}));
+
+app.get('/api/agents/:id/versions', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  const versions = await agentStore.listAgentConfigVersions(req.params.id, limit);
+  res.json(versions);
+}));
+
+app.get('/api/agents/:id/versions/:version', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const versionNumber = parseInt(req.params.version, 10);
+  if (isNaN(versionNumber) || versionNumber < 1) throw httpError(400, 'version must be a positive integer');
+  const version = await agentStore.getAgentConfigVersion(req.params.id, versionNumber);
+  if (!version) throw httpError(404, 'Version not found');
+  res.json(version);
+}));
+
+app.post('/api/agents/:id/versions/:version/rollback', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const versionNumber = parseInt(req.params.version, 10);
+  if (isNaN(versionNumber) || versionNumber < 1) throw httpError(400, 'version must be a positive integer');
+
+  const updated = await agentStore.rollbackAgentToConfigVersion(req.params.id, versionNumber);
+  if (!updated) throw httpError(404, 'Version not found');
+
+  await recordAuditEvent(req, {
+    action_type: 'agent.config.rollback',
+    target_type: 'agent',
+    target_id: req.params.id,
+    outcome: 'success',
+    details: { version_number: versionNumber },
+  });
+
+  res.json(redactAgentWebhookSecrets(updated));
+}));
+
+// ── Agent Monitoring ──────────────────────────────────────────────────────────
+
+app.get('/api/agents/:id/metrics', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const agentId = req.params.id;
+
+  const metrics = await withConn(async (client) => {
+    const [totalConvsRes, totalMsgsRes, errorsRes, lastActiveRes, toolUsageRes] =
+      await Promise.all([
+        client.query(
+          `SELECT COUNT(DISTINCT details->>'conversation_id') AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1 AND action_type = 'sandbox.chat'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1 AND action_type = 'sandbox.chat'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1
+             AND outcome = 'failure'
+             AND occurred_at >= NOW() - INTERVAL '24 hours'`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT MAX(occurred_at) AS last_active
+           FROM control_plane_audit_events
+           WHERE target_id = $1`,
+          [agentId],
+        ),
+        client.query(
+          `SELECT details->>'tool_name' AS tool_name, COUNT(*) AS count
+           FROM control_plane_audit_events
+           WHERE target_id = $1
+             AND action_type = 'sandbox.tool_call'
+             AND details->>'tool_name' IS NOT NULL
+           GROUP BY details->>'tool_name'
+           ORDER BY count DESC`,
+          [agentId],
+        ),
+      ]);
+
+    const toolUsage: Record<string, number> = {};
+    for (const row of toolUsageRes.rows) {
+      toolUsage[String(row.tool_name)] = Number(row.count);
+    }
+
+    return {
+      total_conversations: Number(totalConvsRes.rows[0]?.count ?? 0),
+      total_messages: Number(totalMsgsRes.rows[0]?.count ?? 0),
+      errors_last_24h: Number(errorsRes.rows[0]?.count ?? 0),
+      last_active: lastActiveRes.rows[0]?.last_active instanceof Date
+        ? lastActiveRes.rows[0].last_active.toISOString()
+        : (lastActiveRes.rows[0]?.last_active ?? null),
+      tool_usage: toolUsage,
+    };
+  });
+
+  res.json(metrics);
+}));
+
+app.get('/api/agents/:id/activity', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const agentId = req.params.id;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+
+  const events = await withConn(async (client) => {
+    const res = await client.query(
+      `SELECT event_id, occurred_at, action_type, outcome, details
+       FROM control_plane_audit_events
+       WHERE target_id = $1
+       ORDER BY occurred_at DESC
+       LIMIT $2`,
+      [agentId, limit],
+    );
+    return res.rows;
+  });
+
+  const activity = events.map((row: Record<string, unknown>) => {
+    const details = (row.details && typeof row.details === 'object') ? row.details as Record<string, unknown> : {};
+    const actionType = String(row.action_type);
+    const outcome = String(row.outcome);
+
+    let type = actionType;
+    let summary = actionType;
+    if (actionType === 'sandbox.chat') {
+      type = outcome === 'failure' ? 'error' : 'message';
+      summary = outcome === 'failure' ? 'Chat error' : 'Conversation message';
+    } else if (actionType === 'sandbox.tool_call') {
+      type = 'tool_call';
+      summary = details.tool_name ? `Tool: ${details.tool_name}` : 'Tool call';
+    } else if (actionType === 'agent.deploy') {
+      type = 'deploy';
+      summary = 'Agent deployed';
+    } else if (actionType === 'agent.clone') {
+      type = 'clone';
+      summary = 'Agent cloned';
+    }
+
+    return {
+      id: String(row.event_id),
+      type,
+      timestamp: row.occurred_at instanceof Date
+        ? (row.occurred_at as Date).toISOString()
+        : String(row.occurred_at),
+      summary,
+      details,
+    };
+  });
+
+  res.json(activity);
+}));
+
 app.post('/api/agents/:id/sandbox', requireAuth, asyncHandler(async (req, res) => {
   await getOwnedAgentRecord(req, req.params.id);
   const { sandbox_id } = validateAgentSandboxAttachBody(req.body);
@@ -2620,6 +3055,8 @@ app.post('/api/agents/create', requireAuth, asyncHandler(async (req, res) => {
       createdBy: req.user!.userId,
       orgId: builder.organization.id,
     });
+    // Track the creation lifecycle — starts at "think"
+    await agentStore.updateAgent(agent.id, { forge_stage: 'think' });
 
     // 2. Set up the forge stream entry (same pattern as POST /api/agents/:id/forge)
     const sandboxName = `forge-${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
@@ -2805,6 +3242,25 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
             sendEvent('log', { message: 'Template cloned into workspace.' });
             sendEvent('log', { message: 'Restarting gateway with cloned soul...' });
             await restartGateway(forgeCName).catch(() => {});
+
+            // Run agent setup if requested (v3 marketplace install flow)
+            if (entry.request.run_agent_setup) {
+              sendEvent('log', { message: 'Running agent setup from .openclaw/setup.json...' });
+              try {
+                const { runAgentSetup } = await import('./agentSetup');
+                const setupResult = await runAgentSetup(sandboxIdStr, (msg) => {
+                  sendEvent('log', { message: msg });
+                });
+                if (setupResult.ok) {
+                  sendEvent('log', { message: 'Agent setup complete — all services running.' });
+                } else {
+                  sendEvent('log', { message: 'Agent setup completed with issues.' });
+                }
+              } catch (setupErr) {
+                sendEvent('log', { message: `Agent setup error: ${setupErr instanceof Error ? setupErr.message : String(setupErr)}` });
+              }
+            }
+
             endSpanOk(cloneSpan);
           } else {
             sendEvent('log', { message: `Clone failed: ${String(cloneOut).slice(0, 200)}` });
@@ -2950,15 +3406,52 @@ app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, re
     return;
   }
 
-  const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+  const containerName = getContainerName(agent.forge_sandbox_id);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+
+  // Reconcile: if forge_stage is "complete" (Ship finished) but agent status
+  // is still "forging", promote to "active". This handles the case where the
+  // frontend completed Ship but the status update failed or browser closed.
+  // We ONLY promote when forge_stage explicitly says "complete" — never guess
+  // from file existence, because that skips review/test/ship stages.
+  let reconciled = false;
+  if (agent.status === 'forging' && agent.forge_stage === 'complete') {
+    await agentStore.updateAgent(req.params.id, { status: 'active' });
+    reconciled = true;
+  }
+
   res.json({
     active: running,
     status: running ? 'ready' : 'stopped',
     forge_sandbox_id: agent.forge_sandbox_id,
+    forge_stage: agent.forge_stage,
     vnc_port: record.vnc_port ?? null,
     gateway_port: record.gateway_port,
     standard_url: record.standard_url,
+    reconciled,
+    agent_status: reconciled ? 'active' : agent.status,
   });
+}));
+
+/**
+ * Update the agent's forge stage. Called by the frontend on each lifecycle
+ * stage transition so the backend always knows where the creation process is.
+ * This is the source of truth for resuming interrupted builds.
+ */
+const VALID_FORGE_STAGES = ['think', 'plan', 'build', 'review', 'test', 'ship', 'complete'];
+app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const { stage } = req.body;
+
+  if (!stage || !VALID_FORGE_STAGES.includes(stage)) {
+    throw httpError(400, `Invalid stage: ${stage}. Must be one of: ${VALID_FORGE_STAGES.join(', ')}`);
+  }
+
+  // When stage reaches "complete", also promote status to "active"
+  const statusUpdate = stage === 'complete' ? { status: 'active' as const, forge_stage: stage as agentStore.AgentForgeStage } : { forge_stage: stage as agentStore.AgentForgeStage };
+  await agentStore.updateAgent(req.params.id, statusUpdate);
+
+  res.json({ id: agent.id, forge_stage: stage, status: stage === 'complete' ? 'active' : agent.status });
 }));
 
 /**
@@ -5981,10 +6474,13 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
         res.setHeader(key, value as string);
       }
     }
-    // Allow iframe embedding
-    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    // Allow iframe embedding — remove restrictive headers from upstream,
+    // then set permissive ones so the dashboard loads in the builder's iframe
     res.removeHeader('content-security-policy');
     res.removeHeader('x-frame-options');
+    res.removeHeader('content-security-policy-report-only');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.setHeader('Content-Security-Policy', "frame-ancestors *");
 
     res.send(Buffer.from(proxyRes.data as ArrayBuffer));
   } catch (err) {
@@ -6020,6 +6516,17 @@ app.get('/api/sandboxes/:sandbox_id/workspace/files', asyncHandler(async (req, r
     res.json(parseJsonOutput(output));
   } catch {
     throw httpError(502, 'Failed to parse workspace list output');
+  }
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace/status', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const [code, output] = await sandboxExec(req.params.sandbox_id, createWorkspaceStatusCommand(), 10);
+  if (code !== 0) classifyWorkspaceExecError(output, 'status');
+  try {
+    res.json(parseJsonOutput(output));
+  } catch {
+    throw httpError(502, 'Failed to parse workspace status output');
   }
 }));
 
@@ -6126,6 +6633,100 @@ app.get('/api/sandboxes/:sandbox_id/workspace/archive', asyncHandler(async (req,
   res.setHeader('Content-Type', mimeType);
   res.setHeader('Content-Disposition', `attachment; filename="${downloadName.replace(/"/g, '')}"`);
   res.send(buffer);
+}));
+
+// ── Workspace write (v3 build pipeline) ──────────────────────────────────────
+
+import { writeWorkspaceFile as writeWsFile, writeWorkspaceFiles as writeWsFiles, mergeWorkspaceCopilotToMain, readWorkspaceCopilotFile } from './workspaceWriter';
+import { pushWorkspaceToGitHub } from './workspaceGitPush';
+import { shipAgent } from './agentRepo';
+
+app.post('/api/sandboxes/:sandbox_id/workspace/write', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { path, content } = req.body ?? {};
+  if (typeof path !== 'string' || !path.trim()) throw httpError(400, 'path is required');
+  if (typeof content !== 'string') throw httpError(400, 'content is required');
+  const result = await writeWsFile(req.params.sandbox_id, path, content);
+  if (!result.ok) throw httpError(500, result.error ?? 'Write failed');
+  res.json(result);
+}));
+
+app.post('/api/sandboxes/:sandbox_id/workspace/write-batch', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { files } = req.body ?? {};
+  if (!Array.isArray(files)) throw httpError(400, 'files array is required');
+  if (files.length === 0) throw httpError(400, 'files array is empty');
+  if (files.length > 50) throw httpError(400, 'Maximum 50 files per batch');
+  for (const f of files) {
+    if (typeof f?.path !== 'string' || !f.path.trim()) throw httpError(400, 'Each file must have a path');
+    if (typeof f?.content !== 'string') throw httpError(400, 'Each file must have content');
+  }
+  const results = await writeWsFiles(req.params.sandbox_id, files);
+  const failed = results.filter((r) => !r.ok);
+  res.json({ ok: failed.length === 0, results, failed: failed.length, succeeded: results.length - failed.length });
+}));
+
+app.get('/api/sandboxes/:sandbox_id/workspace-copilot/file', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+  if (!filePath) throw httpError(400, 'path query parameter is required');
+  const content = await readWorkspaceCopilotFile(req.params.sandbox_id, filePath);
+  if (content === null) throw httpError(404, 'File not found in copilot workspace');
+  res.json({ path: filePath, content });
+}));
+
+app.post('/api/sandboxes/:sandbox_id/workspace/merge-copilot', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const ok = await mergeWorkspaceCopilotToMain(req.params.sandbox_id);
+  if (!ok) throw httpError(500, 'Failed to merge copilot workspace into main workspace');
+  res.json({ ok: true });
+}));
+
+// Push workspace directly to GitHub from inside the container
+// Auth via GitHub PAT in the request body — no JWT needed
+app.post('/api/sandboxes/:sandbox_id/workspace/git-push', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { repo, githubToken, commitMessage, agentName } = req.body ?? {};
+  if (typeof repo !== 'string' || !repo.trim()) throw httpError(400, 'repo is required (owner/repo)');
+  const result = await pushWorkspaceToGitHub({
+    sandboxId: req.params.sandbox_id,
+    repoUrl: repo.trim(),
+    githubToken: typeof githubToken === 'string' ? githubToken.trim() : undefined,
+    commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
+    agentName: typeof agentName === 'string' ? agentName : undefined,
+  });
+  res.json(result);
+}));
+
+// ── Agent Setup (start services after build) ─────────────────────────────────
+
+app.post('/api/sandboxes/:sandbox_id/setup', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { runAgentSetup } = await import('./agentSetup');
+  const result = await runAgentSetup(req.params.sandbox_id, (msg) => {
+    console.log(`[setup:${req.params.sandbox_id.slice(0, 8)}] ${msg}`);
+  });
+  res.json(result);
+}));
+
+// ── Agent Ship (persistent repo) ──────────────────────────────────────────────
+
+app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await agentStore.getAgent(req.params.id);
+  if (!agent) throw httpError(404, 'Agent not found');
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox — build the agent first');
+  const { githubToken, commitMessage, repoName } = req.body ?? {};
+  if (typeof githubToken !== 'string' || !githubToken.trim()) throw httpError(400, 'githubToken is required');
+  const result = await shipAgent({
+    agentId: req.params.id,
+    sandboxId,
+    githubToken: githubToken.trim(),
+    repoName: typeof repoName === 'string' ? repoName.trim() : undefined,
+    commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
+    onLog: (msg) => console.log(`[ship:${req.params.id.slice(0,8)}] ${msg}`),
+  });
+  res.json(result);
 }));
 
 // ── Conversation management ───────────────────────────────────────────────────

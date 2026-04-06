@@ -2,6 +2,7 @@ import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { BuilderState } from "./builder-state";
 import type { CoPilotState } from "./copilot-state";
 import { createCoPilotSeedFromAgent } from "./copilot-flow";
+import type { AgentDevStage, StageStatus } from "./types";
 
 const CACHE_PREFIX = "openclaw-create-session-";
 const CACHE_VERSION = 1;
@@ -17,6 +18,41 @@ export interface CachedCreateSession {
 export interface LoadedCreateSession {
   coPilot: Partial<CoPilotState>;
   builder: Partial<BuilderState>;
+}
+
+function sanitizeRestoredLifecycleTrigger(seed: Partial<CoPilotState>): Partial<CoPilotState> {
+  const sanitized: Partial<CoPilotState> = { ...seed };
+  const devStage = (seed.devStage as AgentDevStage | undefined) ?? null;
+
+  const thinkStatus = (seed.thinkStatus as StageStatus | undefined) ?? "idle";
+  if (
+    sanitized.userTriggeredThink &&
+    (
+      devStage !== "think" ||
+      thinkStatus !== "generating" ||
+      !seed.thinkRunId ||
+      (seed.lastDispatchedThinkRunId != null && seed.lastDispatchedThinkRunId === seed.thinkRunId)
+    )
+  ) {
+    sanitized.userTriggeredThink = false;
+    sanitized.thinkRunId = null;
+  }
+
+  const planStatus = (seed.planStatus as StageStatus | undefined) ?? "idle";
+  if (
+    sanitized.userTriggeredPlan &&
+    (
+      devStage !== "plan" ||
+      planStatus !== "generating" ||
+      !seed.planRunId ||
+      (seed.lastDispatchedPlanRunId != null && seed.lastDispatchedPlanRunId === seed.planRunId)
+    )
+  ) {
+    sanitized.userTriggeredPlan = false;
+    sanitized.planRunId = null;
+  }
+
+  return sanitized;
 }
 
 export function saveCreateSessionToCache(
@@ -57,7 +93,7 @@ export function loadCreateSessionFromCache(agentId: string): LoadedCreateSession
     }
 
     return {
-      coPilot: entry.coPilot ?? {},
+      coPilot: sanitizeRestoredLifecycleTrigger(entry.coPilot ?? {}),
       builder: entry.builder ?? {},
     };
   } catch {
@@ -85,7 +121,10 @@ export function buildResumedCoPilotSeed(
   // Merge cache over persisted seed, but never let empty-string cache values
   // for identity fields overwrite real agent data. This prevents a stale cache
   // (written after a page-refresh reset) from wiping the agent's name/description.
-  const merged: Partial<CoPilotState> = { ...persistedSeed, ...cachedCoPilot };
+  const merged: Partial<CoPilotState> = sanitizeRestoredLifecycleTrigger({
+    ...persistedSeed,
+    ...cachedCoPilot,
+  });
   const identityFields: (keyof CoPilotState)[] = ["name", "description", "systemName"];
   for (const field of identityFields) {
     const cached = cachedCoPilot[field];

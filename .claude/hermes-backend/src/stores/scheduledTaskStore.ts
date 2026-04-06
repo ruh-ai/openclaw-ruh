@@ -49,6 +49,13 @@ export async function getScheduledTask(id: string): Promise<ScheduledTask> {
   });
 }
 
+export async function getScheduledTaskByName(name: string): Promise<ScheduledTask | null> {
+  return withConn(async (client) => {
+    const result = await client.query('SELECT * FROM scheduled_tasks WHERE name = $1', [name]);
+    return result.rows[0] ? serialize(result.rows[0]) : null;
+  });
+}
+
 export async function createScheduledTask(data: {
   name: string;
   description: string;

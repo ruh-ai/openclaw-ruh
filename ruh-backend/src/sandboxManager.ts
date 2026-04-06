@@ -899,6 +899,17 @@ export async function* createOpenclawSandbox(
   }
   yield ['log', `Container started: ${containerName}`];
 
+  const removeContainer = async () => {
+    await dockerSpawn(['rm', '-f', containerName], 15_000);
+  };
+
+  const failCreate = async (message: string): Promise<SandboxEvent> => {
+    createSpan.setStatus({ code: SpanStatusCode.ERROR, message });
+    createSpan.end();
+    await removeContainer();
+    return ['error', message];
+  };
+
   // Resolve the host port Docker assigned
   await Bun.sleep(500);
   const [portCode, portOut] = await dockerSpawn(
@@ -906,16 +917,14 @@ export async function* createOpenclawSandbox(
     10_000,
   );
   if (portCode !== 0 || !portOut) {
-    yield ['error', `Failed to get port mapping: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
+    yield await failCreate(`Failed to get port mapping: ${portOut}`);
     return;
   }
 
   // portOut is like "0.0.0.0:32769" or ":::32769"
   const hostPort = portOut.trim().split(':').pop() ?? '';
   if (!hostPort || isNaN(parseInt(hostPort))) {
-    yield ['error', `Could not parse host port from: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
+    yield await failCreate(`Could not parse host port from: ${portOut}`);
     return;
   }
 
@@ -949,17 +958,6 @@ export async function* createOpenclawSandbox(
 
   const run = (cmd: string, timeoutSec = 300) =>
     dockerExec(containerName, cmd, timeoutSec * 1000);
-
-  const removeContainer = async () => {
-    await dockerSpawn(['rm', '-f', containerName], 15_000);
-  };
-
-  const failCreate = async (message: string): Promise<SandboxEvent> => {
-    createSpan.setStatus({ code: SpanStatusCode.ERROR, message });
-    createSpan.end();
-    await removeContainer();
-    return ['error', message];
-  };
 
   const runRequiredBootstrapStep = async (
     step: BootstrapCommandStep,

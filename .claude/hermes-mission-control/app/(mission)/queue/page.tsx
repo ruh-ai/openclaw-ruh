@@ -13,7 +13,8 @@ import {
   ArrowUpDown,
   Zap,
 } from "lucide-react";
-import { api, type QueueStats, type QueueJob, type QueueHealth } from "@/lib/api";
+import { RunnerSwitcher } from "@/components/RunnerSwitcher";
+import { api, type AgentRunnerKind, type QueueStats, type QueueJob, type QueueHealth } from "@/lib/api";
 
 const STATUS_ICONS: Record<string, typeof CheckCircle> = {
   completed: CheckCircle,
@@ -88,6 +89,7 @@ export default function QueuePage() {
   const [recentJobs, setRecentJobs] = useState<QueueJob[]>([]);
   const [health, setHealth] = useState<QueueHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingRunner, setPendingRunner] = useState<AgentRunnerKind | null>(null);
   const [showSubmit, setShowSubmit] = useState(false);
   const [submitDesc, setSubmitDesc] = useState("");
   const [submitAgent, setSubmitAgent] = useState("auto");
@@ -133,6 +135,20 @@ export default function QueuePage() {
     }
   };
 
+  const handleRunnerSelect = async (runner: AgentRunnerKind) => {
+    setPendingRunner(runner);
+    try {
+      const result = await api.queue.setRunner(runner);
+      setHealth((current) => (current ? { ...current, agentRunner: result.agentRunner } : current));
+      setError(null);
+      fetchData();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setPendingRunner(null);
+    }
+  };
+
   const executionStats = stats?.["hermes-execution"] || { waiting: 0, active: 0, completed: 0, failed: 0 };
   const concurrency = health?.workers.workers.find(w => w.name === "hermes-execution")?.concurrency ?? 2;
 
@@ -166,6 +182,12 @@ export default function QueuePage() {
 
       {error && (
         <div className="mt-3 p-2.5 bg-[var(--error)]/5 border border-[var(--error)]/20 rounded-lg text-xs text-[var(--error)]">{error}</div>
+      )}
+
+      {health && (
+        <div className="mt-4">
+          <RunnerSwitcher runner={health.agentRunner} onSelect={handleRunnerSelect} pendingRunner={pendingRunner} />
+        </div>
       )}
 
       {/* Submit Task Form */}

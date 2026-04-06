@@ -39,6 +39,8 @@ export interface SavedAgent {
   model?: string;
   /** Forge sandbox — dedicated per-agent builder sandbox. Null if not forging. */
   forgeSandboxId?: string | null;
+  /** Current stage in the creation lifecycle (think/plan/build/review/test/ship/complete). */
+  forgeStage?: string | null;
   /** Backend-persisted creation session snapshot for recovery on page refresh. */
   creationSession?: unknown | null;
 }
@@ -82,6 +84,7 @@ function fromBackend(r: Record<string, unknown>): SavedAgent {
     discoveryDocuments: (r.discovery_documents as DiscoveryDocuments | null | undefined) ?? null,
     workspaceMemory: normalizeWorkspaceMemory(r.workspace_memory),
     forgeSandboxId: (r.forge_sandbox_id as string | null) ?? null,
+    forgeStage: (r.forge_stage as string | null) ?? null,
     creationSession: (r.creation_session as unknown) ?? null,
   };
 }

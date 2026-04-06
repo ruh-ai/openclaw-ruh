@@ -1,14 +1,7 @@
 import { describe, expect, test, mock } from "bun:test";
 import { render } from "@testing-library/react";
-
-mock.module("lucide-react", () => {
-  const Icon = ({ children, ...props }: Record<string, unknown>) => <span {...props}>{children}</span>;
-  return {
-    Users: Icon, Bot: Icon, Server: Icon, Store: Icon,
-    LayoutDashboard: Icon, Activity: Icon, LogOut: Icon,
-    Shield: Icon, User: Icon, Code: Icon,
-  };
-});
+import lucideMock from "../test-lucide-mock";
+mock.module("lucide-react", () => lucideMock);
 
 mock.module("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -43,8 +36,8 @@ describe("AdminLayout", () => {
         <div>Test content</div>
       </AdminLayout>,
     );
-    expect(getByText("Ruh Admin")).toBeTruthy();
-    expect(getByText("Platform Management")).toBeTruthy();
+    expect(getByText("Super Admin")).toBeTruthy();
+    expect(getByText("Ruh.ai")).toBeTruthy();
   });
 
   test("renders all navigation links", async () => {
@@ -54,8 +47,8 @@ describe("AdminLayout", () => {
         <div>Test content</div>
       </AdminLayout>,
     );
-    expect(getByText("Dashboard")).toBeTruthy();
-    expect(getByText("Users")).toBeTruthy();
+    expect(getByText("Overview")).toBeTruthy();
+    expect(getByText("People")).toBeTruthy();
     expect(getByText("Agents")).toBeTruthy();
     expect(getByText("Marketplace")).toBeTruthy();
     expect(getByText("System")).toBeTruthy();

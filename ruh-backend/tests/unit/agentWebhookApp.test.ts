@@ -43,6 +43,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -54,14 +55,27 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mockListAgents,
+  listAgentsForCreator: mockListAgents,
+  listAgentsForCreatorInOrg: mockListAgents,
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
+  getAgentForCreator: mock(async () => makeAgentRecord({ id: 'agent-1', sandbox_ids: [SANDBOX_ID] })),
+  getAgentForCreatorInOrg: mock(async () => makeAgentRecord({ id: 'agent-1', sandbox_ids: [SANDBOX_ID] })),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mockUpdateAgentConfig,
   deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
   getAgentWorkspaceMemory: mock(async () => null),
   updateAgentWorkspaceMemory: mock(async () => null),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
@@ -69,10 +83,13 @@ mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -84,9 +101,21 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
@@ -95,7 +124,8 @@ mock.module('../../src/docker', () => ({
   buildHomeFileWriteCommand: () => '',
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
-  dockerSpawn: mock(async () => ({ code: 0, stdout: '', stderr: '' })),
+  dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
@@ -118,7 +148,7 @@ mock.module('axios', () => ({
   post: mockAxiosPost,
 }));
 
-const { app } = await import('../../src/app');
+const { app } = await import('../../src/app.ts?unitAgentWebhookApp');
 
 type MockReq = {
   method: string;

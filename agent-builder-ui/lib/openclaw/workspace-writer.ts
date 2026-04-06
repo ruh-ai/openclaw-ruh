@@ -22,12 +22,24 @@ export interface WriteBatchResult {
 
 /**
  * Read a single file from the sandbox workspace.
- * Returns the file content as a string, or null if the file does not exist.
+ * Tries copilot workspace first (where builds write), falls back to main workspace.
  */
 export async function readWorkspaceFile(
   sandboxId: string,
   path: string,
 ): Promise<string | null> {
+  // Try copilot workspace first (copilot-mode builds write here)
+  const copilotRes = await fetchBackendWithAuth(
+    `${API_BASE}/api/sandboxes/${sandboxId}/workspace-copilot/file?path=${encodeURIComponent(path)}`,
+  );
+  if (copilotRes.ok) {
+    try {
+      const data = await copilotRes.json();
+      if (typeof data.content === "string") return data.content;
+    } catch { /* fall through */ }
+  }
+
+  // Fall back to main workspace
   const res = await fetchBackendWithAuth(
     `${API_BASE}/api/sandboxes/${sandboxId}/workspace/file?path=${encodeURIComponent(path)}`,
   );

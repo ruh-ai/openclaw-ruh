@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ruh Developer",
-  description: "Manage and chat with OpenClaw agents running in sandboxes",
+  title: "Ruh Workspace",
+  description: "Open installed digital employees inside dedicated customer workspaces",
 };
 
 export default function RootLayout({

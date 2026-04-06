@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { SANDBOX_ID, makeSandboxRecord } from '../helpers/fixtures';
+import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
 
 const mockGetSandbox = mock(async () => makeSandboxRecord());
 const mockDeleteSandbox = mock(async () => true);
@@ -27,7 +27,7 @@ const mockReconfigureSandboxLlm = mock(async () => ({
   logs: ['Config updated'],
   configured: { apiKey: 'sk-12***cdef' },
 }));
-const mockDockerExec = mock(async () => [true, '']);
+const mockDockerExec = mock(async () => [true, 'true']);
 
 mock.module('../../src/store', () => ({
   getSandbox: mockGetSandbox,
@@ -42,6 +42,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -53,12 +54,27 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
+  getAgentForCreator: mock(async () => makeAgentRecord()),
+  getAgentForCreatorInOrg: mock(async () => makeAgentRecord()),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
@@ -66,10 +82,13 @@ mock.module('../../src/sandboxManager', () => ({
   reconfigureSandboxLlm: mockReconfigureSandboxLlm,
   retrofitSandboxToSharedCodex: mock(async () => ({ ok: true, model: 'openai-codex/gpt-5.4', authSource: 'Codex CLI auth' })),
   dockerExec: mockDockerExec,
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
   PREVIEW_PORTS: [],
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -81,9 +100,21 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
@@ -93,6 +124,7 @@ mock.module('../../src/docker', () => ({
   dockerContainerRunning: mock(async () => true),
   dockerExec: mockDockerExec,
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
@@ -104,7 +136,11 @@ mock.module('../../src/auditStore', () => ({
   listAuditEvents: mockListAuditEvents,
 }));
 
-const { app } = await import('../../src/app');
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+const { app } = await import('../../src/app.ts?unitAuditApp');
 
 type MockReq = {
   method: string;
@@ -173,25 +209,40 @@ function getRouteHandler(method: string, path: string) {
     });
 
   const route = layer?.['route'] as { stack: Array<{ handle: Function }> } | undefined;
-  const handle = route?.stack?.[0]?.handle;
-  if (!handle) {
+  const handles = route?.stack?.map((entry) => entry.handle) ?? [];
+  if (handles.length === 0) {
     throw new Error(`Route not found: ${method} ${path}`);
   }
-  return handle as (req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void;
+  return handles as Array<(req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void>;
 }
 
 async function invokeRoute(method: string, path: string, req: MockReq) {
-  const handler = getRouteHandler(method, path);
+  const handlers = getRouteHandler(method, path);
   const res = makeRes();
 
-  const nextResult = new Promise<unknown>((resolve, reject) => {
-    handler(req, res, (error?: unknown) => {
-      if (error) reject(error);
-      else resolve(undefined);
-    });
-  });
+  let index = 0;
+  const runNext = async (): Promise<void> => {
+    const handler = handlers[index++];
+    if (!handler) {
+      return;
+    }
 
-  await Promise.race([res.done, nextResult]);
+    await new Promise<void>((resolve, reject) => {
+      handler(req, res, (error?: unknown) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    if (res.body === undefined) {
+      await runNext();
+    }
+  };
+
+  await Promise.race([res.done, runNext()]);
   return res;
 }
 
@@ -228,7 +279,7 @@ beforeEach(() => {
     configured: { apiKey: 'sk-12***cdef' },
   }));
   mockDockerExec.mockReset();
-  mockDockerExec.mockImplementation(async () => [true, '']);
+  mockDockerExec.mockImplementation(async () => [true, 'true']);
   process.env.OPENCLAW_ADMIN_TOKEN = 'admin-test-token';
 });
 
@@ -310,19 +361,13 @@ describe('audit route wiring', () => {
   });
 
   test('admin audit-event query requires a token', async () => {
-    const handler = getRouteHandler('GET', '/api/admin/audit-events');
-    const res = makeRes();
-
-    await expect(new Promise((resolve, reject) => {
-      handler(makeReq({
+    await expect(
+      invokeRoute('GET', '/api/admin/audit-events', makeReq({
         params: {},
         query: {},
         headers: {},
-      }), res, (error?: unknown) => {
-        if (error) reject(error);
-        else resolve(undefined);
-      });
-    })).rejects.toMatchObject({ status: 401 });
+      })),
+    ).rejects.toMatchObject({ status: 401 });
   });
 
   test('admin audit-event query returns filtered rows', async () => {

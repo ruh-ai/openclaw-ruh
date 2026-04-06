@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Send, Plus, ChevronDown, ChevronUp, CheckCircle2,
   Wrench, Terminal, Loader2, Brain, PenLine, SplitSquareHorizontal, Globe, Files, Code2, SlidersHorizontal, Lock,
-  Maximize2, Minimize2, CornerDownLeft, Play,
+  Maximize2, Minimize2, CornerDownLeft, Play, LayoutDashboard,
 } from "lucide-react";
 import Image from "next/image";
 import MessageContent from "@/app/(platform)/agents/create/_components/MessageContent";
@@ -441,6 +441,7 @@ function TerminalPanel({
 
 // ─── Tool category sets for auto-switch ─────────────────────────────────────
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TERMINAL_TOOLS = new Set(["exec", "bash", "shell_exec", "shell", "terminal", "run", "sh"]);
 const BROWSER_TOOLS = new Set([
   "browser_navigate", "browser_click", "browser_input", "browser_scroll",
@@ -457,7 +458,7 @@ const CODE_TOOLS = new Set([
   "text_editor", "read_file", "file_read",
 ]);
 
-type ComputerViewTab = "terminal" | "code" | "browser" | "files" | "preview" | "config";
+type ComputerViewTab = "terminal" | "code" | "browser" | "files" | "preview" | "config" | "dashboard";
 
 function ComputerView({
   liveSteps,
@@ -540,7 +541,7 @@ function ComputerView({
 }) {
   const isBuilderMode = mode === "builder";
   const [activeTab, setActiveTab] = useState<ComputerViewTab>(
-    isBuilderMode && showCoPilotConfig ? "config" : "terminal"
+    isBuilderMode && showCoPilotConfig ? "config" : "dashboard"
   );
   const userTabClickRef = useRef<number>(0); // timestamp of last manual tab click
   const lastAutoSwitchRef = useRef<number>(0);
@@ -694,7 +695,7 @@ function ComputerView({
         {/* Tabs */}
         <div className="ml-auto flex items-center gap-1">
           <div className="flex items-center gap-0.5 rounded-xl border border-[var(--border-default)] bg-[var(--background)] p-0.5">
-            {([...(isBuilderMode && showCoPilotConfig ? ["config"] as const : []), "terminal", "code", "files", "browser", "preview"] as ComputerViewTab[]).map((t) => {
+            {([...(isBuilderMode && showCoPilotConfig ? ["config"] as const : []), "dashboard", "terminal", "code", "files", "browser", "preview"] as ComputerViewTab[]).map((t) => {
               return (
                 <button
                   key={t}
@@ -710,6 +711,7 @@ function ComputerView({
                   }`}
                 >
                   {t === "config" && <SlidersHorizontal className="h-2.5 w-2.5" />}
+                  {t === "dashboard" && <LayoutDashboard className="h-2.5 w-2.5" />}
                   {t === "terminal" && <Terminal className="h-2.5 w-2.5" />}
                   {t === "code" && <Code2 className="h-2.5 w-2.5" />}
                   {t === "files" && <Files className="h-2.5 w-2.5" />}
@@ -805,6 +807,35 @@ function ComputerView({
         />
       )}
 
+      {/* Dashboard tab — Mission Control (agent-runtime on port 8080) */}
+      {activeTab === "dashboard" && (
+        <div className="flex-1 min-h-0 flex flex-col">
+          {activeSandboxId ? (
+            <iframe
+              key={`dashboard-${activeSandboxId}`}
+              src={`${API_BASE}/api/sandboxes/${activeSandboxId}/preview/proxy/8080/`}
+              className="flex-1 w-full border-0"
+              title="Mission Control"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-3 px-8">
+              <LayoutDashboard className="h-7 w-7 text-[var(--primary)]/20" />
+              <p className="text-[10px] font-satoshi-bold text-[var(--text-secondary)] text-center">
+                Mission Control
+              </p>
+              <p className="text-[10px] font-mono text-[var(--text-tertiary)] text-center leading-relaxed">
+                The agent&apos;s dashboard will appear here once the sandbox is running.
+                <br />
+                <span className="text-[var(--text-tertiary)]/60">
+                  Shows data, metrics, and activity from the agent&apos;s work.
+                </span>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Preview tab */}
       {activeTab === "preview" && (
         <PreviewPanel
@@ -820,6 +851,7 @@ function ComputerView({
         <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--background)]">
           <LifecycleStepRenderer
             embedded
+            agentId={existingAgent?.id}
             onComplete={onBuilderComplete}
             canComplete={canBuilderComplete}
             isCompleting={isCompletingBuilder}
@@ -945,35 +977,89 @@ export function TabChat({
   }, [isBuilderMode, sendChatMessage]);
 
   // ── Auto-trigger Think stage PRD/TRD generation ────────────────────────
-  const thinkGenerationSentRef = useRef(false);
   useEffect(() => {
+    if (coPilotStore?.userTriggeredThink && !coPilotStore?.thinkRunId) {
+      coPilotStore?.setUserTriggeredThink?.(true);
+      return;
+    }
+
+    const thinkRunId = coPilotStore?.thinkRunId ?? null;
     if (
       coPilotStore?.devStage === "think" &&
       coPilotStore?.thinkStatus === "generating" &&
+      coPilotStore?.userTriggeredThink &&
+      Boolean(thinkRunId) &&
+      coPilotStore?.lastDispatchedThinkRunId !== thinkRunId &&
       !coPilotStore?.discoveryDocuments &&
-      !thinkGenerationSentRef.current &&
       !isLoading
     ) {
       const name = coPilotStore.name?.trim();
       const desc = coPilotStore.description?.trim();
       if (name && desc) {
-        thinkGenerationSentRef.current = true;
+        coPilotStore?.markThinkRunDispatched?.(thinkRunId);
+        coPilotStore?.setUserTriggeredThink?.(false);
         const thinkPrompt = `Create the PRD and TRD for ${name} based on this mission: ${desc}`;
-        sendChatMessage(thinkPrompt, { silent: true });
+        sendChatMessage(thinkPrompt, { silent: true })
+          .then(async () => {
+            // Think completed — read PRD/TRD from workspace and populate store
+            if (!coPilotStore?.discoveryDocuments) {
+              const sandboxId = coPilotStore?.agentSandboxId;
+              if (sandboxId) {
+                try {
+                  const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+                  const [prdContent, trdContent] = await Promise.all([
+                    readWorkspaceFile(sandboxId, ".openclaw/discovery/PRD.md"),
+                    readWorkspaceFile(sandboxId, ".openclaw/discovery/TRD.md"),
+                  ]);
+                  if (prdContent && trdContent) {
+                    const parse = (md: string) => {
+                      const lines = md.split("\n");
+                      const title = lines[0]?.replace(/^#\s+/, "") ?? "Document";
+                      const sections: Array<{ heading: string; content: string }> = [];
+                      let heading = "", content: string[] = [];
+                      for (const line of lines.slice(1)) {
+                        if (line.startsWith("## ")) {
+                          if (heading) sections.push({ heading, content: content.join("\n").trim() });
+                          heading = line.replace(/^##\s+/, ""); content = [];
+                        } else content.push(line);
+                      }
+                      if (heading) sections.push({ heading, content: content.join("\n").trim() });
+                      return { title, sections };
+                    };
+                    coPilotStore?.setDiscoveryDocuments?.({ prd: parse(prdContent), trd: parse(trdContent) });
+                    coPilotStore?.setThinkStatus?.("ready");
+                  }
+                } catch (err) {
+                  console.warn("[Think] Failed to read docs from workspace:", err);
+                }
+              }
+            }
+          })
+          .catch(() => {
+            coPilotStore?.setThinkStatus?.("failed");
+          });
       }
     }
-  }, [coPilotStore?.devStage, coPilotStore?.thinkStatus, coPilotStore?.discoveryDocuments, coPilotStore?.name, coPilotStore?.description, isLoading, sendChatMessage]);
+  }, [coPilotStore?.devStage, coPilotStore?.thinkStatus, coPilotStore?.thinkRunId, coPilotStore?.discoveryDocuments, coPilotStore?.name, coPilotStore?.description, coPilotStore?.userTriggeredThink, coPilotStore?.lastDispatchedThinkRunId, isLoading, sendChatMessage]);
 
   // ── Auto-trigger plan generation when Think → Plan transition occurs ────
-  const planGenerationSentRef = useRef(false);
   useEffect(() => {
+    if (coPilotStore?.userTriggeredPlan && !coPilotStore?.planRunId) {
+      coPilotStore?.setUserTriggeredPlan?.(true);
+      return;
+    }
+
+    const planRunId = coPilotStore?.planRunId ?? null;
     if (
       coPilotStore?.devStage === "plan" &&
       coPilotStore?.planStatus === "generating" &&
-      !planGenerationSentRef.current &&
+      coPilotStore?.userTriggeredPlan &&
+      Boolean(planRunId) &&
+      coPilotStore?.lastDispatchedPlanRunId !== planRunId &&
       !isLoading
     ) {
-      planGenerationSentRef.current = true;
+      coPilotStore?.markPlanRunDispatched?.(planRunId);
+      coPilotStore?.setUserTriggeredPlan?.(false);
       // Build a message that includes the approved PRD/TRD for the architect
       const docs = coPilotStore.discoveryDocuments;
       let planPrompt = "Generate the architecture plan for this agent.";
@@ -982,32 +1068,37 @@ export function TabChat({
         const trdSummary = docs.trd.sections.map((s) => `### ${s.heading}\n${s.content}`).join("\n\n");
         planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
       }
-      sendChatMessage(planPrompt, { silent: true });
+      sendChatMessage(planPrompt, { silent: true })
+        .then(async () => {
+          // Plan message completed — architect should have written architecture.json
+          // to the workspace. Read it and populate the store (reliable, no marker parsing).
+          if (!coPilotStore?.architecturePlan) {
+            const sandboxId = coPilotStore?.agentSandboxId;
+            if (sandboxId) {
+              try {
+                const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+                const planJson = await readWorkspaceFile(sandboxId, ".openclaw/plan/architecture.json");
+                if (planJson) {
+                  const { normalizePlan } = await import("@/lib/openclaw/plan-formatter");
+                  const plan = normalizePlan(JSON.parse(planJson));
+                  coPilotStore?.setArchitecturePlan?.(plan);
+                  coPilotStore?.setPlanStatus?.("ready");
+                }
+              } catch (err) {
+                console.warn("[Plan] Failed to read plan from workspace:", err);
+              }
+            }
+          }
+        })
+        .catch(() => {
+          coPilotStore?.setPlanStatus?.("failed");
+        });
     }
-  }, [coPilotStore?.devStage, coPilotStore?.planStatus, isLoading, coPilotStore?.discoveryDocuments, sendChatMessage]);
+  }, [coPilotStore?.devStage, coPilotStore?.planStatus, coPilotStore?.planRunId, coPilotStore?.userTriggeredPlan, isLoading, coPilotStore?.discoveryDocuments, coPilotStore?.lastDispatchedPlanRunId, sendChatMessage]);
 
-  // ── Auto-approve Plan → Build when architecture plan is ready ─────────
-  // No manual gate — the plan is shown for review but build starts automatically.
-  // Users can always go back to edit the plan from the Review stage.
-  const planAutoApprovedRef = useRef(false);
-  useEffect(() => {
-    if (
-      coPilotStore?.devStage === "plan" &&
-      coPilotStore?.planStatus === "ready" &&
-      coPilotStore?.architecturePlan &&
-      !planAutoApprovedRef.current &&
-      !isLoading
-    ) {
-      // Brief delay so the plan flashes on screen before auto-advancing
-      const timeout = setTimeout(() => {
-        if (!planAutoApprovedRef.current) {
-          planAutoApprovedRef.current = true;
-          onPlanApproved?.();
-        }
-      }, 2000);
-      return () => clearTimeout(timeout);
-    }
-  }, [coPilotStore?.devStage, coPilotStore?.planStatus, coPilotStore?.architecturePlan, isLoading, onPlanApproved]);
+  // Plan approval is user-gated — the user clicks "Approve & Start Build"
+  // in the Plan stage UI (LifecycleStepRenderer StagePlan). No auto-approval.
+  // This gives users time to review the architecture plan before build starts.
 
   const agentLogo = "/assets/logos/favicon.svg";
   const loadingOlderHistory = false;

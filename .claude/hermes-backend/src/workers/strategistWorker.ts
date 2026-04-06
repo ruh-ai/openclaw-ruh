@@ -3,7 +3,7 @@ import path from 'path';
 import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, type AnalystJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
-import { spawnClaudeAgent } from './subprocess';
+import { spawnAgentProcess } from './subprocess';
 import * as goalStore from '../stores/goalStore';
 import { query } from '../db';
 
@@ -99,7 +99,7 @@ Output ONLY valid JSON matching your output format specification.`;
 
   console.log('[hermes:strategist] Running system assessment...');
 
-  const result = await spawnClaudeAgent({
+  const result = await spawnAgentProcess({
     jobId: `strategist-${uuidv4().slice(0, 8)}`,
     agentPath,
     prompt,

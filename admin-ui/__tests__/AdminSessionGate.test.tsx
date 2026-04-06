@@ -1,5 +1,5 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
 
 const replaceFn = mock(() => {});
 
@@ -26,17 +26,26 @@ beforeEach(() => {
 });
 
 describe("AdminSessionGate", () => {
-  test("shows loading spinner initially", () => {
-    const { container, queryByText } = render(
-      <AdminSessionGate>
-        <div>Protected</div>
-      </AdminSessionGate>
-    );
+  test("shows loading spinner initially", async () => {
+    // Use a never-resolving promise so the component stays in loading state
+    // regardless of how fast microtasks flush in the test environment
+    // @ts-expect-error — replacing global fetch for test
+    globalThis.fetch = mock(() => new Promise(() => {}));
+
+    let container: HTMLElement;
+    let queryByText: ReturnType<typeof render>["queryByText"];
+    await act(async () => {
+      ({ container, queryByText } = render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      ));
+    });
 
     // Component should not render children while loading
-    expect(queryByText("Protected")).toBeNull();
+    expect(queryByText!("Protected")).toBeNull();
     // Should render spinner wrapper (two nested divs, no children text)
-    expect(container.querySelector("div > div")).toBeTruthy();
+    expect(container!.querySelector("div > div")).toBeTruthy();
   });
 
   test("renders children when authenticated with admin access", async () => {
@@ -56,25 +65,30 @@ describe("AdminSessionGate", () => {
       })
     );
 
-    const { getByText } = render(
-      <AdminSessionGate>
-        <div>Protected Content</div>
-      </AdminSessionGate>
-    );
+    let getByText: ReturnType<typeof render>["getByText"];
+    await act(async () => {
+      ({ getByText } = render(
+        <AdminSessionGate>
+          <div>Protected Content</div>
+        </AdminSessionGate>
+      ));
+    });
 
     await waitFor(() => {
-      expect(getByText("Protected Content")).toBeTruthy();
+      expect(getByText!("Protected Content")).toBeTruthy();
     });
     expect(replaceFn).not.toHaveBeenCalled();
   });
 
   test("redirects when fetch returns non-ok response", async () => {
     // Default beforeEach sets fetch to return 401
-    render(
-      <AdminSessionGate>
-        <div>Protected</div>
-      </AdminSessionGate>
-    );
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
 
     await waitFor(() => {
       expect(replaceFn).toHaveBeenCalledWith(
@@ -99,11 +113,13 @@ describe("AdminSessionGate", () => {
       })
     );
 
-    render(
-      <AdminSessionGate>
-        <div>Protected</div>
-      </AdminSessionGate>
-    );
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
 
     await waitFor(() => {
       expect(replaceFn).toHaveBeenCalledWith(
@@ -116,11 +132,13 @@ describe("AdminSessionGate", () => {
     // @ts-expect-error — replacing global fetch for test
     globalThis.fetch = mock(() => Promise.reject(new Error("Network error")));
 
-    render(
-      <AdminSessionGate>
-        <div>Protected</div>
-      </AdminSessionGate>
-    );
+    await act(async () => {
+      render(
+        <AdminSessionGate>
+          <div>Protected</div>
+        </AdminSessionGate>
+      );
+    });
 
     await waitFor(() => {
       expect(replaceFn).toHaveBeenCalledWith(

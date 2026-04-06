@@ -1,5 +1,4 @@
 import { Worker, type Job } from 'bullmq';
-import { spawn } from 'bun';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,6 +7,7 @@ import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type FactoryJobData, type IngestionJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
 import { query } from '../db';
+import { spawnAgentProcess } from './subprocess';
 
 /**
  * List existing agent names and descriptions for the factory prompt.
@@ -73,21 +73,20 @@ model: sonnet
 Output ONLY the complete .md file content, nothing else. Start with the frontmatter.`;
 
       const hermesPath = path.join(config.agentsDir, 'hermes.md');
-      const proc = spawn({
-        cmd: [config.claudeCliPath, '--agent', hermesPath, '--print', '--dangerously-skip-permissions'],
-        stdin: new Blob([creationPrompt]),
-        stdout: 'pipe',
-        stderr: 'pipe',
-        cwd: config.projectRoot,
+      const result = await spawnAgentProcess({
+        jobId: String(job.id ?? uuidv4()),
+        agentPath: hermesPath,
+        prompt: creationPrompt,
+        timeout: config.executionTimeout,
+        dangerouslySkipPermissions: true,
       });
 
-      const exitCode = await proc.exited;
-      const output = await new Response(proc.stdout).text();
-
-      if (exitCode !== 0 || !output.trim()) {
+      if (!result.success || !result.stdout.trim()) {
         console.error('[hermes:factory] Agent creation subprocess failed');
-        throw new Error('Agent creation subprocess failed');
+        throw new Error(result.stderr || 'Agent creation subprocess failed');
       }
+
+      const output = result.stdout;
 
       // Extract agent name from frontmatter
       const nameMatch = output.match(/^name:\s*(.+)$/m);

@@ -190,6 +190,13 @@ interface EvalTask {
 **Before:** `eval-runner.ts` → `sendToArchitectStreaming()` → shared architect container
 **After:** `eval-runner.ts` → `sendToForgeSandboxChat()` → agent's own container
 
+### Sandbox readiness gate
+
+- The Test stage follows the same forge-only contract as [[SPEC-openclaw-bridge-forge-required]].
+- When `agentSandboxId` is missing, `runEvalSuite()` keeps scenarios pending with an explicit container-not-ready reason instead of calling `sendToArchitectStreaming()`.
+- `runSkillTest()` also fails closed: missing sandbox state returns a skipped result with the same container-not-ready reason instead of probing the retired shared architect path.
+- `LifecycleStepRenderer.tsx` surfaces that state directly in the Test UI so operators see `Container not ready` while the dedicated agent sandbox is still provisioning.
+
 The agent container already exists from the Build stage. Its `forgeSandboxId` is stored in copilot state. The `sendToForgeSandboxChat()` function already exists in `api.ts` and routes through `/api/openclaw/forge-chat` → `/api/sandboxes/:id/chat`.
 
 For trace collection, we use the **WebSocket chat endpoint** (`/api/sandboxes/:id/chat/ws`) which emits `tool` and `result` events for every tool call. This is surfaced via a new frontend proxy endpoint at `/api/openclaw/forge-chat-traced`.

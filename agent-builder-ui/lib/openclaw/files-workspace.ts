@@ -1,6 +1,27 @@
 export type WorkspacePreviewKind = "text" | "image" | "pdf" | "binary";
 export type WorkspaceArtifactType = "webpage" | "document" | "data" | "code" | "image" | "archive" | "other";
 
+// ─── Workspace Status (lightweight summary from status endpoint) ────────────
+
+export interface WorkspaceStatus {
+  soul_exists: boolean;
+  agents_md_exists: boolean;
+  skill_count: number;
+  tool_count: number;
+  trigger_count: number;
+  skill_ids: string[];
+  last_modified: string | null;
+}
+
+export async function fetchWorkspaceStatus(
+  apiBase: string,
+  sandboxId: string,
+): Promise<WorkspaceStatus> {
+  const res = await fetch(`${apiBase}/api/sandboxes/${sandboxId}/workspace/status`);
+  if (!res.ok) throw new Error(`Workspace status failed: ${res.status}`);
+  return res.json() as Promise<WorkspaceStatus>;
+}
+
 export interface WorkspaceFileItem {
   path: string;
   name: string;

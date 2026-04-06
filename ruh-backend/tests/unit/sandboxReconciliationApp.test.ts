@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
-import { SANDBOX_ID, makeSandboxRecord } from '../helpers/fixtures';
+import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
 
 const mockGetSandbox = mock(async () => makeSandboxRecord());
 const mockListSandboxes = mock(async () => [makeSandboxRecord()]);
@@ -24,6 +24,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -35,23 +36,41 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mock(async () => null),
+  getAgentForCreator: mock(async () => makeAgentRecord()),
+  getAgentForCreatorInOrg: mock(async () => makeAgentRecord()),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
+  getAgentWorkspaceMemory: mock(async () => null),
+  updateAgentWorkspaceMemory: mock(async () => null),
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({ ok: true })),
   retrofitSandboxToSharedCodex: mock(async () => ({ ok: true })),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   restartGateway: mock(async () => [true, '']),
   PREVIEW_PORTS: [],
   stopAndRemoveContainer: mockStopAndRemoveContainer,
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -63,9 +82,21 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
@@ -75,6 +106,7 @@ mock.module('../../src/docker', () => ({
   dockerContainerRunning: mockDockerContainerRunning,
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   listManagedSandboxContainers: mockListManagedSandboxContainers,
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
@@ -86,13 +118,17 @@ mock.module('../../src/auditStore', () => ({
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 mock.module('axios', () => ({
   default: { get: mockAxiosGet, post: mock(async () => ({ status: 200, data: {} })) },
   get: mockAxiosGet,
   post: mock(async () => ({ status: 200, data: {} })),
 }));
 
-const { app } = await import('../../src/app');
+const { app } = await import('../../src/app.ts?unitSandboxReconciliationApp');
 
 type MockReq = {
   method: string;
@@ -152,26 +188,41 @@ function getRouteHandler(method: string, path: string) {
   });
 
   const route = layer?.route as { stack: Array<{ handle: Function }> } | undefined;
-  const handle = route?.stack?.[0]?.handle;
-  if (!handle) {
+  const handles = route?.stack?.map((entry) => entry.handle) ?? [];
+  if (handles.length === 0) {
     throw new Error(`Route not found: ${method} ${path}`);
   }
 
-  return handle as (req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void;
+  return handles as Array<(req: MockReq, res: ReturnType<typeof makeRes>, next: (error?: unknown) => void) => void>;
 }
 
 async function invokeRoute(method: string, path: string, req: MockReq) {
-  const handler = getRouteHandler(method, path);
+  const handlers = getRouteHandler(method, path);
   const res = makeRes();
 
-  const nextResult = new Promise<unknown>((resolve, reject) => {
-    handler(req, res, (error?: unknown) => {
-      if (error) reject(error);
-      else resolve(undefined);
-    });
-  });
+  let index = 0;
+  const runNext = async (): Promise<void> => {
+    const handler = handlers[index++];
+    if (!handler) {
+      return;
+    }
 
-  await Promise.race([res.done, nextResult]);
+    await new Promise<void>((resolve, reject) => {
+      handler(req, res, (error?: unknown) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+
+    if (res.body === undefined) {
+      await runNext();
+    }
+  };
+
+  await Promise.race([res.done, runNext()]);
   return res;
 }
 
@@ -216,16 +267,11 @@ describe('sandbox reconciliation routes', () => {
   });
 
   test('admin reconcile route requires a valid token', async () => {
-    const handler = getRouteHandler('GET', '/api/admin/sandboxes/reconcile');
-
-    await expect(new Promise((resolve, reject) => {
-      handler(makeReq({
+    await expect(
+      invokeRoute('GET', '/api/admin/sandboxes/reconcile', makeReq({
         headers: {},
-      }), makeRes(), (error?: unknown) => {
-        if (error) reject(error);
-        else resolve(undefined);
-      });
-    })).rejects.toMatchObject({ status: 401 });
+      })),
+    ).rejects.toMatchObject({ status: 401 });
   });
 
   test('admin reconcile route reports DB-only and container-only sandboxes', async () => {

@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { UserRecord } from '../../src/userStore';
 import type { SessionRecord } from '../../src/sessionStore';
 import type { OrganizationMembershipRecord } from '../../src/organizationMembershipStore';
 import type { OrgRecord } from '../../src/orgStore';
+import jwt from 'jsonwebtoken';
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
@@ -10,6 +11,9 @@ const USER_ID = 'user-abc-123';
 const ORG_ID = 'org-dev-456';
 const SESSION_ID = 'session-789';
 const REFRESH_TOKEN = 'rt-uuid-token';
+
+process.env.JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'unit-test-access-secret';
+process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'unit-test-refresh-secret';
 
 function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
   return {
@@ -103,13 +107,41 @@ const mockEnsureAuthIdentity = mock(async (..._args: unknown[]) => ({
 const mockHashPassword = mock(async (_pw: string) => '$2a$12$newhash');
 const mockVerifyPassword = mock(async (_pw: string, _hash: string) => true);
 
-const mockSignAccessToken = mock((_payload: unknown) => 'mock-access-token');
-const mockVerifyAccessToken = mock((_token: string) => ({
-  userId: USER_ID,
-  email: 'test@example.com',
-  role: 'developer',
-  orgId: ORG_ID,
-}));
+function encodeAccessToken(payload: { userId: string; email: string; role: string; orgId: string | null }) {
+  return jwt.sign(payload, process.env.JWT_ACCESS_SECRET!, { expiresIn: '15m' });
+}
+
+function decodeAccessToken(token: string) {
+  try {
+    return jwt.verify(token, process.env.JWT_ACCESS_SECRET!) as {
+      userId: string;
+      email: string;
+      role: string;
+      orgId: string | null;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function defaultAuthPayload(overrides: Partial<{ userId: string; email: string; role: string; orgId: string | null }> = {}) {
+  return {
+    userId: USER_ID,
+    email: 'test@example.com',
+    role: 'developer',
+    orgId: ORG_ID,
+    ...overrides,
+  };
+}
+
+function authHeader(overrides: Partial<{ userId: string; email: string; role: string; orgId: string | null }> = {}) {
+  return `Bearer ${encodeAccessToken(defaultAuthPayload(overrides))}`;
+}
+
+const mockSignAccessToken = mock((payload: unknown) =>
+  encodeAccessToken(payload as ReturnType<typeof defaultAuthPayload>),
+);
+const mockVerifyAccessToken = mock((token: string) => decodeAccessToken(token));
 
 mock.module('../../src/userStore', () => ({
   getUserByEmail: mockGetUserByEmail,
@@ -163,7 +195,7 @@ mock.module('express-rate-limit', () => ({
 }));
 
 // Import after mocking
-const { authRouter } = await import('../../src/authRoutes');
+const { authRouter } = await import('../../src/authRoutes.ts?authRoutesUnit');
 
 // ── Lightweight Express app for testing ─────────────────────────────────────
 
@@ -217,13 +249,10 @@ beforeEach(() => {
   // Restore sensible defaults
   mockHashPassword.mockResolvedValue('$2a$12$newhash');
   mockVerifyPassword.mockResolvedValue(true);
-  mockSignAccessToken.mockReturnValue('mock-access-token');
-  mockVerifyAccessToken.mockReturnValue({
-    userId: USER_ID,
-    email: 'test@example.com',
-    role: 'developer',
-    orgId: ORG_ID,
-  });
+  mockSignAccessToken.mockImplementation((payload: unknown) =>
+    encodeAccessToken(payload as ReturnType<typeof defaultAuthPayload>),
+  );
+  mockVerifyAccessToken.mockImplementation((token: string) => decodeAccessToken(token));
   mockCreateSession.mockResolvedValue(makeSession());
   mockEnsureAuthIdentity.mockResolvedValue({
     id: 'identity-1',
@@ -234,6 +263,13 @@ beforeEach(() => {
   });
   mockListMembershipsForUser.mockResolvedValue([]);
   mockDeleteUserSessions.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  mockSignAccessToken.mockImplementation((payload: unknown) =>
+    encodeAccessToken(payload as ReturnType<typeof defaultAuthPayload>),
+  );
+  mockVerifyAccessToken.mockImplementation((token: string) => decodeAccessToken(token));
 });
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -327,7 +363,12 @@ describe('POST /api/auth/register', () => {
     expect(res.status).toBe(201);
     expect(res.body.user).toBeDefined();
     expect(res.body.user.email).toBe('test@example.com');
-    expect(res.body.accessToken).toBe('mock-access-token');
+    expect(decodeAccessToken(res.body.accessToken)).toMatchObject({
+      userId: USER_ID,
+      email: 'test@example.com',
+      role: 'developer',
+      orgId: ORG_ID,
+    });
     expect(res.body.refreshToken).toBeDefined();
     expect(mockCreateUser).toHaveBeenCalledTimes(1);
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
@@ -459,7 +500,12 @@ describe('POST /api/auth/login', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.user.id).toBe(USER_ID);
-    expect(res.body.accessToken).toBe('mock-access-token');
+    expect(decodeAccessToken(res.body.accessToken)).toMatchObject({
+      userId: USER_ID,
+      email: 'test@example.com',
+      role: 'developer',
+      orgId: ORG_ID,
+    });
     expect(res.body.refreshToken).toBeDefined();
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
     expect(mockEnsureAuthIdentity).toHaveBeenCalledTimes(1);
@@ -538,7 +584,12 @@ describe('POST /api/auth/refresh', () => {
     expect(res.status).toBe(200);
     expect(mockDeleteSession).toHaveBeenCalledWith(session.id);
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
-    expect(res.body.accessToken).toBe('mock-access-token');
+    expect(decodeAccessToken(res.body.accessToken)).toMatchObject({
+      userId: USER_ID,
+      email: 'test@example.com',
+      role: 'developer',
+      orgId: ORG_ID,
+    });
     // New refresh token should be different from old one (it's a uuid)
     expect(res.body.refreshToken).toBeDefined();
   });
@@ -572,7 +623,7 @@ describe('POST /api/auth/logout', () => {
   test('deletes all user sessions and clears cookies', async () => {
     const res = await request()
       .post('/api/auth/logout')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.message).toContain('Logged out');
@@ -599,7 +650,7 @@ describe('GET /api/auth/me', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
     expect(res.status).toBe(404);
   });
 
@@ -611,7 +662,7 @@ describe('GET /api/auth/me', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(USER_ID);
@@ -645,7 +696,7 @@ describe('GET /api/auth/me', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.activeOrganization.id).toBe(customerOrgId);
@@ -659,7 +710,7 @@ describe('GET /api/auth/me', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.platformRole).toBe('platform_admin');
@@ -671,7 +722,7 @@ describe('GET /api/auth/me', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.platformRole).toBe('user');
@@ -694,7 +745,7 @@ describe('PATCH /api/auth/me', () => {
 
     const res = await request()
       .patch('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .send({ displayName: 'New Name' });
 
     expect(res.status).toBe(200);
@@ -710,7 +761,7 @@ describe('PATCH /api/auth/me', () => {
 
     const res = await request()
       .patch('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .send({ displayName: 'New Name' });
 
     expect(res.status).toBe(404);
@@ -718,19 +769,18 @@ describe('PATCH /api/auth/me', () => {
 });
 
 describe('POST /api/auth/switch-org', () => {
-  test('returns 401 without auth', async () => {
-    mockVerifyAccessToken.mockReturnValue(null);
-
+  test('returns 400 when refresh token is missing even if an access token is absent', async () => {
     const res = await request()
       .post('/api/auth/switch-org')
       .send({ organizationId: ORG_ID });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(400);
+    expect(res.body.detail).toContain('Refresh token is required');
   });
 
   test('returns 400 when organizationId missing', async () => {
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .send({});
     expect(res.status).toBe(400);
     expect(res.body.detail).toContain('organizationId is required');
@@ -739,7 +789,7 @@ describe('POST /api/auth/switch-org', () => {
   test('returns 400 when refreshToken missing', async () => {
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .send({ organizationId: ORG_ID });
     expect(res.status).toBe(400);
     expect(res.body.detail).toContain('Refresh token is required');
@@ -750,7 +800,7 @@ describe('POST /api/auth/switch-org', () => {
 
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .set('Cookie', `refreshToken=${REFRESH_TOKEN}`)
       .send({ organizationId: ORG_ID });
     expect(res.status).toBe(401);
@@ -763,7 +813,7 @@ describe('POST /api/auth/switch-org', () => {
 
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .set('Cookie', `refreshToken=${REFRESH_TOKEN}`)
       .send({ organizationId: 'org-other' });
     expect(res.status).toBe(403);
@@ -777,7 +827,7 @@ describe('POST /api/auth/switch-org', () => {
 
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .set('Cookie', `refreshToken=${REFRESH_TOKEN}`)
       .send({ organizationId: ORG_ID });
     expect(res.status).toBe(403);
@@ -796,13 +846,18 @@ describe('POST /api/auth/switch-org', () => {
 
     const res = await request()
       .post('/api/auth/switch-org')
-      .set('Authorization', 'Bearer mock-access-token')
+      .set('Authorization', authHeader())
       .set('Cookie', `refreshToken=${REFRESH_TOKEN}`)
       .send({ organizationId: newOrgId });
 
     expect(res.status).toBe(200);
     expect(mockSetActiveOrgId).toHaveBeenCalledWith(SESSION_ID, newOrgId);
-    expect(res.body.accessToken).toBe('mock-access-token');
+    expect(decodeAccessToken(res.body.accessToken)).toMatchObject({
+      userId: USER_ID,
+      email: 'test@example.com',
+      role: 'developer',
+      orgId: newOrgId,
+    });
   });
 });
 
@@ -819,7 +874,7 @@ describe('DELETE /api/auth/me (GDPR deletion)', () => {
 
     const res = await request()
       .delete('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
     expect(res.status).toBe(404);
   });
 
@@ -828,7 +883,7 @@ describe('DELETE /api/auth/me (GDPR deletion)', () => {
 
     const res = await request()
       .delete('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.message).toContain('deleted');
@@ -854,7 +909,7 @@ describe('GET /api/auth/me/export (GDPR export)', () => {
 
     const res = await request()
       .get('/api/auth/me/export')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
     expect(res.status).toBe(404);
   });
 
@@ -863,7 +918,7 @@ describe('GET /api/auth/me/export (GDPR export)', () => {
 
     const res = await request()
       .get('/api/auth/me/export')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.headers['content-disposition']).toContain('attachment');
@@ -884,7 +939,7 @@ describe('legacy membership fallback', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.memberships).toHaveLength(1);
@@ -902,7 +957,7 @@ describe('legacy membership fallback', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.memberships).toHaveLength(1);
@@ -915,7 +970,7 @@ describe('legacy membership fallback', () => {
 
     const res = await request()
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer mock-access-token');
+      .set('Authorization', authHeader());
 
     expect(res.status).toBe(200);
     expect(res.body.memberships).toHaveLength(0);

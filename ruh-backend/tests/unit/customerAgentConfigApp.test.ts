@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { signAccessToken } from '../../src/auth/tokens';
 
 import { AGENT_ID, SANDBOX_ID, makeAgentRecord } from '../helpers/fixtures';
 
@@ -115,6 +116,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -141,9 +143,22 @@ mock.module('../../src/agentStore', () => ({
   clearForgeSandbox: mock(async () => currentAgent),
   getAgentWorkspaceMemory: mock(async () => currentAgent.workspace_memory),
   updateAgentWorkspaceMemory: mockUpdateAgentWorkspaceMemory,
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  removeSandboxFromAgent: mock(async () => currentAgent),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/orgStore', () => ({
+  createOrg: mock(async (name: string, slug: string, kind = 'customer') => ({
+    id: `org-${slug}`,
+    name,
+    slug,
+    kind,
+    status: 'active',
+  })),
   getOrg: mock(async () => ({
     id: 'org-customer-1',
     name: 'Globex Corporation',
@@ -151,20 +166,7 @@ mock.module('../../src/orgStore', () => ({
     kind: 'customer',
     status: 'active',
   })),
-}));
-
-mock.module('../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'customer-user-1',
-      email: 'prasanjit@ruh.ai',
-      role: 'end_user',
-      orgId: 'org-customer-1',
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
+  listOrgs: mock(async () => []),
 }));
 
 mock.module('../../src/auth/customerAccess', () => ({
@@ -202,7 +204,7 @@ mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
   ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
@@ -216,11 +218,21 @@ mock.module('../../src/channelManager', () => ({
   configureChannels: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  markBackendReady: mock(() => {}),
-  markBackendNotReady: mock(() => {}),
-  getBackendReadiness: mock(() => ({ status: 'ready', reason: null, timestamp: Date.now() })),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: mock(() => 'echo ok'),
@@ -230,6 +242,7 @@ mock.module('../../src/docker', () => ({
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   joinShellArgs: (args: unknown[]) => args.map(String).join(' '),
   listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
@@ -248,7 +261,37 @@ mock.module('axios', () => ({
   post: mock(async () => ({ status: 200, data: {} })),
 }));
 
-const { request, resetStreams } = await import('../helpers/app');
+const { request, resetStreams } = await import('../helpers/app.ts?unitCustomerAgentConfigApp');
+
+function customerAuthHeader() {
+  return `Bearer ${signAccessToken({
+    userId: 'customer-user-1',
+    email: 'prasanjit@ruh.ai',
+    role: 'end_user',
+    orgId: 'org-customer-1',
+  })}`;
+}
+
+async function patchCustomerConfig(body: Record<string, unknown>) {
+  const send = () => request()
+    .patch(`/api/agents/${AGENT_ID}/customer-config`)
+    .set('Authorization', customerAuthHeader())
+    .send(body);
+
+  try {
+    return await send();
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && error.code === 'ECONNRESET'
+    ) {
+      return await send();
+    }
+    throw error;
+  }
+}
 
 beforeEach(() => {
   currentAgent = makeAgentRecord({
@@ -359,7 +402,7 @@ beforeEach(() => {
 
 describe('customer agent config routes', () => {
   test('GET returns the normalized customer runtime config snapshot', async () => {
-    const res = await request().get(`/api/agents/${AGENT_ID}/customer-config`);
+    const res = await request().get(`/api/agents/${AGENT_ID}/customer-config`).set('Authorization', customerAuthHeader());
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -409,19 +452,17 @@ describe('customer agent config routes', () => {
   });
 
   test('PATCH updates safe runtime fields and preserves runtime input metadata', async () => {
-    const res = await request()
-      .patch(`/api/agents/${AGENT_ID}/customer-config`)
-      .send({
-        name: 'Revenue Copilot',
-        description: 'Keeps spend efficient and summaries tighter.',
-        agentRules: ['Always tie optimizations back to ROI'],
-        runtimeInputValues: [
-          {
-            key: 'GOOGLE_ADS_CUSTOMER_ID',
-            value: '123-456-7890',
-          },
-        ],
-      });
+    const res = await patchCustomerConfig({
+      name: 'Revenue Copilot',
+      description: 'Keeps spend efficient and summaries tighter.',
+      agentRules: ['Always tie optimizations back to ROI'],
+      runtimeInputValues: [
+        {
+          key: 'GOOGLE_ADS_CUSTOMER_ID',
+          value: '123-456-7890',
+        },
+      ],
+    });
 
     expect(res.status).toBe(200);
     expect(mockUpdateAgent).toHaveBeenCalledWith(AGENT_ID, {
@@ -470,6 +511,7 @@ describe('customer agent config routes', () => {
   test('PATCH rejects unknown fields', async () => {
     const res = await request()
       .patch(`/api/agents/${AGENT_ID}/customer-config`)
+      .set('Authorization', customerAuthHeader())
       .send({
         triggerLabel: 'daily',
       });
@@ -481,7 +523,7 @@ describe('customer agent config routes', () => {
   });
 
   test('GET allows customer access to workspace memory', async () => {
-    const res = await request().get(`/api/agents/${AGENT_ID}/workspace-memory`);
+    const res = await request().get(`/api/agents/${AGENT_ID}/workspace-memory`).set('Authorization', customerAuthHeader());
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -495,6 +537,7 @@ describe('customer agent config routes', () => {
   test('PATCH allows customer updates to workspace memory', async () => {
     const res = await request()
       .patch(`/api/agents/${AGENT_ID}/workspace-memory`)
+      .set('Authorization', customerAuthHeader())
       .send({
         instructions: '  Use the latest ROAS snapshot first.  ',
         continuitySummary: '  Waiting on May spend targets.  ',

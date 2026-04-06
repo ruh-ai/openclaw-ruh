@@ -47,4 +47,9 @@ ruh-backend/coverage/
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/settings.local.json
 .worktrees/
+.claude/worktrees/
 .gstack/
+
+# ── E2E artifacts ─────────────────────────────────────────────────────────────
+**/*.e2e-*.png
+**/e2e-*.png

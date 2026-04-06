@@ -5,12 +5,13 @@ import { getFlowProducer } from '../queues/flows';
 import * as queueJobStore from '../stores/queueJobStore';
 import { addSseClient } from '../events/sseManager';
 import { getWorkerManager } from '../index';
+import { getAgentRunnerHealth, isAgentRunnerKind, setSelectedAgentRunner } from '../agentRunner';
 
 export const queueRouter = Router();
 
 // Submit a task to the queue
 queueRouter.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, source, agentName, priority, timeout, metadata } = req.body;
+  const { description, source, agentName, priority, timeout, goalId, metadata } = req.body;
   if (!description) throw httpError(400, 'description is required');
 
   const jobData: IngestionJobData = {
@@ -19,6 +20,7 @@ queueRouter.post('/tasks', asyncHandler(async (req, res) => {
     agentName: agentName || 'auto',
     priority: priority ?? 5,
     timeout,
+    goalId,
     metadata,
   };
 
@@ -101,7 +103,32 @@ queueRouter.get('/health', asyncHandler(async (_req, res) => {
   res.json({
     redis: redisOk ? 'connected' : 'disconnected',
     workers: workerStatus,
+    agentRunner: getAgentRunnerHealth(),
     timestamp: new Date().toISOString(),
+  });
+}));
+
+queueRouter.patch('/runner', asyncHandler(async (req, res) => {
+  const runner = req.body?.runner as string | undefined;
+  if (!isAgentRunnerKind(runner)) {
+    throw httpError(400, 'runner must be one of: claude, codex');
+  }
+
+  const current = getAgentRunnerHealth();
+  const candidate = current.options.find((option) => option.kind === runner);
+  if (!candidate) {
+    throw httpError(400, `Unknown runner: ${runner}`);
+  }
+
+  if (!candidate.available) {
+    throw httpError(400, candidate.error || `${runner} is not available`);
+  }
+
+  setSelectedAgentRunner(runner);
+
+  res.json({
+    selected: runner,
+    agentRunner: getAgentRunnerHealth(),
   });
 }));
 

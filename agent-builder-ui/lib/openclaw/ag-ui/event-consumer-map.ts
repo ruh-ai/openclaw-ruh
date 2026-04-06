@@ -235,7 +235,9 @@ export function consumeArchitecturePlanReady(value: unknown, deps: ConsumerDeps)
     tracer.drop("use-agent-chat", "CUSTOM", "architecture_plan_ready", "plan missing in payload");
     return;
   }
-  deps.coPilotStore.setArchitecturePlan(payload.plan);
+  // Normalize the plan to fill missing fields before setting in store
+  const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
+  deps.coPilotStore.setArchitecturePlan(normalizePlan(payload.plan as unknown as Record<string, unknown>));
   deps.coPilotStore.setPlanStatus("ready");
   deps.coPilotStore.setDevStage("plan");
   tracer.apply("copilot-store", "CUSTOM", "architecture_plan_ready");

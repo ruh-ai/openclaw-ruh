@@ -18,6 +18,7 @@ import { CustomEventName } from "./types";
 import { parseWizardDirectives } from "../wizard-directive-parser";
 import { detectChannelHintIds } from "../builder-hint-normalization";
 import { tracer } from "./event-tracer";
+import { extractStructuredResponseFromText } from "../gateway-response";
 
 // ─── Context passed to every handler ────────────────────────────────────────
 
@@ -321,9 +322,13 @@ function handleAgentResponse(response: ArchitectResponse, ctx: EventContext): Ba
   // JSON (discovery / architecture_plan) from the agent's text response,
   // returning type: "agent_response" with the raw text in content. Try to
   // re-parse it here so the Think/Plan stages still work.
-  const embeddedResponse = tryExtractEmbeddedResponse(content);
-  if (embeddedResponse) {
-    const fakeResponse = { ...embeddedResponse, content } as unknown as ArchitectResponse;
+  const embeddedResponse = extractStructuredResponseFromText(content);
+  if (embeddedResponse && typeof embeddedResponse.type === "string") {
+    const fakeResponse = {
+      ...embeddedResponse,
+      content,
+      type: embeddedResponse.type,
+    } as unknown as ArchitectResponse;
     if (embeddedResponse.type === "discovery" && embeddedResponse.prd && embeddedResponse.trd) {
       tracer.emit("builder-agent", "CUSTOM", "discovery_documents", "agent_response-failsafe");
       return handleDiscovery(fakeResponse, ctx);
@@ -361,60 +366,6 @@ function handleAgentResponse(response: ArchitectResponse, ctx: EventContext): Ba
   }
 
   return events;
-}
-
-/**
- * Try to extract a structured response (discovery, architecture_plan, ready_for_review)
- * from raw text content. Handles code blocks and raw JSON.
- */
-function tryExtractEmbeddedResponse(text: string): Record<string, unknown> | null {
-  // Try code block: ```ready_for_review ... ``` or ```json ... ```
-  const codeBlockMatch = text.match(/```(?:ready_for_review|discovery|architecture_plan|json)\s*\n?([\s\S]*?)```/);
-  if (codeBlockMatch) {
-    try {
-      const parsed = JSON.parse(codeBlockMatch[1]) as Record<string, unknown>;
-      if (typeof parsed.type === "string") return parsed;
-    } catch { /* fall through */ }
-  }
-
-  // Try raw JSON with known types — use brace-counting for reliable extraction
-  const KNOWN_TYPES = ["discovery", "architecture_plan", "ready_for_review"];
-  for (const knownType of KNOWN_TYPES) {
-    const marker = `"type"`;
-    const typePattern = new RegExp(`"type"\\s*:\\s*"${knownType}"`);
-    const typeMatch = typePattern.exec(text);
-    if (!typeMatch) continue;
-
-    // Walk backwards to find the opening `{`
-    let startIdx = -1;
-    for (let i = typeMatch.index; i >= 0; i--) {
-      if (text[i] === "{") { startIdx = i; break; }
-    }
-    if (startIdx === -1) continue;
-
-    // Walk forward counting braces to find the matching `}`
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = startIdx; i < text.length; i++) {
-      const ch = text[i];
-      if (escape) { escape = false; continue; }
-      if (ch === "\\") { escape = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === "{") depth++;
-      if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          try {
-            return JSON.parse(text.slice(startIdx, i + 1)) as Record<string, unknown>;
-          } catch { break; }
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 function handleError(response: ArchitectResponse): BaseEvent[] {

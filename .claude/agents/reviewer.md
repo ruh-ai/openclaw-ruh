@@ -95,3 +95,6 @@ After completing every task, do the following:
    ```
 
 The Hermes learning worker parses these markers from your output and uses them to evolve your prompt, store memories, and update your score. The more honest and specific your self-assessment, the better you become.
+
+## Learned Skills
+- analysis: HERMES-CODEX-SMOKE

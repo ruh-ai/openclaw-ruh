@@ -740,6 +740,62 @@ export const MIGRATIONS: SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_billing_events_stripe ON billing_events (stripe_event_id)`,
     ],
   },
+  {
+    id: '0030_agent_forge_stage',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS forge_stage TEXT DEFAULT NULL`,
+    ],
+  },
+  {
+    id: '0031_agent_config_versions',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS agent_config_versions (
+        id             TEXT        PRIMARY KEY,
+        agent_id       TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        version_number INTEGER     NOT NULL,
+        snapshot       JSONB       NOT NULL,
+        message        TEXT,
+        created_at     TIMESTAMP   NOT NULL DEFAULT NOW(),
+        created_by     TEXT,
+        UNIQUE (agent_id, version_number)
+      )
+      `,
+      `
+      CREATE INDEX IF NOT EXISTS idx_agent_config_versions_agent
+      ON agent_config_versions (agent_id, version_number DESC)
+      `,
+    ],
+  },
+  {
+    id: '0032_account_lockouts',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS account_lockouts (
+        email           TEXT        PRIMARY KEY,
+        attempt_count   INTEGER     NOT NULL DEFAULT 0,
+        locked_until    TIMESTAMPTZ NULL,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+      `,
+    ],
+  },
+  {
+    id: '0033_agent_repo_url',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_url TEXT`,
+      `ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS repo_url TEXT`,
+    ],
+  },
+  {
+    id: '0034_agent_repo_fields',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_owner TEXT`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_name TEXT`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_default_branch TEXT DEFAULT 'main'`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_last_pushed_at TIMESTAMPTZ`,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {

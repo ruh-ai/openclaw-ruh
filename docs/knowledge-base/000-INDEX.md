@@ -66,6 +66,7 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-agent-persistence]] — Backend persistence for agents (PostgreSQL table + REST CRUD API)
 - [[SPEC-agent-model-settings]] — Agent LLM provider & model selector (Settings tab, client-side, no backend changes)
 - [[SPEC-agent-builder-gateway-error-reporting]] — Architect bridge reports terminal provider-auth failures without mislabeling them as gateway outages
+- [[SPEC-openclaw-bridge-forge-required]] — `/api/openclaw` is forge-only for builder execution and fails closed instead of reviving the retired shared architect gateway
 - [[SPEC-architect-bridge-retry-safety]] — Builder architect requests use one stable request identity, abort cleanly, and fail closed after gateway acceptance
 - [[SPEC-architect-exec-approval-policy]] — Builder architect bridge classifies exec approvals, auto-allows only a narrow safe set, and denies the rest visibly
 - [[SPEC-agent-builder-architect-protocol-normalization]] — Builder bridge normalizes newer architect payloads into the stable create-flow contract
@@ -138,6 +139,14 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-builder-terminal-transcript-isolation]] — Builder terminal commands stay in Agent's Computer history instead of echoing into the left chat transcript
 - [[SPEC-builder-contextual-refine-loop]] — Builder suggestions and post-build architect runs stay grounded in the current named agent and stage state
 - [[SPEC-competitive-intelligence-learnings]] — Self-evolving multi-worker agent architecture: internal worker teams, skill evolution, enterprise governance
+- [[SPEC-hermes-runner-readiness-and-dashboard]] — Hermes resolves its agent runner outside shell PATH assumptions and Mission Control foregrounds blocked-state plus active-goal pressure
+- [[SPEC-hermes-goal-task-board]] — Hermes goals now decompose into dedicated board tasks with goal linkage, board status, and agent-attributed execution history
+- [[SPEC-hermes-selectable-runner]] — Hermes can run agent work through either Claude Code or Codex with explicit runner switching and per-runner validation
+- [[SPEC-hermes-resettable-task-state]] — Hermes can clear task/goal state to a stable blank slate because built-in strategist and analyst timers now honor schedule disables
+- [[SPEC-agent-creation-lifecycle]] — **Implemented.** Full 7-stage agent creation lifecycle reference: Think → Plan → Build → Review → Test → Ship → Reflect with state machine, container lifecycle, eval loop, and deployment
+- [[SPEC-agent-creation-v3-build-pipeline]] — **Implemented (v4).** Workspace-first build pipeline: Think = multi-step research agent, Plan = structural decisions (no inline content), Build = v4 orchestrator with scaffold + specialist sub-agents + validation
+- [[SPEC-gateway-ws-proxy]] — Backend WS proxy replaces the Next.js SSE bridge: backend authenticates with the gateway server-side, browser gets bidirectional real-time events
+- [[SPEC-agent-as-project]] — Each agent is a persistent software project: one GitHub repo, branch-based improvements, PR-driven reviews, incremental builds, and full development lifecycle
 
 ---
 
@@ -165,6 +174,7 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Fix or extend channel (Telegram/Slack) logic | [[006-channel-manager]] |
 | Work on conversations or chat | [[007-conversation-store]] |
 | Work on the agent builder chat UI | [[008-agent-builder-ui]] |
+| Understand the full agent creation lifecycle (all 7 stages) | [[SPEC-agent-creation-lifecycle]] + [[008-agent-builder-ui]] |
 | Work on the developer dashboard UI | [[009-ruh-frontend]] |
 | Change deployment config | [[010-deployment]] |
 | Understand agent-readable system logs and observability | [[SPEC-agent-readable-system-events]] + [[002-backend-overview]] |
@@ -188,6 +198,7 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand why create-flow workspace tabs stay static | [[SPEC-create-flow-static-workspace-tabs]] + [[008-agent-builder-ui]] |
 | Understand saved PRD/TRD discovery-doc persistence | [[SPEC-agent-discovery-doc-persistence]] + [[008-agent-builder-ui]] |
 | Understand create-flow refresh/reopen recovery | [[SPEC-agent-create-session-resume]] + [[008-agent-builder-ui]] |
+| Understand why `/api/openclaw` now fails closed without `forge_sandbox_id` | [[SPEC-openclaw-bridge-forge-required]] + [[008-agent-builder-ui]] |
 | Understand create-flow stepper/back navigation after refresh | [[SPEC-create-flow-lifecycle-navigation]] + [[008-agent-builder-ui]] |
 | Understand purpose-gated skill inference and deploy blocking in Co-Pilot | [[SPEC-agent-builder-gated-skill-tool-flow]] + [[008-agent-builder-ui]] |
 | Research or integrate a tool for an agent | [[SPEC-tool-integration-workspace]] + [[008-agent-builder-ui]] |
@@ -196,6 +207,10 @@ This knowledge base is designed for Obsidian graph navigation. All notes must fo
 | Understand or author repo automations | [[012-automation-architecture]] |
 | Understand the learning-note and daily-journal workflow | [[013-agent-learning-system]] |
 | Understand repo-local maintainer agent roles | [[012-automation-architecture]] + [[SPEC-automation-agent-roles]] |
+| Understand Hermes runner readiness and blocked Mission Control state | [[SPEC-hermes-runner-readiness-and-dashboard]] + [[012-automation-architecture]] |
+| Understand the Hermes goal/task planning board | [[SPEC-hermes-goal-task-board]] + [[012-automation-architecture]] |
+| Understand Hermes runner switching between Claude Code and Codex | [[SPEC-hermes-selectable-runner]] + [[012-automation-architecture]] |
+| Reset Hermes task/goal state without immediate repopulation | [[SPEC-hermes-resettable-task-state]] + [[012-automation-architecture]] |
 | Understand the analyst project-focus workflow | [[012-automation-architecture]] + [[SPEC-analyst-project-focus]] + `docs/project-focus.md` |
 | Understand feature-at-a-time maintainer runs | [[SPEC-feature-at-a-time-automation-contract]] + [[012-automation-architecture]] |
 | Understand the multi-tenant auth foundation | [[SPEC-multi-tenant-auth-foundation]] + [[014-auth-system]] + [[005-data-models]] |

@@ -3,9 +3,10 @@ import { getRedis } from '../redis';
 import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type ExecutionJobData, type LearningJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
-import { spawnClaudeAgent } from './subprocess';
+import { spawnAgentProcess } from './subprocess';
 import * as queueJobStore from '../stores/queueJobStore';
 import * as taskStore from '../stores/taskStore';
+import * as boardTaskStore from '../stores/boardTaskStore';
 
 /**
  * Classify a failure as retryable or permanent.
@@ -67,8 +68,8 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
 
       publish({ type: 'task', action: 'updated', data: { taskLogId, status: 'running', agent: agentName } });
 
-      // Spawn Claude CLI subprocess
-      const result = await spawnClaudeAgent({
+      // Spawn the selected agent runner subprocess
+      const result = await spawnAgentProcess({
         jobId: job.id ?? queueJobId,
         agentPath,
         prompt,
@@ -106,6 +107,12 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
         status: finalStatus,
         resultSummary: result.success ? `Agent ${agentName} completed successfully` : undefined,
         error: result.success ? undefined : (result.killed ? 'Timed out' : result.stderr?.slice(0, 500)),
+      });
+
+      await boardTaskStore.syncBoardTaskFromTaskLog(taskLogId, {
+        taskStatus: finalStatus,
+        agentName,
+        error: result.success ? null : (result.killed ? 'Timed out' : result.stderr?.slice(0, 500)),
       });
 
       publish({ type: 'task', action: 'updated', data: { taskLogId, status: finalStatus, agent: agentName } });

@@ -23,6 +23,18 @@ export interface DashboardStats {
       tasksPassed: number; tasksFailed: number; passRate: number;
     }>;
   };
+  goals: {
+    active: number;
+    list: Array<{
+      id: string;
+      title: string;
+      status: string;
+      priority: string;
+      taskCount: number;
+      completedCount: number;
+      progressPct: number;
+    }>;
+  };
 }
 
 export interface TimelineEvent {
@@ -44,6 +56,7 @@ export interface TaskLog {
   startedAt: string; completedAt: string | null; resultSummary: string | null;
   error: string | null; sessionId: string | null; createdAt: string;
   parentTaskId: string | null; priority: string; durationMs: number | null;
+  goalId: string | null; boardTaskId: string | null;
 }
 
 export interface SessionListItem {
@@ -87,9 +100,28 @@ export interface QueueStats {
   [queueName: string]: { waiting: number; active: number; completed: number; failed: number };
 }
 
+export type AgentRunnerKind = "claude" | "codex";
+
+export interface AgentRunnerOption {
+  kind: AgentRunnerKind;
+  available: boolean;
+  path: string;
+  source: string;
+  error?: string;
+}
+
 export interface QueueHealth {
   redis: string;
   workers: { running: boolean; workerCount: number; activeSubprocesses: number; workers: Array<{ name: string; running: boolean; concurrency?: number }> };
+  agentRunner: {
+    selected: AgentRunnerKind;
+    selectedSource: string;
+    available: boolean;
+    path: string;
+    source: string;
+    error: string | null;
+    options: AgentRunnerOption[];
+  };
   timestamp: string;
 }
 
@@ -112,6 +144,40 @@ export interface Goal {
 
 export interface GoalProgress {
   total: number; completed: number; failed: number; running: number; progressPct: number;
+}
+
+export type BoardTaskStatus = "todo" | "in_progress" | "blocked" | "done";
+
+export interface BoardTask {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string;
+  status: BoardTaskStatus;
+  priority: string;
+  plannedAgent: string | null;
+  completedByAgent: string | null;
+  lastExecutionAgent: string | null;
+  currentTaskLogId: string | null;
+  latestTaskLogId: string | null;
+  blockedReason: string | null;
+  source: string;
+  runCount: number;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalBoardLane {
+  goal: Goal;
+  stats: {
+    total: number;
+    todo: number;
+    inProgress: number;
+    blocked: number;
+    done: number;
+  };
+  tasks: BoardTask[];
 }
 
 export interface WorkerPoolConfig {
@@ -186,6 +252,11 @@ export const api = {
     retry: (id: string) => fetchAPI<{ retryJobId: string }>(`/api/queue/tasks/${id}/retry`, { method: "POST" }),
     pause: (queue: string) => fetchAPI<void>(`/api/queue/pause/${queue}`, { method: "POST" }),
     resume: (queue: string) => fetchAPI<void>(`/api/queue/resume/${queue}`, { method: "POST" }),
+    setRunner: (runner: AgentRunnerKind) =>
+      fetchAPI<{ selected: AgentRunnerKind; agentRunner: QueueHealth["agentRunner"] }>("/api/queue/runner", {
+        method: "PATCH",
+        body: JSON.stringify({ runner }),
+      }),
   },
 
   // ── Schedules API ──────────────────────────────────────────
@@ -217,6 +288,11 @@ export const api = {
       return fetchAPI<{ items: Goal[]; total: number }>(`/api/goals${qs}`);
     },
     get: (id: string) => fetchAPI<Goal>(`/api/goals/${id}`),
+    board: (params?: Record<string, string>) => {
+      const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+      return fetchAPI<{ items: GoalBoardLane[]; totalGoals: number; totalTasks: number }>(`/api/goals/board${qs}`);
+    },
+    goalBoard: (id: string) => fetchAPI<GoalBoardLane>(`/api/goals/${id}/board`),
     create: (data: { title: string; description: string; priority?: string; deadline?: string; acceptanceCriteria?: string[] }) =>
       fetchAPI<Goal>("/api/goals", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Goal>) =>
@@ -225,6 +301,39 @@ export const api = {
     progress: (id: string) => fetchAPI<GoalProgress>(`/api/goals/${id}/progress`),
     tasks: (id: string) => fetchAPI<{ items: TaskLog[]; total: number }>(`/api/goals/${id}/tasks`),
     analyze: (id: string) => fetchAPI<{ triggered: boolean }>(`/api/goals/${id}/analyze`, { method: "POST" }),
+  },
+
+  boardTasks: {
+    list: (params?: Record<string, string>) => {
+      const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+      return fetchAPI<{ items: BoardTask[]; total: number }>(`/api/board/tasks${qs}`);
+    },
+    get: (id: string) => fetchAPI<BoardTask>(`/api/board/tasks/${id}`),
+    create: (data: {
+      goalId: string;
+      title: string;
+      description?: string;
+      priority?: string;
+      plannedAgent?: string | null;
+      status?: BoardTaskStatus;
+      blockedReason?: string | null;
+    }) =>
+      fetchAPI<{ task: BoardTask; created: boolean }>("/api/board/tasks", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: Partial<BoardTask>) =>
+      fetchAPI<BoardTask>(`/api/board/tasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    logs: (id: string, params?: Record<string, string>) => {
+      const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+      return fetchAPI<{ items: TaskLog[]; total: number }>(`/api/board/tasks/${id}/logs${qs}`);
+    },
+    run: (id: string) => fetchAPI<{ triggered: boolean; boardTaskId: string; jobId: string }>(`/api/board/tasks/${id}/run`, {
+      method: "POST",
+    }),
   },
 
   // ── Worker Pool API ────────────────────────────────────────

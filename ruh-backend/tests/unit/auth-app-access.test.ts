@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 
-import {
+const {
   deriveAppAccess,
   deriveSessionAppAccess,
-} from '../../src/auth/appAccess';
+} = await import('../../src/auth/appAccess?unitAuthAppAccess');
 
 function membership(overrides: {
   kind: 'developer' | 'customer';
@@ -17,6 +17,7 @@ function membership(overrides: {
     organizationSlug: `${overrides.kind}-org`,
     organizationKind: overrides.kind,
     organizationPlan: 'free',
+    organizationStatus: 'active',
     role: overrides.role,
     status: overrides.status ?? 'active',
   };

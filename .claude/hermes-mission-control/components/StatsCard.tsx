@@ -14,18 +14,18 @@ export function StatsCard({
   subtitle?: string;
 }) {
   return (
-    <div className="animate-fadeIn bg-[var(--card-color)] rounded-xl border border-[var(--border-default)] p-5">
-      <div className="flex items-center justify-between">
+    <div className="mission-card animate-fadeIn rounded-[24px] p-5">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-tertiary)]">
+          <p className="section-label">
             {title}
           </p>
-          <p className="text-2xl font-bold text-[var(--text-primary)] mt-1">{value}</p>
+          <p className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[var(--text-primary)]">{value}</p>
           {subtitle && (
-            <p className="text-xs text-[var(--text-tertiary)] mt-0.5">{subtitle}</p>
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">{subtitle}</p>
           )}
         </div>
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
+        <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${color}`}>
           <Icon className="h-5 w-5" />
         </div>
       </div>

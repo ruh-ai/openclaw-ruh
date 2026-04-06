@@ -5,9 +5,10 @@ import { getRedis } from '../redis';
 import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type AnalystJobData, type IngestionJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
-import { spawnClaudeAgent } from './subprocess';
+import { spawnAgentProcess } from './subprocess';
 import * as taskStore from '../stores/taskStore';
 import * as goalStore from '../stores/goalStore';
+import * as boardTaskStore from '../stores/boardTaskStore';
 import * as scoreStore from '../stores/scoreStore';
 import * as agentStore from '../stores/agentStore';
 import { query } from '../db';
@@ -16,11 +17,10 @@ import { query } from '../db';
  * Assemble the analyst prompt with goal context and existing tasks.
  */
 async function assembleAnalystPrompt(data: AnalystJobData): Promise<string> {
-  // Get existing tasks for this goal
-  const existingTasks = await taskStore.listTasks({ goalId: data.goalId, limit: 50 });
+  const existingTasks = await boardTaskStore.listBoardTasks({ goalId: data.goalId, limit: 50 });
 
   const tasksSummary = existingTasks.items.length > 0
-    ? existingTasks.items.map(t => `- [${t.status}] ${t.description} (agent: ${t.delegatedTo || 'unassigned'})`).join('\n')
+    ? existingTasks.items.map(t => `- [${t.status}] ${t.title}: ${t.description || t.title} (planned agent: ${t.plannedAgent || 'unassigned'}, last execution: ${t.lastExecutionAgent || 'none'})`).join('\n')
     : 'No tasks exist for this goal yet.';
 
   return `You are analyzing a goal and decomposing it into actionable tasks.
@@ -57,6 +57,19 @@ If all acceptance criteria are covered by existing tasks, output:
 { "goalId": "${data.goalId}", "analysis": "All criteria covered", "tasks": [] }`;
 }
 
+function numericPriorityToBoardPriority(priority: number): string {
+  if (priority <= 1) return 'critical';
+  if (priority <= 3) return 'high';
+  if (priority <= 7) return 'normal';
+  return 'low';
+}
+
+function toBoardTitle(description: string): string {
+  const trimmed = description.trim();
+  const sentence = trimmed.split(/[\n.!?]/)[0]?.trim() || trimmed;
+  return sentence.slice(0, 120);
+}
+
 export function createAnalystWorker(): Worker<AnalystJobData> {
   const config = getConfig();
 
@@ -71,7 +84,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
 
       // Spawn the analyst agent
       const agentPath = path.join(config.agentsDir, 'analyst.md');
-      const result = await spawnClaudeAgent({
+      const result = await spawnAgentProcess({
         jobId: job.id ?? uuidv4(),
         agentPath,
         prompt,
@@ -104,15 +117,29 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
         parsed = { goalId, analysis: 'Output parsing failed', tasks: [] };
       }
 
-      // Submit tasks to ingestion queue
+      // Create goal-linked board tasks first, then submit only newly created work.
       let tasksCreated = 0;
       for (const task of parsed.tasks) {
+        const boardTaskResult = await boardTaskStore.createBoardTask({
+          goalId,
+          title: toBoardTitle(task.description),
+          description: task.description,
+          priority: numericPriorityToBoardPriority(task.priority ?? 5),
+          plannedAgent: task.agentName || null,
+          source: 'analyst',
+        });
+
+        if (!boardTaskResult.created) {
+          continue;
+        }
+
         await getQueue(QUEUE_NAMES.INGESTION).add('ingest', {
           description: task.description,
           source: 'analyst',
           agentName: task.agentName || 'auto',
           priority: task.priority ?? 5,
           goalId,
+          metadata: { boardTaskId: boardTaskResult.task.id },
         } satisfies IngestionJobData, { priority: task.priority ?? 5 });
         tasksCreated++;
       }

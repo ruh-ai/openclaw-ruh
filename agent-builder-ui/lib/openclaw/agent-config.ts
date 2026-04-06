@@ -1,5 +1,6 @@
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import { isRuntimeInputFilled } from "@/lib/agents/runtime-inputs";
+import type { ArchitecturePlan, SkillGraphNode, WorkflowDefinition } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -263,5 +264,112 @@ export async function pushAgentConfig(
     detail: ok ? null : typeof data?.detail === "string" ? data.detail : "Agent config apply failed",
     steps,
     ...(webhooks ? { webhooks } : {}),
+  };
+}
+
+/**
+ * Deploy an agent directly from an architecture plan that includes inline content.
+ * Skips the architect Build step entirely — writes files via configure-agent in one batch.
+ * Returns the push result + generated SkillGraphNodes for the copilot store.
+ */
+export async function deployFromPlan(
+  sandboxId: string,
+  agentName: string,
+  agentDescription: string,
+  plan: ArchitecturePlan,
+  agentId?: string,
+): Promise<{ result: PushAgentConfigResult; nodes: SkillGraphNode[]; workflow: WorkflowDefinition }> {
+  const nodes: SkillGraphNode[] = plan.skills.map((s) => ({
+    skill_id: s.id,
+    name: s.name,
+    description: s.description,
+    source: "custom" as const,
+    status: "generated" as const,
+    depends_on: s.dependencies,
+    requires_env: s.envVars,
+    tool_type: s.toolType,
+    skill_md: s.skillMd,
+  }));
+
+  const workflow: WorkflowDefinition = {
+    name: "main-workflow",
+    description: `${agentName} workflow`,
+    steps: plan.workflow.steps.map((s, i) => ({
+      id: `step-${i}`,
+      action: "execute",
+      skill: s.skillId,
+      wait_for: i > 0 ? [plan.workflow.steps[i - 1].skillId] : [],
+    })),
+  };
+
+  const soulContent = plan.soulContent || buildSoulContent({
+    id: agentId ?? "new",
+    name: agentName,
+    avatar: "🤖",
+    description: agentDescription,
+    skills: nodes.map((n) => n.skill_id),
+    skillGraph: nodes,
+    agentRules: [],
+    triggerLabel: plan.triggers?.[0]?.description ?? "manual",
+    sandboxIds: [sandboxId],
+    status: "draft",
+    createdAt: new Date().toISOString(),
+  });
+
+  const res = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/configure-agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      system_name: agentName,
+      soul_content: soulContent,
+      skills: [
+        { skill_id: "skill-creator", name: "Skill Creator", description: "Create and register new SKILL.md files." },
+        ...nodes.map((n) => ({
+          skill_id: n.skill_id,
+          name: n.name,
+          description: n.description || n.name,
+          ...(n.skill_md ? { skill_md: n.skill_md } : {}),
+        })),
+      ],
+      cron_jobs: buildCronJobs({
+        name: agentName,
+        triggers: plan.triggers?.map((t) => ({
+          id: t.id,
+          title: t.description,
+          kind: t.type as "manual" | "schedule" | "webhook",
+          status: "supported" as const,
+          schedule: t.type === "cron" ? t.config : undefined,
+        })),
+      } as SavedAgent),
+      runtime_inputs: [],
+      agent_id: agentId,
+    }),
+  });
+
+  const contentType = res.headers.get("content-type") ?? "";
+  const data = contentType.includes("application/json") ? await res.json() : null;
+
+  if (!res.ok) {
+    return {
+      result: {
+        ok: false,
+        applied: false,
+        detail: typeof data?.detail === "string" ? data.detail : `Deploy failed: ${res.status}`,
+        steps: Array.isArray(data?.steps) ? data.steps : [],
+      },
+      nodes,
+      workflow,
+    };
+  }
+
+  return {
+    result: {
+      ok: data?.ok === true && data?.applied === true,
+      applied: data?.applied === true,
+      detail: null,
+      steps: Array.isArray(data?.steps) ? data.steps : [],
+    },
+    nodes,
+    workflow,
   };
 }

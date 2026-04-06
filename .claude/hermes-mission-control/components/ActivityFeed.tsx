@@ -41,20 +41,20 @@ export function ActivityFeed({
         const time = new Date(event.createdAt).toLocaleString();
 
         return (
-          <div key={event.id} className="animate-fadeIn flex items-start gap-3 py-2">
-            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
+          <div key={event.id} className="animate-fadeIn flex items-start gap-3 rounded-[20px] border border-[var(--border-muted)] bg-white/45 px-3 py-3">
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${color}`}>
               <Icon className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm text-[var(--text-primary)] truncate">{event.title}</p>
-              <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-sm text-[var(--text-primary)]">{event.title}</p>
+              <div className="mt-1 flex items-center gap-2">
                 {event.agent && (
-                  <span className="text-[10px] font-medium text-[var(--primary)]">{event.agent}</span>
+                  <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-[var(--primary)]">{event.agent}</span>
                 )}
                 {event.detail && (
-                  <span className="text-[10px] text-[var(--text-tertiary)]">{event.detail}</span>
+                  <span className="text-[11px] text-[var(--text-tertiary)]">{event.detail}</span>
                 )}
-                <span className="text-[10px] text-[var(--text-tertiary)] ml-auto shrink-0">{time}</span>
+                <span className="ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">{time}</span>
               </div>
             </div>
           </div>

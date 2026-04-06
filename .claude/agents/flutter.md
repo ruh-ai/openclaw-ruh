@@ -110,3 +110,8 @@ The Hermes learning worker parses these markers from your output and uses them t
 
 ## Learned Skills
 - analysis: **Verdict: The acceptance criterion is already satisfied
+
+## Learned Skills
+- Flutter widget test setup with ProviderScope overrides, SharedPreferences mocking, and viewport sizing
+- test-run: Here's what was fixed:
+- Flutter widget testing with tool call expansion tap interaction and streaming cursor verification

@@ -17,20 +17,6 @@ const mockUpdateAgentWorkspaceMemory = mock(async () => ({
   updated_at: '2026-03-25T17:30:00.000Z',
 }));
 
-mock.module('../../src/auth/middleware', () => ({
-  requireAuth: (req: Record<string, unknown>, _res: unknown, next: (error?: unknown) => void) => {
-    req.user = {
-      userId: 'user-test-001',
-      email: 'developer@test.dev',
-      role: 'developer',
-      orgId: 'org-test-001',
-    };
-    next();
-  },
-  optionalAuth: (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-  requireRole: () => (_req: unknown, _res: unknown, next: (error?: unknown) => void) => next(),
-}));
-
 mock.module('../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
@@ -57,6 +43,7 @@ mock.module('../../src/store', () => ({
 mock.module('../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
+  getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
   createConversation: mock(async () => ({})),
   getMessagesPage: mock(async () => ({ messages: [], has_more: false, next_cursor: null })),
@@ -68,18 +55,37 @@ mock.module('../../src/conversationStore', () => ({
 mock.module('../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
+  listAgentsForCreator: mock(async () => []),
+  listAgentsForCreatorInOrg: mock(async () => []),
   saveAgent: mock(async () => ({})),
   getAgent: mockGetAgent,
   getAgentForCreator: mock(async () => ({ id: 'agent-1', name: 'Memory Agent' })),
+  getAgentForCreatorInOrg: mock(async () => ({ id: 'agent-1', name: 'Memory Agent' })),
   updateAgent: mock(async () => ({})),
   updateAgentConfig: mock(async () => ({})),
   deleteAgent: mock(async () => true),
   addSandboxToAgent: mock(async () => ({})),
+  setForgeSandbox: mock(async () => ({})),
+  promoteForgeSandbox: mock(async () => ({})),
+  clearForgeSandbox: mock(async () => ({})),
+  removeSandboxFromAgent: mock(async () => ({})),
   getAgentWorkspaceMemory: mockGetAgentWorkspaceMemory,
   updateAgentWorkspaceMemory: mockUpdateAgentWorkspaceMemory,
+  getAgentCredentials: mock(async () => []),
+  getAgentCredentialSummary: mock(async () => []),
+  saveAgentCredential: mock(async () => {}),
+  deleteAgentCredential: mock(async () => {}),
+  getAgentBySandboxId: mock(async () => null),
 }));
 
 mock.module('../../src/orgStore', () => ({
+  createOrg: mock(async (name: string, slug: string, kind = 'developer') => ({
+    id: `org-${slug}`,
+    name,
+    slug,
+    kind,
+    status: 'active',
+  })),
   getOrg: mock(async () => ({
     id: 'org-test-001',
     name: 'Test Dev Org',
@@ -87,17 +93,25 @@ mock.module('../../src/orgStore', () => ({
     kind: 'developer',
     status: 'active',
   })),
+  listOrgs: mock(async () => []),
 }));
 
 mock.module('../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mock(async () => ({})),
   retrofitSandboxToSharedCodex: mock(async () => ({})),
-  dockerExec: mock(async () => [true, '']),
+  dockerExec: mock(async () => [true, 'true']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
   PREVIEW_PORTS: [],
+  waitForGateway: mock(async () => true),
+  sandboxExec: mock(async () => [0, '']),
+}));
+
+mock.module('express-rate-limit', () => ({
+  default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 mock.module('../../src/channelManager', () => ({
@@ -109,9 +123,21 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => ({
-  getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
-}));
+mock.module('../../src/backendReadiness', () => {
+  let ready = true;
+  let reason: string | null = null;
+  return {
+    markBackendReady: () => {
+      ready = true;
+      reason = null;
+    },
+    markBackendNotReady: (nextReason = 'Waiting for database initialization') => {
+      ready = false;
+      reason = nextReason;
+    },
+    getBackendReadiness: () => ({ status: ready ? 'ready' : 'not_ready', ready, reason }),
+  };
+});
 
 mock.module('../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
@@ -121,6 +147,7 @@ mock.module('../../src/docker', () => ({
   dockerContainerRunning: mock(async () => true),
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
+  getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
   normalizePathSegment: (value: string) => value,
@@ -132,7 +159,7 @@ mock.module('../../src/auditStore', () => ({
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-const { app } = await import('../../src/app');
+const { app } = await import('../../src/app.ts?unitAgentWorkspaceMemoryApp');
 
 type MockReq = {
   method: string;

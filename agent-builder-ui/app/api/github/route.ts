@@ -140,6 +140,31 @@ async function handlePush(
   });
 }
 
+async function detectSandboxId(agentName?: string): Promise<string | null> {
+  try {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+    // Query sandboxes directly (no auth required) and find one with workspace files
+    const res = await fetch(`${API_BASE}/api/sandboxes`);
+    if (!res.ok) return null;
+    const sandboxes = await res.json();
+    // Pick the most recent sandbox that's running
+    const running = (sandboxes as Array<{ sandbox_id: string; sandbox_state?: string; sandbox_name?: string }>)
+      .filter((s) => s.sandbox_state === "running")
+      .sort((a, b) => (b.sandbox_id > a.sandbox_id ? 1 : -1));
+
+    // Try to match by agent name in sandbox name
+    if (agentName) {
+      const nameSlug = agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const match = running.find((s) => s.sandbox_name?.toLowerCase().includes(nameSlug.split("-")[0]));
+      if (match) return match.sandbox_id;
+    }
+    // Fall back to the first running sandbox
+    return running[0]?.sandbox_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -154,9 +179,34 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "push") {
-      const { owner, repoName, agentName, files } = body;
-      if (!owner || !repoName || !files) {
-        return NextResponse.json({ ok: false, error: "owner, repoName, and files required" }, { status: 400 });
+      const { owner, repoName, agentName, files, sandboxId } = body;
+      if (!owner || !repoName) {
+        return NextResponse.json({ ok: false, error: "owner and repoName required" }, { status: 400 });
+      }
+
+      // V3: push directly from the container via the backend git-push endpoint.
+      // This avoids reading files one-by-one and handles large workspaces.
+      const effectiveSandboxId = sandboxId || await detectSandboxId(agentName);
+      if (effectiveSandboxId) {
+        console.log(`[/api/github] Delegating to git-push endpoint (sandbox ${effectiveSandboxId})`);
+        const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+        const gitPushRes = await fetch(`${API_BASE}/api/sandboxes/${effectiveSandboxId}/workspace/git-push`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repo: `${owner}/${repoName}`,
+            githubToken: token,
+            agentName: agentName || "Agent",
+            commitMessage: `ship: ${agentName || "agent"} template`,
+          }),
+        });
+        const gitPushResult = await gitPushRes.json();
+        return NextResponse.json(gitPushResult);
+      }
+
+      // Fallback: no sandbox found — push the files from the request body
+      if (!files || files.length === 0) {
+        return NextResponse.json({ ok: false, error: "No files to push and no sandbox found" }, { status: 400 });
       }
       return handlePush(token, owner, repoName, agentName || "Agent", files);
     }

@@ -88,6 +88,7 @@ export function mergeRuntimeInputDefinitions({
       example: current?.example,
       options: current?.options,
       group: current?.group,
+      populationStrategy: current?.populationStrategy,
     } satisfies AgentRuntimeInput;
   });
 
@@ -124,6 +125,7 @@ export function enrichRuntimeInputsFromPlan(
       example: input.example ?? plan.example,
       options: input.options ?? plan.options,
       group: input.group ?? plan.group,
+      populationStrategy: input.populationStrategy ?? plan.populationStrategy,
     };
   });
 }
@@ -143,6 +145,9 @@ export function hasMissingRequiredInputs(agent: {
     agentRules: agent.agentRules,
   });
   return resolved.some(
-    (input) => input.required && !isRuntimeInputFilled(input),
+    (input) =>
+      input.required &&
+      (input.populationStrategy ?? "user_required") === "user_required" &&
+      !isRuntimeInputFilled(input),
   );
 }

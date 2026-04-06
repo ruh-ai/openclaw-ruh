@@ -12,6 +12,10 @@ const mockSetStatus = mock(() => {});
 const mockSetAttribute = mock(() => {});
 const mockRecordException = mock(() => {});
 const mockSpanContext = mock(() => ({ traceId: 'trace-abc', spanId: 'span-def' }));
+const mockSetSpan = mock((ctx: unknown) => ctx);
+const mockContextActive = mock(() => ({ name: 'active-context' }));
+const mockContextWith = mock((_ctx: unknown, fn: () => unknown) => fn());
+const mockPropagationExtract = mock((ctx: unknown) => ctx);
 
 const mockStartSpan = mock(() => ({
   end: mockEnd,
@@ -24,7 +28,9 @@ const mockStartSpan = mock(() => ({
 const mockGetTracer = mock(() => ({ startSpan: mockStartSpan }));
 
 mock.module('@opentelemetry/api', () => ({
-  trace: { getTracer: mockGetTracer },
+  context: { active: mockContextActive, with: mockContextWith },
+  propagation: { extract: mockPropagationExtract },
+  trace: { getTracer: mockGetTracer, setSpan: mockSetSpan },
   SpanStatusCode: { OK: 1, ERROR: 2 },
 }));
 
@@ -38,6 +44,10 @@ beforeEach(() => {
   mockSetStatus.mockClear();
   mockSetAttribute.mockClear();
   mockRecordException.mockClear();
+  mockSetSpan.mockClear();
+  mockContextActive.mockClear();
+  mockContextWith.mockClear();
+  mockPropagationExtract.mockClear();
 });
 
 describe('startAgentSpan', () => {

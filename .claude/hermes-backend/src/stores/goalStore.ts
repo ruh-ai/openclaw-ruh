@@ -148,12 +148,30 @@ export async function deleteGoal(id: string): Promise<boolean> {
 export async function getGoalProgress(goalId: string): Promise<GoalProgress> {
   return withConn(async (client) => {
     const res = await client.query(`
+      WITH board AS (
+        SELECT
+          COUNT(*) as total,
+          COUNT(*) FILTER (WHERE status = 'done') as completed,
+          COUNT(*) FILTER (WHERE status = 'blocked') as failed,
+          COUNT(*) FILTER (WHERE status = 'in_progress') as running
+        FROM board_tasks
+        WHERE goal_id = $1
+      ),
+      execution AS (
+        SELECT
+          COUNT(*) as total,
+          COUNT(*) FILTER (WHERE status = 'completed') as completed,
+          COUNT(*) FILTER (WHERE status = 'failed') as failed,
+          COUNT(*) FILTER (WHERE status = 'running') as running
+        FROM task_logs
+        WHERE goal_id = $1
+      )
       SELECT
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(*) FILTER (WHERE status = 'failed') as failed,
-        COUNT(*) FILTER (WHERE status = 'running') as running
-      FROM task_logs WHERE goal_id = $1
+        CASE WHEN board.total > 0 THEN board.total ELSE execution.total END as total,
+        CASE WHEN board.total > 0 THEN board.completed ELSE execution.completed END as completed,
+        CASE WHEN board.total > 0 THEN board.failed ELSE execution.failed END as failed,
+        CASE WHEN board.total > 0 THEN board.running ELSE execution.running END as running
+      FROM board, execution
     `, [goalId]);
 
     const row = res.rows[0];
@@ -186,13 +204,30 @@ export async function getGoalsSummary(): Promise<Array<{
   return withConn(async (client) => {
     const result = await client.query(`
       SELECT
-        g.id, g.title, g.status, g.priority,
-        COUNT(t.id) as task_count,
-        COUNT(t.id) FILTER (WHERE t.status = 'completed') as completed_count
+        g.id,
+        g.title,
+        g.status,
+        g.priority,
+        COALESCE(bt.task_count, tl.task_count, 0) as task_count,
+        COALESCE(bt.completed_count, tl.completed_count, 0) as completed_count
       FROM goals g
-      LEFT JOIN task_logs t ON t.goal_id = g.id
+      LEFT JOIN (
+        SELECT
+          goal_id,
+          COUNT(*) as task_count,
+          COUNT(*) FILTER (WHERE status = 'done') as completed_count
+        FROM board_tasks
+        GROUP BY goal_id
+      ) bt ON bt.goal_id = g.id
+      LEFT JOIN (
+        SELECT
+          goal_id,
+          COUNT(*) as task_count,
+          COUNT(*) FILTER (WHERE status = 'completed') as completed_count
+        FROM task_logs
+        GROUP BY goal_id
+      ) tl ON tl.goal_id = g.id AND bt.goal_id IS NULL
       WHERE g.status = 'active'
-      GROUP BY g.id, g.title, g.status, g.priority
       ORDER BY
         CASE g.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END
     `);

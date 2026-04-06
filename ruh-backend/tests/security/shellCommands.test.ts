@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
-import {
+const {
   buildConfigureAgentCronAddCommand,
   buildHomeFileWriteCommand,
   buildCronDeleteCommand,
   buildCronRunCommand,
   normalizePathSegment,
-} from '../../src/docker';
+} = await import('../../src/docker?securityShellCommands');
 
 describe('shell-safe route command builders', () => {
   test('configure-agent writes use normalized skill paths and quote content literally', () => {

@@ -14,7 +14,7 @@ mock.module('../../src/db', () => ({
   withConn: async (fn: (c: typeof mockClient) => Promise<unknown>) => fn(mockClient),
 }));
 
-import * as agentStore from '../../src/agentStore';
+const agentStore = await import('../../src/agentStore?unitAgentForge');
 
 // ─────────────────────────────────────────────────────────────────────────────
 

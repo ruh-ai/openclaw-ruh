@@ -47,6 +47,7 @@ function serializeTask(row: Record<string, unknown>): TaskLog {
     priority: row.priority ? String(row.priority) : 'normal',
     durationMs: row.duration_ms != null ? Number(row.duration_ms) : null,
     goalId: row.goal_id ? String(row.goal_id) : null,
+    boardTaskId: row.board_task_id ? String(row.board_task_id) : null,
     createdAt: String(row.created_at),
   };
 }
