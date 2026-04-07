@@ -38,7 +38,7 @@ import {
 import {
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
-import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
+// useArchitectSandbox removed — every agent has its own forge sandbox
 import { useForgeSandbox } from "@/hooks/use-forge-sandbox";
 import { CREATE_AGENT_MODE_OPTIONS, normalizeCreateMode, type CreateAgentMode } from "./create-mode";
 import { resolveCreatePageChatMode, type ForgeAgentMode } from "./agent-mode";
@@ -110,7 +110,7 @@ function CreateAgentPageContent() {
   const existingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
 
   const { builderState, updateBuilderState, resetBuilderState, initializeFromAgent } = useBuilderState();
-  const { sandbox: architectSandbox } = useArchitectSandbox();
+  // Shared architect sandbox removed — every agent has its own forge sandbox.
 
   // ── v2: per-agent forge sandbox ──────────────────────────────────────────
   // Each new agent gets its own container. forgePhase tracks the provisioning
@@ -241,12 +241,23 @@ function CreateAgentPageContent() {
   const effectiveAgentId = workingAgent?.id ?? createdAgentId;
 
   // v2: each agent gets its own container — resolve its forge sandbox.
-  // When a forge sandbox is provisioned, NEVER fall back to the shared architect.
-  const { sandbox: forgeSandbox, error: forgeSandboxError } = useForgeSandbox(
+  // Every agent MUST have a forge sandbox. No fallback to shared architect.
+  const { sandbox: forgeSandbox, loading: forgeSandboxLoading, error: forgeSandboxError } = useForgeSandbox(
     workingAgent?.forgeSandboxId ? workingAgent.id : null
   );
-  const hasForgeAgent = Boolean(workingAgent?.forgeSandboxId);
-  const effectiveSandbox = hasForgeAgent ? forgeSandbox : architectSandbox;
+  const effectiveSandbox = forgeSandbox ?? null;
+
+  // Debug: log sandbox resolution state
+  useEffect(() => {
+    console.log(
+      `[create-page] Sandbox state: editingAgentId=${editingAgentId ?? "none"}, ` +
+      `workingAgent.id=${workingAgent?.id ?? "none"}, ` +
+      `workingAgent.forgeSandboxId=${workingAgent?.forgeSandboxId ?? "MISSING"}, ` +
+      `forgeSandbox=${forgeSandbox?.sandbox_id ?? "null"}, ` +
+      `loading=${forgeSandboxLoading}, error=${forgeSandboxError ?? "none"}, ` +
+      `forgePhase=${forgePhase ?? "null"}`
+    );
+  }, [editingAgentId, workingAgent?.id, workingAgent?.forgeSandboxId, forgeSandbox, forgeSandboxLoading, forgeSandboxError, forgePhase]);
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
@@ -1149,6 +1160,31 @@ function CreateAgentPageContent() {
         onSubmit={handleInitSubmit}
         onBack={() => router.push("/agents")}
       />
+    );
+  }
+
+  // ── Forge sandbox guard: block chat until sandbox is ready ──────────────
+  if (editingAgentId && !effectiveSandbox && (forgeSandboxLoading || forgeSandboxError)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+        {forgeSandboxLoading && (
+          <>
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-primary)]" />
+            <p className="text-[var(--text-secondary)]">Connecting to agent sandbox...</p>
+          </>
+        )}
+        {forgeSandboxError && (
+          <>
+            <p className="text-red-500 text-center max-w-md">{forgeSandboxError}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-lg bg-[var(--accent-primary)] text-white hover:opacity-90 transition-opacity"
+            >
+              Retry
+            </button>
+          </>
+        )}
+      </div>
     );
   }
 

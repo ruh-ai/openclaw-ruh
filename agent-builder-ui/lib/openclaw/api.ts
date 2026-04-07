@@ -59,20 +59,27 @@ export async function sendToArchitectStreaming(
   callbacks?: StreamCallbacks,
   options?: SendToArchitectOptions
 ): Promise<ArchitectResponse> {
+  const requestBody = {
+    session_id: sessionId,
+    request_id: options?.requestId,
+    message,
+    agent: "architect",
+    mode: options?.mode,
+    soul_override: options?.soulOverride,
+    ...(options?.forgeSandboxId ? { forge_sandbox_id: options.forgeSandboxId } : {}),
+    ...(options?.agentId ? { agent_id: options.agentId } : {}),
+  };
+
+  console.log(
+    `[openclaw-api] Sending to /api/openclaw: forge_sandbox_id=${options?.forgeSandboxId ?? "MISSING"}, ` +
+    `session=${sessionId}, agent_id=${options?.agentId ?? "none"}, mode=${options?.mode ?? "build"}`
+  );
+
   const res = await fetch("/api/openclaw", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: options?.signal,
-    body: JSON.stringify({
-      session_id: sessionId,
-      request_id: options?.requestId,
-      message,
-      agent: "architect",
-      mode: options?.mode,
-      soul_override: options?.soulOverride,
-      ...(options?.forgeSandboxId ? { forge_sandbox_id: options.forgeSandboxId } : {}),
-      ...(options?.agentId ? { agent_id: options.agentId } : {}),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!res.ok) {
@@ -86,7 +93,7 @@ export async function sendToArchitectStreaming(
       }
 
       const code = payload?.error ?? null;
-      const detail = payload?.detail ?? payload?.message ?? "Bridge request failed.";
+      const detail = payload?.detail ?? payload?.message ?? payload?.error ?? "Bridge request failed.";
       const prefix =
         res.status === 401 || res.status === 403 || code === "forbidden_origin" || code === "auth_unavailable"
           ? "Bridge auth error:"

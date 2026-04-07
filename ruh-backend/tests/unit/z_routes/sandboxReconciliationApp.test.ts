@@ -7,8 +7,7 @@ const mockListSandboxes = mock(async () => [makeSandboxRecord()]);
 const mockDeleteSandbox = mock(async () => true);
 const mockWriteAuditEvent = mock(async () => {});
 const mockAxiosGet = mock(async () => ({ status: 200, data: { status: 'running' } }));
-const mockDockerContainerRunning = mock(async () => true);
-const mockListManagedSandboxContainers = mock(async () => []);
+import { dockerContainerRunningMock as mockDockerContainerRunning, listManagedSandboxContainersMock as mockListManagedSandboxContainers } from '../../helpers/mockDocker';
 const mockStopAndRemoveContainer = mock(async () => {});
 
 mock.module('../../../src/store', () => ({
@@ -85,18 +84,7 @@ mock.module('../../../src/backendReadiness', () => ({
   getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
 }));
 
-mock.module('../../../src/docker', () => ({
-  buildConfigureAgentCronAddCommand: () => '',
-  buildCronDeleteCommand: () => '',
-  buildCronRunCommand: () => '',
-  buildHomeFileWriteCommand: () => '',
-  dockerContainerRunning: mockDockerContainerRunning,
-  dockerExec: mock(async () => [true, '']),
-  dockerSpawn: mock(async () => [0, '']),
-  listManagedSandboxContainers: mockListManagedSandboxContainers,
-  joinShellArgs: (args: Array<string | number>) => args.join(' '),
-  normalizePathSegment: (value: string) => value,
-}));
+import '../../helpers/mockDocker';
 
 mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),

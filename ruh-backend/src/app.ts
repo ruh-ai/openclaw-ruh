@@ -46,8 +46,7 @@ import {
   buildCronDeleteCommand,
   buildCronRunCommand,
   buildHomeFileWriteCommand,
-  dockerContainerRunning,
-  listManagedSandboxContainers,
+  getContainerName,
   dockerSpawn,
   joinShellArgs,
   normalizePathSegment,
@@ -67,14 +66,13 @@ import { getBackendReadiness } from './backendReadiness';
 import { getSandboxConversationRecord } from './conversationAccess';
 import {
   createOpenclawSandbox,
-  dockerExec,
-  getContainerName,
   PREVIEW_PORTS,
   reconfigureSandboxLlm,
   restartGateway,
   retrofitSandboxToSharedCodex,
   stopAndRemoveContainer,
 } from './sandboxManager';
+import { getProvider } from './providers';
 import {
   httpError,
   gatewayUrlAndHeaders,
@@ -442,7 +440,7 @@ async function resolveActiveSandboxForAgent(
     if (!record) {
       continue;
     }
-    const running = await dockerContainerRunning(getContainerName(sandboxId)).catch(() => false);
+    const running = await getProvider().isRunning(sandboxId).catch(() => false);
     if (running) {
       return record;
     }
@@ -576,8 +574,7 @@ async function recordSystemEvent(
 }
 
 async function sandboxExec(sandboxId: string, cmd: string, timeoutSec = 30): Promise<[number, string]> {
-  const containerName = getContainerName(sandboxId);
-  const [ok, output] = await dockerExec(containerName, cmd, timeoutSec * 1000);
+  const [ok, output] = await getProvider().exec(sandboxId, cmd, timeoutSec * 1000);
   return [ok ? 0 : 1, output];
 }
 
@@ -632,7 +629,6 @@ async function applyAgentConfiguration(
   payload: ConfigureAgentPayload,
 ): Promise<ConfigureAgentApplyResult> {
   const record = await getRecord(sandboxId);
-  const containerName = getContainerName(record.sandbox_id);
   const {
     system_name,
     soul_content,
@@ -698,8 +694,8 @@ async function applyAgentConfiguration(
   }
 
   if (soul_content) {
-    const [ok, out] = await dockerExec(
-      containerName,
+    const [ok, out] = await getProvider().exec(
+      sandboxId,
       buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', soul_content),
       30_000,
     );
@@ -722,8 +718,8 @@ async function applyAgentConfiguration(
       : registrySkill
         ? `Skill ${normalizedSkillId}: registry match (${registrySkill.skill_id})`
         : `Skill ${normalizedSkillId}: stub (no registry entry)`;
-    const [ok, out] = await dockerExec(
-      containerName,
+    const [ok, out] = await getProvider().exec(
+      sandboxId,
       buildHomeFileWriteCommand(
         `.openclaw/workspace/skills/${normalizedSkillId}/SKILL.md`,
         skillContent,
@@ -741,8 +737,8 @@ async function applyAgentConfiguration(
   }
 
   for (const job of (cron_jobs ?? [])) {
-    const [ok, out] = await dockerExec(
-      containerName,
+    const [ok, out] = await getProvider().exec(
+      sandboxId,
       buildConfigureAgentCronAddCommand({
         name: String(job.name ?? ''),
         schedule: String(job.schedule ?? ''),
@@ -767,8 +763,8 @@ async function applyAgentConfiguration(
         value: String(input.value ?? ''),
       })),
     );
-    const [ok, out] = await dockerExec(
-      containerName,
+    const [ok, out] = await getProvider().exec(
+      record.sandbox_id,
       buildHomeFileWriteCommand('.openclaw/.env', runtimeEnvContent),
       20_000,
     );
@@ -822,7 +818,7 @@ async function applyAgentConfiguration(
 
       const mcpConfig = JSON.stringify({ mcpServers }, null, 2);
       const mcpCmd = buildHomeFileWriteCommand('.openclaw/mcp.json', mcpConfig);
-      const [mcpOk, mcpOut] = await dockerExec(containerName, mcpCmd, 15_000);
+      const [mcpOk, mcpOut] = await getProvider().exec(record.sandbox_id, mcpCmd, 15_000);
       if (!pushStep({
         kind: 'mcp',
         target: '.openclaw/mcp.json',
@@ -1495,7 +1491,7 @@ app.post('/api/agents/:id/forge', requireAuth, asyncHandler(async (req, res) => 
   if (agent.forge_sandbox_id) {
     const existing = await store.getSandbox(agent.forge_sandbox_id).catch(() => null);
     if (existing) {
-      const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+      const running = await getProvider().isRunning(agent.forge_sandbox_id).catch(() => false);
       if (running) {
         res.json({ forge_sandbox_id: agent.forge_sandbox_id, status: 'ready', sandbox: existing });
         return;
@@ -1615,8 +1611,7 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
           const cloneSpan = startAgentSpan('agent.forge.repo_clone', {
             'agent.id': agentId, 'sandbox.id': sandboxIdStr, 'repo.url': reproduceRepoUrl,
           });
-          const forgeCName = getContainerName(sandboxIdStr);
-          sendEvent('log', { message: `Cloning template from ${reproduceRepoUrl}...` });
+                    sendEvent('log', { message: `Cloning template from ${reproduceRepoUrl}...` });
 
           // Build git clone URL (inject token for private repos)
           const reproduceToken = entry.request.reproduce_github_token as string | undefined;
@@ -1626,9 +1621,9 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
           }
 
           // Install git, clone into workspace
-          await dockerExec(forgeCName, 'apt-get update -qq && apt-get install -y --no-install-recommends git >/dev/null 2>&1', 60_000).catch(() => {});
-          const [cloneOk, cloneOut] = await dockerExec(
-            forgeCName,
+          await getProvider().exec(sandboxIdStr, 'apt-get update -qq && apt-get install -y --no-install-recommends git >/dev/null 2>&1', 60_000).catch(() => {});
+          const [cloneOk, cloneOut] = await getProvider().exec(
+            sandboxIdStr,
             `cd ~/.openclaw/workspace && git clone --depth 1 '${cloneUrl.replace(/'/g, "'\\''")}' _repo_tmp 2>&1 && cp -r _repo_tmp/* _repo_tmp/.* . 2>/dev/null; rm -rf _repo_tmp .git && echo __CLONE_OK__`,
             120_000,
           ).catch(() => [false, 'clone command failed']);
@@ -1636,7 +1631,7 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
           if (cloneSuccess) {
             sendEvent('log', { message: 'Template cloned into workspace.' });
             sendEvent('log', { message: 'Restarting gateway with cloned soul...' });
-            await restartGateway(forgeCName).catch(() => {});
+            await restartGateway(sandboxIdStr).catch(() => {});
             endSpanOk(cloneSpan);
           } else {
             sendEvent('log', { message: `Clone failed: ${String(cloneOut).slice(0, 200)}` });
@@ -1646,18 +1641,17 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
           const soulSpan = startAgentSpan('agent.forge.soul_inject', {
             'agent.id': agentId, 'sandbox.id': sandboxIdStr, 'method': 'architect',
           });
-          const forgeCName = getContainerName(sandboxIdStr);
-          sendEvent('log', { message: 'Injecting Architect SOUL.md into workspace...' });
-          const [soulOk] = await dockerExec(
-            forgeCName,
+                    sendEvent('log', { message: 'Injecting Architect SOUL.md into workspace...' });
+          const [soulOk] = await getProvider().exec(
+            sandboxIdStr,
             buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', ARCHITECT_SOUL_MD),
             30_000,
           ).catch(() => [false]);
           if (soulOk) {
             // Write a backup so mode-switching can restore the Architect soul
             // after the Architect overwrites SOUL.md with the agent's soul.
-            await dockerExec(
-              forgeCName,
+            await getProvider().exec(
+              sandboxIdStr,
               buildHomeFileWriteCommand('.openclaw/workspace/.soul.architect.md', ARCHITECT_SOUL_MD),
               30_000,
             ).catch(() => {});
@@ -1675,20 +1669,19 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
         if (sandboxIdStr) {
           const backendPort = getConfig().port ?? 8000;
           const backendUrl = `http://host.docker.internal:${backendPort}`;
-          const forgeCName = getContainerName(sandboxIdStr);
-          await dockerExec(
-            forgeCName,
+                    await getProvider().exec(
+            sandboxIdStr,
             `echo 'export RUH_BACKEND_URL="${backendUrl}"\nexport RUH_AGENT_ID="${agentId}"' >> /root/.bashrc`,
             10_000,
           ).catch(() => {});
           // Also write a convenience script the Architect can call
-          await dockerExec(
-            forgeCName,
+          await getProvider().exec(
+            sandboxIdStr,
             buildHomeFileWriteCommand('.openclaw/sync-skills.sh',
               `#!/bin/bash\ncurl -sf -X POST "$RUH_BACKEND_URL/api/agents/$RUH_AGENT_ID/forge/sync-workspace" -H "Content-Type: application/json" && echo "\\nSkills synced to backend." || echo "\\nSync failed."`),
             10_000,
           ).catch(() => {});
-          await dockerExec(forgeCName, 'chmod +x /root/.openclaw/sync-skills.sh', 5_000).catch(() => {});
+          await getProvider().exec(sandboxIdStr, 'chmod +x /root/.openclaw/sync-skills.sh', 5_000).catch(() => {});
         }
 
         sendEvent('approved', data);
@@ -1761,7 +1754,7 @@ app.get('/api/agents/:id/forge', requireAuth, asyncHandler(async (req, res) => {
     return;
   }
 
-  const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+  const running = await getProvider().isRunning(agent.forge_sandbox_id).catch(() => false);
   res.json({
     status: running ? 'ready' : 'stopped',
     forge_sandbox_id: agent.forge_sandbox_id,
@@ -1782,7 +1775,7 @@ app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, re
     return;
   }
 
-  const running = await dockerContainerRunning(getContainerName(agent.forge_sandbox_id)).catch(() => false);
+  const running = await getProvider().isRunning(agent.forge_sandbox_id).catch(() => false);
   res.json({
     active: running,
     status: running ? 'ready' : 'stopped',
@@ -1868,18 +1861,18 @@ app.patch('/api/agents/:id/mode', requireAuth, asyncHandler(async (req, res) => 
   });
 
   try {
-    const containerName = getContainerName(agent.forge_sandbox_id);
+    const forgeSandboxId = agent.forge_sandbox_id;
 
     if (mode === 'building') {
-      const [restoreOk, restoreOut] = await dockerExec(
-        containerName,
+      const [restoreOk, restoreOut] = await getProvider().exec(
+        forgeSandboxId,
         'cp ~/.openclaw/workspace/.soul.architect.md ~/.openclaw/workspace/SOUL.md 2>/dev/null && echo ok || echo missing',
         15_000,
       );
       if (!restoreOk || restoreOut.includes('missing')) {
         if (ARCHITECT_SOUL_MD) {
-          await dockerExec(
-            containerName,
+          await getProvider().exec(
+            forgeSandboxId,
             buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', ARCHITECT_SOUL_MD),
             30_000,
           );
@@ -1889,7 +1882,7 @@ app.patch('/api/agents/:id/mode', requireAuth, asyncHandler(async (req, res) => 
       }
     }
 
-    await restartGateway(containerName);
+    await restartGateway(forgeSandboxId);
     endSpanOk(span);
     res.json({ ok: true, mode, agent_id: req.params.id, sandbox_id: agent.forge_sandbox_id });
   } catch (err) {
@@ -1949,11 +1942,9 @@ app.post('/api/agents/:id/forge/sync-workspace', asyncHandler(async (req, res) =
     throw httpError(400, 'Agent has no forge sandbox');
   }
 
-  const containerName = getContainerName(sandboxId);
-
   // 1. List skill directories in the workspace
-  const [lsOk, lsOut] = await dockerExec(
-    containerName,
+  const [lsOk, lsOut] = await getProvider().exec(
+    sandboxId,
     'ls -1 ~/.openclaw/workspace/skills/ 2>/dev/null || echo ""',
     15_000,
   );
@@ -1968,8 +1959,8 @@ app.post('/api/agents/:id/forge/sync-workspace', asyncHandler(async (req, res) =
   // 2. Read each SKILL.md and parse frontmatter
   for (const dir of skillDirs) {
     const safeName = normalizePathSegment(dir);
-    const [readOk, content] = await dockerExec(
-      containerName,
+    const [readOk, content] = await getProvider().exec(
+      sandboxId,
       `cat ~/.openclaw/workspace/skills/${safeName}/SKILL.md 2>/dev/null || echo ""`,
       10_000,
     ).catch(() => [false, ''] as [boolean, string]);
@@ -1995,8 +1986,8 @@ app.post('/api/agents/:id/forge/sync-workspace', asyncHandler(async (req, res) =
   }
 
   // 3. Read workflow.json if present
-  const [wfOk, wfOut] = await dockerExec(
-    containerName,
+  const [wfOk, wfOut] = await getProvider().exec(
+    sandboxId,
     'cat ~/.openclaw/workspace/.openclaw/workflow.json 2>/dev/null || echo ""',
     10_000,
   ).catch(() => [false, ''] as [boolean, string]);
@@ -2132,7 +2123,7 @@ app.delete('/api/agents/:id/credentials/:toolId', requireAuth, asyncHandler(asyn
 app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, res) => {
   const { sandbox_id } = req.params;
   const record = await getRecord(sandbox_id);
-  const containerName = getContainerName(record.sandbox_id);
+
 
   const {
     system_name,
@@ -2205,7 +2196,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
 
   // Write SOUL.md
   if (soul_content) {
-    const [ok, out] = await dockerExec(containerName,
+    const [ok, out] = await getProvider().exec(record.sandbox_id,
       buildHomeFileWriteCommand('.openclaw/workspace/SOUL.md', soul_content),
       30_000);
     if (!pushStep({
@@ -2230,7 +2221,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
       : registrySkill
         ? `Skill ${normalizedSkillId}: registry match (${registrySkill.skill_id})`
         : `Skill ${normalizedSkillId}: stub (no registry entry)`;
-    const [ok, out] = await dockerExec(containerName,
+    const [ok, out] = await getProvider().exec(record.sandbox_id,
       buildHomeFileWriteCommand(
         `.openclaw/workspace/skills/${normalizedSkillId}/SKILL.md`,
         skillContent,
@@ -2249,7 +2240,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
 
   // Register cron jobs
   for (const job of (cron_jobs ?? [])) {
-    const [ok, out] = await dockerExec(containerName,
+    const [ok, out] = await getProvider().exec(record.sandbox_id,
       buildConfigureAgentCronAddCommand({
         name: String(job.name ?? ''),
         schedule: String(job.schedule ?? ''),
@@ -2274,8 +2265,8 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
         value: String(input.value ?? ''),
       })),
     );
-    const [ok, out] = await dockerExec(
-      containerName,
+    const [ok, out] = await getProvider().exec(
+      record.sandbox_id,
       buildHomeFileWriteCommand('.openclaw/.env', runtimeEnvContent),
       20_000,
     );
@@ -2334,7 +2325,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
 
       const mcpConfig = JSON.stringify({ mcpServers }, null, 2);
       const mcpCmd = buildHomeFileWriteCommand('.openclaw/mcp.json', mcpConfig);
-      const [mcpOk, mcpOut] = await dockerExec(containerName, mcpCmd, 15_000);
+      const [mcpOk, mcpOut] = await getProvider().exec(record.sandbox_id, mcpCmd, 15_000);
       if (!pushStep({
         kind: 'mcp',
         target: '.openclaw/mcp.json',
@@ -2395,7 +2386,7 @@ app.post('/api/sandboxes/:sandbox_id/configure-agent', asyncHandler(async (req, 
 app.patch('/api/sandboxes/:sandbox_id/runtime-env', asyncHandler(async (req, res) => {
   const { sandbox_id } = req.params;
   const record = await getRecord(sandbox_id);
-  const containerName = getContainerName(record.sandbox_id);
+
 
   const { runtime_inputs } = req.body;
   if (!Array.isArray(runtime_inputs) || runtime_inputs.length === 0) {
@@ -2409,8 +2400,8 @@ app.patch('/api/sandboxes/:sandbox_id/runtime-env', asyncHandler(async (req, res
     })),
   );
 
-  const [ok, out] = await dockerExec(
-    containerName,
+  const [ok, out] = await getProvider().exec(
+    record.sandbox_id,
     buildHomeFileWriteCommand('.openclaw/.env', envContent),
     20_000,
   );
@@ -2555,7 +2546,7 @@ app.get('/api/sandboxes/:sandbox_id/models', asyncHandler(async (req, res) => {
 app.get('/api/sandboxes/:sandbox_id/status', asyncHandler(async (req, res) => {
   const record = await getRecord(req.params.sandbox_id);
   const [url, headers] = gatewayUrlAndHeaders(record, '/api/status');
-  const container_running = await dockerContainerRunning(getContainerName(record.sandbox_id))
+  const container_running = await getProvider().isRunning(record.sandbox_id)
     .catch(() => false);
   let gatewayReachable = false;
   try {
@@ -2615,7 +2606,7 @@ app.get('/api/admin/sandboxes/reconcile', asyncHandler(async (req, res) => {
   requireAdmin(req);
   const [records, containers] = await Promise.all([
     store.listSandboxes(),
-    listManagedSandboxContainers(),
+    getProvider().listManaged(),
   ]);
   const report = buildSandboxRuntimeReconciliation({ records, containers });
   res.json(report);
@@ -2627,7 +2618,7 @@ app.post('/api/admin/sandboxes/:sandbox_id/reconcile/repair', asyncHandler(async
   const action = String(req.body?.action ?? '').trim();
   const [records, containers] = await Promise.all([
     store.listSandboxes(),
-    listManagedSandboxContainers(),
+    getProvider().listManaged(),
   ]);
   const report = buildSandboxRuntimeReconciliation({ records, containers });
   const item = report.items.find((entry) => entry.sandbox_id === sandboxId)
@@ -2670,12 +2661,13 @@ app.post('/api/admin/sandboxes/:sandbox_id/reconcile/repair', asyncHandler(async
 app.post('/api/sandboxes/:sandbox_id/restart', asyncHandler(async (req, res) => {
   const { sandbox_id } = req.params;
   await getRecord(sandbox_id);
-  const containerName = getContainerName(sandbox_id);
+  const provider = getProvider();
 
-  // Check if container exists at all
-  const running = await dockerContainerRunning(containerName).catch(() => false);
+  // Check if sandbox exists at all
+  const running = await provider.isRunning(sandbox_id).catch(() => false);
   if (!running) {
-    // Try to start a stopped container
+    // Try to start a stopped container (Docker-specific fallback)
+    const containerName = getContainerName(sandbox_id);
     const [startCode] = await dockerSpawn(['start', containerName], 30_000);
     if (startCode !== 0) {
       throw httpError(
@@ -2685,8 +2677,8 @@ app.post('/api/sandboxes/:sandbox_id/restart', asyncHandler(async (req, res) => 
     }
   }
 
-  // Restart the gateway process inside the container
-  await restartGateway(containerName);
+  // Restart the gateway process inside the sandbox
+  await restartGateway(sandbox_id);
 
   await recordAuditEvent(req, {
     action_type: 'sandbox.restart',
@@ -2853,10 +2845,6 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
     sandboxExec(req.params.sandbox_id, `mkdir -p "${sessionPath}" 2>/dev/null`, 10).catch(() => {});
   }
 
-  const [url, headers] = gatewayUrlAndHeaders(record, '/v1/chat/completions');
-  headers['Content-Type'] = 'application/json';
-  if (sessionKey) headers['x-openclaw-session-key'] = sessionKey;
-
   // Normalize model name: gateway only accepts "openclaw" or "openclaw/<agentId>"
   const rawModel = typeof body['model'] === 'string' ? body['model'] : '';
   if (!rawModel.startsWith('openclaw/') && rawModel !== 'openclaw') {
@@ -2864,6 +2852,51 @@ app.post('/api/sandboxes/:sandbox_id/chat', asyncHandler(async (req, res) => {
   }
 
   const isStream = Boolean(body['stream']);
+
+  // For Daytona sandboxes, proxy via toolbox exec (curl inside sandbox) to bypass
+  // the preview URL proxy's Auth0 redirect and 502 issues. The Daytona preview URL
+  // requires X-Daytona-Preview-Token and often returns 502 when the gateway uses
+  // too much memory. Toolbox exec connects to localhost:18789 directly.
+  const isDaytona = getConfig().sandboxProvider === 'daytona';
+  if (isDaytona) {
+    // Don't flush headers early for Daytona — the toolbox exec returns the entire
+    // response at once (not incrementally), so flushing headers would leave the client
+    // waiting with an empty body until the exec completes.
+    const headerArgs = [
+      '-H', 'Content-Type: application/json',
+      ...(record.gateway_token ? ['-H', `Authorization: Bearer ${record.gateway_token}`] : []),
+      ...(sessionKey ? ['-H', `x-openclaw-session-key: ${sessionKey}`] : []),
+    ].map(h => `'${h}'`).join(' ');
+    const bodyJson = JSON.stringify(body).replace(/'/g, "'\\''");
+    const curlFlags = isStream ? '-sN' : '-s';
+    const curlCmd = `curl ${curlFlags} --max-time 120 http://127.0.0.1:18789/v1/chat/completions ${headerArgs} -d '${bodyJson}' 2>&1`;
+    const provider = getProvider();
+    // Ensure gateway is running — restart if crashed (common in 1GB cgroup).
+    const gwEnsureCmd =
+      `export PATH="$HOME/openclaw-pkg/node_modules/.bin:$HOME/.local/bin:$PATH" && ` +
+      `pkill -9 -f "openclaw-device" 2>/dev/null; ` +
+      // Check if port is open
+      `node -e "const n=require('net');n.connect(18789,'127.0.0.1',function(){this.end();process.exit(0)}).on('error',()=>process.exit(1))" 2>/dev/null || ` +
+      // Port closed → restart
+      `{ pkill -9 -f openclaw 2>/dev/null; sleep 1; ` +
+      `NODE_OPTIONS=--max-old-space-size=512 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 setsid openclaw gateway run --bind lan --port 18789 > /tmp/openclaw-gateway.log 2>&1 & ` +
+      // Wait for healthy with retry loop
+      `for i in 1 2 3 4 5 6 7 8 9 10; do ` +
+      `  sleep 2; pkill -9 -f "openclaw-device" 2>/dev/null; ` +
+      `  node -e "const n=require('net');n.connect(18789,'127.0.0.1',function(){this.end();process.exit(0)}).on('error',()=>process.exit(1))" 2>/dev/null && break; ` +
+      `done; echo "Gateway restarted"; }`;
+    await provider.exec(req.params.sandbox_id, gwEnsureCmd, 60_000);
+
+    const [ok, out] = await provider.exec(req.params.sandbox_id, curlCmd, 600_000);
+    res.setHeader('Content-Type', isStream ? 'text/event-stream' : 'application/json');
+    res.write(out || (isStream ? '' : '{"error":"Gateway returned empty response"}'));
+    res.end();
+    return;
+  }
+
+  const [url, headers] = gatewayUrlAndHeaders(record, '/v1/chat/completions');
+  headers['Content-Type'] = 'application/json';
+  if (sessionKey) headers['x-openclaw-session-key'] = sessionKey;
 
   if (isStream) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -3212,7 +3245,7 @@ app.get('/api/sandboxes/:sandbox_id/browser/screenshot', asyncHandler(async (req
 
 app.get('/api/sandboxes/:sandbox_id/preview/ports', asyncHandler(async (req, res) => {
   const record = await getRecord(req.params.sandbox_id);
-  const containerName = getContainerName(record.sandbox_id);
+  const containerName = getContainerName(record.sandbox_id); // Docker-specific port resolution
 
   // Batch: get all port mappings from Docker in one call
   const portMappings: Record<number, number> = {};
@@ -3260,7 +3293,7 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
     throw httpError(400, `Port ${req.params.port} is not a valid preview port`);
   }
 
-  const containerName = getContainerName(record.sandbox_id);
+  const containerName = getContainerName(record.sandbox_id); // Docker-specific port resolution
   const proc = Bun.spawnSync(['docker', 'port', containerName, `${containerPort}/tcp`]);
   const stdout = proc.stdout?.toString().trim() ?? '';
   if (proc.exitCode !== 0 || !stdout) {

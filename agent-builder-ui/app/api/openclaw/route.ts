@@ -26,18 +26,18 @@ import type { LifecycleEvent } from "@/lib/openclaw/types";
 
 export const runtime = "nodejs";
 
-const DEFAULT_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
-const DEFAULT_GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 const GATEWAY_ORIGIN =
   process.env.OPENCLAW_GATEWAY_ORIGIN || "https://clawagentbuilder.ruh.ai";
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Server-side backend URL: use BACKEND_INTERNAL_URL (Docker service name) for
+// server-to-server calls; NEXT_PUBLIC_API_URL is for browser-side (localhost port mapping).
+const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const PER_ATTEMPT_TIMEOUT_MS = parseInt(
   process.env.OPENCLAW_TIMEOUT_MS || "180000",
   10
 );
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2000;
-const AUTH_ME_PATH = "/users/me";
+const AUTH_ME_PATH = "/api/auth/me";
 
 type StreamEventSender = (event: string, data: object) => void;
 
@@ -120,6 +120,8 @@ interface GatewayCredentials {
   token: string;
   /** Origin header to send when connecting. Forge sandboxes need an origin from their allowed list. */
   origin?: string;
+  /** Daytona preview token to bypass Auth0 redirect on the preview URL proxy. */
+  previewToken?: string;
 }
 
 /**
@@ -137,6 +139,8 @@ async function resolveForgeGateway(
   }
   const record = await res.json();
   const httpUrl: string = record.standard_url || record.dashboard_url || "";
+  const gatewayToken: string = record.gateway_token || "";
+  const previewToken: string = record.preview_token || "";
   if (!httpUrl) {
     throw new Error(
       `Forge sandbox ${forgeSandboxId} has no gateway URL`
@@ -144,11 +148,23 @@ async function resolveForgeGateway(
   }
 
   // Health-check: verify the gateway is reachable before returning.
-  // If the container is running but the gateway process crashed, attempt
-  // to restart it via the backend before giving up.
+  // Send both the gateway token (for openclaw auth) and the Daytona preview token
+  // (to bypass Daytona's Auth0 redirect on the preview URL proxy).
+  const probeHeaders: Record<string, string> = {};
+  if (gatewayToken) {
+    probeHeaders["Authorization"] = `Bearer ${gatewayToken}`;
+  }
+  if (previewToken) {
+    probeHeaders["X-Daytona-Preview-Token"] = previewToken;
+  }
   try {
-    const probe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-    if (!probe.ok) throw new Error(`probe status ${probe.status}`);
+    const probe = await fetch(httpUrl, {
+      headers: probeHeaders,
+      signal: AbortSignal.timeout(5000),
+    });
+    // 4xx = gateway is alive but rejecting the request (auth issue, bad path, etc.)
+    // 5xx or connection error = gateway is actually down
+    if (probe.status >= 500) throw new Error(`probe status ${probe.status}`);
   } catch (probeErr) {
     console.warn(
       `[Gateway] Forge sandbox ${forgeSandboxId} gateway at ${httpUrl} is unreachable, attempting restart...`,
@@ -168,8 +184,11 @@ async function resolveForgeGateway(
         console.log(`[Gateway] Restart command sent for forge sandbox ${forgeSandboxId}, waiting for gateway...`);
         // Wait a few seconds for the gateway to come up, then re-probe
         await new Promise((r) => setTimeout(r, 5000));
-        const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-        if (!reProbe.ok) {
+        const reProbe = await fetch(httpUrl, {
+          headers: probeHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        if (reProbe.status >= 500) {
           throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
         }
         console.log(`[Gateway] Forge sandbox ${forgeSandboxId} gateway recovered after restart`);
@@ -196,6 +215,7 @@ async function resolveForgeGateway(
     url: wsUrl,
     token: record.gateway_token || "",
     origin: forgeOrigin,
+    previewToken,
   };
 }
 
@@ -206,7 +226,9 @@ async function resolveForgeGateway(
 export async function POST(req: NextRequest) {
   try {
     await requireAuthenticatedBridgeSession(req, {
-      backendUrl: BACKEND_URL,
+      // Use the public URL for the dev bypass check (BACKEND_INTERNAL_URL uses
+      // Docker service name "backend" which isn't recognized as localhost).
+      backendUrl: process.env.NEXT_PUBLIC_API_URL || BACKEND_URL,
       authMePath: AUTH_ME_PATH,
       nodeEnv: process.env.NODE_ENV,
       allowLocalDevelopmentBypass: true,
@@ -225,6 +247,24 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (!forge_sandbox_id || typeof forge_sandbox_id !== "string") {
+      console.error(
+        `[openclaw-bridge] 400: forge_sandbox_id missing. ` +
+        `session_id=${session_id}, agent_id=${agent_id ?? "none"}, ` +
+        `forge_sandbox_id=${JSON.stringify(forge_sandbox_id)}, ` +
+        `agent=${agent ?? "architect"}, mode=${mode ?? "build"}`
+      );
+      return NextResponse.json(
+        { error: "forge_sandbox_id is required. Every agent must have its own sandbox — create one via POST /api/agents/:id/forge first." },
+        { status: 400 }
+      );
+    }
+
+    console.log(
+      `[openclaw-bridge] Request: session=${session_id}, forge_sandbox=${forge_sandbox_id}, ` +
+      `agent=${agent ?? "architect"}, mode=${mode ?? "build"}, agent_id=${agent_id ?? "none"}`
+    );
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -380,210 +420,52 @@ export async function POST(req: NextRequest) {
                   },
                 );
 
+                console.log(`[bridge-fallback] chatRes status=${chatRes.status}, type=${chatRes.headers.get("content-type")}`);
                 if (!chatRes.ok) {
                   const errText = await chatRes.text().catch(() => "unknown error");
+                  console.log(`[bridge-fallback] error body: ${errText.slice(0, 200)}`);
                   throw new Error(`Forge bridge failed (${chatRes.status}): ${errText.slice(0, 200)}`);
                 }
 
+                // Read the full body to see what came back
+                const chatBody = await chatRes.text();
+                console.log(`[bridge-fallback] body len=${chatBody.length}, first_200=${chatBody.slice(0, 200)}`);
+
                 onLifecycleEvent({ phase: "thinking", message: "Agent thinking..." });
 
-                const reader = chatRes.body?.getReader();
-                if (!reader) throw new Error("No response body from forge bridge");
-
-                // Periodic progress events to keep the UI alive during long builds.
-                // The architect executes tools internally — no tool events stream
-                // through the HTTP chat endpoint — so we emit synthetic phases.
-                const buildPhases = [
-                  { at: 10, phase: "planning", message: "Planning workspace structure..." },
-                  { at: 25, phase: "writing", message: "Writing SOUL.md — agent personality..." },
-                  { at: 45, phase: "generating", message: "Generating skill files..." },
-                  { at: 80, phase: "configuring", message: "Configuring tools and integrations..." },
-                  { at: 120, phase: "triggers", message: "Setting up triggers and schedules..." },
-                  { at: 160, phase: "assembling", message: "Assembling skill graph..." },
-                  { at: 200, phase: "working", message: "Still working — complex agents take time..." },
-                ];
-                const streamStart = Date.now();
-                let nextPhaseIdx = 0;
-                const progressInterval = setInterval(() => {
-                  const elapsed = (Date.now() - streamStart) / 1000;
-                  while (nextPhaseIdx < buildPhases.length && elapsed >= buildPhases[nextPhaseIdx].at) {
-                    const bp = buildPhases[nextPhaseIdx];
-                    send("status", { phase: bp.phase, message: bp.message });
-                    nextPhaseIdx++;
-                  }
-                }, 5000);
-
-                const decoder = new TextDecoder();
+                // Parse the SSE body manually (since we already consumed it with .text())
+                const sseLines = chatBody.split("\n");
                 let fullContent = "";
-                let buffer = "";
-                const emittedFiles = new Set<string>();
-                const emittedSkills = new Set<string>();
-                let lastScanIndex = 0;
-
-                const scanForFileEvents = () => {
-                  const scanText = fullContent.slice(lastScanIndex);
-                  lastScanIndex = fullContent.length;
-
-                  for (const m of scanText.matchAll(/skills\/([a-z0-9_-]+)\/SKILL\.md/gi)) {
-                    const skillId = m[1];
-                    if (!emittedSkills.has(skillId)) {
-                      emittedSkills.add(skillId);
-                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                    }
-                  }
-
-                  for (const m of scanText.matchAll(/\.openclaw\/workspace\/([^\s'"`\\]+)/g)) {
-                    const filePath = m[1];
-                    if (!emittedFiles.has(filePath)) {
-                      emittedFiles.add(filePath);
-                      send("file_written", { path: filePath, tool: "bash" });
-                    }
-                  }
-
-                  if (scanText.includes("SOUL.md") && !emittedFiles.has("SOUL.md")) {
-                    emittedFiles.add("SOUL.md");
-                    send("file_written", { path: "SOUL.md", tool: "bash" });
-                  }
-                };
-
-                try {
-                  while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split("\n");
-                    buffer = lines.pop() || "";
-
-                    for (const line of lines) {
-                      if (line.startsWith("event: ")) continue;
-                      if (!line.startsWith("data: ")) continue;
-                      const data = line.slice(6).trim();
-                      if (data === "[DONE]") continue;
-
-                      try {
-                        const parsed = JSON.parse(data);
-
-                        if (parsed.tool) {
-                          send("tool_start", { tool: parsed.tool, input: parsed.input || "" });
-                          const cmd = String(parsed.input || "");
-                          const skillMatch = cmd.match(/skills\/([a-z0-9_-]+)\/SKILL\.md/i);
-                          if (skillMatch) send("skill_created", { skillId: skillMatch[1], path: `skills/${skillMatch[1]}/SKILL.md` });
-                          const fileMatch = cmd.match(/\.openclaw\/workspace\/([^\s'"]+)/);
-                          if (fileMatch) {
-                            send("file_written", { path: fileMatch[1], tool: parsed.tool });
-                            send("workspace_changed", { action: "create", path: fileMatch[1] });
-                          }
-                          continue;
-                        }
-
-                        const delta = parsed.choices?.[0]?.delta?.content;
-                        if (typeof delta === "string" && delta) {
-                          fullContent += delta;
-                          send("delta", { text: delta });
-                          scanForFileEvents();
-                        }
-
-                        if (parsed.phase) {
-                          onLifecycleEvent({ phase: parsed.phase, message: parsed.message || "" });
-                        }
-
-                        if (parsed.message && !parsed.choices && !parsed.tool && !parsed.phase) {
-                          send("status", { phase: "error", message: parsed.message });
-                        }
-                      } catch {
-                        // Skip unparseable chunks
-                      }
-                    }
-                  }
-                } catch (streamErr) {
-                  if ((streamErr as Error).name !== "AbortError") {
-                    console.warn("[forge-bridge] Stream error:", streamErr);
-                  }
-                } finally {
-                  clearInterval(progressInterval);
-                }
-
-                const rfrMatch = fullContent.match(/```ready_for_review\s*\n?([\s\S]*?)```/) ||
-                  fullContent.match(/```json\s*\n?([\s\S]*?"type"\s*:\s*"ready_for_review"[\s\S]*?)```/) ||
-                  fullContent.match(/\{[\s\S]*"type"\s*:\s*"ready_for_review"[\s\S]*\}/);
-
-                if (rfrMatch) {
+                for (const line of sseLines) {
+                  if (!line.startsWith("data: ")) continue;
+                  const data = line.slice(6).trim();
+                  if (data === "[DONE]") continue;
                   try {
-                    const jsonStr = rfrMatch[1] || rfrMatch[0];
-                    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
-
-                    // Emit skill_created for each node in the skill graph
-                    // so the UI gets real skill events at build completion.
-                    const nodes = (parsed.skill_graph as Record<string, unknown>)?.nodes;
-                    if (Array.isArray(nodes)) {
-                      for (const node of nodes) {
-                        const n = node as Record<string, unknown>;
-                        const skillId = (n.skill_id as string) || "";
-                        if (skillId) {
-                          send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                        }
-                      }
-                      send("build_progress", {
-                        completed: nodes.length,
-                        total: nodes.length,
-                        currentSkill: null,
-                      });
+                    const parsed = JSON.parse(data);
+                    const delta = parsed.choices?.[0]?.delta?.content;
+                    if (typeof delta === "string" && delta) {
+                      fullContent += delta;
+                      send("delta", { text: delta });
                     }
-
-                    return parsed as object;
-                  } catch { /* fall through */ }
+                    // Non-streaming response (choices[0].message.content)
+                    const msg = parsed.choices?.[0]?.message?.content;
+                    if (typeof msg === "string" && msg) {
+                      fullContent += msg;
+                      send("delta", { text: msg });
+                    }
+                  } catch {}
                 }
-
-                return { type: "agent_response", content: fullContent } as object;
+                console.log(`[bridge-fallback] parsed fullContent="${fullContent.slice(0, 100)}"`);
+                send("result", { type: "agent_response", content: fullContent, request_id: requestId });
+                return { content: fullContent };
               }
 
-              // Shared architect gateway: direct WebSocket
-              if (!DEFAULT_GATEWAY_URL) {
-                throw new Error(
-                  "No gateway available. The agent has no forge sandbox and OPENCLAW_GATEWAY_URL is not configured."
-                );
-              }
-              const gateway: GatewayCredentials = {
-                url: DEFAULT_GATEWAY_URL,
-                token: DEFAULT_GATEWAY_TOKEN,
-              };
-
-              const response = await connectWithRetry(
-                session_id,
-                message,
-                resolvedAgent,
-                resolvedMode,
-                typeof soul_override === "string" ? soul_override : undefined,
-                onLifecycleEvent,
-                send,
-                requestId,
-                req.signal,
-                gateway,
-                typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : undefined,
-                trace
+              // No shared architect fallback — every agent must have its own forge sandbox.
+              // This code path should be unreachable because we validate forge_sandbox_id
+              // at the top of the handler.
+              throw new Error(
+                "forge_sandbox_id is required. Every agent must have its own sandbox."
               );
-
-              const responseType =
-                typeof response === "object" &&
-                response !== null &&
-                "type" in response
-                  ? (response as { type?: unknown }).type ?? null
-                  : null;
-
-              trace.update({
-                statusMessage: "Bridge request succeeded",
-                output: { type: responseType },
-              });
-
-              // Score the request outcome so quality trends appear in Langfuse
-              const isSuccess = responseType !== "error";
-              await trace.addScore(
-                "request_success",
-                isSuccess ? 1 : 0,
-                isSuccess ? "Request completed successfully" : "Request ended with an error response"
-              );
-
-              return response;
             }
           );
 
@@ -695,8 +577,8 @@ async function connectWithRetry(
   perAttemptTimeoutMs?: number,
   trace?: BridgeTraceHandle
 ): Promise<object> {
-  const gatewayUrl = gateway?.url || DEFAULT_GATEWAY_URL;
-  const gatewayToken = gateway?.token || DEFAULT_GATEWAY_TOKEN;
+  const gatewayUrl = gateway?.url || "";
+  const gatewayToken = gateway?.token || "";
   const gatewayOrigin = gateway?.origin || GATEWAY_ORIGIN;
   let lastError: Error | null = null;
 
@@ -713,7 +595,7 @@ async function connectWithRetry(
 
       if (!gatewayUrl) {
         throw new Error(
-          "OPENCLAW_GATEWAY_URL is not configured. Set it in your .env file."
+          "No gateway URL available. Ensure the agent has a forge sandbox with a valid gateway."
         );
       }
       return await forwardToGateway(
@@ -792,7 +674,7 @@ async function forwardToGateway(
   trace?: BridgeTraceHandle
 ): Promise<object> {
   const effectiveTimeout = perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
-  const token = gatewayToken || DEFAULT_GATEWAY_TOKEN;
+  const token = gatewayToken || "";
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(gatewayUrl, {
       headers: { Origin: origin || GATEWAY_ORIGIN },

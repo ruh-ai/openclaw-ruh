@@ -11,6 +11,8 @@ import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { dockerSpawn, dockerExec, getContainerName } from './docker';
 import { getConfig } from './config';
 import { httpError, parseJsonOutput } from './utils';
+import { getProvider } from './providers';
+import type { InfrastructureResult } from './providers';
 
 // Re-export for consumers (channelManager, tests)
 export { dockerExec, getContainerName, PREVIEW_PORTS };
@@ -364,7 +366,7 @@ function assertExpectedResolvedModel(
 }
 
 async function seedSharedAuthState(
-  containerName: string,
+  sandboxId: string,
   seed: SharedAuthSeed,
   homeDir = '/root',
 ): Promise<void> {
@@ -372,8 +374,8 @@ async function seedSharedAuthState(
   const payload = fs.readFileSync(seed.hostPath).toString('base64');
   const script =
     "const fs=require('fs');const path=require('path');const destination=process.argv[1];const content=Buffer.from(process.argv[2],'base64');if(fs.existsSync(destination)){process.stdout.write('present');process.exit(0)}fs.mkdirSync(path.dirname(destination),{recursive:true});fs.writeFileSync(destination,content);process.stdout.write('seeded');";
-  const [ok, out] = await dockerExec(
-    containerName,
+  const [ok, out] = await getProvider().exec(
+    sandboxId,
     `node -e ${JSON.stringify(script)} ${JSON.stringify(destination)} ${JSON.stringify(payload)} 2>&1`,
     45_000,
   );
@@ -384,13 +386,13 @@ async function seedSharedAuthState(
 }
 
 async function syncCodexAuthProfile(
-  containerName: string,
+  sandboxId: string,
   homeDir: string,
 ): Promise<void> {
   const script = "const fs=require('fs');const path=require('path');const homeDir=process.argv[1];const codexPath=path.join(homeDir,'.codex','auth.json');const authStorePath=path.join(homeDir,'.openclaw','agents','main','agent','auth-profiles.json');const codex=JSON.parse(fs.readFileSync(codexPath,'utf8'));const access=codex&&codex.tokens&&codex.tokens.access_token;const refresh=codex&&codex.tokens&&codex.tokens.refresh_token;const accountId=codex&&codex.tokens&&codex.tokens.account_id;if(!access||!refresh||!accountId) throw new Error('Codex auth file is missing access_token, refresh_token, or account_id');const jwtPart=String(access).split('.')[1]||'';const normalized=jwtPart.replace(/-/g,'+').replace(/_/g,'/');const jwtPayload=JSON.parse(Buffer.from(normalized,'base64').toString('utf8'));const expires=typeof jwtPayload.exp==='number'?jwtPayload.exp*1000:null;if(!expires) throw new Error('Could not derive Codex token expiry from access token');let authStore={version:1,profiles:{},lastGood:{},usageStats:{}};try{authStore=JSON.parse(fs.readFileSync(authStorePath,'utf8'));}catch{}authStore.version=1;authStore.profiles=authStore.profiles||{};authStore.lastGood=authStore.lastGood||{};authStore.usageStats=authStore.usageStats||{};authStore.profiles['openai-codex:default']={type:'oauth',provider:'openai-codex',access,refresh,expires,accountId};authStore.lastGood['openai-codex']='openai-codex:default';fs.mkdirSync(path.dirname(authStorePath),{recursive:true});fs.writeFileSync(authStorePath,JSON.stringify(authStore,null,2));process.stdout.write('synced');";
 
-  const [ok, out] = await dockerExec(
-    containerName,
+  const [ok, out] = await getProvider().exec(
+    sandboxId,
     `node -e ${JSON.stringify(script)} ${JSON.stringify(homeDir)} 2>&1`,
     45_000,
   );
@@ -401,14 +403,14 @@ async function syncCodexAuthProfile(
 }
 
 async function alignArchitectAgentModel(
-  containerName: string,
+  sandboxId: string,
   homeDir: string,
   sharedCodexModel: string,
 ): Promise<boolean> {
   const script = "const fs=require('fs');const path=require('path');const homeDir=process.argv[1];const model=process.argv[2];const configPath=path.join(homeDir,'.openclaw','openclaw.json');let config={};try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch{process.stdout.write('absent');process.exit(0)}const agents=Array.isArray(config?.agents?.list)?config.agents.list:[];let found=false;for(const agent of agents){if(!agent||typeof agent!=='object'||agent.id!=='architect') continue;found=true;if(agent.model!==model){agent.model=model;fs.writeFileSync(configPath,JSON.stringify(config,null,2));process.stdout.write('updated');process.exit(0)}}process.stdout.write(found?'present':'absent');";
 
-  const [ok, out] = await dockerExec(
-    containerName,
+  const [ok, out] = await getProvider().exec(
+    sandboxId,
     `node -e ${JSON.stringify(script)} ${JSON.stringify(homeDir)} ${JSON.stringify(sharedCodexModel)} 2>&1`,
     45_000,
   );
@@ -433,7 +435,7 @@ function truncateBootstrapDiagnostic(output: string, limit = 200): string {
 }
 
 async function verifyBootstrapConfig(
-  containerName: string,
+  sandboxId: string,
   expectations: BootstrapConfigExpectation[],
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
   const encodedExpectations = Buffer.from(JSON.stringify(expectations), 'utf8').toString('base64');
@@ -462,8 +464,8 @@ async function verifyBootstrapConfig(
     "process.stdout.write(JSON.stringify({ok:failures.length===0,failures}));",
   ].join('');
 
-  const [ok, output] = await dockerExec(
-    containerName,
+  const [ok, output] = await getProvider().exec(
+    sandboxId,
     `node -e ${JSON.stringify(script)} ${JSON.stringify(encodedExpectations)} 2>&1`,
     30_000,
   );
@@ -589,19 +591,24 @@ function resolveProviderOptions(
   return { providerId, providerDef, modelId, baseUrl, apiKey, envUpdates, providerConfig };
 }
 
-export async function restartGateway(containerName: string): Promise<void> {
-  await dockerExec(containerName, 'openclaw gateway stop 2>/dev/null || true', 15_000);
+export async function restartGateway(sandboxId: string): Promise<void> {
+  const provider = getProvider();
+  await provider.exec(
+    sandboxId,
+    `export PATH="$HOME/openclaw-pkg/node_modules/.bin:$HOME/.local/bin:$PATH" && openclaw gateway stop 2>/dev/null || true`,
+    15_000,
+  );
   await Bun.sleep(2000);
-  await dockerExec(
-    containerName,
-    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
-    10_000,
+  await provider.exec(
+    sandboxId,
+    `export PATH="$HOME/openclaw-pkg/node_modules/.bin:$HOME/.local/bin:$PATH" && bash -c 'OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 NODE_OPTIONS=--max-old-space-size=512 setsid openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &' && sleep 2`,
+    15_000,
   );
 }
 
-async function detectContainerHomeDir(containerName: string): Promise<string> {
-  const [ok, out] = await dockerExec(
-    containerName,
+async function detectContainerHomeDir(sandboxId: string): Promise<string> {
+  const [ok, out] = await getProvider().exec(
+    sandboxId,
     `node -e "process.stdout.write(require('os').homedir())"`,
     10_000,
   );
@@ -613,11 +620,12 @@ async function detectContainerHomeDir(containerName: string): Promise<string> {
   return homeDir;
 }
 
-async function waitForGateway(containerName: string): Promise<boolean> {
+async function waitForGateway(sandboxId: string): Promise<boolean> {
+  const provider = getProvider();
   for (let i = 0; i < 10; i++) {
     await Bun.sleep(1500);
-    const [ok] = await dockerExec(
-      containerName,
+    const [ok] = await provider.exec(
+      sandboxId,
       `node -e "const n=require('net');const c=n.connect(${GATEWAY_PORT},'127.0.0.1',()=>{c.end();process.exit(0)});c.on('error',()=>process.exit(1))"`,
       5000,
     );
@@ -627,20 +635,21 @@ async function waitForGateway(containerName: string): Promise<boolean> {
 }
 
 export async function retrofitContainerToSharedCodex(
-  containerName: string,
+  sandboxId: string,
   opts: SharedCodexRetrofitOptions = {},
 ): Promise<SharedCodexRetrofitResult> {
+  const provider = getProvider();
   const sharedAuthSeed = resolveSharedAuthSeed(opts);
   if (!sharedAuthSeed) {
     throw httpError(400, 'No shared OpenClaw OAuth or Codex auth file is available on the host');
   }
 
   const sharedCodexModel = resolveSharedCodexModel(opts);
-  const homeDir = await detectContainerHomeDir(containerName);
-  await seedSharedAuthState(containerName, sharedAuthSeed, homeDir);
+  const homeDir = await detectContainerHomeDir(sandboxId);
+  await seedSharedAuthState(sandboxId, sharedAuthSeed, homeDir);
 
-  const [onboardOk, onboardOut] = await dockerExec(
-    containerName,
+  const [onboardOk, onboardOut] = await provider.exec(
+    sandboxId,
     SHARED_CODEX_ONBOARD_CMD,
     120_000,
   );
@@ -648,11 +657,11 @@ export async function retrofitContainerToSharedCodex(
     throw httpError(502, `Failed to refresh OpenClaw onboarding for shared Codex auth: ${onboardOut.slice(0, 400)}`);
   }
   if (sharedAuthSeed.kind === 'codex-auth') {
-    await syncCodexAuthProfile(containerName, homeDir);
+    await syncCodexAuthProfile(sandboxId, homeDir);
   }
 
-  const [setModelOk, setModelOut] = await dockerExec(
-    containerName,
+  const [setModelOk, setModelOut] = await provider.exec(
+    sandboxId,
     `openclaw config set agents.defaults.model.primary ${sharedCodexModel}`,
     30_000,
   );
@@ -661,13 +670,13 @@ export async function retrofitContainerToSharedCodex(
   }
 
   const hasArchitectAgent = await alignArchitectAgentModel(
-    containerName,
+    sandboxId,
     homeDir,
     sharedCodexModel,
   );
 
-  const [probeOk, probeOut] = await dockerExec(
-    containerName,
+  const [probeOk, probeOut] = await provider.exec(
+    sandboxId,
     'openclaw models status --probe --probe-provider openai-codex --json',
     30_000,
   );
@@ -678,8 +687,8 @@ export async function retrofitContainerToSharedCodex(
   assertExpectedResolvedModel(probeOut, sharedCodexModel, 'Shared Codex auth');
 
   if (hasArchitectAgent) {
-    const [architectProbeOk, architectProbeOut] = await dockerExec(
-      containerName,
+    const [architectProbeOk, architectProbeOut] = await provider.exec(
+      sandboxId,
       'openclaw models status --agent architect --probe --probe-provider openai-codex --json',
       30_000,
     );
@@ -690,15 +699,15 @@ export async function retrofitContainerToSharedCodex(
     assertExpectedResolvedModel(architectProbeOut, sharedCodexModel, 'Architect shared Codex auth');
   }
 
-  await restartGateway(containerName);
-  const healthy = await waitForGateway(containerName);
+  await restartGateway(sandboxId);
+  const healthy = await waitForGateway(sandboxId);
   if (!healthy) {
     throw httpError(502, 'Gateway did not become healthy after shared Codex retrofit');
   }
 
   return {
     ok: true,
-    containerName,
+    containerName: sandboxId,
     model: sharedCodexModel,
     homeDir,
     authSource: sharedAuthSeed.label,
@@ -716,7 +725,7 @@ export async function retrofitSandboxToSharedCodex(
   sandboxId: string,
   opts: SharedCodexRetrofitOptions = {},
 ): Promise<SharedCodexRetrofitResult & { sandboxId: string }> {
-  const result = await retrofitContainerToSharedCodex(getContainerName(sandboxId), opts);
+  const result = await retrofitContainerToSharedCodex(sandboxId, opts);
   return {
     ...result,
     sandboxId,
@@ -746,9 +755,9 @@ export async function reconfigureSandboxLlm(
     'utf8',
   ).toString('base64');
 
-  const containerName = getContainerName(sandboxId);
-  const [writeOk, writeOut] = await dockerExec(
-    containerName,
+  const provider = getProvider();
+  const [writeOk, writeOut] = await provider.exec(
+    sandboxId,
     `node -e ${JSON.stringify(RECONFIGURE_LLM_NODE_SCRIPT)} ${JSON.stringify(payload)} 2>&1`,
     45_000,
   );
@@ -757,8 +766,8 @@ export async function reconfigureSandboxLlm(
     throw httpError(502, `Failed to update LLM config: ${writeOut.slice(0, 400)}`);
   }
 
-  await restartGateway(containerName);
-  const healthy = await waitForGateway(containerName);
+  await restartGateway(sandboxId);
+  const healthy = await waitForGateway(sandboxId);
   if (!healthy) {
     throw httpError(502, 'Gateway did not become healthy after LLM reconfiguration');
   }
@@ -777,7 +786,7 @@ export async function reconfigureSandboxLlm(
 }
 
 export async function stopAndRemoveContainer(sandboxId: string): Promise<void> {
-  await dockerSpawn(['rm', '-f', getContainerName(sandboxId)], 15_000);
+  await getProvider().stopAndRemove(sandboxId);
 }
 
 export async function* createOpenclawSandbox(
@@ -795,15 +804,10 @@ export async function* createOpenclawSandbox(
     sandboxName = 'openclaw-gateway',
   } = opts;
 
-  const sandboxId = uuidv4();
-  const containerName = getContainerName(sandboxId);
   const sharedAuthSeed = resolveSharedAuthSeed(opts);
   const sharedCodexModel = resolveSharedCodexModel(opts);
-  const createSpan = trace.getTracer('ruh-backend').startSpan('sandbox.create', {
-    attributes: { 'sandbox.name': sandboxName, 'sandbox.id': sandboxId },
-  });
 
-  // Collect env vars to forward into the container
+  // Collect env vars to forward into the sandbox
   const keyMap: Record<string, string> = {
     ...(sharedAuthSeed
       ? {}
@@ -820,109 +824,52 @@ export async function* createOpenclawSandbox(
   for (const [key, val] of Object.entries(keyMap)) {
     if (val) {
       envArgs.push('-e', `${key}=${val}`);
-      yield ['log', `Forwarding ${key} into container`];
+      yield ['log', `Forwarding ${key} into sandbox`];
     }
   }
 
-  // Resolve sandbox image — prefer pre-built ruh-sandbox, fall back to legacy
-  let sandboxImage = SANDBOX_IMAGE;
-  let usingPrebuiltImage = false;
-  const [prebuiltInspectCode] = await dockerSpawn(['image', 'inspect', SANDBOX_IMAGE], 10_000);
-  if (prebuiltInspectCode === 0) {
-    usingPrebuiltImage = true;
-    yield ['log', `Using pre-built sandbox image: ${SANDBOX_IMAGE}`];
-  } else {
-    // Fall back to legacy image
-    sandboxImage = LEGACY_IMAGE;
-    yield ['log', `Pre-built image not found, falling back to ${LEGACY_IMAGE}...`];
-    const [legacyInspectCode] = await dockerSpawn(['image', 'inspect', LEGACY_IMAGE], 10_000);
-    if (legacyInspectCode !== 0) {
-      yield ['log', `Pulling ${LEGACY_IMAGE} image...`];
-      const [pullCode, pullOut] = await dockerSpawn(['pull', LEGACY_IMAGE], 180_000);
-      if (pullCode !== 0) {
-        yield ['error', `Failed to pull ${LEGACY_IMAGE} image: ${pullOut}`];
-        return;
+  // ── Infrastructure creation (provider-agnostic) ───────────────────────────
+  const provider = getProvider();
+  let infra: InfrastructureResult | null = null;
+
+  console.log(`[sandbox-create] Starting infrastructure creation via ${getConfig().sandboxProvider} provider`);
+
+  for await (const event of provider.createInfrastructure({ envArgs, sandboxName })) {
+    if (event[0] === 'infra_ready') {
+      infra = event[1] as InfrastructureResult;
+      console.log(`[sandbox-create] Infrastructure ready: sandboxId=${infra.sandboxId}, gatewayUrl=${infra.gatewayUrl}`);
+    } else {
+      const [type, data] = event as SandboxEvent;
+      if (type === 'error') {
+        console.error(`[sandbox-create] Infrastructure error: ${data}`);
+      } else {
+        console.log(`[sandbox-create] ${type}: ${typeof data === 'string' ? data : JSON.stringify(data)}`);
       }
+      yield event as SandboxEvent;
     }
   }
 
-  yield ['log', `Creating container '${containerName}'...`];
-  const [createCode, createOut] = await dockerSpawn(
-    [
-      'run', '-d',
-      '--name', containerName,
-      '--memory', '2g',            // Resource limit: prevent runaway containers
-      '--cpus', '2',               // CPU limit
-      '--restart', 'unless-stopped', // Auto-restart on crash
-      '-p', `${GATEWAY_PORT}`,     // Docker assigns a random host port
-      '-p', `${VNC_WS_PORT}`,      // VNC websockify port
-      ...PREVIEW_PORTS.flatMap(p => ['-p', `${p}`]), // Dev server preview ports
-      ...envArgs,
-      sandboxImage,
-      'tail', '-f', '/dev/null',   // Keep container alive
-    ],
-    30_000,
-  );
-
-  if (createCode !== 0) {
-    yield ['error', `Failed to create container: ${createOut}`];
-    return;
-  }
-  yield ['log', `Container started: ${containerName}`];
-
-  // Resolve the host port Docker assigned
-  await Bun.sleep(500);
-  const [portCode, portOut] = await dockerSpawn(
-    ['port', containerName, `${GATEWAY_PORT}/tcp`],
-    10_000,
-  );
-  if (portCode !== 0 || !portOut) {
-    yield ['error', `Failed to get port mapping: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
+  if (!infra) {
+    console.error('[sandbox-create] Infrastructure creation failed — no infra_ready event received');
     return;
   }
 
-  // portOut is like "0.0.0.0:32769" or ":::32769"
-  const hostPort = portOut.trim().split(':').pop() ?? '';
-  if (!hostPort || isNaN(parseInt(hostPort))) {
-    yield ['error', `Could not parse host port from: ${portOut}`];
-    await dockerSpawn(['rm', '-f', containerName]);
-    return;
-  }
+  const sandboxId = infra.sandboxId;
+  const gatewayUrl = infra.gatewayUrl;
+  const hostPort = infra.gatewayHostPort;
+  const vncHostPort = infra.vncHostPort;
+  const dashboardHostPort = infra.dashboardHostPort;
+  const usingPrebuiltImage = infra.usingPrebuiltImage;
 
-  const gatewayUrl = `http://localhost:${hostPort}`;
-  yield ['log', `Gateway will be accessible at ${gatewayUrl}`];
-
-  // Resolve VNC websockify host port
-  const [vncPortCode, vncPortOut] = await dockerSpawn(
-    ['port', containerName, `${VNC_WS_PORT}/tcp`],
-    10_000,
-  );
-  let vncHostPort: number | null = null;
-  if (vncPortCode === 0 && vncPortOut) {
-    const parsed = parseInt(vncPortOut.trim().split(':').pop() ?? '', 10);
-    if (!isNaN(parsed)) {
-      vncHostPort = parsed;
-      yield ['log', `VNC websockify will be accessible on host port ${vncHostPort}`];
-    }
-  }
-
-  // Resolve agent dashboard host port (8080 inside container)
-  const [dashPortCode, dashPortOut] = await dockerSpawn(
-    ['port', containerName, '8080/tcp'],
-    10_000,
-  );
-  let dashboardHostPort: number | null = null;
-  if (dashPortCode === 0 && dashPortOut) {
-    const parsed = parseInt(dashPortOut.trim().split(':').pop() ?? '', 10);
-    if (!isNaN(parsed)) dashboardHostPort = parsed;
-  }
+  const createSpan = trace.getTracer('ruh-backend').startSpan('sandbox.create', {
+    attributes: { 'sandbox.name': sandboxName, 'sandbox.id': sandboxId },
+  });
 
   const run = (cmd: string, timeoutSec = 300) =>
-    dockerExec(containerName, cmd, timeoutSec * 1000);
+    provider.exec(sandboxId, `export PATH="$HOME/openclaw-pkg/node_modules/.bin:$HOME/.local/bin:$PATH" && ${cmd}`, timeoutSec * 1000);
 
   const removeContainer = async () => {
-    await dockerSpawn(['rm', '-f', containerName], 15_000);
+    await provider.stopAndRemove(sandboxId);
   };
 
   const failCreate = async (message: string): Promise<SandboxEvent> => {
@@ -958,9 +905,12 @@ export async function* createOpenclawSandbox(
   };
 
   // ── OpenClaw + Browser install (skip if using pre-built image) ──────────
+  console.log(`[sandbox-create] Starting bootstrap (usingPrebuiltImage=${usingPrebuiltImage})...`);
   if (usingPrebuiltImage) {
     // Pre-built image has everything installed — just verify and start VNC
+    console.log('[sandbox-create] Checking openclaw --version...');
     const [verOk, ver] = await run('openclaw --version');
+    console.log(`[sandbox-create] openclaw --version: ok=${verOk}, output=${ver.slice(0, 100)}`);
     if (!verOk) {
       yield await failCreate('openclaw binary not found in pre-built image — rebuild with: scripts/build-sandbox-image.sh');
       return;
@@ -986,15 +936,71 @@ export async function* createOpenclawSandbox(
     }
   } else {
     // Legacy path: install everything from scratch (slow ~3min)
-    yield ['log', 'Installing OpenClaw (npm install -g openclaw@2026.3.24)...'];
-    let [ok, out] = await run('npm install -g openclaw@2026.3.24', 600);
-    if (!ok) {
-      yield ['log', 'Retrying with --unsafe-perm...'];
-      [ok, out] = await run('npm install -g --unsafe-perm openclaw@latest', 600);
+    // Detect if running as root (Docker) or non-root (Daytona)
+    const [, whoamiOut] = await run('whoami 2>/dev/null || echo unknown', 5);
+    const isRoot = whoamiOut.trim() === 'root';
+    yield ['log', `Installing OpenClaw (user: ${whoamiOut.trim()}, root: ${isRoot})...`];
+
+    let ok: boolean;
+    let out: string;
+
+    if (isRoot) {
+      // Docker: install globally as root
+      [ok, out] = await run('npm install -g openclaw@2026.3.24 2>&1', 600);
       if (!ok) {
-        yield await failCreate(`OpenClaw installation failed: ${out}`);
-        return;
+        yield ['log', `First attempt failed, retrying latest...`];
+        [ok, out] = await run('npm install -g openclaw@latest 2>&1', 600);
       }
+    } else {
+      // Daytona / non-root: install into a dedicated directory so npm can
+      // properly nest all transitive dependencies (avoids "Cannot find package"
+      // errors that occur with --prefix when OOM truncates the install).
+      yield ['log', 'Non-root detected, installing via pnpm...'];
+      // Daytona sandbox cgroup limits to 1GB — npm OOMs resolving openclaw's 1000+ deps.
+      // pnpm resolves in <512MB and installs in ~20s with proper dep isolation.
+      // Use provider.exec directly to avoid run() PATH wrapper adding overhead.
+      // Daytona sandbox cgroup limits to 1GB. npm OOMs on openclaw's 1000+ deps.
+      // pnpm resolves in ~800MB peak, completing in ~20s.
+      // node-linker=hoisted creates a flat node_modules (like npm) so openclaw's
+      // undeclared runtime requires (@buape/carbon, @larksuiteoapi/node-sdk, etc.) work.
+      console.log(`[sandbox-create] Installing via pnpm (corepack + hoisted linker)...`);
+      // Step A: enable pnpm via corepack
+      await provider.exec(sandboxId,
+        'mkdir -p $HOME/.local/bin && corepack enable --install-directory=$HOME/.local/bin pnpm 2>&1',
+        30_000,
+      );
+      // Step B: install openclaw via pnpm (main install — ~30s, peaks at ~800MB).
+      // Split from plugin deps so each step fits within the 1GB cgroup.
+      await provider.exec(sandboxId,
+        'export PATH="$HOME/.local/bin:$PATH" && ' +
+        'mkdir -p $HOME/openclaw-pkg && cd $HOME/openclaw-pkg && ' +
+        '{ echo \'{"name":"openclaw-install","version":"1.0.0"}\' > package.json; } && ' +
+        'echo "node-linker=hoisted" > .npmrc && ' +
+        'pnpm add openclaw@latest 2>&1',
+        300_000,
+      );
+      // Step C: install undeclared runtime deps (channel plugins openclaw requires()
+      // but doesn't declare). Separate exec so memory from Step B is freed.
+      await provider.exec(sandboxId,
+        'export PATH="$HOME/.local/bin:$PATH" && cd $HOME/openclaw-pkg && ' +
+        'pnpm add @buape/carbon @larksuiteoapi/node-sdk @slack/web-api grammy 2>&1 || true',
+        120_000,
+      );
+      // Check binary
+      [ok, out] = await provider.exec(sandboxId,
+        'test -x $HOME/openclaw-pkg/node_modules/.bin/openclaw && echo __INSTALL_OK__',
+        10_000,
+      );
+      // Accept if binary exists regardless of npm exit code
+      if (!ok && out.includes('__INSTALL_OK__')) {
+        ok = true;
+        yield ['log', 'npm exited with warnings but binary installed successfully (second-pass repair succeeded)'];
+      }
+    }
+
+    if (!ok) {
+      yield await failCreate(`OpenClaw installation failed: ${out}`);
+      return;
     }
 
     const [verOk, ver] = await run('openclaw --version');
@@ -1005,12 +1011,20 @@ export async function* createOpenclawSandbox(
     yield ['log', `OpenClaw installed: ${ver}`];
 
     // ── Install browser + VNC stack for live browser view ──────────────────
-    yield ['log', 'Installing browser & VNC stack (xvfb, x11vnc, websockify, chromium)...'];
+    // Skip on non-root (Daytona) sandboxes: 1GB cgroup doesn't have room for
+    // Xvfb+x11vnc+websockify+chromium alongside the gateway, and VNC isn't
+    // accessible through Daytona's preview URL proxy anyway.
+    if (!isRoot) {
+      yield ['log', 'Skipping browser/VNC stack (Daytona sandbox — not needed)'];
+    } else {
+    yield ['log', 'Installing browser & VNC stack...'];
+    const aptCmd = isRoot ? 'apt-get' : 'sudo apt-get';
     const [browserOk, browserOut] = await run(
-      'apt-get update -qq && apt-get install -y --no-install-recommends ' +
+      `${aptCmd} update -qq 2>&1 && ` +
+      `${aptCmd} install -y --no-install-recommends ` +
       'xvfb x11vnc websockify novnc chromium ' +
-      'fonts-liberation fonts-noto-color-emoji ' +
-      '&& rm -rf /var/lib/apt/lists/*',
+      'fonts-liberation fonts-noto-color-emoji 2>&1' +
+      `&& ${aptCmd} clean 2>/dev/null; rm -rf /var/lib/apt/lists/* 2>/dev/null || true`,
       600,
     );
     if (!browserOk) {
@@ -1025,7 +1039,7 @@ export async function* createOpenclawSandbox(
       const xvfbWarning = await runOptionalBootstrapStep('browser.xvfb', 'Xvfb :99 -screen 0 1280x720x24 -ac &', 10);
       if (xvfbWarning) yield ['log', xvfbWarning];
       // Set DISPLAY for all subsequent processes
-      const bashrcWarning = await runOptionalBootstrapStep('browser.display-export', 'echo "export DISPLAY=:99" >> /root/.bashrc', 5);
+      const bashrcWarning = await runOptionalBootstrapStep('browser.display-export', 'echo "export DISPLAY=:99" >> $HOME/.bashrc', 5);
       if (bashrcWarning) yield ['log', bashrcWarning];
       // x11vnc — VNC server on port 5900
       const x11vncWarning = await runOptionalBootstrapStep(
@@ -1043,12 +1057,13 @@ export async function* createOpenclawSandbox(
     if (websockifyWarning) yield ['log', websockifyWarning];
     yield ['log', `VNC services started (websockify on port ${VNC_WS_PORT})`];
   }
+  } // end browser/VNC install (root only)
   } // end legacy install path
 
   if (sharedAuthSeed) {
     yield ['log', `Seeding shared ${sharedAuthSeed.label} into sandbox...`];
     try {
-      await seedSharedAuthState(containerName, sharedAuthSeed);
+      await seedSharedAuthState(sandboxId, sharedAuthSeed);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       yield await failCreate(msg);
@@ -1056,53 +1071,32 @@ export async function* createOpenclawSandbox(
     }
   }
 
-  // Build onboard command
+  // Build onboard command — OpenClaw 2026.4.5+ uses native provider flags
   let onboardCmd =
-    'openclaw onboard --non-interactive --secret-input-mode plaintext --accept-risk --skip-health';
+    'openclaw onboard --non-interactive --accept-risk --skip-health';
 
   if (sharedAuthSeed) {
     onboardCmd += ' --auth-choice skip';
     yield ['log', `LLM provider: Shared Codex OAuth via ${sharedAuthSeed.label}`];
   } else if (openrouterApiKey) {
-    onboardCmd +=
-      ' --auth-choice custom-api-key' +
-      ' --custom-base-url https://openrouter.ai/api/v1' +
-      ' --custom-model-id openrouter/auto' +
-      ` --custom-api-key ${openrouterApiKey}` +
-      ' --custom-compatibility openai';
+    onboardCmd += ` --auth-choice openrouter-api-key --openrouter-api-key ${openrouterApiKey}`;
     yield ['log', 'LLM provider: OpenRouter'];
   } else if (openaiApiKey) {
-    onboardCmd += ` --auth-choice openai-api-key --custom-api-key ${openaiApiKey}`;
+    onboardCmd += ` --auth-choice openai-api-key --openai-api-key ${openaiApiKey}`;
     yield ['log', 'LLM provider: OpenAI'];
   } else if (anthropicApiKey) {
-    onboardCmd +=
-      ' --auth-choice custom-api-key' +
-      ' --custom-base-url https://api.anthropic.com/v1' +
-      ' --custom-model-id claude-sonnet-4-20250514' +
-      ` --custom-api-key ${anthropicApiKey}` +
-      ' --custom-compatibility openai';
+    onboardCmd += ` --auth-choice custom-api-key --anthropic-api-key ${anthropicApiKey}`;
     yield ['log', 'LLM provider: Anthropic'];
   } else if (geminiApiKey) {
-    onboardCmd +=
-      ' --auth-choice custom-api-key' +
-      ' --custom-base-url https://generativelanguage.googleapis.com/v1beta/openai' +
-      ' --custom-model-id gemini-2.5-flash' +
-      ` --custom-api-key ${geminiApiKey}` +
-      ' --custom-compatibility openai';
+    onboardCmd += ` --auth-choice gemini-api-key --gemini-api-key ${geminiApiKey}`;
     yield ['log', 'LLM provider: Gemini'];
   } else {
-    // Fallback: use local Ollama
-    onboardCmd +=
-      ' --auth-choice custom-api-key' +
-      ` --custom-base-url ${ollamaBaseUrl}` +
-      ` --custom-model-id ${ollamaModel}` +
-      ' --custom-api-key ollama-local' +
-      ' --custom-compatibility openai';
+    onboardCmd += ` --auth-choice ollama`;
     yield ['log', `LLM provider: Ollama (${ollamaModel})`];
   }
 
   yield ['log', 'Running OpenClaw onboarding...'];
-  const [onboardOk, onboardOut] = await run(onboardCmd, 120);
+  const [onboardOk, onboardOut] = await run(onboardCmd + ' 2>&1', 120);
   if (!onboardOk) {
     yield await failCreate(`Onboarding failed: ${onboardOut}`);
     return;
@@ -1120,7 +1114,7 @@ export async function* createOpenclawSandbox(
     }
     if (sharedAuthSeed.kind === 'codex-auth') {
       try {
-        await syncCodexAuthProfile(containerName, '/root');
+        await syncCodexAuthProfile(sandboxId, '/root');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         yield await failCreate(msg);
@@ -1206,58 +1200,24 @@ export async function* createOpenclawSandbox(
     'http://localhost:8000',
   ];
   const gatewayTrustedProxies = ['127.0.0.1', '172.0.0.0/8', '10.0.0.0/8'];
-  const requiredBootstrapSteps: BootstrapCommandStep[] = [
-    {
-      id: 'gateway.bind',
-      label: 'gateway bind',
-      command: 'openclaw config set gateway.bind lan',
+
+  // Write all config in one node script (avoids 10+ `openclaw config set` CLI calls
+  // that each spawn a Node.js process — too much memory in Daytona's 1GB cgroup).
+  const configPatch = {
+    gateway: {
+      bind: 'lan',
+      controlUi: {
+        allowInsecureAuth: true,
+        dangerouslyAllowHostHeaderOriginFallback: true,
+      },
+      trustedProxies: gatewayTrustedProxies,
+      http: { endpoints: { chatCompletions: { enabled: true } } },
     },
-    {
-      id: 'gateway.controlUi.allowedOrigins',
-      label: 'gateway control UI allowed origins',
-      command: `openclaw config set gateway.controlUi.allowedOrigins '${JSON.stringify(gatewayAllowedOrigins)}'`,
-    },
-    {
-      id: 'gateway.trustedProxies',
-      label: 'gateway trusted proxies',
-      command: `openclaw config set gateway.trustedProxies '${JSON.stringify(gatewayTrustedProxies)}'`,
-    },
-    {
-      id: 'gateway.controlUi.allowInsecureAuth',
-      label: 'gateway insecure auth override',
-      command: 'openclaw config set gateway.controlUi.allowInsecureAuth true',
-    },
-    {
-      id: 'gateway.http.endpoints.chatCompletions.enabled',
-      label: 'chat completions endpoint',
-      command: 'openclaw config set gateway.http.endpoints.chatCompletions.enabled true',
-    },
-    {
-      id: 'browser.noSandbox',
-      label: 'browser no-sandbox mode',
-      command: 'openclaw config set browser.noSandbox true',
-    },
-    {
-      id: 'browser.headless',
-      label: 'browser headed mode',
-      command: 'openclaw config set browser.headless false',
-    },
-    {
-      id: 'tools.profile',
-      label: 'full tools profile',
-      command: 'openclaw config set tools.profile full',
-    },
-    {
-      id: 'commands.native',
-      label: 'native command execution',
-      command: 'openclaw config set commands.native true',
-    },
-    {
-      id: 'commands.nativeSkills',
-      label: 'native command skills',
-      command: 'openclaw config set commands.nativeSkills true',
-    },
-  ];
+    browser: { noSandbox: true, headless: false },
+    tools: { profile: 'full' },
+    commands: { native: true, nativeSkills: true },
+  };
+  const requiredBootstrapSteps: BootstrapCommandStep[] = [];
 
   // Inject OTEL diagnostics config so the gateway exports traces
   const backendConfig = getConfig();
@@ -1318,27 +1278,44 @@ export async function* createOpenclawSandbox(
     yield ['log', 'OTEL diagnostics config will be applied to gateway'];
   }
 
-  // Batch all config into a single docker exec to avoid 11+ sequential CLI calls.
-  // Each `openclaw config set` takes ~2-3s due to Node.js startup + JSON read/write.
-  // Batching saves ~25-30s of provisioning time.
+  // Write all config at once via a single node script that patches openclaw.json directly.
+  // This avoids spawning 10+ `openclaw config set` CLI processes (each ~100MB) that
+  // exceed the 1GB cgroup limit on Daytona sandboxes.
   yield ['log', 'Applying required bootstrap config...'];
-  const batchedConfigScript = requiredBootstrapSteps
-    .map((step) => step.command)
-    .join(' && ');
-  const [batchOk, batchOut] = await run(batchedConfigScript, 60);
-  if (!batchOk) {
-    // Fallback: run steps individually to identify which one failed
-    yield ['log', 'Batched config failed — retrying steps individually...'];
-    for (const step of requiredBootstrapSteps) {
-      yield ['log', `Applying required bootstrap step: ${step.label}...`];
-      const stepApplied = await runRequiredBootstrapStep(step);
-      if (!stepApplied.ok) {
-        yield await failCreate(stepApplied.error);
-        return;
+  const configPatchB64 = Buffer.from(JSON.stringify(configPatch)).toString('base64');
+  const [configOk, configOut] = await run(
+    `node -e "` +
+    `const fs=require('fs'),os=require('os'),path=require('path');` +
+    `const cfgPath=path.join(os.homedir(),'.openclaw','openclaw.json');` +
+    `const cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'));` +
+    `const patch=JSON.parse(Buffer.from('${configPatchB64}','base64').toString());` +
+    `function merge(t,s){Object.keys(s).forEach(k=>{if(s[k]&&typeof s[k]==='object'&&!Array.isArray(s[k])){t[k]=t[k]||{};merge(t[k],s[k])}else{t[k]=s[k]}});return t}` +
+    `merge(cfg,patch);` +
+    `fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2));` +
+    `console.log('Config patched')` +
+    `" 2>&1`,
+    15,
+  );
+  if (!configOk) {
+    yield await failCreate(`Config patch failed: ${configOut}`);
+    return;
+  }
+  yield ['log', 'Config applied (direct JSON patch)'];
+
+  // Run any OTEL or dynamically-added bootstrap steps via CLI
+  if (requiredBootstrapSteps.length > 0) {
+    const batchedConfigScript = requiredBootstrapSteps.map((step) => step.command).join(' && ');
+    const [batchOk] = await run(batchedConfigScript, 60);
+    if (!batchOk) {
+      for (const step of requiredBootstrapSteps) {
+        yield ['log', `Applying required bootstrap step: ${step.label}...`];
+        const stepApplied = await runRequiredBootstrapStep(step);
+        if (!stepApplied.ok) {
+          yield await failCreate(stepApplied.error);
+          return;
+        }
       }
     }
-  } else {
-    yield ['log', `Applied ${requiredBootstrapSteps.length} config steps`];
   }
 
   // Read gateway token — prefer the device operator token (has operator.write scope)
@@ -1384,8 +1361,10 @@ export async function* createOpenclawSandbox(
   // Start gateway (with DISPLAY=:99 so browser tools render on the virtual display)
   yield ['log', 'Starting OpenClaw gateway...'];
   await run('openclaw gateway stop 2>/dev/null || true');
+  // Use setsid to fully detach the process from the exec session.
+  // nohup + & alone doesn't work on Daytona because the shell session ends when exec returns.
   const [gatewayStartOk, gatewayStartOut] = await run(
-    `DISPLAY=:99 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &`,
+    `bash -c 'DISPLAY=:99 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 NODE_OPTIONS=--max-old-space-size=512 setsid openclaw gateway run --bind lan --port ${GATEWAY_PORT} > /tmp/openclaw-gateway.log 2>&1 &' && sleep 2`,
   );
   if (!gatewayStartOk) {
     yield await failCreate(
@@ -1394,13 +1373,32 @@ export async function* createOpenclawSandbox(
     return;
   }
 
+  // Kill openclaw-devices early — it spawns with the gateway and consumes 400MB+,
+  // starving the gateway of memory in Daytona's 1GB cgroup. Must kill before
+  // the health check so the gateway has enough memory to fully initialize.
+  if (!usingPrebuiltImage) {
+    await Bun.sleep(2000); // let gateway start first
+    await run('pkill -9 -f "openclaw-device" 2>/dev/null || true', 5);
+  }
+
   yield ['log', 'Waiting for gateway to become healthy...'];
   let healthy = false;
-  // Poll every 1s instead of 3s — gateway typically starts in 2-5s
+  // Poll every 2s — Daytona networking may take a few seconds to stabilize.
+  // Try both 127.0.0.1 (loopback) and the host's LAN IP since `--bind lan` may
+  // only bind to the LAN interface, not loopback.
   for (let i = 0; i < 30; i++) {
-    await Bun.sleep(1000);
+    await Bun.sleep(2000);
     const [portCheck] = await run(
-      `node -e "const n=require('net');const c=n.connect(${GATEWAY_PORT},'127.0.0.1',()=>{c.end();process.exit(0)});c.on('error',()=>process.exit(1))"`,
+      `node -e "
+        const n=require('net'),os=require('os');
+        const ifaces=os.networkInterfaces();
+        const hosts=['127.0.0.1'];
+        Object.values(ifaces).forEach(a=>(a||[]).forEach(i=>{ if(!i.internal&&i.family==='IPv4') hosts.push(i.address); }));
+        let tried=0;
+        function tryNext(){ if(tried>=hosts.length){ process.exit(1); } const h=hosts[tried++]; const c=n.connect(${GATEWAY_PORT},h,()=>{c.end();process.exit(0)}); c.on('error',tryNext); }
+        tryNext();
+      "`.replace(/\n\s*/g, ' '),
+      10,
     );
     if (portCheck) { healthy = true; break; }
   }
@@ -1415,10 +1413,15 @@ export async function* createOpenclawSandbox(
   }
   yield ['log', 'Gateway is listening!'];
 
+  // Re-kill devices in case they respawned during health check
+  if (!usingPrebuiltImage) {
+    await run('pkill -9 -f "openclaw-device" 2>/dev/null || true', 5);
+  }
+
   yield ['log', 'Verifying required bootstrap config...'];
-  const verification = await verifyBootstrapConfig(containerName, [
+  const verification = await verifyBootstrapConfig(sandboxId, [
     { path: 'gateway.bind', expected: 'lan' },
-    { path: 'gateway.controlUi.allowedOrigins', expected: gatewayAllowedOrigins },
+    { path: 'gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback', expected: true },
     { path: 'gateway.trustedProxies', expected: gatewayTrustedProxies },
     { path: 'gateway.controlUi.allowInsecureAuth', expected: true },
     { path: 'gateway.http.endpoints.chatCompletions.enabled', expected: true },
@@ -1468,15 +1471,15 @@ export async function* createOpenclawSandbox(
     sandbox_id: sandboxId,
     sandbox_name: sandboxName,
     sandbox_state: 'running',
-    dashboard_url: gatewayUrl,
+    dashboard_url: infra.dashboardUrl ?? gatewayUrl,
     signed_url: null,
     standard_url: gatewayUrl,
-    preview_token: null,
+    preview_token: infra.previewToken,
     gateway_token: gatewayToken,
     gateway_port: parseInt(hostPort),
     vnc_port: vncHostPort,
     dashboard_port: dashboardHostPort,
-    ssh_command: `docker exec -it ${containerName} bash`,
+    ssh_command: infra.sshCommand,
     shared_codex_enabled: Boolean(sharedAuthSeed),
     shared_codex_model: sharedAuthSeed ? sharedCodexModel : null,
   };

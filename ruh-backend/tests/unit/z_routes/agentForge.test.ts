@@ -134,21 +134,7 @@ mock.module('../../../src/channelManager', () => ({
   configureChannels: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../../src/docker', () => ({
-  dockerContainerRunning: mock(async () => false),
-  dockerExec: mock(async () => [true, '']),
-  dockerSpawn: mock(async () => [0, '']),
-  getContainerName: (id: string) => `openclaw-${id}`,
-  shellQuote: (v: string) => `'${v}'`,
-  joinShellArgs: (args: unknown[]) => args.map(String).join(' '),
-  normalizePathSegment: (v: string) => v,
-  buildHomeFileWriteCommand: mock(() => 'echo ok'),
-  buildConfigureAgentCronAddCommand: mock(() => 'echo ok'),
-  buildCronDeleteCommand: mock(() => 'echo ok'),
-  buildCronRunCommand: mock(() => 'echo ok'),
-  parseManagedSandboxContainerList: mock(() => []),
-  listManagedSandboxContainers: mock(async () => []),
-}));
+import '../../helpers/mockDocker';
 
 mock.module('../../../src/backendReadiness', () => ({
   markBackendReady: mock(() => {}),

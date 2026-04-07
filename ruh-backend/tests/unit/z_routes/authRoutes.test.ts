@@ -216,18 +216,7 @@ mock.module('../../../src/backendReadiness', () => ({
   getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
 }));
 
-mock.module('../../../src/docker', () => ({
-  buildConfigureAgentCronAddCommand: () => '',
-  buildCronDeleteCommand: () => '',
-  buildCronRunCommand: () => '',
-  buildHomeFileWriteCommand: () => '',
-  dockerContainerRunning: mock(async () => true),
-  dockerExec: mockDockerExec,
-  dockerSpawn: mock(async () => [0, '']),
-  listManagedSandboxContainers: mock(async () => []),
-  joinShellArgs: (args: Array<string | number>) => args.join(' '),
-  normalizePathSegment: (v: string) => v,
-}));
+import '../../helpers/mockDocker';
 
 mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),

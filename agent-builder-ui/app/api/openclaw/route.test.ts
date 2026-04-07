@@ -280,8 +280,6 @@ mock.module("ws", () => ({
   default: MockWebSocket,
 }));
 
-process.env.OPENCLAW_GATEWAY_URL = "ws://gateway.test";
-process.env.OPENCLAW_GATEWAY_TOKEN = "token";
 process.env.OPENCLAW_TIMEOUT_MS = "180000";
 process.env.NEXT_PUBLIC_API_URL = "http://backend.test";
 

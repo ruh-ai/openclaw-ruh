@@ -1,10 +1,15 @@
 import os from 'node:os';
 import path from 'node:path';
 
+import type { SandboxProviderType } from './providers/types';
+
 export interface BackendConfig {
   databaseUrl: string;
   port: number;
   allowedOrigins: string[];
+  sandboxProvider: SandboxProviderType;
+  daytonaApiKey: string | null;
+  daytonaApiUrl: string | null;
   openclawAdminToken: string | null;
   openclawSharedOauthJsonPath: string;
   codexAuthJsonPath: string;
@@ -126,6 +131,19 @@ export function parseBackendConfig(
     : readRaw(env, 'DATABASE_URL') ?? '';
   const port = parsePort(readRaw(env, 'PORT'), errors);
   const allowedOrigins = parseOrigins(readRaw(env, 'ALLOWED_ORIGINS'), errors);
+
+  // Sandbox provider: docker (default) or daytona
+  const rawSandboxProvider = readRaw(env, 'SANDBOX_PROVIDER') ?? 'docker';
+  const sandboxProvider: SandboxProviderType =
+    rawSandboxProvider === 'daytona' ? 'daytona' : 'docker';
+  const daytonaApiKey = normalizeOptionalString(readRaw(env, 'DAYTONA_API_KEY'));
+  const daytonaApiUrl = normalizeOptionalString(readRaw(env, 'DAYTONA_API_URL'))
+    ?? (sandboxProvider === 'daytona' ? 'https://app.daytona.io/api' : null);
+
+  if (sandboxProvider === 'daytona' && !daytonaApiKey) {
+    errors.push('DAYTONA_API_KEY is required when SANDBOX_PROVIDER=daytona');
+  }
+
   const openclawAdminToken = normalizeOptionalString(readRaw(env, 'OPENCLAW_ADMIN_TOKEN'));
 
   const openclawSharedOauthJsonPath = readRaw(env, 'OPENCLAW_SHARED_OAUTH_JSON_PATH')
@@ -200,6 +218,9 @@ export function parseBackendConfig(
     databaseUrl,
     port,
     allowedOrigins,
+    sandboxProvider,
+    daytonaApiKey,
+    daytonaApiUrl,
     openclawAdminToken,
     openclawSharedOauthJsonPath,
     codexAuthJsonPath,

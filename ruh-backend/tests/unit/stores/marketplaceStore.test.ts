@@ -4,18 +4,9 @@
 
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 
-// ── Mock withConn ─────────────────────────────────────────────────────────────
+// ── Mock withConn (shared singleton — avoids mock.module collision) ───────────
 
-const mockQuery = mock(async (_sql: string, _params?: unknown[]) => ({
-  rows: [],
-  rowCount: 0,
-}));
-const mockClient = { query: mockQuery };
-
-mock.module("../../../src/db", () => ({
-  withConn: async (fn: (c: typeof mockClient) => Promise<unknown>) =>
-    fn(mockClient),
-}));
+import { mockQuery, mockClient } from '../../helpers/mockDb';
 
 // Mock uuid to return deterministic IDs
 mock.module("uuid", () => ({

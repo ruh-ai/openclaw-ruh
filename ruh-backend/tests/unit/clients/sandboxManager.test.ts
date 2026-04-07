@@ -45,7 +45,7 @@ mock.module('../../../src/docker', () => ({
     // Command-aware defaults for common openclaw commands
     if (cmd.includes('gateway.auth.token')) return [true, 'tok-gateway-123'];
     if (cmd.includes("agent.id!=='architect'")) {
-      return [true, containerName === 'openclaw-openclaw-gateway-1' ? 'updated' : 'absent'];
+      return [true, containerName === 'openclaw-gateway-1' ? 'updated' : 'absent'];
     }
     if (
       cmd.includes('openclaw models status') &&
@@ -113,6 +113,8 @@ function makeTempAuthFile(relativePath: string, content: string) {
   };
 }
 
+import { resetProvider } from '../../../src/providers';
+
 beforeEach(() => {
   spawnCalls.length = 0;
   execCalls.length  = 0;
@@ -120,6 +122,9 @@ beforeEach(() => {
   execQueue.length  = 0;
   defaultSpawn = [0, ''];
   defaultExec  = [true, ''];
+  // Force Docker provider regardless of env — this test mocks docker.ts
+  process.env.SANDBOX_PROVIDER = 'docker';
+  resetProvider();
   process.env.OPENCLAW_SHARED_OAUTH_JSON_PATH = join(tmpdir(), 'missing-openclaw-oauth.json');
   process.env.CODEX_AUTH_JSON_PATH = join(tmpdir(), 'missing-codex-auth.json');
   process.env.OPENCLAW_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
@@ -238,7 +243,8 @@ describe('createOpenclawSandbox', () => {
     // Force legacy path: pre-built image not available, legacy image is present
     spawnQueue.push([1, 'No such image: ruh-sandbox:latest']); // pre-built inspect fails
     // legacy image inspect succeeds (cmd-aware default handles node:22-bookworm)
-    // All exec calls fail by default → npm install fails twice
+    // whoami succeeds (root), then all exec calls fail → npm install fails twice
+    execQueue.push([true, 'root']); // whoami
     defaultExec = [false, 'ERESOLVE'];
 
     const events = await collectEvents(BASE_OPTS);
@@ -262,9 +268,10 @@ describe('createOpenclawSandbox', () => {
     // Force legacy path: pre-built image not available
     spawnQueue.push([1, 'No such image: ruh-sandbox:latest']); // pre-built inspect fails
     // legacy image inspect succeeds (cmd-aware default)
-    // npm install succeeds (1st exec call), version check fails (2nd)
-    execQueue.push([true, '']);    // npm install
-    execQueue.push([false, '']);   // --version fails
+    // whoami (root check), npm install succeeds, version check fails
+    execQueue.push([true, 'root']);  // whoami
+    execQueue.push([true, '']);      // npm install
+    execQueue.push([false, '']);     // --version fails
     // remaining exec calls won't be reached
 
     const events = await collectEvents(BASE_OPTS);
@@ -294,22 +301,20 @@ describe('createOpenclawSandbox', () => {
     // 3. sandbox-agent-runtime
     // 4. openclaw onboard (onboarding)
     // 5. auth-profiles.json node script
-    // 6. batched bootstrap config → FAIL (triggers individual step retry)
-    // 7. first individual step (gateway.bind) → FAIL → error
+    // 6. JSON config patch → FAIL
     execQueue.push([true, '']);            // openclaw --version
     execQueue.push([true, '']);            // sandbox-vnc-start
     execQueue.push([true, '']);            // sandbox-agent-runtime
     execQueue.push([true, 'onboarded']);   // openclaw onboard
     execQueue.push([true, '']);            // auth-profiles.json
-    execQueue.push([false, 'batch failed']); // batched config fails → individual retry
-    execQueue.push([false, 'permission denied']); // gateway.bind step fails
+    execQueue.push([false, 'patch error']); // JSON config patch fails
 
     const events = await collectEvents(BASE_OPTS);
 
     expect(events.some(([type]) => type === 'result')).toBe(false);
     const errors = events.filter(([type]) => type === 'error');
     expect(errors.length).toBe(1);
-    expect(String(errors[0][1])).toContain('gateway.bind');
+    expect(String(errors[0][1])).toContain('Config patch failed');
     expect(spawnCalls.some((args) => args[0] === 'rm' && args[1] === '-f')).toBe(true);
   });
 
@@ -468,7 +473,7 @@ describe('retrofitContainerToSharedCodex', () => {
         opts: Record<string, string>
       ) => Promise<Record<string, unknown>>;
 
-      const result = await retrofit('openclaw-sandbox-123', {
+      const result = await retrofit('sandbox-123', {
         sharedCodexAuthPath: codexAuth.filePath,
       });
 
@@ -499,7 +504,7 @@ describe('retrofitContainerToSharedCodex', () => {
         opts: Record<string, string>
       ) => Promise<Record<string, unknown>>;
 
-      const result = await retrofit('openclaw-openclaw-gateway-1', {
+      const result = await retrofit('gateway-1', {
         sharedCodexAuthPath: codexAuth.filePath,
       });
 
@@ -537,7 +542,7 @@ describe('retrofitContainerToSharedCodex', () => {
       ) => Promise<Record<string, unknown>>;
 
       await expect(
-        retrofit('openclaw-sandbox-123', { sharedCodexAuthPath: codexAuth.filePath }),
+        retrofit('sandbox-123', { sharedCodexAuthPath: codexAuth.filePath }),
       ).rejects.toThrow('Shared Codex auth probe failed');
     } finally {
       codexAuth.cleanup();
@@ -570,7 +575,7 @@ describe('retrofitContainerToSharedCodex', () => {
       ) => Promise<Record<string, unknown>>;
 
       await expect(
-        retrofit('openclaw-sandbox-123', { sharedCodexAuthPath: codexAuth.filePath }),
+        retrofit('sandbox-123', { sharedCodexAuthPath: codexAuth.filePath }),
       ).rejects.toThrow('Gateway did not become healthy after shared Codex retrofit');
     } finally {
       codexAuth.cleanup();
@@ -600,7 +605,7 @@ describe('retrofitContainerToSharedCodex', () => {
       ) => Promise<Record<string, unknown>>;
 
       await expect(
-        retrofit('openclaw-openclaw-gateway-1', { sharedCodexAuthPath: codexAuth.filePath }),
+        retrofit('gateway-1', { sharedCodexAuthPath: codexAuth.filePath }),
       ).rejects.toThrow('Shared Codex auth probe returned no usable targets');
     } finally {
       codexAuth.cleanup();

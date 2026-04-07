@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
-const mockQuery = mock(async (_sql: string, _params?: unknown[]) => ({ rows: [], rowCount: 0 }));
-const mockClient = { query: mockQuery };
-
-mock.module('../../../src/db', () => ({
-  withConn: async (fn: (c: typeof mockClient) => Promise<unknown>) => fn(mockClient),
-}));
+import { mockQuery, mockClient } from '../../helpers/mockDb';
 
 import * as systemEventStore from '../../../src/systemEventStore';
 

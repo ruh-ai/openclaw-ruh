@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
 
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "";
-const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /**
- * Resolve the sandbox record backing the architect gateway.
+ * Resolve a sandbox record for the architect.
  *
- * Matching strategy (in priority order):
- * 1. URL match: compare OPENCLAW_GATEWAY_URL against standard_url/dashboard_url
- * 2. Token match: compare OPENCLAW_GATEWAY_TOKEN against gateway_token
- * 3. Fallback: first sandbox with vnc_port set (browser-capable)
+ * With forge-only architecture, every agent has its own sandbox.
+ * This endpoint finds the first available sandbox with VNC or gateway port.
  */
 export async function GET() {
   try {
@@ -30,41 +26,12 @@ export async function GET() {
       );
     }
 
-    let match: Record<string, unknown> | undefined;
+    // First sandbox with VNC (browser-capable)
+    let match = sandboxes.find(
+      (sb) => typeof sb.vnc_port === "number" && sb.vnc_port > 0,
+    );
 
-    // Strategy 1: Match by gateway URL (ws→http conversion)
-    if (GATEWAY_URL) {
-      const gatewayHttp = GATEWAY_URL
-        .replace(/^wss:/, "https:")
-        .replace(/^ws:/, "http:")
-        .replace(/\/+$/, "");
-
-      match = sandboxes.find((sb) => {
-        for (const key of ["standard_url", "dashboard_url"] as const) {
-          const url = sb[key];
-          if (typeof url === "string" && url.replace(/\/+$/, "") === gatewayHttp) {
-            return true;
-          }
-        }
-        return false;
-      });
-    }
-
-    // Strategy 2: Match by gateway token
-    if (!match && GATEWAY_TOKEN) {
-      match = sandboxes.find(
-        (sb) => typeof sb.gateway_token === "string" && sb.gateway_token === GATEWAY_TOKEN,
-      );
-    }
-
-    // Strategy 3: First sandbox with VNC (browser-capable)
-    if (!match) {
-      match = sandboxes.find(
-        (sb) => typeof sb.vnc_port === "number" && sb.vnc_port > 0,
-      );
-    }
-
-    // Strategy 4: First running sandbox
+    // Fallback: first running sandbox
     if (!match) {
       match = sandboxes[0];
     }

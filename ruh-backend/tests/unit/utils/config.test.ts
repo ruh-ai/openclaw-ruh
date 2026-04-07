@@ -16,6 +16,9 @@ describe('parseBackendConfig', () => {
     expect(config.codexAuthJsonPath).toContain('.codex/auth.json');
     expect(config.openaiApiKey).toBeNull();
     expect(config.agentCredentialsKey).toBeNull();
+    expect(config.sandboxProvider).toBe('docker');
+    expect(config.daytonaApiKey).toBeNull();
+    expect(config.daytonaApiUrl).toBeNull();
   });
 
   test('throws one aggregated error for missing and malformed variables', () => {
@@ -141,5 +144,53 @@ describe('getConfig', () => {
 
     expect(first.jwtAccessSecret).toBe(second.jwtAccessSecret);
     expect(first.jwtRefreshSecret).toBe(second.jwtRefreshSecret);
+  });
+});
+
+describe('sandbox provider config', () => {
+  const baseEnv = { DATABASE_URL: 'postgres://openclaw:changeme@localhost:5432/openclaw' };
+
+  test('defaults SANDBOX_PROVIDER to docker', () => {
+    const config = parseBackendConfig(baseEnv);
+    expect(config.sandboxProvider).toBe('docker');
+    expect(config.daytonaApiKey).toBeNull();
+    expect(config.daytonaApiUrl).toBeNull();
+  });
+
+  test('accepts SANDBOX_PROVIDER=docker explicitly', () => {
+    const config = parseBackendConfig({ ...baseEnv, SANDBOX_PROVIDER: 'docker' });
+    expect(config.sandboxProvider).toBe('docker');
+  });
+
+  test('accepts SANDBOX_PROVIDER=daytona with DAYTONA_API_KEY', () => {
+    const config = parseBackendConfig({
+      ...baseEnv,
+      SANDBOX_PROVIDER: 'daytona',
+      DAYTONA_API_KEY: 'dtk-test-key',
+    });
+    expect(config.sandboxProvider).toBe('daytona');
+    expect(config.daytonaApiKey).toBe('dtk-test-key');
+    expect(config.daytonaApiUrl).toBe('https://app.daytona.io/api');
+  });
+
+  test('accepts custom DAYTONA_API_URL', () => {
+    const config = parseBackendConfig({
+      ...baseEnv,
+      SANDBOX_PROVIDER: 'daytona',
+      DAYTONA_API_KEY: 'dtk-test-key',
+      DAYTONA_API_URL: 'https://custom.daytona.internal',
+    });
+    expect(config.daytonaApiUrl).toBe('https://custom.daytona.internal');
+  });
+
+  test('throws when SANDBOX_PROVIDER=daytona but DAYTONA_API_KEY is missing', () => {
+    expect(() =>
+      parseBackendConfig({ ...baseEnv, SANDBOX_PROVIDER: 'daytona' }),
+    ).toThrow(/DAYTONA_API_KEY/);
+  });
+
+  test('falls back to docker for unknown SANDBOX_PROVIDER values', () => {
+    const config = parseBackendConfig({ ...baseEnv, SANDBOX_PROVIDER: 'gcp' });
+    expect(config.sandboxProvider).toBe('docker');
   });
 });

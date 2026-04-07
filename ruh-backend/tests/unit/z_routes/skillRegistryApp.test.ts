@@ -1,8 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 
 const getSandboxMock = mock(async () => null);
-const dockerExecMock = mock(async () => [true, '']);
-const buildHomeFileWriteCommandMock = (path: string, content: string) => `WRITE ${path}\n${content}`;
+import { dockerExecMock, buildHomeFileWriteCommandMock } from '../../helpers/mockDocker';
 const getAgentMock = mock(async () => null);
 const getAgentCredentialsMock = mock(async () => []);
 const decryptCredentialsMock = mock((_encrypted: string, _iv: string) => ({}));
@@ -86,18 +85,7 @@ mock.module('../../../src/backendReadiness', () => ({
   getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
 }));
 
-mock.module('../../../src/docker', () => ({
-  buildConfigureAgentCronAddCommand: () => '',
-  buildCronDeleteCommand: () => '',
-  buildCronRunCommand: () => '',
-  buildHomeFileWriteCommand: buildHomeFileWriteCommandMock,
-  dockerContainerRunning: mock(async () => true),
-  dockerExec: dockerExecMock,
-  dockerSpawn: mock(async () => ({ child: null, output: Promise.resolve('') })),
-  listManagedSandboxContainers: mock(async () => []),
-  joinShellArgs: (args: Array<string | number>) => args.join(' '),
-  normalizePathSegment: (value: string) => value,
-}));
+import '../../helpers/mockDocker';
 
 mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),

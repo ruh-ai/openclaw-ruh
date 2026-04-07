@@ -48,7 +48,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
       PORT: "8000"
-      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003"
     ports:
       - "8000:8000"
     volumes:
@@ -70,6 +70,7 @@ services:
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_URL: "http://localhost:8000"
+      BACKEND_INTERNAL_URL: "http://backend:8000"
     ports:
       - "3000:3000"
     volumes:
@@ -118,7 +119,7 @@ services:
 
   # ── Ruh App / Flutter Web (dev server) ─────────────────────────────────────
   ruh-app:
-    image: ghcr.io/cirruslabs/flutter:stable
+    image: ghcr.io/cirruslabs/flutter:3.41.6
     working_dir: /app
     command: sh -c "flutter pub get && flutter run -d web-server --web-port=3003 --web-hostname=0.0.0.0"
     environment:

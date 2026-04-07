@@ -27,7 +27,7 @@ const mockReconfigureSandboxLlm = mock(async () => ({
   logs: ['Config updated'],
   configured: { apiKey: 'sk-12***cdef' },
 }));
-const mockDockerExec = mock(async () => [true, '']);
+import { dockerExecMock as mockDockerExec } from '../../helpers/mockDocker';
 
 mock.module('../../../src/store', () => ({
   getSandbox: mockGetSandbox,
@@ -103,18 +103,7 @@ mock.module('../../../src/backendReadiness', () => ({
   getBackendReadiness: () => ({ status: 'ready', ready: true, reason: null }),
 }));
 
-mock.module('../../../src/docker', () => ({
-  buildConfigureAgentCronAddCommand: () => '',
-  buildCronDeleteCommand: (jobId: string) => `cron delete ${jobId}`,
-  buildCronRunCommand: (jobId: string) => `cron run ${jobId}`,
-  buildHomeFileWriteCommand: () => '',
-  dockerContainerRunning: mock(async () => true),
-  dockerExec: mockDockerExec,
-  dockerSpawn: mock(async () => [0, '']),
-  listManagedSandboxContainers: mock(async () => []),
-  joinShellArgs: (args: Array<string | number>) => args.join(' '),
-  normalizePathSegment: (value: string) => value,
-}));
+import '../../helpers/mockDocker';
 
 mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),
