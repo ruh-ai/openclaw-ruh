@@ -18,6 +18,11 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import type { EvalTask, SkillGraphNode, ExecutionTrace } from "../types";
 
+// Capture the native fetch before any other test file can replace globalThis.fetch.
+// Other tests (e.g. backend-fetch.test.ts) replace globalThis.fetch with a mock
+// and bun shares globalThis across test files in the same run.
+const nativeFetch = globalThis.fetch;
+
 // ── Test config ─────────────────────────────────────────────────────────────
 
 const GATEWAY_PORT = 56809;
@@ -58,7 +63,7 @@ async function chatWithGateway(message: string, systemPrompt?: string): Promise<
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   messages.push({ role: "user", content: message });
 
-  const res = await fetch(`http://localhost:${GATEWAY_PORT}/v1/chat/completions`, {
+  const res = await nativeFetch(`http://localhost:${GATEWAY_PORT}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -85,7 +90,7 @@ async function llmJudge(prompt: string): Promise<string> {
 
 beforeAll(async () => {
   try {
-    const res = await fetch(`http://localhost:${GATEWAY_PORT}/v1/models`, {
+    const res = await nativeFetch(`http://localhost:${GATEWAY_PORT}/v1/models`, {
       headers: { Authorization: `Bearer ${GATEWAY_TOKEN}`, Origin: "https://localhost" },
       signal: AbortSignal.timeout(5000),
     });

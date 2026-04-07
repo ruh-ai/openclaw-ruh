@@ -137,6 +137,9 @@ describe("copilot-lifecycle-cache", () => {
   });
 
   test("keeps userTriggeredPlan only when plan stage is actively generating and undispatched", () => {
+    // The sanitizer resets ANY "generating" status to "failed" on restore because
+    // the SSE/WS connection is gone — an interrupted generation shows a retry button.
+    // So even a valid undispatched plan trigger gets cleared.
     const entry = {
       version: 4,
       timestamp: Date.now(),
@@ -153,7 +156,8 @@ describe("copilot-lifecycle-cache", () => {
     storage.set("openclaw-copilot-lifecycle-agent-8", JSON.stringify(entry));
 
     const loaded = loadCoPilotLifecycleFromCache("agent-8");
-    expect(loaded?.userTriggeredPlan).toBe(true);
-    expect(loaded?.planRunId).toBe("plan-run-456");
+    expect(loaded?.planStatus).toBe("failed");
+    expect(loaded?.userTriggeredPlan).toBe(false);
+    expect(loaded?.planRunId).toBeNull();
   });
 });

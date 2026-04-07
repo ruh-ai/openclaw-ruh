@@ -34,7 +34,7 @@ mock.module('@opentelemetry/api', () => ({
   SpanStatusCode: { OK: 1, ERROR: 2 },
 }));
 
-const { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } = await import('../../src/agentTracing');
+const { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } = await import('../../../src/agentTracing');
 
 // ─────────────────────────────────────────────────────────────────────────────
 

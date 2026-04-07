@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 const {
   deriveAppAccess,
   deriveSessionAppAccess,
-} = await import('../../src/auth/appAccess?unitAuthAppAccess');
+} = await import('../../../src/auth/appAccess?unitAuthAppAccess');
 
 function membership(overrides: {
   kind: 'developer' | 'customer';

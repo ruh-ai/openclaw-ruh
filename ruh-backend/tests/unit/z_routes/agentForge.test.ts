@@ -126,6 +126,9 @@ mock.module('../../../src/sandboxManager', () => ({
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  waitForGateway: mock(async () => true),
+  retrofitContainerToSharedCodex: mock(async () => ({ ok: true })),
 }));
 
 mock.module('../../../src/channelManager', () => ({

@@ -134,6 +134,7 @@ mock.module('../../../src/orgStore', () => ({
     slug: 'dev-org',
     kind: 'developer',
     plan: 'free',
+    status: 'active',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   })),
@@ -183,6 +184,9 @@ mock.module('../../../src/sandboxManager', () => ({
   getContainerName: (id: string) => `openclaw-${id}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  waitForGateway: mock(async () => true),
+  retrofitContainerToSharedCodex: mock(async () => ({ ok: true })),
   PREVIEW_PORTS: [],
 }));
 
@@ -208,7 +212,10 @@ mock.module('../../../src/docker', () => ({
   dockerExec: mock(async () => [true, '']),
   dockerSpawn: mock(async () => [0, '']),
   listManagedSandboxContainers: mock(async () => []),
+  parseManagedSandboxContainerList: () => [],
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  getContainerName: (id: string) => `openclaw-${id}`,
+  shellQuote: (v: string) => `'${v}'`,
   normalizePathSegment: (v: string) => v,
 }));
 

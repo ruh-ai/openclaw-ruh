@@ -9,7 +9,7 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/",
-    "test:unit": "bun test tests/unit/",
+    "test:unit": "bun run scripts/run-unit-tests.ts",
     "test:integration": "bun test tests/integration/",
     "test:e2e": "bun test tests/e2e/",
     "test:smoke": "bun test tests/smoke/",

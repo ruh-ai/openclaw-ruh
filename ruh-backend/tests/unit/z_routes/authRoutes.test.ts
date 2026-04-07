@@ -152,6 +152,12 @@ mock.module('../../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
+mock.module('../../../src/accountLockoutStore', () => ({
+  getLockout: mock(async () => null),
+  recordFailedAttempt: mock(async () => ({ attemptCount: 1, locked: false })),
+  clearLockout: mock(async () => {}),
+}));
+
 mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
@@ -200,6 +206,9 @@ mock.module('../../../src/sandboxManager', () => ({
   getContainerName: (id: string) => `openclaw-${id}`,
   stopAndRemoveContainer: mock(async () => {}),
   restartGateway: mock(async () => [true, '']),
+  ensureInteractiveRuntimeServices: mock(async () => {}),
+  waitForGateway: mock(async () => true),
+  retrofitContainerToSharedCodex: mock(async () => ({ ok: true })),
   PREVIEW_PORTS: [],
 }));
 
@@ -225,7 +234,11 @@ mock.module('../../../src/docker', () => ({
   dockerExec: mockDockerExec,
   dockerSpawn: mock(async () => [0, '']),
   listManagedSandboxContainers: mock(async () => []),
+  parseManagedSandboxContainerList: () => [],
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  getContainerName: (id: string) => `openclaw-${id}`,
+  shellQuote: (v: string) => `'${v}'`,
+  normalizePathSegment: (v: string) => v,
   normalizePathSegment: (v: string) => v,
 }));
 

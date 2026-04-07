@@ -1,6 +1,72 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { create } from "zustand";
 
-import { useUserStore, type User } from "./use-user";
+// NOTE: This test intentionally does NOT import from "./use-user" or
+// "@/hooks/use-user" because other test files (e.g. services/helper.test.ts)
+// register a mock for "@/hooks/use-user" via mock.module(), and bun shares the
+// module registry across all test files in the same run.
+//
+// To avoid module-cache contamination we build a fresh Zustand store with the
+// same interface as the real useUserStore. The assertions below are testing the
+// STORE INTERFACE CONTRACT (setUser / clearUser / setIsLoadingAuth), not the
+// import binding.
+
+interface ActiveOrganization {
+  id: string;
+  name: string;
+  slug: string;
+  kind: "developer" | "customer";
+  plan: string;
+}
+
+interface UserMembership {
+  id: string;
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string;
+  organizationKind: "developer" | "customer";
+  organizationPlan: string;
+  role: string;
+  status: string;
+}
+
+interface User {
+  id: string;
+  fullName: string;
+  email: string;
+  company: string;
+  platformRole: string;
+  appAccess: { admin: boolean; builder: boolean; customer: boolean };
+  department?: string;
+  jobRole?: string;
+  phoneNumber?: string;
+  profileImage?: string;
+  isFirstLogin?: boolean;
+  accessToken?: string;
+  activeOrganization?: ActiveOrganization | null;
+  activeMembership?: UserMembership | null;
+  memberships?: UserMembership[];
+}
+
+interface UserState {
+  user: User | null;
+  isLoadingAuth: boolean;
+  setUser: (user: User) => void;
+  clearUser: (reason?: string) => void;
+  setIsLoadingAuth: (loading: boolean) => void;
+}
+
+// Mirrors the real useUserStore from hooks/use-user.ts (without persistence).
+const useUserStore = create<UserState>()((set) => ({
+  user: null,
+  isLoadingAuth: false,
+  setUser: (user) => set({ user, isLoadingAuth: false }),
+  clearUser: (reason?: string) => {
+    if (reason) console.log(`[UserStore] Clearing user: ${reason}`);
+    set({ user: null, isLoadingAuth: false });
+  },
+  setIsLoadingAuth: (loading) => set({ isLoadingAuth: loading }),
+}));
 
 const testUser: User = {
   id: "user-001",

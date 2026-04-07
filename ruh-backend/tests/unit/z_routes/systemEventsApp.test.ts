@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { signAccessToken } from '../../src/auth/tokens';
+import { signAccessToken } from '../../../src/auth/tokens';
 
 const mockListSystemEvents = mock(async (filters: Record<string, unknown> = {}) => ({
   items: [{
@@ -83,7 +83,7 @@ async function* fakeSuccessGen(): AsyncGenerator<[string, unknown]> {
 
 const mockCreateSandbox = mock(fakeSuccessGen);
 
-mock.module('../../src/auth/builderAccess', () => ({
+mock.module('../../../src/auth/builderAccess', () => ({
   requireActiveDeveloperOrg: mock(async (user?: Record<string, unknown>) => ({
     user,
     organization: {
@@ -96,12 +96,12 @@ mock.module('../../src/auth/builderAccess', () => ({
   })),
 }));
 
-mock.module('../../src/systemEventStore', () => ({
+mock.module('../../../src/systemEventStore', () => ({
   writeSystemEvent: mockWriteSystemEvent,
   listSystemEvents: mockListSystemEvents,
 }));
 
-mock.module('../../src/store', () => ({
+mock.module('../../../src/store', () => ({
   getSandbox: mockGetSandbox,
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -110,7 +110,7 @@ mock.module('../../src/store', () => ({
   updateSandboxSharedCodex: mock(async () => {}),
 }));
 
-mock.module('../../src/agentStore', () => ({
+mock.module('../../../src/agentStore', () => ({
   listAgents: mock(async () => []),
   listAgentsForCreator: mock(async () => []),
   listAgentsForCreatorInOrg: mock(async () => []),
@@ -135,7 +135,7 @@ mock.module('../../src/agentStore', () => ({
   getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../src/conversationStore', () => ({
+mock.module('../../../src/conversationStore', () => ({
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
   listConversationsPage: mock(async () => ({ items: [], has_more: false, next_cursor: null })),
@@ -146,7 +146,7 @@ mock.module('../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../src/sandboxManager', () => ({
+mock.module('../../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mockCreateSandbox,
   reconfigureSandboxLlm: mock(async () => ({ ok: true, provider: 'openai', model: 'gpt-4o', logs: [] })),
@@ -160,7 +160,7 @@ mock.module('../../src/sandboxManager', () => ({
   sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../src/channelManager', () => ({
+mock.module('../../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -169,7 +169,7 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => {
+mock.module('../../../src/backendReadiness', () => {
   let ready = true;
   let reason: string | null = null;
   return {
@@ -185,7 +185,7 @@ mock.module('../../src/backendReadiness', () => {
   };
 });
 
-mock.module('../../src/docker', () => ({
+mock.module('../../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: () => '',
   buildCronRunCommand: () => '',
@@ -199,12 +199,12 @@ mock.module('../../src/docker', () => ({
   normalizePathSegment: (value: string) => value,
 }));
 
-mock.module('../../src/auditStore', () => ({
+mock.module('../../../src/auditStore', () => ({
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-const { request, resetStreams } = await import('../helpers/app.ts?unitSystemEventsApp');
+const { request, resetStreams } = await import('../../helpers/app.ts?unitSystemEventsApp');
 
 function developerAuthHeader() {
   return `Bearer ${signAccessToken({

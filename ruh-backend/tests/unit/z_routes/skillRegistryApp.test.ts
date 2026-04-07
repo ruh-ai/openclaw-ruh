@@ -1,5 +1,23 @@
 import { describe, expect, mock, test } from 'bun:test';
-import { makeAgentRecord } from '../helpers/fixtures';
+import { makeAgentRecord } from '../../helpers/fixtures';
+
+const testSkills = [
+  {
+    skill_id: 'slack-reader',
+    name: 'Slack Reader',
+    description: 'Reads channels, threads, and message context from Slack workspaces.',
+    tags: ['slack', 'messaging', 'collaboration', 'read'],
+    skill_md: '---\nname: slack-reader\ndescription: Reads channels, threads, and message context from Slack workspaces.\ntags: [slack, messaging, collaboration, read]\n---\n\n# Slack Reader\n\nReads Slack channels.',
+  },
+];
+
+mock.module('../../../src/skillRegistry', () => ({
+  listSkills: () => [...testSkills],
+  findSkill: (id: string) => testSkills.find((s) => s.skill_id === id || s.skill_id === id.replace(/_/g, '-')) ?? null,
+  searchSkills: (q: string) => testSkills.filter((s) => s.name.toLowerCase().includes(q.toLowerCase())),
+  publishSkill: mock(() => true),
+  registryStats: () => ({ total: testSkills.length, community: 0 }),
+}));
 
 const getSandboxMock = mock(async () => null);
 const dockerExecMock = mock(async () => [true, 'true']);
@@ -9,7 +27,7 @@ const getAgentCredentialsMock = mock(async () => []);
 const decryptCredentialsMock = mock((_encrypted: string, _iv: string) => ({}));
 const encryptCredentialsMock = mock(() => ({ encrypted: 'ciphertext', iv: 'nonce' }));
 
-mock.module('../../src/store', () => ({
+mock.module('../../../src/store', () => ({
   getSandbox: getSandboxMock,
   deleteSandbox: mock(async () => false),
   listSandboxes: mock(async () => []),
@@ -19,7 +37,7 @@ mock.module('../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../src/conversationStore', () => ({
+mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -31,7 +49,7 @@ mock.module('../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../src/agentStore', () => ({
+mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
   listAgentsForCreator: mock(async () => []),
@@ -57,7 +75,7 @@ mock.module('../../src/agentStore', () => ({
   getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../src/credentials', () => ({
+mock.module('../../../src/credentials', () => ({
   decryptCredentials: decryptCredentialsMock,
   encryptCredentials: encryptCredentialsMock,
 }));
@@ -66,7 +84,7 @@ mock.module('express-rate-limit', () => ({
   default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-mock.module('../../src/sandboxManager', () => ({
+mock.module('../../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   PREVIEW_PORTS: [],
   reconfigureSandboxLlm: mock(async () => ({})),
@@ -80,7 +98,7 @@ mock.module('../../src/sandboxManager', () => ({
   sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../src/channelManager', () => ({
+mock.module('../../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -89,7 +107,7 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => {
+mock.module('../../../src/backendReadiness', () => {
   let ready = true;
   let reason: string | null = null;
   return {
@@ -105,7 +123,7 @@ mock.module('../../src/backendReadiness', () => {
   };
 });
 
-mock.module('../../src/docker', () => ({
+mock.module('../../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: () => '',
   buildCronRunCommand: () => '',
@@ -119,13 +137,13 @@ mock.module('../../src/docker', () => ({
   normalizePathSegment: (value: string) => value,
 }));
 
-mock.module('../../src/auditStore', () => ({
+mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mock(async () => {}),
   listAuditEvents: mock(async () => ({ items: [], has_more: false })),
 }));
 
-const { app } = await import('../../src/app.ts?unitSkillRegistryApp');
+const { app } = await import('../../../src/app.ts?unitSkillRegistryApp');
 
 type MockReq = {
   method: string;

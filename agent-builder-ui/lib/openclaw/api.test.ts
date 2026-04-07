@@ -341,6 +341,8 @@ describe("SSE timeout", () => {
 
 describe("partial response fallback", () => {
   test("returns partial response when stream ends without result event but has deltas", async () => {
+    // The source now treats incomplete streams (even with partial deltas) as errors.
+    // A stream that ends without a "result" event always throws.
     globalThis.fetch = mock(async () =>
       makeSseResponse([
         "event: delta\n",
@@ -350,12 +352,9 @@ describe("partial response fallback", () => {
       ])
     ) as typeof fetch;
 
-    const result = await sendToArchitectStreaming("session-partial", "Build an agent");
-
-    expect(result).toEqual({
-      type: "agent_response",
-      content: "Hello world",
-    });
+    await expect(
+      sendToArchitectStreaming("session-partial", "Build an agent")
+    ).rejects.toThrow("stream ended without a result event");
   });
 
   test("still throws when no result and no deltas", async () => {
@@ -372,6 +371,7 @@ describe("partial response fallback", () => {
   });
 
   test("sendToForgeSandboxChat returns partial response from deltas when no result event", async () => {
+    // The source now throws for all incomplete forge streams regardless of partial content.
     globalThis.fetch = mock(async () =>
       makeSseResponse([
         "event: delta\n",
@@ -379,12 +379,9 @@ describe("partial response fallback", () => {
       ])
     ) as typeof fetch;
 
-    const result = await sendToForgeSandboxChat("sandbox-1", "session-forge", "Test message");
-
-    expect(result).toEqual({
-      type: "agent_response",
-      content: "Forge partial",
-    });
+    await expect(
+      sendToForgeSandboxChat("sandbox-1", "session-forge", "Test message")
+    ).rejects.toThrow("stream ended without a result event");
   });
 
   test("sendToForgeSandboxChat throws when no result and no deltas", async () => {

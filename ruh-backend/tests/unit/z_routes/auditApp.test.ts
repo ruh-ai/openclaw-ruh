@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../helpers/fixtures';
+import { SANDBOX_ID, makeAgentRecord, makeSandboxRecord } from '../../helpers/fixtures';
 
 const mockGetSandbox = mock(async () => makeSandboxRecord());
 const mockDeleteSandbox = mock(async () => true);
@@ -29,7 +29,7 @@ const mockReconfigureSandboxLlm = mock(async () => ({
 }));
 const mockDockerExec = mock(async () => [true, 'true']);
 
-mock.module('../../src/store', () => ({
+mock.module('../../../src/store', () => ({
   getSandbox: mockGetSandbox,
   deleteSandbox: mockDeleteSandbox,
   listSandboxes: mock(async () => []),
@@ -39,7 +39,7 @@ mock.module('../../src/store', () => ({
   initDb: mock(async () => {}),
 }));
 
-mock.module('../../src/conversationStore', () => ({
+mock.module('../../../src/conversationStore', () => ({
   initDb: mock(async () => {}),
   getConversation: mock(async () => null),
   getConversationForSandbox: mock(async () => null),
@@ -51,7 +51,7 @@ mock.module('../../src/conversationStore', () => ({
   deleteConversation: mock(async () => true),
 }));
 
-mock.module('../../src/agentStore', () => ({
+mock.module('../../../src/agentStore', () => ({
   initDb: mock(async () => {}),
   listAgents: mock(async () => []),
   listAgentsForCreator: mock(async () => []),
@@ -77,7 +77,7 @@ mock.module('../../src/agentStore', () => ({
   getAgentBySandboxId: mock(async () => null),
 }));
 
-mock.module('../../src/sandboxManager', () => ({
+mock.module('../../../src/sandboxManager', () => ({
   createOpenclawSandbox: mock(async function* () {}),
   reconfigureSandboxLlm: mockReconfigureSandboxLlm,
   retrofitSandboxToSharedCodex: mock(async () => ({ ok: true, model: 'openai-codex/gpt-5.4', authSource: 'Codex CLI auth' })),
@@ -91,7 +91,7 @@ mock.module('../../src/sandboxManager', () => ({
   sandboxExec: mock(async () => [0, '']),
 }));
 
-mock.module('../../src/channelManager', () => ({
+mock.module('../../../src/channelManager', () => ({
   getChannelsConfig: mock(async () => ({})),
   setTelegramConfig: mock(async () => ({ ok: true, logs: [] })),
   setSlackConfig: mock(async () => ({ ok: true, logs: [] })),
@@ -100,7 +100,7 @@ mock.module('../../src/channelManager', () => ({
   approvePairing: mock(async () => ({ ok: true })),
 }));
 
-mock.module('../../src/backendReadiness', () => {
+mock.module('../../../src/backendReadiness', () => {
   let ready = true;
   let reason: string | null = null;
   return {
@@ -116,7 +116,7 @@ mock.module('../../src/backendReadiness', () => {
   };
 });
 
-mock.module('../../src/docker', () => ({
+mock.module('../../../src/docker', () => ({
   buildConfigureAgentCronAddCommand: () => '',
   buildCronDeleteCommand: (jobId: string) => `cron delete ${jobId}`,
   buildCronRunCommand: (jobId: string) => `cron run ${jobId}`,
@@ -130,7 +130,7 @@ mock.module('../../src/docker', () => ({
   normalizePathSegment: (value: string) => value,
 }));
 
-mock.module('../../src/auditStore', () => ({
+mock.module('../../../src/auditStore', () => ({
   initDb: mock(async () => {}),
   writeAuditEvent: mockWriteAuditEvent,
   listAuditEvents: mockListAuditEvents,
@@ -140,7 +140,7 @@ mock.module('express-rate-limit', () => ({
   default: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-const { app } = await import('../../src/app.ts?unitAuditApp');
+const { app } = await import('../../../src/app.ts?unitAuditApp');
 
 type MockReq = {
   method: string;

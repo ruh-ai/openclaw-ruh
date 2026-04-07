@@ -1,3 +1,4 @@
 [test]
 preload = ["./test-setup.ts"]
 coverageDir = "./coverage"
+pathIgnorePatterns = ["e2e/**", "test-results/**"]
