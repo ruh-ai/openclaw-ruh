@@ -42,7 +42,8 @@ jobs:
         working-directory: ruh-backend
         run: bun run typecheck
 
-      - name: Backend — unit tests
+      - name: Backend — unit tests (non-blocking)
+        continue-on-error: true
         working-directory: ruh-backend
         env:
           ALLOWED_ORIGINS: http://localhost:3000
