@@ -35,7 +35,7 @@ const config: Config = {
 // next/jest appends its own transformIgnorePatterns that would still block MSW's
 // ESM-only dependencies (until-async, @mswjs/*). We override the merged config
 // after createJestConfig processes it so our exclusions actually take effect.
-const ESM_PKGS = 'msw|@mswjs|until-async|@bundled-es-modules';
+const ESM_PKGS = 'msw|@mswjs|until-async|@bundled-es-modules|rettime';
 
 const jestConfigFn = createJestConfig(config);
 export default async () => {
