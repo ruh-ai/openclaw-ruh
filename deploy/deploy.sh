@@ -78,6 +78,10 @@ cp deploy/nginx-prod.conf nginx/nginx.conf
 
 echo "  Patches applied"
 
+# Copy compose file to repo root so paths resolve correctly
+cp "$COMPOSE_FILE" docker-compose.prod.yml
+COMPOSE_FILE="docker-compose.prod.yml"
+
 # ── 3. Rebuild Docker images ─────────────────────────────────────────────────
 echo "[3/6] Building Docker images..."
 docker compose -f "$COMPOSE_FILE" build --parallel 2>&1 | tail -5
