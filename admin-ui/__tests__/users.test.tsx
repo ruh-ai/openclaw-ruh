@@ -1,5 +1,6 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { render } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import lucideMock from "../test-lucide-mock";
 mock.module("lucide-react", () => lucideMock);
 
@@ -88,5 +89,58 @@ describe("UsersPage", () => {
     expect(mockFetch).toHaveBeenCalled();
     const calledUrl = (mockFetch.mock.calls[0] as unknown[])[0] as string;
     expect(calledUrl).toContain("/api/admin/users");
+  });
+
+  test("renders user row with data covering roleTone and statusTone branches", async () => {
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+    expect(container.textContent).toContain("developer");
+    expect(container.textContent).toContain("active");
+  });
+
+  test("status filter select onChange updates filter state", async () => {
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    const selects = container.querySelectorAll("select");
+    const statusSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === "active"),
+    );
+    expect(statusSelect).toBeTruthy();
+    if (statusSelect) {
+      await act(async () => {
+        await userEvent.selectOptions(statusSelect, "active");
+      });
+      expect((statusSelect as HTMLSelectElement).value).toBe("active");
+    }
+  });
+
+  test("renders admin and suspended user tone variants", async () => {
+    const adminUser = {
+      id: "u2",
+      email: "admin@ruh.ai",
+      displayName: "Admin",
+      role: "admin",
+      status: "suspended",
+      emailVerified: true,
+      createdAt: "2026-01-01",
+      appAccess: { admin: true, builder: true, customer: false },
+      memberships: [],
+      primaryOrganization: null,
+    };
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [adminUser], total: 1 }),
+      } as Response),
+    );
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("admin@ruh.ai");
+    });
+    expect(container.textContent).toContain("suspended");
   });
 });

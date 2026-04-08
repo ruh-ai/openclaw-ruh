@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 
 import { AgentWorkspaceClient } from '@/app/agents/[agentId]/AgentWorkspaceClient';
+import AgentWorkspacePage from '@/app/agents/[agentId]/page';
 
 import { makeAgentRecord, makeSandbox } from '../helpers/fixtures';
 import { server } from '../helpers/server';
@@ -70,5 +71,15 @@ describe('AgentWorkspaceClient', () => {
       expect(screen.getByText('Could not open this workspace')).toBeInTheDocument();
       expect(screen.getByText('Agent not found')).toBeInTheDocument();
     });
+  });
+});
+
+describe('AgentWorkspacePage (page wrapper)', () => {
+  test('renders AgentWorkspaceClient via the page wrapper', () => {
+    // Just verify the wrapper renders without throwing
+    const { container } = render(
+      <AgentWorkspacePage params={{ agentId: 'agent-runtime-001' }} />,
+    );
+    expect(container).toBeTruthy();
   });
 });

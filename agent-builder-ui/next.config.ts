@@ -48,10 +48,6 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
 
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-
   reactStrictMode: true,
 
   async headers() {
@@ -66,6 +62,25 @@ const nextConfig: NextConfig = {
         }),
       },
     ];
+  },
+
+  // Proxy sandbox preview requests so the Dashboard iframe loads from the same
+  // origin (localhost:3000). This avoids cross-origin cookie/fetch issues that
+  // break Next.js hydration inside the iframe.
+  async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    return {
+      beforeFiles: [
+        {
+          source: "/api/sandbox-preview/:sandboxId/proxy/:port",
+          destination: `${apiUrl}/api/sandboxes/:sandboxId/preview/proxy/:port/`,
+        },
+        {
+          source: "/api/sandbox-preview/:sandboxId/proxy/:port/:path*",
+          destination: `${apiUrl}/api/sandboxes/:sandboxId/preview/proxy/:port/:path*`,
+        },
+      ],
+    };
   },
 
   images: {
