@@ -128,26 +128,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ── Ruh App (Flutter Web) ──────────────────────────────────────────────
-      - name: Docker metadata — ruh-app
-        id: meta-ruh-app
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.RUH_APP_IMAGE }}
-          tags: |
-            type=sha,prefix=,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push ruh-app
-        uses: docker/build-push-action@v6
-        with:
-          context: ./ruh_app
-          push: true
-          build-args: API_BASE_URL=
-          tags: ${{ steps.meta-ruh-app.outputs.tags }}
-          labels: ${{ steps.meta-ruh-app.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # ── Ruh App (Flutter Web) — disabled until Flutter SDK version resolved
+      # - name: Build and push ruh-app
+      #   uses: docker/build-push-action@v6
+      #   with:
+      #     context: ./ruh_app
+      #     push: true
 
   # ── Deploy to GCE VM via SSH ──────────────────────────────────────────────
   deploy:
