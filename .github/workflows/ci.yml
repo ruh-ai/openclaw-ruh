@@ -69,6 +69,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install workspace package dependencies
+        run: cd ../packages/logger && bun install
+
       - name: Run fast test suites with coverage
         run: bun run test:coverage
         # test:coverage = bun test ... --coverage --coverage-reporter=lcov
@@ -120,6 +123,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install workspace package dependencies
+        run: cd ../packages/logger && bun install
+
       - name: Integration tests
         run: bun run test:integration
 
@@ -162,6 +168,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Install workspace package dependencies
+        run: cd ../packages/logger && bun install
 
       - name: Smoke tests
         run: bun run test:smoke

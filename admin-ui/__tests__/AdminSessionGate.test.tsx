@@ -6,6 +6,7 @@ const replaceFn = mock(() => {});
 mock.module("next/navigation", () => ({
   usePathname: () => "/dashboard",
   useRouter: () => ({ replace: replaceFn }),
+  redirect: () => {},
 }));
 
 // Must be after mock.module so the component picks up mocked modules
