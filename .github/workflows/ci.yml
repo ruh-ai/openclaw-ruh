@@ -80,7 +80,7 @@ jobs:
 
       - name: Upload backend coverage (lcov)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: ruh-backend/coverage/lcov.info
@@ -238,7 +238,7 @@ jobs:
 
       - name: Upload frontend coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: ruh-frontend/coverage/
@@ -284,7 +284,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ruh-frontend-playwright-report
           path: ruh-frontend/playwright-report/
@@ -369,7 +369,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-builder-playwright-report
           path: agent-builder-ui/playwright-report/
