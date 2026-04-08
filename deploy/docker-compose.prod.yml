@@ -1,0 +1,88 @@
+# =============================================================================
+# docker-compose.prod.yml — Production deployment (builder-only, no ruh-app)
+#
+# Usage: docker compose -f docker-compose.prod.yml up -d
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-openclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB:       ${POSTGRES_DB:-openclaw}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openclaw} -d ${POSTGRES_DB:-openclaw}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    user: root
+    build:
+      context: .
+      dockerfile: ./ruh-backend/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
+      PORT: "8000"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      CODEX_AUTH_JSON_PATH: /root/.codex/auth.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ruh/.codex/auth.json:/root/.codex/auth.json:ro
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  agent-builder-ui:
+    build:
+      context: ./agent-builder-ui
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      - backend
+      - agent-builder-ui
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+    driver: bridge

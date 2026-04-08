@@ -38,7 +38,7 @@ services:
   backend:
     build:
       context: .
-      file: ./ruh-backend/Dockerfile
+      dockerfile: ./ruh-backend/Dockerfile
     env_file:
       - .env
     environment:
@@ -83,8 +83,8 @@ services:
   # ── Ruh Frontend / Client App (Next.js 16) ─────────────────────────────────
   frontend:
     build:
-      context: ./ruh-frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./ruh-frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
     environment:

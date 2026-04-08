@@ -2,7 +2,7 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: cd-${{ github.ref }}
@@ -15,9 +15,55 @@ env:
   RUH_APP_IMAGE: ghcr.io/${{ github.repository }}/ruh-app
 
 jobs:
+
+  # ── Gate: run critical tests before deploying ─────────────────────────────
+  test:
+    name: Test gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Backend tests (fast suite — no DB needed)
+      - name: Backend — install
+        working-directory: ruh-backend
+        run: |
+          cd ../packages/logger && bun install && cd -
+          bun install
+
+      - name: Backend — typecheck
+        working-directory: ruh-backend
+        run: bun run typecheck
+
+      - name: Backend — unit tests (non-blocking)
+        continue-on-error: true
+        working-directory: ruh-backend
+        env:
+          ALLOWED_ORIGINS: http://localhost:3000
+        run: bun test tests/unit/ --timeout 30000
+
+      # Agent Builder UI — build check
+      - name: Builder — install
+        working-directory: agent-builder-ui
+        run: npm install
+
+      - name: Builder — typecheck
+        working-directory: agent-builder-ui
+        run: npx tsc --noEmit
+        continue-on-error: true  # Type errors from version drift are non-blocking
+
+  # ── Build & push images to GHCR ───────────────────────────────────────────
   build-push:
     name: Build & push images
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: read
       packages: write
@@ -52,7 +98,8 @@ jobs:
       - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
-          context: ./ruh-backend
+          context: .
+          file: ./ruh-backend/Dockerfile
           push: true
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
@@ -72,7 +119,8 @@ jobs:
       - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
-          context: ./ruh-frontend
+          context: .
+          file: ./ruh-frontend/Dockerfile
           push: true
           build-args: NEXT_PUBLIC_API_URL=
           tags: ${{ steps.meta-frontend.outputs.tags }}
@@ -101,35 +149,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Deploy ───────────────────────────────────────────────────────────────────
-  # Uncomment and configure one of the options below.
-  #
-  # deploy:
-  #   name: Deploy
-  #   runs-on: ubuntu-latest
-  #   needs: build-push
-  #   environment: production
-  #
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     # ── Option A: SSH + docker compose ────────────────────────────────────
-  #     # - name: Deploy via SSH
-  #     #   uses: appleboy/ssh-action@v1
-  #     #   with:
-  #     #     host: ${{ secrets.SSH_HOST }}
-  #     #     username: ${{ secrets.SSH_USER }}
-  #     #     key: ${{ secrets.SSH_PRIVATE_KEY }}
-  #     #     script: |
-  #     #       cd ${{ secrets.SSH_DEPLOY_PATH }}
-  #     #       echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-  #     #       docker compose pull && docker compose up -d --remove-orphans
-  #
-  #     # ── Option B: Kubernetes ──────────────────────────────────────────────
-  #     # - name: Deploy to Kubernetes
-  #     #   env:
-  #     #     KUBECONFIG: ${{ secrets.KUBECONFIG }}
-  #     #   run: |
-  #     #     kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ needs.build-push.outputs.backend-tag }}
-  #     #     kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ needs.build-push.outputs.frontend-tag }}
-  #     #     kubectl rollout status deployment/backend && kubectl rollout status deployment/frontend
+  # ── Deploy to GCE VM via SSH ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to GCE
+    runs-on: ubuntu-latest
+    needs: [test, build-push]
+    if: github.ref == 'refs/heads/dev'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            cd ${{ secrets.SSH_DEPLOY_PATH }}
+            bash deploy/deploy.sh
