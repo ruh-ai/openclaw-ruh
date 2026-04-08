@@ -807,34 +807,37 @@ function ComputerView({
         />
       )}
 
-      {/* Dashboard tab — Mission Control (agent-runtime on port 8080) */}
-      {activeTab === "dashboard" && (
+      {/* Dashboard tab — agent's built application (auto-discovered from service_ports) */}
+      {activeTab === "dashboard" && (() => {
+        const dashboardPort = existingAgent?.servicePorts?.find(s => s.name === "dashboard")?.port ?? 3200;
+        const backendPort = existingAgent?.servicePorts?.find(s => s.name === "backend")?.port ?? 3100;
+        return (
         <div className="flex-1 min-h-0 flex flex-col">
           {activeSandboxId ? (
             <iframe
-              key={`dashboard-${activeSandboxId}`}
-              src={`${API_BASE}/api/sandboxes/${activeSandboxId}/preview/proxy/8080/`}
+              key={`dashboard-${activeSandboxId}-${dashboardPort}`}
+              src={`/api/sandbox-preview/${activeSandboxId}/proxy/${dashboardPort}/?backendPort=${backendPort}`}
               className="flex-1 w-full border-0"
-              title="Mission Control"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              title="Agent Dashboard"
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3 px-8">
               <LayoutDashboard className="h-7 w-7 text-[var(--primary)]/20" />
               <p className="text-[10px] font-satoshi-bold text-[var(--text-secondary)] text-center">
-                Mission Control
+                Agent Dashboard
               </p>
               <p className="text-[10px] font-mono text-[var(--text-tertiary)] text-center leading-relaxed">
                 The agent&apos;s dashboard will appear here once the sandbox is running.
                 <br />
                 <span className="text-[var(--text-tertiary)]/60">
-                  Shows data, metrics, and activity from the agent&apos;s work.
+                  Shows the application built during agent creation.
                 </span>
               </p>
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Preview tab */}
       {activeTab === "preview" && (
@@ -889,11 +892,14 @@ export function TabChat({
   const builderDisplayName = builderState?.name || builderState?.systemName || agent.name;
   const builderSuggestionName = coPilotStore?.name || builderState?.name || builderState?.systemName || agent.name;
   const builderSuggestionDescription = coPilotStore?.description || builderState?.description || agent.description || "";
+  const featureCtx = coPilotStore?.featureContext ?? null;
+  const isFeatureMode = Boolean(featureCtx);
   const builderSuggestions = isBuilderMode
     ? buildBuilderChatSuggestions({
         devStage: coPilotStore?.devStage,
         name: builderSuggestionName,
         description: builderSuggestionDescription,
+        featureContext: featureCtx,
       })
     : [];
   const hasPersistedBuilderIdentity = Boolean(
@@ -1254,11 +1260,13 @@ export function TabChat({
                       {isBuilderMode ? (
                         <div className="space-y-4 mt-1">
                           <p className="text-sm font-satoshi-regular text-[var(--text-primary)] leading-relaxed">
-                            Describe the agent you want to build. I&apos;ll design its skills, integrations, and deployment config.
+                            {isFeatureMode
+                              ? `Describe the feature you want to add to ${featureCtx?.baselineAgent.name ?? "your agent"}.`
+                              : "Describe the agent you want to build. I'll design its skills, integrations, and deployment config."}
                           </p>
                           <div className="space-y-2">
                             <p className="text-[10px] font-satoshi-bold uppercase tracking-wider text-[var(--text-tertiary)]">
-                              {builderSuggestionDescription.trim().length > 0 ? "Suggested prompts" : "Try an example"}
+                              {isFeatureMode ? `Feature: ${featureCtx?.title ?? ""}` : builderSuggestionDescription.trim().length > 0 ? "Suggested prompts" : "Try an example"}
                             </p>
                             {builderSuggestions.map((example) => (
                               <button
@@ -1274,26 +1282,16 @@ export function TabChat({
                             ))}
                           </div>
                           <div className="flex items-center gap-4 pt-1">
-                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]" />
-                              Think
-                            </div>
-                            <span className="text-[var(--text-tertiary)]/30">→</span>
-                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]/60" />
-                              Plan
-                            </div>
-                            <span className="text-[var(--text-tertiary)]/30">→</span>
-                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]/40" />
-                              Build
-                            </div>
-                            <span className="text-[var(--text-tertiary)]/30">→</span>
-                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]/20" />
-                              Review → Test → Ship
-                            </div>
-                            <span className="text-[10px] font-mono text-[var(--text-tertiary)]/50 ml-auto">~3–5 min</span>
+                            {(isFeatureMode ? ["Discover", "Plan", "Build", "Review", "Test", "Merge"] : ["Think", "Plan", "Build", "Review → Test → Ship"]).map((label, i, arr) => (
+                              <div key={label} className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
+                                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: `color-mix(in srgb, var(--primary) ${100 - i * 15}%, transparent)` }} />
+                                  {label}
+                                </div>
+                                {i < arr.length - 1 && <span className="text-[var(--text-tertiary)]/30 ml-1.5">→</span>}
+                              </div>
+                            ))}
+                            <span className="text-[10px] font-mono text-[var(--text-tertiary)]/50 ml-auto">{isFeatureMode ? "~1–3 min" : "~3–5 min"}</span>
                           </div>
                         </div>
                       ) : (
@@ -1423,7 +1421,7 @@ export function TabChat({
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={getStageInputPlaceholder(coPilotStore?.devStage, isBuilderMode, agent.name)}
+                placeholder={getStageInputPlaceholder(coPilotStore?.devStage, isBuilderMode, agent.name, isFeatureMode)}
                 disabled={(isLoading && !isBuilderMode) || (!isBuilderMode && !activeSandbox)}
                 rows={1}
                 className="flex-1 resize-none bg-transparent text-sm font-satoshi-regular text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] outline-none min-h-[24px] max-h-[120px] leading-relaxed disabled:opacity-50"

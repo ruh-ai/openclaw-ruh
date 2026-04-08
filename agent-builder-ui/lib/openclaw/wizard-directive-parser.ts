@@ -287,12 +287,26 @@ export function buildWizardStateContext(state: {
     envVars?: Array<{ key?: string }>;
   } | null;
   agentRules: string[];
+  featureContext?: { title: string; description: string; baselineAgent: { name: string; skillCount: number; skills: string[] } } | null;
 }): string {
   const parts = [
     `[WIZARD_STATE]`,
     ...(state.devStage ? [`Dev Stage: ${state.devStage}`] : []),
     `Phase: ${state.phase}`,
   ];
+
+  // Feature branch context
+  if (state.featureContext) {
+    const fc = state.featureContext;
+    parts.push(`[FEATURE_MODE]`);
+    parts.push(`Mode: Adding a feature to an existing agent — do NOT rebuild from scratch`);
+    parts.push(`Feature: "${fc.title}"`);
+    if (fc.description) parts.push(`Feature Description: ${fc.description}`);
+    parts.push(`Baseline Agent: "${fc.baselineAgent.name}" with ${fc.baselineAgent.skillCount} existing skills`);
+    if (fc.baselineAgent.skills.length > 0) parts.push(`Existing Skills: ${fc.baselineAgent.skills.join(", ")}`);
+    parts.push(`Instructions: Only create NEW skills/tools needed. Do not modify existing unless required.`);
+    parts.push(`[/FEATURE_MODE]`);
+  }
 
   // For Plan stage, include workspace paths instead of full document content.
   // The Plan instruction tells the architect to read files from workspace.

@@ -177,7 +177,7 @@ describe("create-session-cache", () => {
       expect.objectContaining({
         coPilot: expect.objectContaining({
           devStage: "build",
-          buildStatus: "building",
+          buildStatus: "failed",
           selectedSkillIds: ["inventory-monitor"],
         }),
         builder: expect.objectContaining({
@@ -327,7 +327,7 @@ describe("create-session-cache", () => {
 
     expect(resumed).toEqual(expect.objectContaining({
       name: "Inventory Alert Bot",
-      buildStatus: "building",
+      buildStatus: "failed",
       selectedSkillIds: [],
       channels: [],
       runtimeInputs: agent.runtimeInputs,
@@ -347,7 +347,7 @@ describe("create-session-cache", () => {
     expect(resumed.thinkStatus).toBe("ready");
   });
 
-  test("buildResumedCoPilotSeed keeps think trigger while request is active and not yet dispatched", () => {
+  test("buildResumedCoPilotSeed converts stale generating think to failed on restore", () => {
     const resumed = buildResumedCoPilotSeed(agent, {
       devStage: "think",
       thinkStatus: "generating",
@@ -356,8 +356,10 @@ describe("create-session-cache", () => {
       lastDispatchedThinkRunId: null,
     });
 
-    expect(resumed.userTriggeredThink).toBe(true);
-    expect(resumed.thinkRunId).toBe("think-run-1");
+    // Stale "generating" → "failed" on restore since the connection is gone
+    expect(resumed.userTriggeredThink).toBe(false);
+    expect(resumed.thinkRunId).toBeNull();
+    expect(resumed.thinkStatus).toBe("failed");
   });
 
   test("buildResumedCoPilotSeed clears stale think trigger when stage is not think", () => {
@@ -373,7 +375,7 @@ describe("create-session-cache", () => {
     expect(resumed.thinkRunId).toBeNull();
   });
 
-  test("buildResumedCoPilotSeed clears stale plan trigger when run was already dispatched", () => {
+  test("buildResumedCoPilotSeed converts stale generating plan to failed on restore", () => {
     const resumed = buildResumedCoPilotSeed(agent, {
       userTriggeredPlan: true,
       thinkStatus: "ready",
@@ -384,10 +386,10 @@ describe("create-session-cache", () => {
 
     expect(resumed.userTriggeredPlan).toBe(false);
     expect(resumed.planRunId).toBeNull();
-    expect(resumed.planStatus).toBe("generating");
+    expect(resumed.planStatus).toBe("failed");
   });
 
-  test("buildResumedCoPilotSeed keeps plan trigger while plan is generating and not yet dispatched", () => {
+  test("buildResumedCoPilotSeed converts undispatched generating plan to failed on restore", () => {
     const resumed = buildResumedCoPilotSeed(agent, {
       devStage: "plan",
       thinkStatus: "ready",
@@ -397,8 +399,10 @@ describe("create-session-cache", () => {
       lastDispatchedPlanRunId: null,
     });
 
-    expect(resumed.userTriggeredPlan).toBe(true);
-    expect(resumed.planRunId).toBe("plan-run-1");
+    // Even undispatched generating is stale on restore — connection is gone
+    expect(resumed.userTriggeredPlan).toBe(false);
+    expect(resumed.planRunId).toBeNull();
+    expect(resumed.planStatus).toBe("failed");
   });
 
   test("buildResumedCoPilotSeed clears stale plan trigger when stage is not plan", () => {
@@ -413,6 +417,7 @@ describe("create-session-cache", () => {
 
     expect(resumed.userTriggeredPlan).toBe(false);
     expect(resumed.planRunId).toBeNull();
+    expect(resumed.planStatus).toBe("failed");
   });
 
   test("buildResumedBuilderState prefers the persisted forge sandbox while restoring cached work", () => {

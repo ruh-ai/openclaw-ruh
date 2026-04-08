@@ -33,9 +33,18 @@ const AGENT_SELECT_COLUMNS = `
   repo_name,
   repo_default_branch,
   repo_last_pushed_at,
+  active_branch,
+  repo_initialized_at,
+  service_ports,
   created_at,
   updated_at
 `;
+
+export interface AgentServicePort {
+  name: string;
+  port: number;
+  healthy?: boolean;
+}
 
 export interface AgentWorkspaceMemory {
   instructions: string;
@@ -165,11 +174,14 @@ export interface AgentRecord {
   paperclip_company_id: string | null;
   paperclip_workers: PaperclipWorkerRecord[];
   creation_session: unknown | null;
+  service_ports: AgentServicePort[] | null;
   repo_url: string | null;
   repo_owner: string | null;
   repo_name: string | null;
   repo_default_branch: string;
   repo_last_pushed_at: string | null;
+  active_branch: string;
+  repo_initialized_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -383,11 +395,14 @@ export async function updateAgentConfig(
     channels?: AgentChannelRecord[];
     discoveryDocuments?: AgentDiscoveryDocumentsRecord | null;
     creationSession?: unknown;
+    servicePorts?: AgentServicePort[] | null;
     repoUrl?: string | null;
     repoOwner?: string | null;
     repoName?: string | null;
     repoDefaultBranch?: string | null;
     repoLastPushedAt?: string | null;
+    activeBranch?: string | null;
+    repoInitializedAt?: string | null;
   },
 ): Promise<AgentRecord | null> {
   const sets: string[] = [];
@@ -404,11 +419,14 @@ export async function updateAgentConfig(
   if (config.channels !== undefined) { sets.push(`channels = $${idx++}`); vals.push(JSON.stringify(config.channels)); }
   if (config.discoveryDocuments !== undefined) { sets.push(`discovery_documents = $${idx++}`); vals.push(config.discoveryDocuments ? JSON.stringify(config.discoveryDocuments) : null); }
   if (config.creationSession !== undefined) { sets.push(`creation_session = $${idx++}`); vals.push(config.creationSession ? JSON.stringify(config.creationSession) : null); }
+  if (config.servicePorts !== undefined) { sets.push(`service_ports = $${idx++}`); vals.push(config.servicePorts ? JSON.stringify(config.servicePorts) : null); }
   if (config.repoUrl !== undefined) { sets.push(`repo_url = $${idx++}`); vals.push(config.repoUrl ?? null); }
   if (config.repoOwner !== undefined) { sets.push(`repo_owner = $${idx++}`); vals.push(config.repoOwner ?? null); }
   if (config.repoName !== undefined) { sets.push(`repo_name = $${idx++}`); vals.push(config.repoName ?? null); }
   if (config.repoDefaultBranch !== undefined) { sets.push(`repo_default_branch = $${idx++}`); vals.push(config.repoDefaultBranch ?? 'main'); }
   if (config.repoLastPushedAt !== undefined) { sets.push(`repo_last_pushed_at = $${idx++}`); vals.push(config.repoLastPushedAt ?? null); }
+  if (config.activeBranch !== undefined) { sets.push(`active_branch = $${idx++}`); vals.push(config.activeBranch ?? 'main'); }
+  if (config.repoInitializedAt !== undefined) { sets.push(`repo_initialized_at = $${idx++}`); vals.push(config.repoInitializedAt ?? null); }
 
   if (sets.length === 0) return getAgent(id);
 
@@ -596,6 +614,7 @@ function serialize(row: Record<string, unknown>): AgentRecord {
   row['paperclip_company_id'] = typeof row['paperclip_company_id'] === 'string' ? row['paperclip_company_id'] : null;
   row['paperclip_workers'] = normalizePaperclipWorkers(row['paperclip_workers']);
   row['creation_session'] = (typeof row['creation_session'] === 'object' && row['creation_session'] !== null) ? row['creation_session'] : null;
+  row['service_ports'] = Array.isArray(row['service_ports']) ? row['service_ports'] : null;
   row['repo_url'] = typeof row['repo_url'] === 'string' ? row['repo_url'] : null;
   row['repo_owner'] = typeof row['repo_owner'] === 'string' ? row['repo_owner'] : null;
   row['repo_name'] = typeof row['repo_name'] === 'string' ? row['repo_name'] : null;

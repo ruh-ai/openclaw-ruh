@@ -52,6 +52,26 @@ function sanitizeRestoredLifecycleTrigger(seed: Partial<CoPilotState>): Partial<
     sanitized.planRunId = null;
   }
 
+  // On restore, any in-progress status is stale because the SSE/WS connection
+  // that was driving it is gone. Convert to "failed" so the UI shows a retry
+  // button instead of a permanent spinner. Matches the equivalent logic in
+  // copilot-lifecycle-cache.ts sanitizeRestoredLifecycleTrigger.
+  if (sanitized.buildStatus === ("building" as StageStatus)) {
+    sanitized.buildStatus = "failed" as StageStatus;
+    sanitized.userTriggeredBuild = false;
+    sanitized.buildRunId = null;
+  }
+  if (sanitized.thinkStatus === ("generating" as StageStatus)) {
+    sanitized.thinkStatus = "failed" as StageStatus;
+    sanitized.userTriggeredThink = false;
+    sanitized.thinkRunId = null;
+  }
+  if (sanitized.planStatus === ("generating" as StageStatus)) {
+    sanitized.planStatus = "failed" as StageStatus;
+    sanitized.userTriggeredPlan = false;
+    sanitized.planRunId = null;
+  }
+
   return sanitized;
 }
 

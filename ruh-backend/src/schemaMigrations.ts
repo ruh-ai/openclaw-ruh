@@ -796,6 +796,66 @@ export const MIGRATIONS: SchemaMigration[] = [
       `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_last_pushed_at TIMESTAMPTZ`,
     ],
   },
+  {
+    id: '0035_github_connections',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS github_connections (
+        id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        user_id           TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        github_user_id    TEXT        NOT NULL,
+        github_username   TEXT        NOT NULL,
+        access_token      TEXT        NOT NULL,
+        token_scope       TEXT        NOT NULL DEFAULT 'repo',
+        connected_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_github_connections_user_id ON github_connections(user_id)`,
+    ],
+  },
+  {
+    id: '0036_agent_git_workflow',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_branch TEXT DEFAULT 'main'`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_initialized_at TIMESTAMPTZ`,
+    ],
+  },
+  {
+    id: '0036_agent_branches',
+    statements: [
+      `
+      CREATE TABLE IF NOT EXISTS agent_branches (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        agent_id        TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        branch_name     TEXT        NOT NULL,
+        base_branch     TEXT        NOT NULL DEFAULT 'main',
+        title           TEXT        NOT NULL,
+        description     TEXT        NOT NULL DEFAULT '',
+        status          TEXT        NOT NULL DEFAULT 'open',
+        pr_number       INTEGER,
+        pr_url          TEXT,
+        created_by      TEXT        REFERENCES users(id),
+        merged_at       TIMESTAMPTZ,
+        feature_stage   TEXT        DEFAULT 'think',
+        feature_context JSONB       DEFAULT NULL,
+        feature_prd     TEXT        DEFAULT NULL,
+        feature_plan    JSONB       DEFAULT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(agent_id, branch_name)
+      )
+      `,
+      `CREATE INDEX IF NOT EXISTS idx_agent_branches_agent ON agent_branches (agent_id, status)`,
+    ],
+  },
+  {
+    id: '0038_agent_service_ports',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS service_ports JSONB DEFAULT NULL`,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {

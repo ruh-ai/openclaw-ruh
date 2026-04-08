@@ -10,7 +10,10 @@
  */
 
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem, type PlanActivityItem } from "@/lib/openclaw/copilot-state";
+import { BranchDiffPanel } from "../BranchDiffPanel";
+import { FeatureBriefCard } from "../FeatureBriefCard";
 import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
 import {
   Lightbulb,
@@ -79,6 +82,16 @@ const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb;
   test: { label: "Test", icon: FlaskConical, description: "Run evaluations" },
   ship: { label: "Ship", icon: Rocket, description: "Deploy agent" },
   reflect: { label: "Reflect", icon: BookOpen, description: "Build summary" },
+};
+
+const FEATURE_STAGE_META: Record<AgentDevStage, { label: string; description: string }> = {
+  think:   { label: "Discover",       description: "Analyze feature requirements" },
+  plan:    { label: "Plan Changes",   description: "Design the delta" },
+  build:   { label: "Build Feature",  description: "Create new skills & config" },
+  review:  { label: "Review Diff",    description: "Inspect branch changes" },
+  test:    { label: "Test Feature",   description: "Validate new capabilities" },
+  ship:    { label: "Merge",          description: "Create PR & merge to main" },
+  reflect: { label: "Summary",        description: "Feature summary" },
 };
 
 function getStageIndex(stage: AgentDevStage): number {
@@ -1559,8 +1572,20 @@ function BuildActivityPanel({
 
 // ─── Stage-aware placeholder text ───────────────────────────────────────────
 
-export function getStageInputPlaceholder(devStage: string | undefined, isBuilderMode: boolean, agentName: string): string {
+export function getStageInputPlaceholder(devStage: string | undefined, isBuilderMode: boolean, agentName: string, isFeatureMode = false): string {
   if (!isBuilderMode) return `Message ${agentName}…`;
+  if (isFeatureMode) {
+    switch (devStage) {
+      case "think": return "Describe the feature you want to add...";
+      case "plan": return "Ask about the feature architecture...";
+      case "build": return "Feature build in progress...";
+      case "review": return "Ask about changes or request modifications...";
+      case "test": return "Review feature test results...";
+      case "ship": return "Ready to merge. Create a PR to proceed.";
+      case "reflect": return "Feature complete.";
+      default: return "Describe the feature...";
+    }
+  }
   switch (devStage) {
     case "think": return "Describe what your agent should do...";
     case "plan": return "Waiting for architecture plan...";
@@ -1598,6 +1623,9 @@ export function LifecycleStepRenderer({
 }: LifecycleStepRendererProps) {
   const store = useCoPilotStore();
   const { devStage, maxUnlockedDevStage } = store;
+  const searchParams = useSearchParams();
+  const featureBranch = searchParams.get("branch");
+  const featureCtx = store.featureContext;
 
   const stageIdx = AGENT_DEV_STAGES.indexOf(devStage);
 
@@ -1642,6 +1670,7 @@ export function LifecycleStepRenderer({
       <div className="shrink-0 flex items-center gap-0.5 px-3 py-2.5 border-b border-[var(--border-default)] bg-[var(--card-color)] overflow-x-auto">
         {AGENT_DEV_STAGES.map((stage, i) => {
           const meta = STAGE_META[stage];
+          const fMeta = featureCtx ? FEATURE_STAGE_META[stage] : null;
           const Icon = meta.icon;
           const active = isStageActive(stage);
           const done = isStageDone(stage);
@@ -1655,7 +1684,7 @@ export function LifecycleStepRenderer({
                 if (!locked && !anyStageLoading) store.setDevStage(stage);
               }}
               disabled={locked || anyStageLoading}
-              title={meta.description}
+              title={fMeta?.description ?? meta.description}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-satoshi-medium whitespace-nowrap transition-colors ${
                 active
                   ? "bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/30"
@@ -1675,7 +1704,7 @@ export function LifecycleStepRenderer({
               ) : (
                 <Icon className="h-3 w-3" />
               )}
-              {meta.label}
+              {fMeta?.label ?? meta.label}
               {i < AGENT_DEV_STAGES.length - 1 && (
                 <ChevronRight className="h-2.5 w-2.5 text-[var(--text-tertiary)]/30 ml-0.5" />
               )}
@@ -1686,6 +1715,16 @@ export function LifecycleStepRenderer({
 
       {/* ── Stage content ─────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
+        {devStage === "think" && featureCtx && (
+          <div className="px-4 pt-4">
+            <FeatureBriefCard
+              title={featureCtx.title}
+              description={featureCtx.description}
+              baselineAgent={featureCtx.baselineAgent}
+              stage={devStage}
+            />
+          </div>
+        )}
         {devStage === "think" && (
           <StageThinkPlaceholder
             store={store}
@@ -1762,10 +1801,17 @@ export function LifecycleStepRenderer({
           </div>
         )}
         {devStage === "review" && (
-          <StageReview
-            store={store}
-            onApprove={() => store.advanceDevStage()}
-          />
+          <>
+            {featureBranch && agentId && (
+              <div className="px-4 pt-4">
+                <BranchDiffPanel agentId={agentId} branchName={featureBranch} />
+              </div>
+            )}
+            <StageReview
+              store={store}
+              onApprove={() => store.advanceDevStage()}
+            />
+          </>
         )}
         {devStage === "test" && (
           <StageTest
@@ -1774,7 +1820,9 @@ export function LifecycleStepRenderer({
             agentId={agentId}
           />
         )}
-        {devStage === "ship" && (
+        {devStage === "ship" && featureCtx && featureBranch && agentId ? (
+          <StageMerge agentId={agentId} branchName={featureBranch} featureTitle={featureCtx.title} agentName={featureCtx.baselineAgent.name} />
+        ) : devStage === "ship" && (
           <StageShip
             store={store}
             agentId={agentId}
@@ -1802,6 +1850,13 @@ export function LifecycleStepRenderer({
             {stageIdx + 1} / {AGENT_DEV_STAGES.length}
           </span>
         </div>
+        <button
+          onClick={() => store.advanceDevStage()}
+          disabled={stageIdx >= AGENT_DEV_STAGES.length - 1 || anyStageLoading}
+          className="px-3 py-1.5 text-xs font-satoshi-bold text-[var(--primary)] hover:text-[var(--primary)]/80 disabled:opacity-30 disabled:text-[var(--text-tertiary)] transition-colors"
+        >
+          {stageIdx >= AGENT_DEV_STAGES.length - 1 ? "Done" : "Next →"}
+        </button>
       </div>
     </div>
   );
@@ -1946,9 +2001,8 @@ function StagePlan({
     vectorCollections: rawPlan.vectorCollections ?? [],
   } : null;
 
-  // Waiting for architect to generate the plan — show the live activity panel
-  const planLoading = status === "generating" || (status === "idle" && !plan);
-  if (planLoading) {
+  // Only show spinner when plan is actively being generated (not stale idle)
+  if (status === "generating") {
     return <PlanActivityPanel planActivity={store.planActivity} planStep={store.planStep} />;
   }
 
@@ -1978,8 +2032,20 @@ function StagePlan({
 
   if (!plan) {
     return (
-      <div className="p-6">
-        <p className="text-xs text-[var(--text-tertiary)]">No architecture plan available yet.</p>
+      <div className="p-6 space-y-4">
+        <p className="text-xs text-[var(--text-secondary)]">
+          No architecture plan has been generated yet. Click below to generate one, or ask the architect in the chat.
+        </p>
+        <button
+          onClick={() => {
+            store.setPlanStatus("generating");
+            store.setUserTriggeredPlan(true);
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-satoshi-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
+        >
+          <Play className="h-3 w-3" />
+          Generate Plan
+        </button>
       </div>
     );
   }
@@ -3726,6 +3792,111 @@ const SHIP_STEPS: ShipStepConfig[] = [
   { id: "deploy", label: "Deploy to Sandbox", description: "Push config to the agent's runtime container", icon: Database },
   { id: "github", label: "Push to GitHub", description: "Export agent template to a GitHub repository", icon: Github },
 ];
+
+// ─── Feature-mode Merge stage (replaces Ship when on a feature branch) ────
+
+function StageMerge({ agentId, branchName, featureTitle, agentName }: {
+  agentId: string; branchName: string; featureTitle: string; agentName: string;
+}) {
+  const [step, setStep] = useState<"idle" | "creating-pr" | "merging" | "done" | "error">("idle");
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [prNumber, setPrNumber] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+  const handleCreatePR = async () => {
+    setStep("creating-pr");
+    try {
+      const res = await fetch(`${API_BASE}/api/agents/${agentId}/branches/${encodeURIComponent(branchName)}/pr`, {
+        method: "POST", credentials: "include",
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as Record<string, string>).error ?? "Failed"); }
+      const data = await res.json() as { prNumber: number; prUrl: string };
+      setPrNumber(data.prNumber); setPrUrl(data.prUrl); setStep("idle");
+    } catch (err) { setError(err instanceof Error ? err.message : "Failed"); setStep("error"); }
+  };
+
+  const handleMerge = async () => {
+    setStep("merging");
+    try {
+      const res = await fetch(`${API_BASE}/api/agents/${agentId}/branches/${encodeURIComponent(branchName)}/merge`, {
+        method: "POST", credentials: "include",
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as Record<string, string>).error ?? "Merge failed"); }
+      setStep("done");
+    } catch (err) { setError(err instanceof Error ? err.message : "Merge failed"); setStep("error"); }
+  };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="rounded-xl border border-[var(--primary)]/15 bg-[var(--primary)]/3 px-4 py-3">
+        <div className="flex items-center gap-2 mb-2">
+          <GitBranch className="h-4 w-4 text-[var(--primary)]" />
+          <h3 className="text-sm font-satoshi-bold text-[var(--text-primary)]">Merge Feature</h3>
+        </div>
+        <p className="text-xs text-[var(--text-secondary)]">
+          Merge &quot;{featureTitle}&quot; into {agentName}&apos;s main branch via GitHub Pull Request.
+        </p>
+      </div>
+
+      {step === "done" ? (
+        <div className="flex flex-col items-center py-8 gap-3">
+          <CheckCircle2 className="h-10 w-10 text-[var(--success)]" />
+          <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">Feature merged</p>
+          <p className="text-xs text-[var(--text-secondary)]">&quot;{featureTitle}&quot; is now part of {agentName}</p>
+          {prUrl && (
+            <a href={prUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-[var(--primary)] hover:underline">
+              View PR on GitHub <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      ) : step === "error" ? (
+        <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 px-4 py-3">
+          <p className="text-xs text-[var(--error)]">{error}</p>
+          <button onClick={() => setStep("idle")} className="mt-2 text-xs text-[var(--primary)] hover:underline">Try again</button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {/* Step 1: Create PR */}
+          <div className={`rounded-xl border px-4 py-3 ${prNumber ? "border-[var(--success)]/20 bg-[var(--success)]/5" : "border-[var(--border-stroke)]"}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {prNumber ? <CheckCircle2 className="h-4 w-4 text-[var(--success)]" /> : <span className="w-5 h-5 rounded-full border-2 border-[var(--primary)] flex items-center justify-center text-[9px] font-bold text-[var(--primary)]">1</span>}
+                <div>
+                  <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Create Pull Request</p>
+                  {prUrl && <a href={prUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[var(--primary)] hover:underline flex items-center gap-0.5">PR #{prNumber} <ExternalLink className="h-2.5 w-2.5" /></a>}
+                </div>
+              </div>
+              {!prNumber && (
+                <button onClick={handleCreatePR} disabled={step === "creating-pr"}
+                  className="px-3 py-1.5 text-xs font-satoshi-bold text-white rounded-lg bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 transition-all">
+                  {step === "creating-pr" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Create PR"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Step 2: Squash & Merge */}
+          <div className={`rounded-xl border px-4 py-3 ${!prNumber ? "opacity-40 border-[var(--border-stroke)]" : "border-[var(--border-stroke)]"}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full border-2 border-[var(--text-tertiary)] flex items-center justify-center text-[9px] font-bold text-[var(--text-tertiary)]">2</span>
+                <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Squash & Merge to Main</p>
+              </div>
+              {prNumber && (
+                <button onClick={handleMerge} disabled={step === "merging"}
+                  className="px-3 py-1.5 text-xs font-satoshi-bold text-white rounded-lg bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 transition-all">
+                  {step === "merging" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Merge"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StageShip({
   store,

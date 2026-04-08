@@ -112,6 +112,22 @@ docker exec ruh-postgres-1 psql -U openclaw -d openclaw -c \
   "UPDATE sandboxes SET dashboard_url = REPLACE(dashboard_url, 'localhost', '${DOCKER_HOST_IP}') WHERE dashboard_url LIKE '%localhost%';" \
   2>/dev/null || true
 
+# Fix sandbox gateway allowed origins (Docker host IP)
+for SANDBOX in $(docker ps --filter "name=openclaw-" --format "{{.Names}}" | grep -v ruh); do
+  docker exec "$SANDBOX" python3 -c "
+import json
+with open('/root/.openclaw/openclaw.json') as f:
+    cfg = json.load(f)
+origins = cfg.get('gateway', {}).get('controlUi', {}).get('allowedOrigins', [])
+for o in ['http://${DOCKER_HOST_IP}', 'http://34.31.176.40']:
+    if o not in origins:
+        origins.append(o)
+cfg['gateway']['controlUi']['allowedOrigins'] = origins
+with open('/root/.openclaw/openclaw.json', 'w') as f:
+    json.dump(cfg, f, indent=2)
+" 2>/dev/null && docker exec "$SANDBOX" pkill -f openclaw-gateway 2>/dev/null && sleep 2 && docker exec -d "$SANDBOX" openclaw gateway || true
+done
+
 # ── 6. Health check ──────────────────────────────────────────────────────────
 echo "[6/6] Health check..."
 for i in $(seq 1 20); do

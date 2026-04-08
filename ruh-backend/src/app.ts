@@ -3451,6 +3451,24 @@ app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, r
   const statusUpdate = stage === 'complete' ? { status: 'active' as const, forge_stage: stage as agentStore.AgentForgeStage } : { forge_stage: stage as agentStore.AgentForgeStage };
   await agentStore.updateAgent(req.params.id, statusUpdate);
 
+  // Auto-commit at stage transitions (Agent-as-Code)
+  const STAGE_COMMITS: Record<string, string> = {
+    plan: 'think: complete requirements discovery',
+    build: 'plan: lock architecture',
+    review: 'build: generate skills and configuration',
+    test: 'review: configuration validated',
+    ship: 'test: evaluation complete',
+  };
+  if (STAGE_COMMITS[stage] && agent.forge_sandbox_id) {
+    try {
+      const gw = await import('./gitWorkspace');
+      const result = await gw.commitWorkspace(agent.forge_sandbox_id, `${STAGE_COMMITS[stage]} — ${agent.name}`);
+      if (result.sha && agent.repo_url) {
+        await gw.pushBranch(agent.forge_sandbox_id, agent.active_branch || 'main').catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+  }
+
   res.json({ id: agent.id, forge_stage: stage, status: stage === 'complete' ? 'active' : agent.status });
 }));
 
@@ -6432,58 +6450,84 @@ app.get('/api/sandboxes/:sandbox_id/preview/ports', asyncHandler(async (req, res
 }));
 
 app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (req, res) => {
-  const record = await getRecord(req.params.sandbox_id);
+  await getRecord(req.params.sandbox_id);
   const containerPort = parseInt(req.params.port, 10);
   if (isNaN(containerPort) || !PREVIEW_PORTS.includes(containerPort)) {
     throw httpError(400, `Port ${req.params.port} is not a valid preview port`);
   }
 
-  const containerName = getContainerName(record.sandbox_id);
-  const proc = Bun.spawnSync(['docker', 'port', containerName, `${containerPort}/tcp`]);
-  const stdout = proc.stdout?.toString().trim() ?? '';
-  if (proc.exitCode !== 0 || !stdout) {
-    throw httpError(502, `Port ${containerPort} is not mapped for this sandbox`);
-  }
-  const hostPort = parseInt(stdout.split(':').pop() ?? '', 10);
-  if (isNaN(hostPort)) throw httpError(502, 'Failed to resolve host port');
-
-  // Extract the path after /proxy/:port/
+  const containerName = getContainerName(req.params.sandbox_id);
   const proxyPath = req.params[0] || '';
-  const targetUrl = `http://127.0.0.1:${hostPort}/${proxyPath}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`;
+  const qs = req.url.includes('?') ? '?' + req.url.split('?')[1] : '';
+  const internalUrl = `http://127.0.0.1:${containerPort}/${proxyPath}${qs}`;
+  // Use frontend rewrite path so sub-resource requests from the iframe
+  // flow through the same-origin Next.js rewrite
+  const proxyBase = `/api/sandbox-preview/${req.params.sandbox_id}/proxy/${containerPort}`;
+
+  // Use docker exec + curl to reach the container's localhost-bound service.
+  const acceptHeader = (req.headers.accept || '*/*').replace(/'/g, "'\\''");
+  const curlCmd = `curl -s -i --max-time 15 -H 'Accept: ${acceptHeader}' '${internalUrl.replace(/'/g, "'\\''")}'`;
 
   try {
-    const proxyRes = await axios({
-      method: req.method as string,
-      url: targetUrl,
-      headers: {
-        ...req.headers,
-        host: `127.0.0.1:${hostPort}`,
-      },
-      data: ['GET', 'HEAD'].includes(req.method) ? undefined : req.body,
-      responseType: 'arraybuffer',
-      validateStatus: () => true,
-      timeout: 30_000,
-      maxRedirects: 0,
-    });
+    const execProc = Bun.spawnSync(['docker', 'exec', containerName, 'sh', '-c', curlCmd], { timeout: 20_000 });
+    const rawBytes = execProc.stdout as Uint8Array;
 
-    // Forward status + headers
-    res.status(proxyRes.status);
-    const skipHeaders = new Set(['transfer-encoding', 'connection', 'content-encoding']);
-    for (const [key, value] of Object.entries(proxyRes.headers)) {
-      if (!skipHeaders.has(key.toLowerCase()) && value) {
-        res.setHeader(key, value as string);
+    if (execProc.exitCode !== 0 || !rawBytes || rawBytes.length === 0) {
+      throw httpError(502, `Preview proxy: container curl failed (exit ${execProc.exitCode})`);
+    }
+
+    // Find the blank line separating HTTP headers from body (\r\n\r\n)
+    let headerEndIdx = -1;
+    for (let i = 0; i < rawBytes.length - 3; i++) {
+      if (rawBytes[i] === 0x0d && rawBytes[i + 1] === 0x0a && rawBytes[i + 2] === 0x0d && rawBytes[i + 3] === 0x0a) {
+        headerEndIdx = i;
+        break;
       }
     }
-    // Allow iframe embedding — remove restrictive headers from upstream,
-    // then set permissive ones so the dashboard loads in the builder's iframe
-    res.removeHeader('content-security-policy');
-    res.removeHeader('x-frame-options');
-    res.removeHeader('content-security-policy-report-only');
-    res.setHeader('X-Frame-Options', 'ALLOWALL');
-    res.setHeader('Content-Security-Policy', "frame-ancestors *");
+    if (headerEndIdx === -1) {
+      res.status(200);
+      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('X-Frame-Options', 'ALLOWALL');
+      res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+      res.send(Buffer.from(rawBytes));
+      return;
+    }
 
-    res.send(Buffer.from(proxyRes.data as ArrayBuffer));
+    const headerText = Buffer.from(rawBytes.slice(0, headerEndIdx)).toString('utf-8');
+    const bodyBytes = rawBytes.slice(headerEndIdx + 4);
+
+    const statusMatch = headerText.match(/^HTTP\/[\d.]+ (\d+)/);
+    const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 200;
+    const ctMatch = headerText.match(/^content-type:\s*(.+)$/im);
+    const contentType = ctMatch ? ctMatch[1].trim() : 'application/octet-stream';
+
+    res.status(statusCode);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    // Rewrite absolute paths in HTML so sub-resources load through the proxy,
+    // and inject a fetch shim so dashboard API calls route to the agent's backend.
+    if (contentType.includes('text/html')) {
+      let html = Buffer.from(bodyBytes).toString('utf-8');
+      html = html.replace(/((?:src|href|action)\s*=\s*["'])\//g, `$1${proxyBase}/`);
+      html = html.replace(/"(\/_next\/)/g, `"${proxyBase}/_next/`);
+
+      const backendPort = parseInt(String(req.query.backendPort), 10) || 3100;
+      const apiBase = `/api/sandbox-preview/${req.params.sandbox_id}/proxy/${backendPort}`;
+      const fetchShim = `<script>window.__DASHBOARD_API_BASE__="${apiBase}";`
+        + `(function(){var f=window.fetch;window.fetch=function(u,o){`
+        + `if(typeof u==='string'&&u.startsWith('/api/'))u=window.__DASHBOARD_API_BASE__+u;`
+        + `return f.call(this,u,o);};})();</script>`;
+      html = html.replace(/<head([^>]*)>/, `<head$1>${fetchShim}`);
+
+      res.send(html);
+    } else {
+      res.send(Buffer.from(bodyBytes));
+    }
   } catch (err) {
+    if (err && typeof err === 'object' && 'status' in err) throw err;
     throw httpError(502, `Preview proxy error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }));
@@ -6679,6 +6723,19 @@ app.post('/api/sandboxes/:sandbox_id/workspace/merge-copilot', requireAuth, asyn
   await getRecord(req.params.sandbox_id);
   const ok = await mergeWorkspaceCopilotToMain(req.params.sandbox_id);
   if (!ok) throw httpError(500, 'Failed to merge copilot workspace into main workspace');
+
+  // Auto-commit after workspace merge (Agent-as-Code)
+  try {
+    const gw = await import('./gitWorkspace');
+    const commitResult = await gw.commitWorkspace(req.params.sandbox_id, 'build: merge copilot workspace');
+    if (commitResult.sha) {
+      const agentForSandbox = await agentStore.getAgentBySandboxId(req.params.sandbox_id);
+      if (agentForSandbox?.repo_url) {
+        await gw.pushBranch(req.params.sandbox_id, agentForSandbox.active_branch || 'main').catch(() => {});
+      }
+    }
+  } catch { /* non-blocking */ }
+
   res.json({ ok: true });
 }));
 
@@ -6706,7 +6763,55 @@ app.post('/api/sandboxes/:sandbox_id/setup', asyncHandler(async (req, res) => {
   const result = await runAgentSetup(req.params.sandbox_id, (msg) => {
     console.log(`[setup:${req.params.sandbox_id.slice(0, 8)}] ${msg}`);
   });
+
+  // Persist service ports on the agent record so the Dashboard tab can discover them.
+  if (result.services?.length) {
+    try {
+      let agent = await agentStore.getAgentBySandboxId(req.params.sandbox_id);
+      if (!agent) {
+        const allAgents = await agentStore.listAgents();
+        agent = allAgents.find((a: agentStore.AgentRecord) => a.forge_sandbox_id === req.params.sandbox_id) ?? null;
+      }
+      if (agent) {
+        const ports = result.services.map((s: { name: string; port: number; healthy?: boolean }) => ({
+          name: s.name, port: s.port, healthy: s.healthy ?? false,
+        }));
+        await agentStore.updateAgentConfig(agent.id, { servicePorts: ports });
+        appLogger.info({ agentId: agent.id, servicePorts: ports }, `[setup] Persisted service ports for agent ${agent.id.slice(0, 8)}`);
+      }
+    } catch (err) {
+      appLogger.warn({ err, sandboxId: req.params.sandbox_id }, `[setup] Failed to persist service ports`);
+    }
+  }
+
   res.json(result);
+}));
+
+// ── Deep Validation (post-build integration checks) ─────────────────────────
+
+app.post('/api/sandboxes/:sandbox_id/validate', asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { plan } = req.body ?? {};
+  if (!plan) throw httpError(400, 'Architecture plan is required in request body');
+
+  const sandboxShort = req.params.sandbox_id.slice(0, 8);
+  const startTime = Date.now();
+  appLogger.info({ sandboxId: req.params.sandbox_id, endpointCount: plan.apiEndpoints?.length ?? 0 }, `[validate:${sandboxShort}] Starting deep validation`);
+
+  const { runDeepValidation } = await import('./agentValidation');
+  const report = await runDeepValidation(req.params.sandbox_id, plan, (msg) => {
+    appLogger.debug({ sandboxId: req.params.sandbox_id }, `[validate:${sandboxShort}] ${msg}`);
+  });
+
+  appLogger.info({
+    sandboxId: req.params.sandbox_id,
+    overallStatus: report.overallStatus,
+    passCount: report.passCount,
+    failCount: report.failCount,
+    durationMs: Date.now() - startTime,
+  }, `[validate:${sandboxShort}] Completed: ${report.passCount} pass, ${report.failCount} fail (${Date.now() - startTime}ms)`);
+
+  res.json(report);
 }));
 
 // ── Agent Ship (persistent repo) ──────────────────────────────────────────────
@@ -6727,6 +6832,214 @@ app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
     onLog: (msg) => console.log(`[ship:${req.params.id.slice(0,8)}] ${msg}`),
   });
   res.json(result);
+}));
+
+// ── Agent Branches (Agent-as-Code: feature branch workflow) ───────────────────
+
+import * as agentBranchStore from './agentBranchStore';
+import * as gitWorkspace from './gitWorkspace';
+
+app.post('/api/agents/:id/branches', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const { title, description } = req.body ?? {};
+  if (!title || typeof title !== 'string' || !title.trim()) throw httpError(400, 'title is required');
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox');
+
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'feature';
+  const branchName = `feature/${slug}`;
+
+  await gitWorkspace.ensureGitInit(sandboxId);
+  await gitWorkspace.commitWorkspace(sandboxId, `wip: save before branching to ${branchName}`);
+  const branchResult = await gitWorkspace.createBranch(sandboxId, branchName);
+  if (!branchResult.ok) throw httpError(500, branchResult.error ?? 'Failed to create branch');
+
+  if (agent.repo_url && agent.repo_owner && agent.repo_name) {
+    try {
+      const { getAccessToken } = await import('./githubConnectionStore');
+      const conn = await getAccessToken(req.user!.userId);
+      if (conn) {
+        await gitWorkspace.setRemoteOrigin(sandboxId, gitWorkspace.buildAuthUrl(conn.token, agent.repo_owner, agent.repo_name));
+        await gitWorkspace.pushBranch(sandboxId, branchName).catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+  }
+
+  const skillGraph = Array.isArray(agent.skill_graph) ? agent.skill_graph as Array<{ name?: string; skill_id?: string }> : [];
+  const featureContext: agentBranchStore.FeatureContext = {
+    title: title.trim(),
+    description: typeof description === 'string' ? description.trim() : '',
+    baselineAgent: {
+      name: agent.name,
+      skillCount: skillGraph.length,
+      toolCount: Array.isArray(agent.tool_connections) ? agent.tool_connections.length : 0,
+      triggerCount: Array.isArray(agent.triggers) ? agent.triggers.length : 0,
+      ruleCount: Array.isArray(agent.agent_rules) ? agent.agent_rules.length : 0,
+      skills: skillGraph.map((s) => s.name ?? s.skill_id ?? 'unnamed').slice(0, 20),
+    },
+  };
+
+  const branch = await agentBranchStore.createBranch({
+    agentId: req.params.id, branchName, baseBranch: agent.active_branch || 'main',
+    title: title.trim(), description: typeof description === 'string' ? description.trim() : '',
+    createdBy: req.user!.userId,
+  });
+  await agentBranchStore.updateFeatureSession(req.params.id, branchName, { featureStage: 'think', featureContext });
+  await agentStore.updateAgentConfig(req.params.id, { activeBranch: branchName });
+  const updated = await agentBranchStore.getBranch(req.params.id, branchName);
+  res.status(201).json(updated ?? branch);
+}));
+
+app.get('/api/agents/:id/branches', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const status = req.query.status as 'open' | 'merged' | 'closed' | undefined;
+  res.json({ branches: await agentBranchStore.listBranches(req.params.id, status) });
+}));
+
+app.get('/api/agents/:id/branches/:branch', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  res.json(branch);
+}));
+
+app.post('/api/agents/:id/branches/:branch/checkout', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox');
+  await gitWorkspace.commitWorkspace(sandboxId, `wip: save before checkout ${req.params.branch}`);
+  const result = await gitWorkspace.checkoutBranch(sandboxId, req.params.branch);
+  if (!result.ok) throw httpError(500, result.error ?? 'Checkout failed');
+  await agentStore.updateAgentConfig(req.params.id, { activeBranch: req.params.branch });
+  res.json({ ok: true, branch: req.params.branch });
+}));
+
+app.post('/api/agents/:id/branches/:branch/commit', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox');
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim() : `update: ${agent.name}`;
+  const result = await gitWorkspace.commitWorkspace(sandboxId, message);
+  if (result.sha && agent.repo_url && agent.repo_owner && agent.repo_name) {
+    try {
+      const { getAccessToken } = await import('./githubConnectionStore');
+      const conn = await getAccessToken(req.user!.userId);
+      if (conn) {
+        await gitWorkspace.setRemoteOrigin(sandboxId, gitWorkspace.buildAuthUrl(conn.token, agent.repo_owner, agent.repo_name));
+        await gitWorkspace.pushBranch(sandboxId, req.params.branch).catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+  }
+  res.json({ sha: result.sha, filesChanged: result.filesChanged });
+}));
+
+app.get('/api/agents/:id/branches/:branch/diff', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (!sandboxId) throw httpError(400, 'Agent has no sandbox');
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  res.json(await gitWorkspace.getDiffSummary(sandboxId, branch.base_branch, req.params.branch));
+}));
+
+app.get('/api/agents/:id/branches/:branch/session', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  res.json({
+    featureStage: branch.feature_stage, featureContext: branch.feature_context,
+    featurePrd: branch.feature_prd, featurePlan: branch.feature_plan,
+    branchName: branch.branch_name, baseBranch: branch.base_branch,
+    title: branch.title, status: branch.status,
+  });
+}));
+
+app.patch('/api/agents/:id/branches/:branch/session', requireAuth, asyncHandler(async (req, res) => {
+  await getOwnedAgentRecord(req, req.params.id);
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  const { featureStage, featurePrd, featurePlan } = req.body ?? {};
+  const patch: Parameters<typeof agentBranchStore.updateFeatureSession>[2] = {};
+  if (typeof featureStage === 'string') patch.featureStage = featureStage as agentBranchStore.FeatureStage;
+  if (typeof featurePrd === 'string') patch.featurePrd = featurePrd;
+  if (featurePlan !== undefined) patch.featurePlan = featurePlan;
+  const updated = await agentBranchStore.updateFeatureSession(req.params.id, req.params.branch, patch);
+  if (!updated) throw httpError(500, 'Failed to update session');
+  res.json({ featureStage: updated.feature_stage, featureContext: updated.feature_context, featurePrd: updated.feature_prd, featurePlan: updated.feature_plan });
+}));
+
+app.post('/api/agents/:id/branches/:branch/pr', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  if (!agent.repo_url || !agent.repo_owner || !agent.repo_name) throw httpError(400, 'Agent has no GitHub repository');
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  if (branch.pr_number) { res.json({ ok: true, prNumber: branch.pr_number, prUrl: branch.pr_url, alreadyExists: true }); return; }
+
+  const { getAccessToken } = await import('./githubConnectionStore');
+  const conn = await getAccessToken(req.user!.userId);
+  if (!conn) throw httpError(400, 'No GitHub connection');
+
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (sandboxId) {
+    await gitWorkspace.setRemoteOrigin(sandboxId, gitWorkspace.buildAuthUrl(conn.token, agent.repo_owner, agent.repo_name));
+    await gitWorkspace.commitWorkspace(sandboxId, `feat: ${branch.title}`);
+    await gitWorkspace.pushBranch(sandboxId, branch.branch_name).catch(() => {});
+  }
+
+  const prResult = await gitWorkspace.createPullRequest(conn.token, agent.repo_owner, agent.repo_name, branch.branch_name, branch.base_branch, branch.title, branch.description || `Feature branch for ${agent.name}.`);
+  if (!prResult.ok) throw httpError(500, prResult.error ?? 'Failed to create PR');
+  await agentBranchStore.updateBranch(req.params.id, req.params.branch, { prNumber: prResult.prNumber ?? null, prUrl: prResult.prUrl ?? null });
+  res.json({ ok: true, prNumber: prResult.prNumber, prUrl: prResult.prUrl });
+}));
+
+app.post('/api/agents/:id/branches/:branch/merge', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  if (!agent.repo_url || !agent.repo_owner || !agent.repo_name) throw httpError(400, 'Agent has no GitHub repository');
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  if (!branch.pr_number) throw httpError(400, 'No PR exists — create one first');
+
+  const { getAccessToken } = await import('./githubConnectionStore');
+  const conn = await getAccessToken(req.user!.userId);
+  if (!conn) throw httpError(400, 'No GitHub connection');
+
+  const mergeResult = await gitWorkspace.squashMergePullRequest(conn.token, agent.repo_owner, agent.repo_name, branch.pr_number, `feat: ${branch.title}`);
+  if (!mergeResult.ok) throw httpError(500, mergeResult.error ?? 'Merge failed');
+
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (sandboxId) {
+    await gitWorkspace.setRemoteOrigin(sandboxId, gitWorkspace.buildAuthUrl(conn.token, agent.repo_owner, agent.repo_name));
+    await gitWorkspace.checkoutBranch(sandboxId, branch.base_branch);
+    await dockerExec(getContainerName(sandboxId), `cd ~/.openclaw/workspace && git pull origin ${branch.base_branch} 2>&1`, 30_000).catch(() => {});
+  }
+
+  await agentBranchStore.updateBranch(req.params.id, req.params.branch, { status: 'merged', mergedAt: new Date().toISOString() });
+  await agentStore.updateAgentConfig(req.params.id, { activeBranch: branch.base_branch });
+
+  try {
+    const updatedAgent = await agentStore.getAgent(req.params.id);
+    if (updatedAgent) {
+      await agentStore.createAgentConfigVersion(req.params.id, {
+        skillGraph: updatedAgent.skill_graph, workflow: updatedAgent.workflow,
+        agentRules: updatedAgent.agent_rules, triggers: updatedAgent.triggers, channels: updatedAgent.channels,
+      }, `feat: ${branch.title}`, req.user!.userId);
+    }
+  } catch { /* non-blocking */ }
+
+  res.json({ ok: true, sha: mergeResult.sha, branch: branch.base_branch });
+}));
+
+app.delete('/api/agents/:id/branches/:branch', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const branch = await agentBranchStore.getBranch(req.params.id, req.params.branch);
+  if (!branch) throw httpError(404, 'Branch not found');
+  const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
+  if (sandboxId && agent.active_branch === branch.branch_name) {
+    await gitWorkspace.checkoutBranch(sandboxId, branch.base_branch).catch(() => {});
+    await agentStore.updateAgentConfig(req.params.id, { activeBranch: branch.base_branch });
+  }
+  await agentBranchStore.updateBranch(req.params.id, req.params.branch, { status: 'closed' });
+  res.json({ ok: true });
 }));
 
 // ── Conversation management ───────────────────────────────────────────────────
