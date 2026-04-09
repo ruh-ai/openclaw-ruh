@@ -51,6 +51,6 @@ USER appuser
 EXPOSE 3003
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost:3003/ || exit 1
+    CMD wget -qO- http://127.0.0.1:3003/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
