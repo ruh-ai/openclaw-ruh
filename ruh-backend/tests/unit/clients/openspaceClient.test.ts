@@ -12,6 +12,19 @@ const mockDockerExec = mock(async (_id: string, _cmd: string) => [true, ''] as [
 
 mock.module('../../../src/docker', () => ({
   dockerExec: mockDockerExec,
+  dockerSpawn: mock(async () => [0, '']),
+  dockerContainerRunning: mock(async () => true),
+  getContainerName: (id: string) => `openclaw-${id}`,
+  shellQuote: (v: string) => `'${v}'`,
+  joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  normalizePathSegment: (v: string) => v,
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
+  buildHomeFileWriteCommand: () => '',
+  buildConfigureAgentCronAddCommand: () => '',
+  buildCronDeleteCommand: () => '',
+  buildCronRunCommand: () => '',
+  parseManagedSandboxContainerList: () => [],
+  listManagedSandboxContainers: mock(async () => []),
 }));
 
 import { isEnabled, recordAndAnalyzeExecution, listSkills } from '../../../src/openspaceClient';

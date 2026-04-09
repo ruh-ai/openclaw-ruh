@@ -134,6 +134,7 @@ mock.module('../../../src/docker', () => ({
   buildCronRunCommand: mock(() => 'echo ok'),
   parseManagedSandboxContainerList: mock(() => []),
   listManagedSandboxContainers: mock(async () => []),
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
 }));
 
 mock.module('../../../src/backendReadiness', () => {

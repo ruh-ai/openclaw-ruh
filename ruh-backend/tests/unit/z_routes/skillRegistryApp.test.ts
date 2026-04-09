@@ -132,9 +132,12 @@ mock.module('../../../src/docker', () => ({
   dockerExec: dockerExecMock,
   dockerSpawn: mock(async () => [0, '']),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,
-  listManagedSandboxContainers: mock(async () => []),
   joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
+  parseManagedSandboxContainerList: mock(() => []),
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
+  shellQuote: (v: string) => `'${v}'`,
 }));
 
 mock.module('../../../src/auditStore', () => ({

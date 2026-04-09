@@ -816,13 +816,6 @@ export const MIGRATIONS: SchemaMigration[] = [
     ],
   },
   {
-    id: '0036_agent_git_workflow',
-    statements: [
-      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_branch TEXT DEFAULT 'main'`,
-      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_initialized_at TIMESTAMPTZ`,
-    ],
-  },
-  {
     id: '0036_agent_branches',
     statements: [
       `
@@ -848,6 +841,13 @@ export const MIGRATIONS: SchemaMigration[] = [
       )
       `,
       `CREATE INDEX IF NOT EXISTS idx_agent_branches_agent ON agent_branches (agent_id, status)`,
+    ],
+  },
+  {
+    id: '0036_agent_git_workflow',
+    statements: [
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS active_branch TEXT DEFAULT 'main'`,
+      `ALTER TABLE agents ADD COLUMN IF NOT EXISTS repo_initialized_at TIMESTAMPTZ`,
     ],
   },
   {

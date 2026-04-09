@@ -3,7 +3,19 @@ import { describe, expect, test, mock, beforeEach } from 'bun:test';
 const mockDockerExec = mock<(container: string, cmd: string, timeout?: number) => Promise<[boolean, string]>>();
 mock.module('../../src/docker', () => ({
   dockerExec: mockDockerExec,
+  dockerSpawn: mock(async () => [0, '']),
+  dockerContainerRunning: mock(async () => true),
   getContainerName: (id: string) => `openclaw-${id}`,
+  shellQuote: (v: string) => `'${v}'`,
+  joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  normalizePathSegment: (v: string) => v,
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
+  buildHomeFileWriteCommand: () => '',
+  buildConfigureAgentCronAddCommand: () => '',
+  buildCronDeleteCommand: () => '',
+  buildCronRunCommand: () => '',
+  parseManagedSandboxContainerList: () => [],
+  listManagedSandboxContainers: mock(async () => []),
 }));
 
 const { runDeepValidation } = await import('../../src/agentValidation');
