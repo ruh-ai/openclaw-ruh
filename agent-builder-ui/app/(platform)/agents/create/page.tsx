@@ -163,10 +163,14 @@ function CreateAgentPageContent() {
       const decoder = new TextDecoder();
       let buffer = "";
       let sandboxReady = false;
+      const STREAM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
       try {
         while (!sandboxReady) {
-          const { done, value } = await reader.read();
+          const timeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Provisioning timed out — please try again")), STREAM_TIMEOUT_MS),
+          );
+          const { done, value } = await Promise.race([reader.read(), timeout]);
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const events = buffer.split("\n\n");
@@ -192,7 +196,9 @@ function CreateAgentPageContent() {
                 break;
               }
             } catch (e) {
-              if (e instanceof Error && (e.message.includes("failed") || e.message.includes("Failed"))) throw e;
+              // Re-throw intentional errors (from error events); only swallow JSON parse failures on non-JSON SSE data
+              if (e instanceof SyntaxError) continue;
+              throw e;
             }
           }
         }

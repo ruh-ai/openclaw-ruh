@@ -65,6 +65,7 @@ mock.module("@/lib/agents/runtime-inputs", () => ({
   extractRuntimeInputKeys: () => [],
   hasMissingRequiredInputs: () => false,
   getRuntimeInputDetails: () => ({ label: "", description: "" }),
+  enrichRuntimeInputsFromPlan: () => [],
 }));
 
 mock.module("@/lib/skills/skill-registry", () => ({

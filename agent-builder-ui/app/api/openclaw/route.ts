@@ -31,7 +31,7 @@ const PER_ATTEMPT_TIMEOUT_MS = parseInt(
   process.env.OPENCLAW_TIMEOUT_MS || "180000",
   10
 );
-const AUTH_ME_PATH = "/users/me";
+const AUTH_ME_PATH = "/api/auth/me";
 
 type StreamEventSender = (event: string, data: object) => void;
 

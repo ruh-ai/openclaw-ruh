@@ -41,6 +41,7 @@ mock.module("@/lib/agents/runtime-inputs", () => ({
   extractRuntimeInputKeys: () => [],
   isRuntimeInputFilled: () => false,
   getRuntimeInputDetails: () => ({ label: "", description: "" }),
+  enrichRuntimeInputsFromPlan: () => [],
 }));
 
 mock.module("@/components/ui/button", () => ({

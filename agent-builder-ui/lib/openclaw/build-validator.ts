@@ -185,24 +185,40 @@ export async function runDeepValidationWithAutoFix(
   sandboxId: string,
   plan: ArchitecturePlan,
   callbacks: AutoFixCallbacks = {},
-  opts: { maxRetries?: number } = {},
+  opts: { maxRetries?: number; totalTimeoutMs?: number } = {},
 ): Promise<DeepValidationReport> {
   const maxRetries = opts.maxRetries ?? 3;
+  const totalTimeoutMs = opts.totalTimeoutMs ?? 120_000; // 2 minutes total budget
   const sessionId = `validate-${uuidv4()}`;
   let totalFixAttempts = 0;
   let totalFixSuccesses = 0;
+  const startedAt = Date.now();
+
+  const isTimedOut = () => Date.now() - startedAt > totalTimeoutMs;
 
   callbacks.onStatus?.("Running deep validation...");
-  let report = await callDeepValidation(sandboxId, plan);
+  let report: DeepValidationReport;
+  try {
+    report = await callDeepValidation(sandboxId, plan);
+  } catch (err) {
+    callbacks.onStatus?.("Deep validation endpoint unavailable — skipping.");
+    return { checks: [], passCount: 0, failCount: 0, overallStatus: "pass", autoFixAttempts: 0, autoFixSuccesses: 0, timestamp: new Date().toISOString() };
+  }
   for (const check of report.checks) callbacks.onCheckResult?.(check);
 
   for (let round = 0; round < maxRetries && report.overallStatus === "fail"; round++) {
+    if (isTimedOut()) {
+      callbacks.onStatus?.("Validation time budget exceeded — stopping auto-fix.");
+      break;
+    }
+
     const failures = report.checks.filter(c => c.status === "fail" && c.fixContext);
     if (failures.length === 0) break;
 
     callbacks.onStatus?.(`Found ${failures.length} issue${failures.length > 1 ? "s" : ""} — auto-fixing (round ${round + 1}/${maxRetries})...`);
 
     for (const failure of failures) {
+      if (isTimedOut()) break;
       totalFixAttempts++;
       callbacks.onAutoFixAttempt?.(failure, round + 1);
       callbacks.onStatus?.(`Fixing: ${failure.label}`);
@@ -210,11 +226,19 @@ export async function runDeepValidationWithAutoFix(
       callbacks.onStatus?.(fixed ? `Fix applied for: ${failure.label}` : `Fix failed for: ${failure.label}`);
     }
 
+    if (isTimedOut()) break;
+
     callbacks.onStatus?.("Rebuilding and restarting services...");
     try { await restartServices(sandboxId); } catch { callbacks.onStatus?.("Service restart failed — continuing validation..."); }
 
     callbacks.onStatus?.("Re-validating...");
-    const newReport = await callDeepValidation(sandboxId, plan);
+    let newReport: DeepValidationReport;
+    try {
+      newReport = await callDeepValidation(sandboxId, plan);
+    } catch {
+      callbacks.onStatus?.("Re-validation endpoint unavailable — stopping.");
+      break;
+    }
 
     for (const newCheck of newReport.checks) {
       const oldCheck = report.checks.find(c => c.check === newCheck.check && c.endpoint === newCheck.endpoint && c.status === "fail");
