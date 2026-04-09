@@ -928,7 +928,10 @@ export async function* createOpenclawSandbox(
     return;
   }
 
-  const gatewayUrl = `http://localhost:${hostPort}`;
+  // Use Docker host IP when running in a container (e.g. via docker compose),
+  // so sibling containers (builder UI) can reach the sandbox gateway.
+  const dockerHostIp = process.env.DOCKER_HOST_IP ?? 'localhost';
+  const gatewayUrl = `http://${dockerHostIp}:${hostPort}`;
   yield ['log', `Gateway will be accessible at ${gatewayUrl}`];
 
   // Resolve VNC websockify host port
@@ -1231,6 +1234,9 @@ export async function* createOpenclawSandbox(
     'http://localhost:3001',
     'http://localhost:80',
     'http://localhost:8000',
+    // Include configured origins (e.g. https://builder.codezero2pi.com) so the
+    // bridge can reach the sandbox gateway in production deployments.
+    ...(process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) ?? []),
   ];
   const gatewayTrustedProxies = ['127.0.0.1', '172.0.0.0/8', '10.0.0.0/8'];
   const requiredBootstrapSteps: BootstrapCommandStep[] = [

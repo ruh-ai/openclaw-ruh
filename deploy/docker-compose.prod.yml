@@ -1,7 +1,15 @@
 # =============================================================================
-# docker-compose.prod.yml — Production deployment (builder-only, no ruh-app)
+# docker-compose.prod.yml — Production deployment (all services, SSL)
 #
-# Usage: docker compose -f docker-compose.prod.yml up -d
+# Subdomains (codezero2pi.com):
+#   builder.  → agent-builder-ui:3000
+#   app.      → frontend:3001
+#   admin.    → admin-ui:3002
+#   api.      → backend:8000
+#
+# Usage:
+#   # First time: run deploy/init-ssl.sh to get certs
+#   # Then: docker compose -f docker-compose.prod.yml up -d
 # =============================================================================
 
 services:
@@ -33,7 +41,8 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
       PORT: "8000"
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      ALLOWED_ORIGINS: "https://builder.codezero2pi.com,https://app.codezero2pi.com,https://admin.codezero2pi.com,https://api.codezero2pi.com"
+      DOCKER_HOST_IP: "172.17.0.1"
       CODEX_AUTH_JSON_PATH: /root/.codex/auth.json
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -56,11 +65,43 @@ services:
       context: ./agent-builder-ui
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_API_URL: "https://api.codezero2pi.com"
     environment:
       NODE_ENV: production
       PORT: "3000"
       OPENCLAW_TIMEOUT_MS: "600000"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./ruh-frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "https://api.codezero2pi.com"
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "https://api.codezero2pi.com"
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
     restart: unless-stopped
     networks:
       - internal
@@ -74,15 +115,35 @@ services:
       dockerfile: Dockerfile
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
     restart: unless-stopped
     networks:
       - internal
     depends_on:
       - backend
+      - frontend
       - agent-builder-ui
+      - admin-ui
+
+  # Certbot for automatic SSL renewal
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    # Renew certs every 12 hours (only renews if expiring within 30 days)
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    networks:
+      - internal
 
 volumes:
   postgres_data:
+  certbot_certs:
+  certbot_webroot:
 
 networks:
   internal:
