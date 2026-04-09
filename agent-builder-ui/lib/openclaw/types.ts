@@ -374,6 +374,30 @@ export interface ValidationReport {
   overallStatus: "pass" | "warn" | "fail";
 }
 
+// ── Deep Validation (Phase H — post-build integration checks) ───────────────
+
+export type DeepValidationCheckType = "db_schema" | "api_endpoint" | "contract" | "dashboard_build" | "integration";
+
+export interface DeepValidationCheck {
+  check: DeepValidationCheckType;
+  status: "pass" | "fail" | "skip";
+  label: string;
+  detail?: string;
+  fixContext?: string;
+  endpoint?: string;
+  attempt?: number;
+}
+
+export interface DeepValidationReport {
+  timestamp: string;
+  checks: DeepValidationCheck[];
+  overallStatus: "pass" | "fail";
+  passCount: number;
+  failCount: number;
+  autoFixAttempts: number;
+  autoFixSuccesses: number;
+}
+
 // ── Evaluation (Test stage) ─────────────────────────────────────────────────
 
 export type EvalTaskStatus = "pending" | "running" | "pass" | "fail" | "manual";

@@ -2,7 +2,11 @@
 
 import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, CheckCircle2, AlertCircle, MessageSquare, FolderOpen, Rocket, Trash2 } from "lucide-react";
+import { ChevronLeft, Loader2, CheckCircle2, AlertCircle, MessageSquare, FolderOpen, Rocket, Trash2, GitMerge } from "lucide-react";
+import { BranchIndicator } from "./_components/BranchIndicator";
+import { MergeReviewDialog } from "./_components/MergeReviewDialog";
+import { useFeatureSession } from "@/hooks/use-feature-session";
+import { useGitHubConnection } from "@/hooks/use-github-connection";
 import { ReviewAgent } from "./_components/review/ReviewAgent";
 import type { ReviewAgentOutput } from "./_components/review/ReviewAgent";
 import { ConfigureAgent } from "./_components/configure/ConfigureAgent";
@@ -88,6 +92,8 @@ function CreateAgentPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editingAgentId = searchParams.get("agentId");
+  const featureBranch = searchParams.get("branch");
+  const isFeatureBranchMode = Boolean(featureBranch && editingAgentId);
   const showDevMockBar = shouldShowDevMockBar(
     process.env.NODE_ENV,
     searchParams.get(DEV_MOCK_BAR_QUERY_PARAM),
@@ -125,6 +131,7 @@ function CreateAgentPageContent() {
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [showShipDialog, setShowShipDialog] = useState(false);
+  const [showMergeDialog, setShowMergeDialog] = useState(false);
   const [modeTransitionKey, setModeTransitionKey] = useState(0);
   const [workspaceFileCount, setWorkspaceFileCount] = useState(0);
   const [workspaceBadge, setWorkspaceBadge] = useState(false);
@@ -205,6 +212,25 @@ function CreateAgentPageContent() {
   }, [router]);
 
   const coPilotStore = useCoPilotStore();
+
+  // Feature session: load and hydrate copilot for feature branch mode
+  const featureSession = useFeatureSession(isFeatureBranchMode ? editingAgentId : null, isFeatureBranchMode ? featureBranch : null);
+  const [featureHydrated, setFeatureHydrated] = useState(false);
+  useEffect(() => {
+    if (!isFeatureBranchMode || !featureSession.session || featureHydrated) return;
+    const ctx = featureSession.session.featureContext;
+    if (!ctx) return;
+    coPilotStore.hydrateForFeature({ title: ctx.title, description: ctx.description, baselineAgent: { name: ctx.baselineAgent.name, skillCount: ctx.baselineAgent.skillCount, skills: ctx.baselineAgent.skills } }, featureSession.session.featureStage);
+    setFeatureHydrated(true);
+  }, [isFeatureBranchMode, featureSession.session, featureHydrated, coPilotStore]);
+
+  // Sync stage changes back to feature session DB
+  const currentDevStage = coPilotStore.devStage;
+  useEffect(() => {
+    if (!isFeatureBranchMode || !featureHydrated) return;
+    featureSession.setFeatureStage(currentDevStage as import("@/hooks/use-feature-session").FeatureStage);
+  }, [currentDevStage, isFeatureBranchMode, featureHydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1460,7 +1486,7 @@ function CreateAgentPageContent() {
               <ChevronLeft className="h-5 w-5 text-[var(--text-secondary)]" />
             </button>
             <h1 className="text-lg font-satoshi-bold text-[var(--text-primary)]">
-              {editingAgentId ? "Improve Agent" : "Create New Agent"}
+              {isFeatureBranchMode ? "Add Feature" : editingAgentId ? "Improve Agent" : "Create New Agent"}
             </h1>
           </div>
           <ModeToggle mode={mode} onChange={handleModeSwitch} />
@@ -1675,15 +1701,18 @@ function CreateAgentPageContent() {
               isReady={agentMode === "live"}
             />
           ) : (
-            <div>
-              <h1 className="text-lg font-satoshi-bold text-[var(--text-primary)]">
-                {existingAgent ? "Improve Agent" : "Create New Agent"}
-              </h1>
-              {existingAgent && (
-                <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)]">
-                  {existingAgent.name}
-                </p>
-              )}
+            <div className="flex items-center gap-3">
+              <div>
+                <h1 className="text-lg font-satoshi-bold text-[var(--text-primary)]">
+                  {isFeatureBranchMode ? "Add Feature" : existingAgent ? "Improve Agent" : "Create New Agent"}
+                </h1>
+                {existingAgent && (
+                  <p className="text-xs font-satoshi-regular text-[var(--text-tertiary)]">
+                    {existingAgent.name}
+                  </p>
+                )}
+              </div>
+              {isFeatureBranchMode && featureBranch && <BranchIndicator branchName={featureBranch} />}
             </div>
           )}
         </div>
@@ -1741,13 +1770,15 @@ function CreateAgentPageContent() {
                 )}
               </button>
               {agentMode === "live" && (
-                <button
-                  onClick={() => setShowShipDialog(true)}
-                  className="spark flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-satoshi-bold gradient-drift text-white hover:opacity-90 transition-all"
-                >
-                  <Rocket className="h-3.5 w-3.5" />
-                  Ship
-                </button>
+                isFeatureBranchMode ? (
+                  <button onClick={() => setShowMergeDialog(true)} className="spark flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-satoshi-bold gradient-drift text-white hover:opacity-90 transition-all">
+                    <GitMerge className="h-3.5 w-3.5" /> Merge
+                  </button>
+                ) : (
+                  <button onClick={() => setShowShipDialog(true)} className="spark flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-satoshi-bold gradient-drift text-white hover:opacity-90 transition-all">
+                    <Rocket className="h-3.5 w-3.5" /> Ship
+                  </button>
+                )
               )}
             </>
           ) : (
@@ -1806,6 +1837,16 @@ function CreateAgentPageContent() {
           onClose={() => setShowShipDialog(false)}
         />
       )}
+
+      {showMergeDialog && workingAgent && featureBranch && (
+        <MergeReviewDialog
+          agentId={workingAgent.id}
+          agentName={workingAgent.name ?? "Agent"}
+          branchName={featureBranch}
+          onClose={() => setShowMergeDialog(false)}
+          onMerged={() => { setShowMergeDialog(false); router.push(`/agents/${workingAgent.id}/chat`); }}
+        />
+      )}
     </div>
   );
 }
@@ -1847,6 +1888,7 @@ function ForgeInitScreen({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const github = useGitHubConnection();
 
   // Derive friendly provisioning steps (deduplicated, filtered)
   const friendlySteps = useMemo(() => {
@@ -1962,6 +2004,29 @@ function ForgeInitScreen({
           </p>
         </div>
 
+        {/* GitHub connection gate */}
+        {!github.loading && !github.connected && (
+          <div className="rounded-xl border border-[var(--brand-primary)]/20 bg-[var(--brand-primary)]/5 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <svg className="h-5 w-5 text-[var(--text-primary)]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              <span className="text-sm font-satoshi-bold text-[var(--text-primary)]">Connect GitHub to continue</span>
+            </div>
+            <p className="text-xs font-satoshi-regular text-[var(--text-secondary)]">
+              Every agent gets its own GitHub repository from day one — version-controlled, with branching for features and PRs for review.
+            </p>
+            <button onClick={() => github.connect()} className="gradient-drift w-full py-2.5 px-4 rounded-xl text-white text-sm font-satoshi-bold transition-all">
+              Connect GitHub
+            </button>
+          </div>
+        )}
+        {github.connected && (
+          <div className="flex items-center gap-2 rounded-xl border border-[var(--border-stroke)] bg-[var(--card-color)] px-3 py-2">
+            <svg className="h-4 w-4 text-[var(--text-secondary)]" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            <span className="text-xs font-satoshi-medium text-[var(--text-secondary)]">Connected as <span className="text-[var(--text-primary)]">{github.username}</span></span>
+            <CheckCircle2 className="h-3.5 w-3.5 text-[var(--success)] ml-auto" />
+          </div>
+        )}
+
         <div className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-satoshi-medium text-[var(--text-primary)]">
@@ -2000,7 +2065,7 @@ function ForgeInitScreen({
 
           <button
             onClick={() => { if (name.trim()) onSubmit(name.trim(), description.trim()); }}
-            disabled={!name.trim()}
+            disabled={!name.trim() || !github.connected}
             className="gradient-drift w-full py-3 px-6 rounded-xl text-white text-sm font-satoshi-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:animate-none transition-all"
           >
             Bring to life

@@ -43,6 +43,12 @@ export interface SavedAgent {
   forgeStage?: string | null;
   /** Backend-persisted creation session snapshot for recovery on page refresh. */
   creationSession?: unknown | null;
+  /** Service ports discovered from setup.json after build completes. */
+  servicePorts?: { name: string; port: number; healthy?: boolean }[] | null;
+  /** GitHub repository URL (set at forge time when GitHub is connected). */
+  repoUrl?: string | null;
+  /** Active git branch in the workspace. */
+  activeBranch?: string | null;
 }
 
 export interface SaveAgentDraftInput {
@@ -86,6 +92,9 @@ function fromBackend(r: Record<string, unknown>): SavedAgent {
     forgeSandboxId: (r.forge_sandbox_id as string | null) ?? null,
     forgeStage: (r.forge_stage as string | null) ?? null,
     creationSession: (r.creation_session as unknown) ?? null,
+    servicePorts: Array.isArray(r.service_ports) ? r.service_ports as { name: string; port: number; healthy?: boolean }[] : null,
+    repoUrl: (r.repo_url as string | null) ?? null,
+    activeBranch: (r.active_branch as string | null) ?? 'main',
   };
 }
 

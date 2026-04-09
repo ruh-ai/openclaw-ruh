@@ -511,10 +511,49 @@ export function CoPilotLayout({
     setDevStage("plan");
     setPlanStatus("generating");
     setUserTriggeredPlan(true);
-    // Plan stage will show a loading spinner until the architect returns
-    // an architecture_plan response. The actual message is sent by TabChat
-    // via the onPlanGenerationNeeded callback.
-  }, [setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments]);
+
+    // Dispatch plan generation directly via the bridge API.
+    // The TabChat useEffect approach has timing issues with Zustand prop subscriptions,
+    // so we call the architect directly here.
+    const forgeSandboxId = activeSandbox?.sandbox_id;
+    if (forgeSandboxId) {
+      const agentId = existingAgent?.id;
+      import("@/lib/openclaw/api").then(({ sendToArchitectStreaming }) => {
+        let planPrompt = "Generate the architecture plan for this agent.";
+        if (docs) {
+          const prdSummary = docs.prd.sections.map((s: { heading: string; content: string }) => `### ${s.heading}\n${s.content}`).join("\n\n");
+          const trdSummary = docs.trd.sections.map((s: { heading: string; content: string }) => `### ${s.heading}\n${s.content}`).join("\n\n");
+          planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
+        }
+        sendToArchitectStreaming(
+          `agent:main:${forgeSandboxId}`,
+          planPrompt,
+          {
+            onDelta: () => {},
+            onStatus: () => {},
+          },
+          { forgeSandboxId, agentId: agentId ?? undefined },
+        ).then(async () => {
+          // Read architecture.json from workspace
+          try {
+            const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+            const planJson = await readWorkspaceFile(forgeSandboxId, ".openclaw/plan/architecture.json");
+            if (planJson) {
+              const { normalizePlan } = await import("@/lib/openclaw/plan-formatter");
+              const plan = normalizePlan(JSON.parse(planJson));
+              coPilotStore.setArchitecturePlan(plan);
+              coPilotStore.setPlanStatus("ready");
+            }
+          } catch (err) {
+            console.warn("[Plan] Failed to read plan from workspace:", err);
+            coPilotStore.setPlanStatus("failed");
+          }
+        }).catch(() => {
+          coPilotStore.setPlanStatus("failed");
+        });
+      });
+    }
+  }, [setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments, coPilotStore]);
 
   // Called when user approves Plan stage — triggers v4 orchestrator build
   const handlePlanApproved = useCallback(async () => {

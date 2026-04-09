@@ -23,7 +23,8 @@ import { useAgentsStore, type SavedAgent } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
 import { DeploymentsPanel } from "./_components/DeploymentsPanel";
 import { ReproduceDialog } from "./create/_components/ReproduceDialog";
-import { Copy, Server, BarChart2 } from "lucide-react";
+import { AddFeatureDialog } from "./create/_components/AddFeatureDialog";
+import { Copy, Server, BarChart2, GitBranch } from "lucide-react";
 
 function summarizeSandboxHealth(
   sandboxIds: string[],
@@ -74,6 +75,7 @@ function AgentCard({
   onToggleStatus,
   onChat,
   onBuild,
+  onAddFeature,
   onDeploy,
   onManageDeployments,
 }: {
@@ -86,6 +88,7 @@ function AgentCard({
   onToggleStatus: (id: string, status: SavedAgent["status"]) => void;
   onChat: (id: string) => void;
   onBuild: (id: string) => void;
+  onAddFeature: (agent: SavedAgent) => void;
   onDeploy: (id: string) => void;
   onManageDeployments: (agent: SavedAgent) => void;
 }) {
@@ -276,6 +279,15 @@ function AgentCard({
           <Wrench className="h-3.5 w-3.5" />
           Build
         </button>
+        {isActive && agent.repoUrl && (
+          <button
+            onClick={() => onAddFeature(agent)}
+            className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 hover:bg-[var(--primary)]/10 hover:border-[var(--primary)]/50 text-xs font-satoshi-bold text-[var(--primary)] transition-all"
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+            Add Feature
+          </button>
+        )}
         {isActive && (
           <button
             onClick={() => router.push(`/agents/${agent.id}/monitor`)}
@@ -297,6 +309,7 @@ export default function AgentsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [deploymentsAgent, setDeploymentsAgent] = useState<SavedAgent | null>(null);
+  const [addFeatureTarget, setAddFeatureTarget] = useState<SavedAgent | null>(null);
   const { agents, deleteAgent, deleteForge, bulkDeleteAgents, updateAgentStatus, fetchAgents } = useAgentsStore();
   const sandboxHealth = useSandboxHealth(
     agents.flatMap((agent) => agent.sandboxIds ?? []),
@@ -612,6 +625,7 @@ export default function AgentsPage() {
                   onToggleStatus={updateAgentStatus}
                   onChat={handleChat}
                   onBuild={handleBuild}
+                  onAddFeature={setAddFeatureTarget}
                   onDeploy={handleDeploy}
                   onManageDeployments={setDeploymentsAgent}
                 />
@@ -629,6 +643,18 @@ export default function AgentsPage() {
           onClose={() => setDeploymentsAgent(null)}
           onChat={handleChat}
           onRefreshHealth={() => fetchAgents()}
+        />
+      )}
+
+      {addFeatureTarget && (
+        <AddFeatureDialog
+          agentId={addFeatureTarget.id}
+          agentName={addFeatureTarget.name}
+          onClose={() => setAddFeatureTarget(null)}
+          onCreated={(branchName) => {
+            setAddFeatureTarget(null);
+            router.push(`/agents/create?agentId=${addFeatureTarget.id}&branch=${encodeURIComponent(branchName)}`);
+          }}
         />
       )}
     </div>

@@ -376,6 +376,36 @@ export async function runBuildPipeline(
     callbacks.onStatus("Agent setup skipped — services not started.");
   }
 
+  // Phase H: Deep validation + auto-fix loop
+  callbacks.onStatus("Validating agent stack...");
+  try {
+    const { runDeepValidationWithAutoFix } = await import("./build-validator");
+    const deepReport = await runDeepValidationWithAutoFix(sandboxId, plan, {
+      onStatus: (msg) => callbacks.onStatus(msg),
+      onCheckResult: (check) => {
+        const icon = check.status === "pass" ? "\u2705" : check.status === "fail" ? "\u274c" : "\u23ed\ufe0f";
+        callbacks.onStatus(`  ${icon} ${check.label}`);
+      },
+      onAutoFixAttempt: (check, attempt) => {
+        callbacks.onStatus(`  \ud83d\udd27 Auto-fixing: ${check.label} (attempt ${attempt}/3)`);
+      },
+    }, { maxRetries: 3 });
+
+    try {
+      const { writeWorkspaceFiles } = await import("./workspace-writer");
+      await writeWorkspaceFiles(sandboxId, [{ path: ".openclaw/build/deep-validation-report.json", content: JSON.stringify(deepReport, null, 2) }]);
+    } catch { /* non-fatal */ }
+
+    if (deepReport.overallStatus === "pass") {
+      callbacks.onStatus(`Validation passed: ${deepReport.passCount} checks OK${deepReport.autoFixSuccesses > 0 ? `, ${deepReport.autoFixSuccesses} auto-fixed` : ""}`);
+    } else {
+      callbacks.onStatus(`Validation completed with ${deepReport.failCount} issue${deepReport.failCount !== 1 ? "s" : ""} remaining`);
+    }
+  } catch (err) {
+    console.warn("[build-orchestrator] Deep validation failed:", err);
+    callbacks.onStatus("Validation skipped — could not run deep checks.");
+  }
+
   return manifest;
 }
 

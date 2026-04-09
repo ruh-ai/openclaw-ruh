@@ -645,4 +645,70 @@ router.delete('/me', requireAuth, asyncHandler(async (req, res) => {
   res.json({ message: 'Account and all associated data have been deleted' });
 }));
 
+// ── GitHub OAuth ──────────────────────────────────────────────────────────────
+
+import * as githubConnectionStore from './githubConnectionStore';
+import { getConfig } from './config';
+
+router.get('/github/status', requireAuth, asyncHandler(async (req, res) => {
+  const conn = await githubConnectionStore.getConnection(req.user!.userId);
+  res.json(conn ?? { connected: false, username: null, connectedAt: null });
+}));
+
+router.get('/github', requireAuth, asyncHandler(async (req, res) => {
+  const config = getConfig();
+  if (!config.githubClientId) throw httpError(503, 'GitHub OAuth not configured');
+  const redirect = (req.query.redirect as string) ?? '/agents';
+  const state = Buffer.from(JSON.stringify({ userId: req.user!.userId, redirect })).toString('base64url');
+  const url = `https://github.com/login/oauth/authorize?client_id=${config.githubClientId}&redirect_uri=${encodeURIComponent(config.githubCallbackUrl)}&scope=repo&state=${state}`;
+  res.redirect(url);
+}));
+
+router.get('/github/callback', asyncHandler(async (req, res) => {
+  const config = getConfig();
+  if (!config.githubClientId || !config.githubClientSecret) throw httpError(503, 'GitHub OAuth not configured');
+
+  const code = req.query.code as string;
+  const stateRaw = req.query.state as string;
+  if (!code || !stateRaw) throw httpError(400, 'Missing code or state');
+
+  let state: { userId: string; redirect: string };
+  try { state = JSON.parse(Buffer.from(stateRaw, 'base64url').toString()); }
+  catch { throw httpError(400, 'Invalid state'); }
+
+  // Exchange code for token
+  const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: config.githubClientId, client_secret: config.githubClientSecret, code }),
+  });
+  const tokenData = await tokenRes.json() as { access_token?: string; scope?: string; error?: string };
+  if (!tokenData.access_token) throw httpError(400, `GitHub OAuth failed: ${tokenData.error ?? 'no token'}`);
+
+  // Get GitHub user info
+  const userRes = await fetch('https://api.github.com/user', {
+    headers: { Authorization: `token ${tokenData.access_token}`, Accept: 'application/json' },
+  });
+  const ghUser = await userRes.json() as { id?: number; login?: string };
+  if (!ghUser.login) throw httpError(400, 'Could not get GitHub user');
+
+  // Store connection
+  await githubConnectionStore.upsertConnection({
+    userId: state.userId,
+    githubUserId: String(ghUser.id),
+    githubUsername: ghUser.login,
+    accessToken: tokenData.access_token,
+    tokenScope: tokenData.scope ?? 'repo',
+  });
+
+  // Redirect back to the builder
+  const redirectUrl = state.redirect || '/agents';
+  res.redirect(`http://localhost:3000${redirectUrl}`);
+}));
+
+router.delete('/github', requireAuth, asyncHandler(async (req, res) => {
+  await githubConnectionStore.deleteConnection(req.user!.userId);
+  res.json({ ok: true });
+}));
+
 export { router as authRouter };

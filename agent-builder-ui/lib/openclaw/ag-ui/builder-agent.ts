@@ -306,6 +306,25 @@ Rules:
 [/INSTRUCTION]
 `;
 
+// ─── Feature-mode preamble ─────────────────────────────────────────────────
+
+export const FEATURE_MODE_PREAMBLE = `[FEATURE_BRANCH_MODE]
+IMPORTANT: You are adding a NEW FEATURE to an EXISTING agent. You are NOT building a new agent.
+
+The agent already exists with working skills, tools, and configuration on the main branch.
+A feature branch has been created. Your job is to design and build ONLY the changes needed.
+
+Rules for Feature Mode:
+- Do NOT rewrite SOUL.md from scratch — only append or modify sections relevant to the feature
+- Do NOT recreate existing skills — only add new skills or modify existing ones if required
+- Research should focus on the specific feature, not the entire domain
+- PRD/TRD should describe only the feature delta, not the full agent
+- Architecture plan should list only NEW skills/tools/triggers, plus any MODIFICATIONS to existing ones
+- When building, only generate files for new or modified components
+[/FEATURE_BRANCH_MODE]
+
+`;
+
 // ─── Build-stage system instruction ─────────────────────────────────────────
 // Build is now handled entirely by the v4 orchestrator (build-orchestrator.ts)
 // with specialist sub-agents. No monolithic build instruction needed.
@@ -705,6 +724,12 @@ export class BuilderAgent extends AbstractAgent {
     }
     // Subsequent messages without a devStage don't override the instruction
     // (the architect remembers its system instruction from the session)
+
+    // In feature mode, prepend the feature preamble so the architect works on a delta
+    const isFeatureMode = Boolean((wizardState as { featureContext?: unknown } | undefined)?.featureContext);
+    if (isFeatureMode && systemInstruction) {
+      systemInstruction = FEATURE_MODE_PREAMBLE + systemInstruction;
+    }
 
     if (this.isFirstMessage) {
       this.isFirstMessage = false;

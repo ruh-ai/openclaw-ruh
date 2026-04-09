@@ -28,6 +28,9 @@ export interface BackendConfig {
   logLevel: string;
   paperclipApiUrl: string | null;
   openspaceMcpEnabled: boolean;
+  githubClientId: string | null;
+  githubClientSecret: string | null;
+  githubCallbackUrl: string;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -183,6 +186,9 @@ export function parseBackendConfig(
 
   const paperclipApiUrl = parseUrlField(readRaw(env, 'PAPERCLIP_API_URL'), 'PAPERCLIP_API_URL', errors);
   const openspaceMcpEnabled = readRaw(env, 'OPENSPACE_MCP_ENABLED') === 'true';
+  const githubClientId = readRaw(env, 'GITHUB_CLIENT_ID') ?? null;
+  const githubClientSecret = readRaw(env, 'GITHUB_CLIENT_SECRET') ?? null;
+  const githubCallbackUrl = readRaw(env, 'GITHUB_CALLBACK_URL') ?? 'http://localhost:8000/api/auth/github/callback';
 
   if (agentCredentialsKey && !/^[0-9a-fA-F]{64}$/.test(agentCredentialsKey)) {
     errors.push('AGENT_CREDENTIALS_KEY must be exactly 64 hexadecimal characters');
@@ -223,6 +229,9 @@ export function parseBackendConfig(
     logLevel,
     paperclipApiUrl,
     openspaceMcpEnabled,
+    githubClientId,
+    githubClientSecret,
+    githubCallbackUrl,
   });
 }
 

@@ -27,7 +27,7 @@ const SANDBOX_IMAGE = process.env.SANDBOX_IMAGE || 'ruh-sandbox:latest';
 const LEGACY_IMAGE = 'node:22-bookworm';
 
 /** Common dev server ports exposed for preview. Docker assigns random host ports. */
-const PREVIEW_PORTS = [3000, 3001, 3002, 4173, 5173, 5174, 8000, 8080];
+const PREVIEW_PORTS = [3000, 3001, 3002, 3100, 3200, 4173, 5173, 5174, 8000, 8080];
 const DEFAULT_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
 const SHARED_CODEX_ONBOARD_CMD =
   'openclaw onboard --non-interactive --secret-input-mode plaintext --accept-risk --skip-health --auth-choice skip';

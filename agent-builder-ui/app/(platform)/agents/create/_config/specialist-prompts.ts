@@ -217,6 +217,41 @@ After writing all skill handlers, confirm:
 
 // ─── Dashboard Specialist ────────────────────────────────────────────────────
 
+const DASHBOARD_DESIGN_TOKENS = `
+DESIGN SYSTEM — You MUST follow these tokens exactly:
+
+Colors:
+  --primary: #ae00d0 (brand purple — use for active nav, buttons, links, accents)
+  --primary-hover: #9400b4
+  --secondary: #7b5aff
+  --background: #f9f7f9 (warm light gray page background)
+  --card-color: #ffffff (card/panel background)
+  --sidebar-bg: #fdfbff
+  --text-primary: #121212
+  --text-secondary: #4b5563
+  --text-tertiary: #9ca3af
+  --border-default: #e5e7eb
+  --success: #22c55e, --error: #ef4444, --warning: #f59e0b, --info: #3b82f6
+  Brand gradient: linear-gradient(135deg, #ae00d0, #7b5aff)
+
+Typography:
+  Font family: system-ui, -apple-system, "Segoe UI", sans-serif
+  Headings: font-weight 700, color --text-primary
+  Body: font-weight 400, font-size 14px, color --text-secondary
+
+Layout:
+  Border radius: 12px cards, 8px buttons/inputs
+  Sidebar: white (#fdfbff) background, 240px width, subtle right border
+  Active nav item: --primary color text with light purple tint background (rgba(174,0,208,0.08))
+  Cards: white background, 1px --border-default border, 12px radius
+  Metric cards: white bg, left purple accent border, large number + label below
+
+Rules:
+  - LIGHT theme by default — do NOT use dark backgrounds (#0f172a, #111827, etc.)
+  - Do NOT use Inter, Tailwind default blue, or cyan/teal accents
+  - Status badges: pill shape with light tinted background + matching text color
+`;
+
 export function buildDashboardPrompt(plan: ArchitecturePlan): string {
   const pages = plan.dashboardPages ?? [];
   const pageList = pages.map((p) => `- ${p.title} (${p.path}): ${p.components.map((c) => c.type).join(", ")}`).join("\n");
@@ -235,20 +270,23 @@ ${pageList}
 Available API endpoints:
 ${endpoints.map((e) => `- ${e.method} ${e.path}`).join("\n")}
 
+${DASHBOARD_DESIGN_TOKENS}
+
 Write these files:
 
-1. **dashboard/layout.tsx** — Dashboard shell with navigation sidebar linking to all pages.
+1. **dashboard/layout.tsx** — Dashboard shell with navigation sidebar linking to all pages. Use the design tokens above for all styling.
 
 2. **dashboard/pages/*.tsx** — One React component per page. Each page:
    - Fetches data from the corresponding API endpoint using the hooks
    - Renders the components specified in the plan (metric-cards, data-table, line-chart, etc.)
    - Handles loading, empty, and error states
+   - Uses the design token colors and spacing
 
 3. **dashboard/hooks/*.ts** — Data fetching hooks using fetch + useState/useEffect. One per API resource.
 
-4. **dashboard/components/*.tsx** — Reusable components: MetricCard, DataTable, Chart (simple implementations using HTML/CSS).
+4. **dashboard/components/*.tsx** — Reusable components: MetricCard, DataTable, Chart. Style using the design tokens — white cards with purple accents, clean borders.
 
-Use React 19, TypeScript, functional components. Keep it simple — no heavy UI library, just clean HTML + inline styles or Tailwind classes.
+Use React 19, TypeScript, functional components. Keep it simple — no heavy UI library, just clean HTML + inline styles using the CSS custom properties above.
 
 Write each file:
 \`\`\`bash

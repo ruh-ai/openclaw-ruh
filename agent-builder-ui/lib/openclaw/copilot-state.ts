@@ -199,6 +199,9 @@ export interface CoPilotState {
 
   // Reflect stage
   buildReport: BuildReport | null;
+
+  // Feature branch mode
+  featureContext: { title: string; description: string; baselineAgent: { name: string; skillCount: number; skills: string[] } } | null;
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -237,6 +240,7 @@ export interface CoPilotActions {
   setRules: (rules: string[]) => void;
   setImprovements: (improvements: AgentImprovement[]) => void;
   hydrateFromSeed: (seed: Partial<CoPilotState>) => void;
+  hydrateForFeature: (featureCtx: CoPilotState["featureContext"], startStage?: string) => void;
 
   // ── Lifecycle actions ──────────────────────────────────────────────────────
   setDevStage: (stage: AgentDevStage) => void;
@@ -351,6 +355,7 @@ function createInitialState(): CoPilotState {
     buildManifest: null,
     buildValidation: null,
     buildReport: null,
+    featureContext: null,
   };
 }
 
@@ -604,6 +609,23 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       ...seed,
       ...lifecyclePreserve,
       maxUnlockedDevStage: resolveMaxUnlockedDevStage({ ...seed, ...lifecyclePreserve }),
+    };
+  }),
+
+  hydrateForFeature: (featureCtx, startStage) => set((prev) => {
+    const stage = (startStage ?? "think") as AgentDevStage;
+    return {
+      ...prev,
+      devStage: stage, maxUnlockedDevStage: stage,
+      thinkStatus: "idle" as StageStatus, planStatus: "idle" as StageStatus,
+      buildStatus: "idle" as StageStatus, evalStatus: "idle" as StageStatus, deployStatus: "idle" as StageStatus,
+      userTriggeredThink: false, userTriggeredPlan: false, userTriggeredBuild: false,
+      thinkActivity: [], thinkRunId: null, lastDispatchedThinkRunId: null,
+      thinkStep: "idle" as ThinkSubStep, researchFindings: [], researchBriefPath: null, prdPath: null, trdPath: null,
+      planActivity: [], planRunId: null, lastDispatchedPlanRunId: null, planStep: "idle" as PlanSubStep, architecturePlan: null,
+      buildActivity: [], buildProgress: null, buildRunId: null, buildManifest: null, buildValidation: null, buildReport: null,
+      evalTasks: [], evalLoopState: { iteration: 0, maxIterations: 3, scores: [], mutations: [], status: "idle" as const },
+      featureContext: featureCtx,
     };
   }),
 
@@ -870,6 +892,7 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       buildManifest: state.buildManifest,
       buildValidation: state.buildValidation,
       buildReport: state.buildReport,
+      featureContext: state.featureContext,
     };
   },
 }));

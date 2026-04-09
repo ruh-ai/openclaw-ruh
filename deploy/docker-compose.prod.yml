@@ -60,6 +60,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
+      OPENCLAW_TIMEOUT_MS: "600000"
     restart: unless-stopped
     networks:
       - internal

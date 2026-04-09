@@ -7,8 +7,10 @@
  * - Reports missing files and overall pass/warn/fail status
  */
 
-import type { ArchitecturePlan, BuildManifest, ValidationReport } from "./types";
+import type { ArchitecturePlan, BuildManifest, ValidationReport, DeepValidationReport, DeepValidationCheck } from "./types";
 import { readWorkspaceFile } from "./workspace-writer";
+import { sendToForgeSandboxChat } from "./api";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Check whether a file exists in the sandbox workspace.
@@ -133,4 +135,97 @@ export async function runValidation(
   }
 
   return report;
+}
+
+// ─── Deep Validation with Auto-Fix Loop ──────────────────────────────────────
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+interface AutoFixCallbacks {
+  onStatus?: (msg: string) => void;
+  onCheckResult?: (check: DeepValidationCheck) => void;
+  onAutoFixAttempt?: (check: DeepValidationCheck, attempt: number) => void;
+}
+
+async function callDeepValidation(sandboxId: string, plan: ArchitecturePlan): Promise<DeepValidationReport> {
+  const res = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan }),
+  });
+  if (!res.ok) throw new Error(`Validation endpoint returned ${res.status}`);
+  return res.json();
+}
+
+async function sendFixToArchitect(sandboxId: string, fixContext: string, sessionId: string): Promise<boolean> {
+  try {
+    await sendToForgeSandboxChat(sandboxId, sessionId, fixContext, { onStatus: () => {} }, { readTimeoutMs: 120_000 });
+    return true;
+  } catch (err) {
+    console.warn("[auto-fix] Architect fix failed:", err);
+    return false;
+  }
+}
+
+async function restartServices(sandboxId: string): Promise<void> {
+  await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/**
+ * Run deep validation and auto-fix loop.
+ * 1. Validate DB, API endpoints, contracts, dashboard, integration
+ * 2. For each failure with fixContext, send fix prompt to architect
+ * 3. After fixes, restart services and re-validate
+ * 4. Max 3 retry rounds
+ */
+export async function runDeepValidationWithAutoFix(
+  sandboxId: string,
+  plan: ArchitecturePlan,
+  callbacks: AutoFixCallbacks = {},
+  opts: { maxRetries?: number } = {},
+): Promise<DeepValidationReport> {
+  const maxRetries = opts.maxRetries ?? 3;
+  const sessionId = `validate-${uuidv4()}`;
+  let totalFixAttempts = 0;
+  let totalFixSuccesses = 0;
+
+  callbacks.onStatus?.("Running deep validation...");
+  let report = await callDeepValidation(sandboxId, plan);
+  for (const check of report.checks) callbacks.onCheckResult?.(check);
+
+  for (let round = 0; round < maxRetries && report.overallStatus === "fail"; round++) {
+    const failures = report.checks.filter(c => c.status === "fail" && c.fixContext);
+    if (failures.length === 0) break;
+
+    callbacks.onStatus?.(`Found ${failures.length} issue${failures.length > 1 ? "s" : ""} — auto-fixing (round ${round + 1}/${maxRetries})...`);
+
+    for (const failure of failures) {
+      totalFixAttempts++;
+      callbacks.onAutoFixAttempt?.(failure, round + 1);
+      callbacks.onStatus?.(`Fixing: ${failure.label}`);
+      const fixed = await sendFixToArchitect(sandboxId, failure.fixContext!, sessionId);
+      callbacks.onStatus?.(fixed ? `Fix applied for: ${failure.label}` : `Fix failed for: ${failure.label}`);
+    }
+
+    callbacks.onStatus?.("Rebuilding and restarting services...");
+    try { await restartServices(sandboxId); } catch { callbacks.onStatus?.("Service restart failed — continuing validation..."); }
+
+    callbacks.onStatus?.("Re-validating...");
+    const newReport = await callDeepValidation(sandboxId, plan);
+
+    for (const newCheck of newReport.checks) {
+      const oldCheck = report.checks.find(c => c.check === newCheck.check && c.endpoint === newCheck.endpoint && c.status === "fail");
+      if (oldCheck && newCheck.status === "pass") {
+        totalFixSuccesses++;
+        newCheck.attempt = round + 1;
+      }
+      callbacks.onCheckResult?.(newCheck);
+    }
+    report = newReport;
+  }
+
+  return { ...report, autoFixAttempts: totalFixAttempts, autoFixSuccesses: totalFixSuccesses };
 }
