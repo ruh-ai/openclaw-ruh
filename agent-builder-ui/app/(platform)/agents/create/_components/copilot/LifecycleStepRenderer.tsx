@@ -3916,82 +3916,38 @@ function StageShip({
     deploy: "pending",
     github: "pending",
   });
-  const [githubRepo, setGithubRepo] = useState("");
   const [githubRepoUrl, setGithubRepoUrl] = useState<string | null>(null);
   const [githubError, setGithubError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [skipGithub, setSkipGithub] = useState(false);
   const [deploying, setDeploying] = useState(false);
 
-  // GitHub PAT auth state
+  // GitHub OAuth connection state (reuses the connection made at agent creation start)
   const [ghConnected, setGhConnected] = useState(false);
-  const [ghUser, setGhUser] = useState<{ login: string; name: string | null; avatar_url: string } | null>(null);
-  const [ghTokenInput, setGhTokenInput] = useState("");
-  const [ghConnecting, setGhConnecting] = useState(false);
-  const [ghAuthError, setGhAuthError] = useState<string | null>(null);
-  const [showTokenInput, setShowTokenInput] = useState(false);
-  const ghTokenRef = useRef<string | null>(null);
-  const ghUserRef = useRef<{ login: string } | null>(null);
+  const [ghUsername, setGhUsername] = useState<string | null>(null);
+  const [ghLoading, setGhLoading] = useState(true);
 
-  // Load stored GitHub token on mount
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+  // Check existing OAuth connection on mount
   useEffect(() => {
     (async () => {
-      const { getStoredToken, getStoredUser, validateToken: validate } = await import("@/lib/github/github-client");
-      const token = getStoredToken();
-      const user = getStoredUser();
-      if (token && user) {
-        ghTokenRef.current = token;
-        ghUserRef.current = user;
-        setGhUser(user);
-        setGhConnected(true);
-        // Auto-generate repo name
-        const { generateRepoName } = await import("@/lib/github/github-client");
-        if (!githubRepo) {
-          setGithubRepo(`${user.login}/${generateRepoName(store.name || "agent")}`);
+      try {
+        const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+        const res = await fetchBackendWithAuth(`${API_BASE}/api/auth/github/status`, {});
+        if (res.ok) {
+          const data = await res.json();
+          setGhConnected(data.connected ?? false);
+          setGhUsername(data.username ?? null);
         }
+      } catch {
+        setGhConnected(false);
+      } finally {
+        setGhLoading(false);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const handleConnectGithub = async () => {
-    const token = ghTokenInput.trim();
-    if (!token) return;
-    setGhConnecting(true);
-    setGhAuthError(null);
-    try {
-      const { validateToken: validate, storeCredentials, generateRepoName } = await import("@/lib/github/github-client");
-      const user = await validate(token);
-      if (!user) {
-        setGhAuthError("Invalid token — check that it has 'repo' scope.");
-        return;
-      }
-      storeCredentials(token, user);
-      ghTokenRef.current = token;
-      ghUserRef.current = user;
-      setGhUser(user);
-      setGhConnected(true);
-      setShowTokenInput(false);
-      setGhTokenInput("");
-      if (!githubRepo) {
-        setGithubRepo(`${user.login}/${generateRepoName(store.name || "agent")}`);
-      }
-    } catch {
-      setGhAuthError("Failed to validate token.");
-    } finally {
-      setGhConnecting(false);
-    }
-  };
-
-  const handleDisconnectGithub = async () => {
-    const { clearCredentials } = await import("@/lib/github/github-client");
-    clearCredentials();
-    ghTokenRef.current = null;
-    ghUserRef.current = null;
-    setGhUser(null);
-    setGhConnected(false);
-    setGithubRepo("");
-  };
 
   const allDone = SHIP_STEPS.every(
     (s) => stepStatuses[s.id] === "done" || stepStatuses[s.id] === "skipped",
@@ -4009,7 +3965,6 @@ function StageShip({
     setStepStatuses((prev) => ({ ...prev, save: "running" }));
     try {
       store.setDeployStatus("running");
-      // Trigger the page-level onComplete which handles save + deploy.
       const completed = await onComplete?.();
       if (completed === false) {
         throw new Error("Agent save or activation failed. Check the console for details.");
@@ -4026,13 +3981,11 @@ function StageShip({
 
     // Step 2: Deploy (the actual deploy is handled by onComplete callback)
     setStepStatuses((prev) => ({ ...prev, deploy: "running" }));
-    // Simulate waiting for deploy completion
     await new Promise((r) => setTimeout(r, 2000));
     setStepStatuses((prev) => ({ ...prev, deploy: "done" }));
 
-    // Step 3: GitHub export (uses PAT-based GitHub API client)
-    const token = ghTokenRef.current;
-    if (skipGithub || !token || !githubRepo) {
+    // Step 3: GitHub export (uses OAuth token stored on the backend)
+    if (skipGithub || !ghConnected) {
       setStepStatuses((prev) => ({ ...prev, github: "skipped" }));
       store.setDeployStatus("done");
       setDeploying(false);
@@ -4041,30 +3994,27 @@ function StageShip({
 
     setStepStatuses((prev) => ({ ...prev, github: "running" }));
     try {
-      const token = ghTokenRef.current;
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
       if (!agentId) {
         throw new Error("No agent ID — cannot ship.");
       }
 
-      // Ship via persistent repo endpoint.
-      // First ship: creates repo under the token owner's account.
-      // Subsequent ships: pushes to the same repo.
-      console.log("[Ship]", { agentId, repo: githubRepo, tokenPrefix: token?.slice(0, 8) });
+      console.log("[Ship]", { agentId, oauthUser: ghUsername });
 
+      // Ship via backend — it uses the stored OAuth token automatically.
       const pushRes = await fetch(`${API_BASE}/api/agents/${agentId}/ship`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          githubToken: token,
           commitMessage: `ship: ${store.name || "agent"} template`,
         }),
       });
       const result = await pushRes.json();
 
-      if (result.ok) {
+      if (!pushRes.ok && pushRes.status === 404) {
+        setStepStatuses((prev) => ({ ...prev, github: "failed" }));
+        setGithubError(`Agent not found in backend (ID: ${agentId}). The agent may not have been saved yet — try saving first.`);
+      } else if (result.ok) {
         setStepStatuses((prev) => ({ ...prev, github: "done" }));
         setGithubRepoUrl(result.repoUrl);
       } else {
@@ -4190,84 +4140,28 @@ function StageShip({
 
           {!skipGithub && (
             <div className="space-y-3">
-              {/* Connected state */}
-              {ghConnected && ghUser ? (
+              {ghLoading ? (
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <Loader2 className="h-3 w-3 animate-spin text-[var(--text-tertiary)]" />
+                  <span className="text-xs text-[var(--text-tertiary)]">Checking GitHub connection...</span>
+                </div>
+              ) : ghConnected && ghUsername ? (
                 <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--success)]/5 border border-[var(--success)]/20">
                   <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={ghUser.avatar_url} alt="" className="w-5 h-5 rounded-full" />
+                    <Github className="h-4 w-4 text-[var(--text-primary)]" />
                     <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">
-                      {ghUser.name || ghUser.login}
+                      @{ghUsername}
                     </span>
                     <CheckCircle2 className="h-3 w-3 text-[var(--success)]" />
                   </div>
-                  <button
-                    onClick={handleDisconnectGithub}
-                    className="text-[10px] font-satoshi-medium text-[var(--text-tertiary)] hover:text-red-500 transition-colors"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              ) : showTokenInput ? (
-                /* Token input */
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={ghTokenInput}
-                      onChange={(e) => setGhTokenInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleConnectGithub()}
-                      placeholder="ghp_xxxxxxxxxxxx"
-                      className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleConnectGithub}
-                      disabled={ghConnecting || !ghTokenInput.trim()}
-                      className="px-3 py-1.5 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 disabled:opacity-30 transition-colors"
-                    >
-                      {ghConnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Connect"}
-                    </button>
-                  </div>
-                  <a
-                    href="https://github.com/settings/tokens/new?scopes=repo&description=Ruh.ai+Agent+Builder"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[10px] font-satoshi-medium text-[var(--primary)] hover:underline"
-                  >
-                    Generate a token with &quot;repo&quot; scope
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </a>
-                  {ghAuthError && (
-                    <p className="text-[10px] font-satoshi-medium text-red-500">{ghAuthError}</p>
-                  )}
+                  <span className="text-[10px] font-satoshi-medium text-[var(--text-tertiary)]">
+                    Connected
+                  </span>
                 </div>
               ) : (
-                /* Connect button */
-                <button
-                  onClick={() => setShowTokenInput(true)}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] hover:border-[var(--primary)]/30 hover:bg-[var(--primary)]/5 transition-colors"
-                >
-                  <Github className="h-4 w-4 text-[var(--text-primary)]" />
-                  <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">Connect GitHub Account</span>
-                </button>
-              )}
-
-              {/* Repo name (shown when connected) */}
-              {ghConnected && (
-                <div>
-                  <label className="block text-[10px] font-satoshi-medium text-[var(--text-tertiary)] mb-1">
-                    Repository
-                  </label>
-                  <input
-                    type="text"
-                    value={githubRepo}
-                    onChange={(e) => setGithubRepo(e.target.value)}
-                    placeholder={`${ghUser?.login ?? "owner"}/${(store.name || "agent").toLowerCase().replace(/\s+/g, "-")}`}
-                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]/50 focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/30"
-                  />
-                  <p className="text-[9px] text-[var(--text-tertiary)] mt-1">
-                    Will create the repo if it doesn&apos;t exist. Agent files pushed to main branch.
+                <div className="px-3 py-2.5 rounded-lg border border-[var(--border-default)] bg-[var(--card-color)]">
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    GitHub not connected. Connect GitHub from the agent creation start page to enable push.
                   </p>
                 </div>
               )}
@@ -4308,7 +4202,7 @@ function StageShip({
         >
           <Github className="h-4 w-4 text-[var(--success)]" />
           <span className="text-xs font-satoshi-medium text-[var(--success)]">
-            Template pushed to {githubRepo}
+            Template pushed to GitHub
           </span>
           <ExternalLink className="h-3 w-3 text-[var(--success)] ml-auto" />
         </a>
@@ -4319,7 +4213,7 @@ function StageShip({
         <div className="flex justify-end pt-2">
           <button
             onClick={handleDeploy}
-            disabled={isCompleting || !canComplete}
+            disabled={isCompleting || !canComplete || ghLoading}
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 disabled:opacity-30 transition-colors"
           >
             <Rocket className="h-3 w-3" />
