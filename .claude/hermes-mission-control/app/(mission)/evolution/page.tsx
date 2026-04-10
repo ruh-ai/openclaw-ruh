@@ -13,6 +13,7 @@ export default function EvolutionPage() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [reports, setReports] = useState<EvolutionReport[]>([]);
   const [trends, setTrends] = useState<AgentTrend[]>([]);
+  const [eventLimit, setEventLimit] = useState(20);
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<string | null>(null);
 
@@ -147,7 +148,7 @@ export default function EvolutionPage() {
             <div className="absolute left-[19px] top-0 bottom-0 w-px bg-[var(--border-default)]" />
 
             <div className="space-y-4">
-              {events.map((event, i) => {
+              {events.slice(0, eventLimit).map((event, i) => {
                 const config = EVENT_CONFIG[event.eventType] || { icon: Zap, color: "bg-[var(--bg-subtle)] text-[var(--text-tertiary)] border-[var(--border-default)]", label: event.eventType };
                 const Icon = config.icon;
                 const time = new Date(event.createdAt);
@@ -180,6 +181,16 @@ export default function EvolutionPage() {
                 );
               })}
             </div>
+            {events.length > eventLimit && (
+              <div className="mt-4 text-center">
+                <button
+                  onClick={() => setEventLimit((prev) => prev + 20)}
+                  className="rounded-lg border border-[var(--border-default)] px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] transition-colors"
+                >
+                  Show more ({events.length - eventLimit} remaining)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

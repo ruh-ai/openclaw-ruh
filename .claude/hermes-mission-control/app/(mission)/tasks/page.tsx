@@ -2,11 +2,15 @@
 import { useEffect, useState } from "react";
 import { ListTodo, Plus } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Pagination } from "@/components/Pagination";
 import { api, type TaskLog } from "@/lib/api";
+
+const PAGE_SIZE = 30;
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<TaskLog[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
   const [showSubmit, setShowSubmit] = useState(false);
   const [submitDesc, setSubmitDesc] = useState("");
@@ -14,14 +18,19 @@ export default function TasksPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchTasks = () => {
-    const params: Record<string, string> = { limit: "50" };
+    const params: Record<string, string> = {
+      limit: String(PAGE_SIZE),
+      offset: String((page - 1) * PAGE_SIZE),
+    };
     if (statusFilter) params.status = statusFilter;
     api.tasks.list(params).then((r) => { setTasks(r.items); setTotal(r.total); });
   };
 
   useEffect(() => {
     fetchTasks();
-  }, [statusFilter]);
+  }, [statusFilter, page]);
+
+  useEffect(() => { setPage(1); }, [statusFilter]);
 
   const handleSubmit = async () => {
     if (!submitDesc.trim()) return;
@@ -162,6 +171,7 @@ export default function TasksPage() {
             </tbody>
           </table>
         )}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
       </div>
     </div>
   );

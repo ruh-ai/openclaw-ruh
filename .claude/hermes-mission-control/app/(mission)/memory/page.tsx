@@ -2,6 +2,9 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Brain, Search, Tag, X } from "lucide-react";
 import { api, type Memory } from "@/lib/api";
+import { Pagination } from "@/components/Pagination";
+
+const PAGE_SIZE = 30;
 
 const MEMORY_TYPES = ["pattern", "pitfall", "preference", "decision", "debug", "refinement", "score"];
 
@@ -20,6 +23,7 @@ export default function MemoryPage() {
   const [total, setTotal] = useState(0);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [agentFilter, setAgentFilter] = useState<string>("");
+  const [page, setPage] = useState(1);
   const [stats, setStats] = useState<{ byType: Record<string, number>; byAgent: Record<string, number> } | null>(null);
 
   // Search state
@@ -31,11 +35,16 @@ export default function MemoryPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const params: Record<string, string> = { limit: "30" };
+    const params: Record<string, string> = {
+      limit: String(PAGE_SIZE),
+      offset: String((page - 1) * PAGE_SIZE),
+    };
     if (typeFilter) params.type = typeFilter;
     if (agentFilter) params.agent = agentFilter;
     api.memories.list(params).then((r) => { setMemories(r.items); setTotal(r.total); });
-  }, [typeFilter, agentFilter]);
+  }, [typeFilter, agentFilter, page]);
+
+  useEffect(() => { setPage(1); }, [typeFilter, agentFilter]);
 
   useEffect(() => {
     api.dashboard().then((s) => setStats({ byType: s.memories.byType, byAgent: s.memories.byAgent }));
@@ -185,6 +194,9 @@ export default function MemoryPage() {
           </div>
         ))}
       </div>
+      {!searchActive && (
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+      )}
     </div>
   );
 }
