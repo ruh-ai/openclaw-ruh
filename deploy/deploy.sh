@@ -132,8 +132,24 @@ with open('/root/.openclaw/openclaw.json', 'w') as f:
 " 2>/dev/null && docker exec "$SANDBOX" pkill -f openclaw-gateway 2>/dev/null && sleep 2 && docker exec -d "$SANDBOX" openclaw gateway || true
 done
 
-# ── 6. Health check ──────────────────────────────────────────────────────────
-echo "[6/6] Health check..."
+# ── 6. Restart Hermes (if installed) ─────────────────────────────────────────
+if systemctl is-active --quiet hermes-backend 2>/dev/null; then
+  echo "[6/7] Restarting Hermes backend..."
+  cd "$APP_DIR/.claude/hermes-backend" && bun install --production 2>&1 | tail -1
+  sudo systemctl restart hermes-backend
+  sleep 3
+  if curl -sf http://localhost:8100/health &>/dev/null; then
+    echo "  Hermes healthy"
+  else
+    echo "  WARNING: Hermes health check failed — check: journalctl -u hermes-backend -n 20"
+  fi
+  cd "$APP_DIR"
+else
+  echo "[6/7] Hermes not installed — skipping (run deploy/setup-hermes.sh to install)"
+fi
+
+# ── 7. Health check ──────────────────────────────────────────────────────────
+echo "[7/7] Health check..."
 for i in $(seq 1 20); do
   if curl -sf https://api.${DOMAIN}/health &>/dev/null; then
     echo "  Healthy!"

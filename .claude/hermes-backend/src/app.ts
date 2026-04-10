@@ -24,7 +24,15 @@ import { getAgentRunnerHealth } from './agentRunner';
 export const app = express();
 
 const config = getConfig();
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({
+  limit: '256kb',
+  verify: (req: express.Request, _res, buf) => {
+    // Capture raw body for webhook signature verification
+    if (req.url?.startsWith('/api/queue/webhooks/')) {
+      (req as any).rawBody = buf;
+    }
+  },
+}));
 app.use(cors({ origin: config.allowedOrigins, credentials: true }));
 
 // ── Queue, Schedule, Evolution, Webhook, Goals, Pool routes ───
