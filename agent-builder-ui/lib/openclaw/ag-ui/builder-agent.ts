@@ -1014,6 +1014,26 @@ export class BuilderAgent extends AbstractAgent {
         closeCopilotTextMessage();
       }
 
+      // Plan-stage fallback: if the architect finished the plan response but no
+      // plan markers were extracted and no architecture_plan_ready event was
+      // emitted, emit plan_complete so the UI transitions to "ready" and the
+      // user can approve. The architect may have produced a valid plan in prose
+      // without the required XML markers.
+      if (isCopilot && devStage === "plan" && thinkAccumulated.length > 200) {
+        const hadPlanEvents = events.some(
+          (e) => (e as Record<string, string>).name === "architecture_plan_ready"
+            || (e as Record<string, string>).name === "plan_skills"
+            || (e as Record<string, string>).name === "plan_complete",
+        );
+        if (!hadPlanEvents) {
+          observer.next({
+            type: EventType.CUSTOM,
+            name: "plan_complete",
+            value: {},
+          } as BaseEvent);
+        }
+      }
+
       observer.next({
         type: EventType.RUN_FINISHED,
         threadId,

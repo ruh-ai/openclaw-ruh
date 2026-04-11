@@ -445,6 +445,17 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
     label: "Architecture plan complete",
     count: 0,
   });
+
+  // If the architect finished the plan response but no structured plan markers
+  // were extracted, synthesize a minimal architecturePlan so the "Approve & Start Build"
+  // button appears. Without this, the UI shows "Generate Plan" forever because
+  // architecturePlan is null even though planStatus is "ready".
+  const store = deps.coPilotStore as unknown as { architecturePlan: unknown };
+  if (!store.architecturePlan) {
+    const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
+    deps.coPilotStore.setArchitecturePlan(normalizePlan({}));
+    tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+  }
 }
 
 // ─── Consumer registry ──────────────────────────────────────────────────────

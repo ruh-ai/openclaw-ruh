@@ -38,6 +38,59 @@ import {
 } from "@/lib/openclaw/copilot-state";
 import { buildBuilderChatSuggestions } from "@/lib/openclaw/builder-chat-suggestions";
 
+// ─── DashboardIframe — loads agent dashboard via direct Docker port ─────────
+// Fetches the Docker-mapped host port from the backend, then embeds the
+// dashboard at that direct URL. This avoids the SPA-breaking proxy rewrite.
+// Falls back to the proxy URL if port discovery fails.
+
+function DashboardIframe({ sandboxId, containerPort, backendPort }: {
+  sandboxId: string;
+  containerPort: number;
+  backendPort: number;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/preview/ports`);
+        if (!res.ok) throw new Error("ports endpoint failed");
+        const data = await res.json() as { ports: Record<number, number>; active: number[] };
+        if (cancelled) return;
+        const hostPort = data.ports[containerPort];
+        if (hostPort && data.active.includes(containerPort)) {
+          setSrc(`http://localhost:${hostPort}/`);
+          return;
+        }
+      } catch { /* fall through */ }
+      // Fallback: use the proxy
+      if (!cancelled) {
+        setSrc(`/api/sandbox-preview/${sandboxId}/proxy/${containerPort}/?backendPort=${backendPort}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sandboxId, containerPort, backendPort, API_BASE]);
+
+  if (!src) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <p className="text-xs text-[var(--text-tertiary)]">Loading dashboard...</p>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      key={`dashboard-${sandboxId}-${src}`}
+      src={src}
+      className="flex-1 w-full border-0"
+      title="Agent Dashboard"
+    />
+  );
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 interface SandboxRecord {
@@ -809,16 +862,17 @@ function ComputerView({
 
       {/* Dashboard tab — agent's built application (auto-discovered from service_ports) */}
       {activeTab === "dashboard" && (() => {
-        const dashboardPort = existingAgent?.servicePorts?.find(s => s.name === "dashboard")?.port ?? 3200;
+        const dashboardPort = existingAgent?.servicePorts?.find(s => s.name === "dashboard")?.port ?? 3100;
         const backendPort = existingAgent?.servicePorts?.find(s => s.name === "backend")?.port ?? 3100;
+        // Prefer the backend port for the dashboard when both are the same (single-port arch)
+        const effectiveDashPort = dashboardPort === backendPort ? backendPort : dashboardPort;
         return (
         <div className="flex-1 min-h-0 flex flex-col">
           {activeSandboxId ? (
-            <iframe
-              key={`dashboard-${activeSandboxId}-${dashboardPort}`}
-              src={`/api/sandbox-preview/${activeSandboxId}/proxy/${dashboardPort}/?backendPort=${backendPort}`}
-              className="flex-1 w-full border-0"
-              title="Agent Dashboard"
+            <DashboardIframe
+              sandboxId={activeSandboxId}
+              containerPort={effectiveDashPort}
+              backendPort={backendPort}
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-3 px-8">

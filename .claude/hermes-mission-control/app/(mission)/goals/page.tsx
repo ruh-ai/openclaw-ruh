@@ -76,7 +76,7 @@ function TaskCard({
   onStatusChange: (status: BoardTaskStatus, blockedReason?: string | null) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-[var(--border-default)] bg-white/75 p-3 shadow-[0_10px_24px_rgba(25,16,62,0.08)]">
+    <div className="rounded-2xl border border-[var(--border-default)] bg-white p-3 shadow-[0_10px_24px_rgba(25,16,62,0.12)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[var(--text-primary)]">{task.title}</p>
@@ -84,12 +84,12 @@ function TaskCard({
             {task.description || task.title}
           </p>
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${PRIORITY_COLORS[task.priority] || PRIORITY_COLORS.normal}`}>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_COLORS[task.priority] || PRIORITY_COLORS.normal}`}>
           {task.priority}
         </span>
       </div>
 
-      <div className="mt-3 space-y-1 text-[10px] text-[var(--text-tertiary)]">
+      <div className="mt-3 space-y-1 text-xs text-[var(--text-tertiary)]">
         <div className="flex items-center justify-between gap-2">
           <span>Planned agent</span>
           <span className="font-medium text-[var(--text-primary)]">{task.plannedAgent || "auto"}</span>
@@ -109,7 +109,7 @@ function TaskCard({
       </div>
 
       {task.blockedReason && (
-        <div className="mt-3 rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 px-3 py-2 text-[10px] text-[var(--error)]">
+        <div className="mt-3 rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 px-3 py-2 text-xs text-[var(--error)]">
           {task.blockedReason}
         </div>
       )}
@@ -119,7 +119,7 @@ function TaskCard({
           <button
             onClick={onRun}
             disabled={busy}
-            className="rounded-full bg-[var(--primary)] px-2.5 py-1 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded-full bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
             {busy ? "Running..." : task.status === "done" ? "Run Again" : "Run"}
           </button>
@@ -129,7 +129,7 @@ function TaskCard({
           <button
             onClick={() => onStatusChange("todo", null)}
             disabled={busy}
-            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
           >
             Move to Todo
           </button>
@@ -138,7 +138,7 @@ function TaskCard({
             <button
               onClick={() => onStatusChange("blocked", "Blocked by operator")}
               disabled={busy}
-              className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+              className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
             >
               Block
             </button>
@@ -149,7 +149,7 @@ function TaskCard({
           <button
             onClick={() => onStatusChange("done")}
             disabled={busy}
-            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
           >
             Mark Done
           </button>
@@ -157,7 +157,7 @@ function TaskCard({
           <button
             onClick={() => onStatusChange("todo")}
             disabled={busy}
-            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+            className="rounded-full border border-[var(--border-default)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
           >
             Reopen
           </button>
@@ -316,16 +316,16 @@ export default function GoalsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-[var(--border-default)] bg-white/70 px-3 py-1.5 text-[10px] font-medium text-[var(--text-secondary)]">
+          <span className="rounded-full border border-[var(--border-default)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
             {board.length} goals
           </span>
-          <span className="rounded-full border border-[var(--border-default)] bg-white/70 px-3 py-1.5 text-[10px] font-medium text-[var(--text-secondary)]">
+          <span className="rounded-full border border-[var(--border-default)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
             {totalTasks} task cards
           </span>
-          <span className="rounded-full border border-[var(--border-default)] bg-white/70 px-3 py-1.5 text-[10px] font-medium text-[var(--text-secondary)]">
+          <span className="rounded-full border border-[var(--border-default)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
             {totalInProgress} running
           </span>
-          <span className="rounded-full border border-[var(--border-default)] bg-white/70 px-3 py-1.5 text-[10px] font-medium text-[var(--text-secondary)]">
+          <span className="rounded-full border border-[var(--border-default)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
             {totalBlocked} blocked
           </span>
           <button
@@ -380,12 +380,12 @@ export default function GoalsPage() {
               value={goalForm.title}
               onChange={(e) => setGoalForm((current) => ({ ...current, title: e.target.value }))}
               placeholder="Goal title"
-              className="rounded-2xl border border-[var(--border-default)] bg-white/80 px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+              className="rounded-2xl border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
             />
             <select
               value={goalForm.priority}
               onChange={(e) => setGoalForm((current) => ({ ...current, priority: e.target.value }))}
-              className="rounded-2xl border border-[var(--border-default)] bg-white/80 px-4 py-3 text-sm text-[var(--text-primary)] outline-none"
+              className="rounded-2xl border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-primary)] outline-none"
             >
               <option value="critical">Critical</option>
               <option value="high">High</option>
@@ -396,7 +396,7 @@ export default function GoalsPage() {
               type="date"
               value={goalForm.deadline}
               onChange={(e) => setGoalForm((current) => ({ ...current, deadline: e.target.value }))}
-              className="rounded-2xl border border-[var(--border-default)] bg-white/80 px-4 py-3 text-sm text-[var(--text-primary)] outline-none"
+              className="rounded-2xl border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-primary)] outline-none"
             />
           </div>
           <textarea
@@ -404,14 +404,14 @@ export default function GoalsPage() {
             onChange={(e) => setGoalForm((current) => ({ ...current, description: e.target.value }))}
             placeholder="Describe the initiative and desired outcome..."
             rows={3}
-            className="mt-3 w-full rounded-2xl border border-[var(--border-default)] bg-white/80 px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+            className="mt-3 w-full rounded-2xl border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
           />
           <textarea
             value={goalForm.criteria}
             onChange={(e) => setGoalForm((current) => ({ ...current, criteria: e.target.value }))}
             placeholder="Acceptance criteria, one per line"
             rows={3}
-            className="mt-3 w-full rounded-2xl border border-[var(--border-default)] bg-white/80 px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+            className="mt-3 w-full rounded-2xl border border-[var(--border-default)] bg-white px-4 py-3 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
           />
           <div className="mt-4 flex justify-end gap-2">
             <button
@@ -455,14 +455,14 @@ export default function GoalsPage() {
                       <Link href={`/goals/${lane.goal.id}`} className="text-lg font-semibold text-[var(--text-primary)] hover:text-[var(--primary)]">
                         {lane.goal.title}
                       </Link>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${PRIORITY_COLORS[lane.goal.priority] || PRIORITY_COLORS.normal}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_COLORS[lane.goal.priority] || PRIORITY_COLORS.normal}`}>
                         {lane.goal.priority}
                       </span>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${GOAL_STATUS_COLORS[lane.goal.status] || GOAL_STATUS_COLORS.active}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${GOAL_STATUS_COLORS[lane.goal.status] || GOAL_STATUS_COLORS.active}`}>
                         {lane.goal.status}
                       </span>
                       {lane.goal.deadline && (
-                        <span className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]">
+                        <span className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
                           Due {new Date(lane.goal.deadline).toLocaleDateString()}
                         </span>
                       )}
@@ -471,7 +471,7 @@ export default function GoalsPage() {
                     {lane.goal.acceptanceCriteria.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {lane.goal.acceptanceCriteria.slice(0, 4).map((criterion, index) => (
-                          <span key={index} className="rounded-full border border-[var(--border-default)] bg-white/70 px-2.5 py-1 text-[10px] text-[var(--text-secondary)]">
+                          <span key={index} className="rounded-full border border-[var(--border-default)] bg-white px-2.5 py-1 text-xs text-[var(--text-secondary)]">
                             {criterion}
                           </span>
                         ))}
@@ -480,7 +480,7 @@ export default function GoalsPage() {
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2 xl:min-w-[360px]">
-                    <div className="rounded-[24px] border border-[var(--border-default)] bg-white/70 p-4">
+                    <div className="rounded-[24px] border border-[var(--border-default)] bg-white p-4">
                       <p className="section-label">Goal Progress</p>
                       <div className="mt-2 flex items-end justify-between">
                         <p className="text-3xl font-semibold text-[var(--text-primary)]">{progress}%</p>
@@ -490,20 +490,20 @@ export default function GoalsPage() {
                         <div className="h-full rounded-full bg-[var(--primary)] transition-all" style={{ width: `${progress}%` }} />
                       </div>
                     </div>
-                    <div className="rounded-[24px] border border-[var(--border-default)] bg-white/70 p-4">
+                    <div className="rounded-[24px] border border-[var(--border-default)] bg-white p-4">
                       <p className="section-label">Lane Pressure</p>
                       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                         <div>
                           <p className="text-xl font-semibold text-[var(--text-primary)]">{lane.stats.todo}</p>
-                          <p className="text-[10px] text-[var(--text-secondary)]">Todo</p>
+                          <p className="text-xs text-[var(--text-secondary)]">Todo</p>
                         </div>
                         <div>
                           <p className="text-xl font-semibold text-[var(--text-primary)]">{lane.stats.inProgress}</p>
-                          <p className="text-[10px] text-[var(--text-secondary)]">In Progress</p>
+                          <p className="text-xs text-[var(--text-secondary)]">In Progress</p>
                         </div>
                         <div>
                           <p className="text-xl font-semibold text-[var(--text-primary)]">{lane.stats.blocked}</p>
-                          <p className="text-[10px] text-[var(--text-secondary)]">Blocked</p>
+                          <p className="text-xs text-[var(--text-secondary)]">Blocked</p>
                         </div>
                       </div>
                     </div>
@@ -513,7 +513,7 @@ export default function GoalsPage() {
                 <div className="mt-5 flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => setOpenTaskComposerGoalId((current) => current === lane.goal.id ? null : lane.goal.id)}
-                    className="flex items-center gap-1.5 rounded-full border border-[var(--border-default)] bg-white/70 px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+                    className="flex items-center gap-1.5 rounded-full border border-[var(--border-default)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
                   >
                     <Plus className="h-3 w-3" />
                     Add Task
@@ -628,16 +628,16 @@ export default function GoalsPage() {
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="text-sm font-semibold text-[var(--text-primary)]">{column.label}</p>
-                            <p className="mt-1 text-[10px] leading-4 text-[var(--text-tertiary)]">{column.hint}</p>
+                            <p className="mt-1 text-xs leading-4 text-[var(--text-tertiary)]">{column.hint}</p>
                           </div>
-                          <span className="rounded-full bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]">
+                          <span className="rounded-full bg-[var(--bg-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
                             {columnTasks.length}
                           </span>
                         </div>
 
                         <div className="mt-4 space-y-3">
                           {columnTasks.length === 0 ? (
-                            <div className="rounded-2xl border border-dashed border-[var(--border-default)] px-4 py-8 text-center text-[10px] text-[var(--text-tertiary)]">
+                            <div className="rounded-2xl border border-dashed border-[var(--border-default)] px-4 py-8 text-center text-xs text-[var(--text-tertiary)]">
                               No task cards here yet.
                             </div>
                           ) : (

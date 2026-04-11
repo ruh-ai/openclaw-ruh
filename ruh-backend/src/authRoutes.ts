@@ -661,7 +661,13 @@ router.get('/github', requireAuth, asyncHandler(async (req, res) => {
   const redirect = (req.query.redirect as string) ?? '/agents';
   const state = Buffer.from(JSON.stringify({ userId: req.user!.userId, redirect })).toString('base64url');
   const url = `https://github.com/login/oauth/authorize?client_id=${config.githubClientId}&redirect_uri=${encodeURIComponent(config.githubCallbackUrl)}&scope=repo&state=${state}`;
-  res.redirect(url);
+  // Return JSON when the frontend fetches with Accept: application/json,
+  // otherwise redirect (for direct browser navigation).
+  if (req.headers.accept?.includes('application/json')) {
+    res.json({ url });
+  } else {
+    res.redirect(url);
+  }
 }));
 
 router.get('/github/callback', asyncHandler(async (req, res) => {
@@ -703,7 +709,9 @@ router.get('/github/callback', asyncHandler(async (req, res) => {
 
   // Redirect back to the builder
   const redirectUrl = state.redirect || '/agents';
-  res.redirect(`http://localhost:3000${redirectUrl}`);
+  const builderOrigin = (process.env.ALLOWED_ORIGINS?.split(',') ?? [])
+    .find(o => o.includes('builder')) ?? 'http://localhost:3000';
+  res.redirect(`${builderOrigin}${redirectUrl}`);
 }));
 
 router.delete('/github', requireAuth, asyncHandler(async (req, res) => {

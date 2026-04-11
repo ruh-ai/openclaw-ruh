@@ -6,8 +6,50 @@
  * docker-compose.yml, .env.example, tsconfig.json, .gitignore, README.md.
  */
 
-import type { ArchitecturePlan } from "./types";
-import { normalizePlan } from "./plan-formatter";
+// Inline types — no dependency on frontend modules
+interface ArchitecturePlanSkill { id: string; name: string; description: string; dependencies: string[]; envVars: string[]; toolType?: string; externalApi?: string }
+interface ArchitecturePlanEnvVar { key: string; label: string; description: string; required: boolean; inputType: string; group: string; example?: string; defaultValue?: string }
+interface DashboardPageComponent { type: string; title?: string; dataSource: string; config?: Record<string, unknown> }
+interface DashboardPage { path: string; title: string; description?: string; components: DashboardPageComponent[] }
+interface ApiEndpoint { method: string; path: string; description: string; query?: string; responseShape?: string }
+interface DataSchema { tables: Array<{ name: string; columns: Array<{ name: string; type?: string; description?: string }>; indexes?: Array<{ columns: string[] }> }> }
+
+export interface ArchitecturePlan {
+  skills: ArchitecturePlanSkill[];
+  workflow: { steps: Array<{ skillId: string; parallel?: boolean }> };
+  integrations: Array<{ name: string; method: string }>;
+  triggers: Array<{ type: string; config?: Record<string, unknown> }>;
+  channels: string[];
+  envVars: ArchitecturePlanEnvVar[];
+  subAgents: Array<{ id: string; name: string }>;
+  missionControl: unknown;
+  soulContent?: string;
+  dataSchema?: DataSchema | null;
+  apiEndpoints?: ApiEndpoint[];
+  dashboardPages?: DashboardPage[];
+  vectorCollections?: Array<{ name: string; description: string }>;
+  buildDependencies?: Array<{ from: string; to: string }>;
+}
+
+// Minimal normalizePlan — fills missing fields
+function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
+  return {
+    skills: (raw.skills as ArchitecturePlanSkill[]) ?? [],
+    workflow: (raw.workflow as ArchitecturePlan['workflow']) ?? { steps: [] },
+    integrations: (raw.integrations as ArchitecturePlan['integrations']) ?? [],
+    triggers: (raw.triggers as ArchitecturePlan['triggers']) ?? [],
+    channels: (raw.channels as string[]) ?? [],
+    envVars: (raw.envVars as ArchitecturePlanEnvVar[]) ?? [],
+    subAgents: (raw.subAgents as ArchitecturePlan['subAgents']) ?? [],
+    missionControl: raw.missionControl ?? null,
+    soulContent: raw.soulContent as string | undefined,
+    dataSchema: (raw.dataSchema as DataSchema | null) ?? null,
+    apiEndpoints: (raw.apiEndpoints as ApiEndpoint[]) ?? [],
+    dashboardPages: (raw.dashboardPages as DashboardPage[]) ?? [],
+    vectorCollections: (raw.vectorCollections as ArchitecturePlan['vectorCollections']) ?? [],
+    buildDependencies: (raw.buildDependencies as ArchitecturePlan['buildDependencies']) ?? [],
+  };
+}
 
 interface ScaffoldFile {
   path: string;

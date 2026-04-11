@@ -145,11 +145,27 @@ export default function DashboardPage() {
 
   if (!stats || !queueHealth) {
     return (
-      <div className="mission-card rounded-[32px] px-6 py-16 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--primary)]/10 soul-pulse">
-          <Sparkles className="h-5 w-5 text-[var(--primary)]" />
+      <div className="space-y-6 animate-pulse">
+        <div className="mission-card rounded-[32px] p-6">
+          <div className="h-6 w-48 rounded-lg bg-[var(--bg-subtle)]" />
+          <div className="mt-3 h-4 w-96 rounded bg-[var(--bg-subtle)]" />
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="rounded-2xl bg-[var(--bg-subtle)] p-5">
+                <div className="h-3 w-16 rounded bg-white/50" />
+                <div className="mt-3 h-8 w-24 rounded bg-white/50" />
+              </div>
+            ))}
+          </div>
         </div>
-        <p className="text-sm text-[var(--text-tertiary)]">Loading Mission Control...</p>
+        <div className="grid gap-4 sm:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="mission-card rounded-[24px] p-5">
+              <div className="h-3 w-20 rounded bg-[var(--bg-subtle)]" />
+              <div className="mt-3 h-8 w-16 rounded bg-[var(--bg-subtle)]" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

@@ -305,8 +305,8 @@ export const useAgentsStore = create<AgentsStoreState>()(
           }),
         });
         if (!res.ok) {
-          const detail = await res.json().catch(() => null);
-          const msg = detail?.message || detail?.error || `Failed to update agent (${res.status})`;
+          const errBody = await res.json().catch(() => null);
+          const msg = errBody?.detail || errBody?.message || errBody?.error || `Failed to update agent (${res.status})`;
           throw new Error(res.status === 401 ? "Not authenticated — please log in first" : msg);
         }
         const data = await res.json();
@@ -378,8 +378,8 @@ export const useAgentsStore = create<AgentsStoreState>()(
           }),
         });
         if (!res.ok) {
-          const detail = await res.json().catch(() => null);
-          const msg = detail?.message || detail?.error || `Failed to update agent config (${res.status})`;
+          const errBody = await res.json().catch(() => null);
+          const msg = errBody?.detail || errBody?.message || errBody?.error || `Failed to update agent config (${res.status})`;
           throw new Error(res.status === 401 ? "Not authenticated — please log in first" : msg);
         }
         const data = await res.json();

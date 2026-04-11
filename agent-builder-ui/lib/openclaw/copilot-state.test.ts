@@ -222,7 +222,7 @@ describe("advanceDevStage", () => {
 
   test("does not touch evalStatus when advancing from plan to build", () => {
     const store = useCoPilotStore;
-    store.setState({ devStage: "plan", maxUnlockedDevStage: "plan", evalStatus: "idle" });
+    store.setState({ devStage: "plan", maxUnlockedDevStage: "plan", evalStatus: "idle", planStatus: "approved" });
     store.getState().advanceDevStage();
     expect(store.getState().devStage).toBe("build");
     expect(store.getState().maxUnlockedDevStage).toBe("build");
@@ -235,6 +235,35 @@ describe("advanceDevStage", () => {
     store.getState().advanceDevStage();
     expect(store.getState().devStage).toBe("reflect");
     expect(store.getState().maxUnlockedDevStage).toBe("reflect");
+  });
+
+  test("blocks advance from plan when planStatus is not approved/done", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "plan", maxUnlockedDevStage: "plan", planStatus: "ready" });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("plan");
+  });
+
+  test("blocks advance from think when thinkStatus is not approved/done", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "think", maxUnlockedDevStage: "think", thinkStatus: "generating" });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("think");
+  });
+
+  test("blocks advance from build when buildStatus is not done", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "build", maxUnlockedDevStage: "build", buildStatus: "building" });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("build");
+  });
+
+  test("canAdvanceDevStage returns false when stage gate not satisfied", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "plan", planStatus: "ready" });
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+    store.setState({ planStatus: "approved" });
+    expect(store.getState().canAdvanceDevStage()).toBe(true);
   });
 
   test("setDevStage preserves the furthest unlocked stage when inspecting earlier phases", () => {

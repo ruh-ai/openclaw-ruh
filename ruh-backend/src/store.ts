@@ -102,6 +102,20 @@ export async function listSandboxes(): Promise<SandboxRecord[]> {
   });
 }
 
+export async function updateSandbox(sandboxId: string, updates: Partial<SandboxRecord>): Promise<void> {
+  const allowed: (keyof SandboxRecord)[] = ['gateway_port', 'standard_url', 'dashboard_url', 'vnc_port'];
+  const entries = Object.entries(updates).filter(([k]) => allowed.includes(k as keyof SandboxRecord));
+  if (entries.length === 0) return;
+  const setClauses = entries.map(([k], i) => `${k} = $${i + 2}`);
+  const values = entries.map(([, v]) => v);
+  await withConn(async (client) => {
+    await client.query(
+      `UPDATE sandboxes SET ${setClauses.join(', ')} WHERE sandbox_id = $1`,
+      [sandboxId, ...values],
+    );
+  });
+}
+
 export async function getSandbox(sandboxId: string): Promise<SandboxRecord | null> {
   return withConn(async (client) => {
     const res = await client.query(

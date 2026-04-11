@@ -1,0 +1,56 @@
+# =============================================================================
+# hermes-backend.service — Hermes autonomous orchestrator on GCP VM
+#
+# Install:
+#   sudo cp deploy/hermes-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable hermes-backend
+#   sudo systemctl start hermes-backend
+#
+# Logs:
+#   journalctl -u hermes-backend -f
+# =============================================================================
+
+[Unit]
+Description=Hermes Backend — Autonomous Agent Orchestrator
+After=network.target redis-server.service docker.service postgresql.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/ruh/.claude/hermes-backend
+
+# Secrets loaded from file (not in unit)
+EnvironmentFile=/opt/ruh/secrets/hermes.env
+
+# Runner config: codex is default, claude is fallback
+Environment=HERMES_AGENT_RUNNER=codex
+Environment=HERMES_CODEX_HOME=/opt/ruh/.hermes-codex-home
+Environment=CODEX_CLI_PATH=/usr/local/bin/codex
+Environment=CLAUDE_CLI_PATH=/usr/local/bin/claude
+Environment=DATABASE_URL=postgresql://openclaw:changeme@localhost:5432/hermes
+Environment=REDIS_URL=redis://localhost:6379
+Environment=PORT=8100
+Environment=ALLOWED_ORIGINS=https://api.codezero2pi.com,https://builder.codezero2pi.com
+Environment=NODE_ENV=production
+Environment=WORKER_CONCURRENCY=2
+Environment=EXECUTION_TIMEOUT_MS=600000
+Environment=MAX_SUBPROCESSES=3
+
+ExecStart=/usr/local/bin/bun run src/index.ts
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=false
+PrivateTmp=true
+
+# Allow docker socket access for sandbox management
+SupplementaryGroups=docker
+
+[Install]
+WantedBy=multi-user.target

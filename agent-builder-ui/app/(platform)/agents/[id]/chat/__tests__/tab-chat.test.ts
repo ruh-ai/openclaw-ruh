@@ -52,6 +52,16 @@ mock.module("@/lib/openclaw/task-plan-parser", () => ({
 
 mock.module("@/lib/openclaw/copilot-flow", () => ({
   hasPurposeMetadata: () => false,
+  planHasInlineContent: () => false,
+  resolveCoPilotToolResearchUseCase: () => "",
+  getSelectedUnresolvedSkillIds: () => [],
+  countSkillAvailability: () => ({ available: 0, total: 0 }),
+  buildCoPilotReviewData: () => ({}),
+  buildCoPilotReviewAgentSnapshot: () => ({}),
+  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
+  canPersistReviewOrLaterForgeStage: () => false,
+  createCoPilotSeedFromAgent: () => ({}),
+  resolveCoPilotCompletionKind: () => null,
 }));
 
 mock.module("@/lib/openclaw/copilot-state", () => ({

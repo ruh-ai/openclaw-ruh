@@ -56,7 +56,7 @@ interface AuthSessionResponse {
 /**
  * Response from token refresh API
  */
-export interface TokenResponse extends AuthSessionResponse {}
+export type TokenResponse = AuthSessionResponse;
 
 interface LocalRegisterInput {
   email: string;

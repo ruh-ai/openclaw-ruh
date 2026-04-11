@@ -338,7 +338,7 @@ export interface BuildDependency {
 
 // ── Build Manifest (v3 pipeline) ────────────────────────────────────────────
 
-export type BuildSpecialist = "scaffold" | "identity" | "database" | "backend" | "skills" | "dashboard";
+export type BuildSpecialist = "scaffold" | "identity" | "database" | "backend" | "skills" | "dashboard" | "verify";
 
 export interface BuildManifestTask {
   id: string;
@@ -396,6 +396,31 @@ export interface DeepValidationReport {
   failCount: number;
   autoFixAttempts: number;
   autoFixSuccesses: number;
+}
+
+// ── Build Harness (post-build verification) ─────────────────────────────────
+
+export type HarnessPhase = "deps" | "compile" | "dashboard_build" | "database" | "services" | "endpoints";
+
+export interface PhaseResult {
+  phase: HarnessPhase;
+  status: "pass" | "fail" | "skip";
+  rounds: number;
+  fixAttempts: number;
+  fixSuccesses: number;
+  detail: string;
+  errors: string[];
+  durationMs: number;
+}
+
+export interface HarnessReport {
+  timestamp: string;
+  phases: PhaseResult[];
+  overallStatus: "pass" | "fail";
+  totalFixAttempts: number;
+  totalFixSuccesses: number;
+  totalDurationMs: number;
+  skippedPhases: HarnessPhase[];
 }
 
 // ── Evaluation (Test stage) ─────────────────────────────────────────────────

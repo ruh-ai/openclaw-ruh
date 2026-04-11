@@ -546,10 +546,17 @@ export function CoPilotLayout({
             }
           } catch (err) {
             console.warn("[Plan] Failed to read plan from workspace:", err);
+            // Don't overwrite "ready" if the plan_complete fallback already set it
+            if (coPilotStore.planStatus !== "ready") {
+              coPilotStore.setPlanStatus("failed");
+            }
+          }
+        }).catch((err) => {
+          console.warn("[Plan] Architect streaming failed:", err);
+          // Don't overwrite "ready" if the plan_complete fallback already set it
+          if (coPilotStore.planStatus !== "ready") {
             coPilotStore.setPlanStatus("failed");
           }
-        }).catch(() => {
-          coPilotStore.setPlanStatus("failed");
         });
       });
     }
@@ -557,29 +564,13 @@ export function CoPilotLayout({
 
   // Called when user approves Plan stage — triggers v4 orchestrator build
   const handlePlanApproved = useCallback(async () => {
-    setPlanStatus("approved");
-
-    const sandboxId = activeSandbox?.sandbox_id;
-    if (!sandboxId) {
-      setBuildStatus("failed");
-      setSkillGeneration("error", "No active sandbox — cannot build.");
+    const agentId = existingAgent?.id;
+    if (!agentId) {
+      setSkillGeneration("error", "No agent ID — cannot build.");
       return;
     }
 
-    // Persist architecture plan to workspace before build starts
-    if (architecturePlan) {
-      try {
-        const { renderPlanSummary } = await import("@/lib/openclaw/plan-formatter");
-        const { writeWorkspaceFiles } = await import("@/lib/openclaw/workspace-writer");
-        await writeWorkspaceFiles(sandboxId, [
-          { path: ".openclaw/plan/architecture.json", content: JSON.stringify(architecturePlan, null, 2) },
-          { path: ".openclaw/plan/PLAN.md", content: renderPlanSummary(architecturePlan) },
-        ]);
-      } catch (err) {
-        console.warn("[CoPilot] Failed to persist plan:", err);
-      }
-    }
-
+    setPlanStatus("approved");
     setDevStage("build");
     setBuildStatus("building");
     setUserTriggeredBuild(true);
@@ -587,92 +578,129 @@ export function CoPilotLayout({
     const trimmedName = name.trim();
     const trimmedDescription = description.trim();
 
-    // ── V4 build: always use orchestrator with specialist sub-agents ──
-    pushBuildActivity({ type: "task", label: "Starting build pipeline..." });
+    pushBuildActivity({ type: "task", label: "Starting build pipeline (server-side)..." });
 
-    import("@/lib/openclaw/build-orchestrator").then(({ runBuildPipeline }) =>
-      runBuildPipeline(
-        sandboxId,
-        {
-          onTaskStart: (task) => {
-            pushBuildActivity({ type: "task", label: `Starting ${task.specialist}...` });
-          },
-          onTaskComplete: (task) => {
-            pushBuildActivity({ type: "task", label: `${task.specialist} complete (${task.files.length} files)` });
-          },
-          onTaskFailed: (task, error) => {
-            pushBuildActivity({ type: "task", label: `${task.specialist} failed: ${error.slice(0, 80)}` });
-          },
-          onFileWritten: (path) => {
-            pushBuildActivity({ type: "file", label: path.split("/").slice(-2).join("/") });
-          },
-          onProgress: (completed, total) => {
-            setBuildProgress({ completed, total, currentSkill: null });
-          },
-          onStatus: (msg) => {
-            pushBuildActivity({ type: "tool", label: msg });
-          },
-          onValidation: (report) => {
-            coPilotStore.setBuildValidation(report);
-          },
-        },
-        {
-          plan: architecturePlan ?? undefined,
-          agentName: trimmedName,
-          discoveryDocs: discoveryDocuments,
-        },
-      ).then((manifest) => {
-        coPilotStore.setBuildManifest(manifest);
-        coPilotStore.setAgentSandboxId(sandboxId);
+    try {
+      // Start the build on the backend
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+      const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+      const startRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
 
-        // Extract skill graph from plan for the Review stage
-        if (architecturePlan) {
-          const nodes = architecturePlan.skills.map((s) => ({
-            skill_id: s.id,
-            name: s.name,
-            description: s.description,
-            status: "generated" as const,
-            source: "custom" as const,
-            depends_on: s.dependencies,
-            requires_env: s.envVars,
-            skill_md: s.skillMd ?? "",
-          }));
-          const workflow = architecturePlan.workflow
-            ? {
-                name: "main-workflow",
-                description: `${trimmedName} workflow`,
-                steps: architecturePlan.workflow.steps.map((step, i) => ({
-                  id: `step-${i}`,
-                  action: "execute" as const,
-                  skill: step.skillId,
-                  wait_for: i > 0 ? [architecturePlan.workflow.steps[i - 1].skillId] : [],
-                })),
+      if (!startRes.ok) {
+        const err = await startRes.json().catch(() => ({ detail: "Build start failed" }));
+        throw new Error((err as { detail?: string }).detail ?? "Build start failed");
+      }
+
+      const { stream_id } = (await startRes.json()) as { stream_id: string };
+
+      // Consume the SSE stream for build progress
+      const streamRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/build/stream/${stream_id}`);
+      if (!streamRes.ok || !streamRes.body) throw new Error("Failed to open build stream");
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let buildDone = false;
+
+      while (!buildDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const block of events) {
+          if (!block.trim()) continue;
+          let eventData = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("data: ")) eventData = line.slice(6);
+          }
+          if (!eventData) continue;
+
+          try {
+            const evt = JSON.parse(eventData) as Record<string, unknown>;
+            const type = evt.type as string;
+
+            switch (type) {
+              case "task_start":
+                pushBuildActivity({ type: "task", label: `Starting ${evt.specialist}...` });
+                break;
+              case "task_complete":
+                pushBuildActivity({ type: "task", label: `${evt.specialist} complete (${(evt.files as string[])?.length ?? 0} files)` });
+                break;
+              case "task_failed":
+                pushBuildActivity({ type: "task", label: `${evt.specialist} failed: ${String(evt.error ?? "").slice(0, 80)}` });
+                break;
+              case "file_written":
+                pushBuildActivity({ type: "file", label: String(evt.path ?? "").split("/").slice(-2).join("/") });
+                break;
+              case "progress":
+                setBuildProgress({ completed: evt.completed as number, total: evt.total as number, currentSkill: null });
+                break;
+              case "status":
+                pushBuildActivity({ type: "tool", label: String(evt.message ?? "") });
+                break;
+              case "build_complete": {
+                buildDone = true;
+                const manifest = evt.manifest as { tasks: Array<{ specialist: string; status: string; files: string[] }> };
+                coPilotStore.setAgentSandboxId(activeSandbox?.sandbox_id ?? null);
+
+                // Extract skill graph from plan for Review stage
+                if (architecturePlan) {
+                  const nodes = architecturePlan.skills.map((s) => ({
+                    skill_id: s.id,
+                    name: s.name,
+                    description: s.description,
+                    status: "generated" as const,
+                    source: "custom" as const,
+                    depends_on: s.dependencies,
+                    requires_env: s.envVars,
+                    skill_md: s.skillMd ?? "",
+                  }));
+                  const workflow = architecturePlan.workflow
+                    ? {
+                        name: "main-workflow",
+                        description: `${trimmedName} workflow`,
+                        steps: architecturePlan.workflow.steps.map((step, i) => ({
+                          id: `step-${i}`,
+                          action: "execute" as const,
+                          skill: step.skillId,
+                          wait_for: i > 0 ? [architecturePlan.workflow.steps[i - 1].skillId] : [],
+                        })),
+                      }
+                    : null;
+                  setSkillGraph(nodes, workflow, []);
+                  onBuilderStateChange({ name: trimmedName, description: trimmedDescription, skillGraph: nodes, workflow, systemName: trimmedName });
+                }
+
+                const allDone = manifest?.tasks?.every((t) => t.status === "done") ?? false;
+                if (allDone) {
+                  setBuildStatus("done");
+                  setDevStage("review");
+                } else {
+                  setBuildStatus("done");
+                  setDevStage("review");
+                  pushBuildActivity({ type: "tool", label: "Build complete — some tasks had issues. Check Review." });
+                }
+                break;
               }
-            : null;
-          setSkillGraph(nodes, workflow, []);
-          onBuilderStateChange({
-            name: trimmedName,
-            description: trimmedDescription,
-            skillGraph: nodes,
-            workflow,
-            systemName: trimmedName,
-          });
+              case "error":
+                pushBuildActivity({ type: "tool", label: `Error: ${evt.message}` });
+                break;
+            }
+          } catch { /* skip unparseable SSE */ }
         }
+      }
 
-        const allDone = manifest.tasks.every((t) => t.status === "done");
-        if (allDone) {
-          setBuildStatus("done");
-          setDevStage("review");
-        } else {
-          setBuildStatus("failed");
-          setSkillGeneration("error", "Some build tasks failed. Check the build log.");
-        }
-      }).catch((error) => {
-        setSkillGeneration("error", error instanceof Error ? error.message : "Build failed.");
-        setBuildStatus("failed");
-      }),
-    );
-  }, [name, description, discoveryDocuments, architecturePlan, activeSandbox, coPilotStore, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, onBuilderStateChange]);
+      try { await reader.cancel(); } catch { /* ignore */ }
+    } catch (error) {
+      setSkillGeneration("error", error instanceof Error ? error.message : "Build failed.");
+      setBuildStatus("failed");
+    }
+  }, [name, description, architecturePlan, existingAgent, activeSandbox, coPilotStore, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, onBuilderStateChange]);
 
   // Called when user retries a failed build — re-triggers handlePlanApproved
   const handleRetryBuild = useCallback(() => {

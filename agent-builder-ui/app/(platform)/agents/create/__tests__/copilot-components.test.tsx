@@ -38,6 +38,9 @@ mock.module("@/lib/openclaw/copilot-flow", () => ({
   countSkillAvailability: () => ({ available: 0, total: 0 }),
   resolveCoPilotToolResearchUseCase: () => "",
   resolveCoPilotCompletionKind: () => null,
+  createCoPilotSeedFromAgent: () => ({}),
+  canPersistReviewOrLaterForgeStage: () => false,
+  planHasInlineContent: () => false,
 }));
 
 mock.module("@/lib/openclaw/builder-state", () => ({
@@ -65,6 +68,7 @@ mock.module("@/lib/agents/runtime-inputs", () => ({
   extractRuntimeInputKeys: () => [],
   hasMissingRequiredInputs: () => false,
   getRuntimeInputDetails: () => ({ label: "", description: "" }),
+  enrichRuntimeInputsFromPlan: () => [],
 }));
 
 mock.module("@/lib/skills/skill-registry", () => ({

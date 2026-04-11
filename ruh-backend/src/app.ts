@@ -37,6 +37,7 @@ import {
   dockerSpawn,
   joinShellArgs,
   normalizePathSegment,
+  readContainerPorts,
 } from './docker';
 import * as store from './store';
 import * as conversationStore from './conversationStore';
@@ -352,6 +353,25 @@ function initializeSseStream(req: Request, res: Response): {
 async function getRecord(sandboxId: string): Promise<store.SandboxRecord> {
   const record = await store.getSandbox(sandboxId);
   if (!record) throw httpError(404, 'Sandbox not found');
+
+  // Auto-reconcile stale Docker port mappings.
+  // After a container restart, Docker reassigns host ports but the DB still
+  // has the old mapping. Detect the mismatch and update the record in-place.
+  if (record.gateway_port && record.gateway_port > 0) {
+    const actualPorts = readContainerPorts(sandboxId);
+    if (actualPorts && actualPorts.gatewayPort !== record.gateway_port) {
+      console.log(`[port-reconcile] sandbox ${sandboxId}: DB port ${record.gateway_port} → Docker port ${actualPorts.gatewayPort}`);
+      const updates: Partial<store.SandboxRecord> = {
+        gateway_port: actualPorts.gatewayPort,
+        standard_url: `http://localhost:${actualPorts.gatewayPort}`,
+        dashboard_url: `http://localhost:${actualPorts.gatewayPort}`,
+      };
+      if (actualPorts.vncPort) updates.vnc_port = actualPorts.vncPort;
+      await store.updateSandbox(sandboxId, updates);
+      Object.assign(record, updates);
+    }
+  }
+
   return record;
 }
 
@@ -2109,6 +2129,8 @@ app.get(
     }
 
     stream.close();
+    // Clean up stale stream entry after clients have had time to read final events
+    setTimeout(() => _streams.delete(stream_id), 60_000);
   }),
 );
 
@@ -3366,6 +3388,8 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
   }
 
   stream.close();
+  // Clean up stale stream entry after clients have had time to read final events
+  setTimeout(() => _streams.delete(stream_id), 60_000);
 }));
 
 /**
@@ -6516,11 +6540,31 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
 
       const backendPort = parseInt(String(req.query.backendPort), 10) || 3100;
       const apiBase = `/api/sandbox-preview/${req.params.sandbox_id}/proxy/${backendPort}`;
-      const fetchShim = `<script>window.__DASHBOARD_API_BASE__="${apiBase}";`
-        + `(function(){var f=window.fetch;window.fetch=function(u,o){`
+      // Shim 1: Rewrite fetch() calls so /api/* goes through the proxy to the agent's backend
+      const fetchShim = `(function(){var f=window.fetch;window.__DASHBOARD_API_BASE__="${apiBase}";`
+        + `window.fetch=function(u,o){`
         + `if(typeof u==='string'&&u.startsWith('/api/'))u=window.__DASHBOARD_API_BASE__+u;`
-        + `return f.call(this,u,o);};})();</script>`;
-      html = html.replace(/<head([^>]*)>/, `<head$1>${fetchShim}`);
+        + `return f.call(this,u,o);};})();`;
+      // Shim 2: SPA routing fix for proxied dashboards.
+      // Problem: React Router reads window.location.pathname which has the proxy prefix.
+      // Fix: (a) replaceState to strip the prefix so React Router matches routes,
+      //      (b) intercept <a> clicks as pushState + popstate so React Router handles
+      //          navigation client-side without full reloads that exit the proxy.
+      const spaShim = `(function(){var pb="${proxyBase}";`
+        // Strip proxy prefix on initial load
+        + `var p=location.pathname;`
+        + `if(p.startsWith(pb)){history.replaceState(null,"",p.slice(pb.length)||"/");}`
+        // Convert <a href="/..."> clicks into client-side navigation
+        + `document.addEventListener("click",function(e){`
+        + `var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;`
+        + `if(!a)return;var h=a.getAttribute("href");`
+        + `if(!h||h.charAt(0)!=="/"||(h.indexOf("/api/")===0))return;`
+        + `e.preventDefault();`
+        + `history.pushState(null,"",h);`
+        + `window.dispatchEvent(new PopStateEvent("popstate"));`
+        + `});})();`;
+      const allShims = `<script>${fetchShim}${spaShim}</script>`;
+      html = html.replace(/<head([^>]*)>/, `<head$1>${allShims}`);
 
       res.send(html);
     } else {
@@ -6814,6 +6858,103 @@ app.post('/api/sandboxes/:sandbox_id/validate', asyncHandler(async (req, res) =>
   res.json(report);
 }));
 
+// ── Sandbox Exec (harness command execution) ─────────────────────────────────
+
+app.post('/api/sandboxes/:sandbox_id/exec', requireAuth, asyncHandler(async (req, res) => {
+  await getRecord(req.params.sandbox_id);
+  const { command, timeoutMs } = req.body ?? {};
+  if (typeof command !== 'string' || !command.trim()) throw httpError(400, 'command is required');
+  const timeoutSec = Math.min(Math.ceil((Number(timeoutMs) || 60_000) / 1000), 300);
+  const [exitCode, output] = await sandboxExec(req.params.sandbox_id, command, timeoutSec);
+  res.json({ ok: exitCode === 0, output: output.slice(-5000), exitCode });
+}));
+
+// ── Agent Build (server-side build pipeline) ─────────────────────────────────
+
+app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getAgentRecord(req.params.id);
+  const sandboxId = agent.forge_sandbox_id;
+  if (!sandboxId) throw httpError(400, 'Agent has no forge sandbox — create the agent first');
+
+  // Read architecture plan from workspace (check both main and copilot locations)
+  let planOutput = '';
+  const [mainExit, mainOut] = await sandboxExec(sandboxId, 'cat $HOME/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null', 10);
+  if (mainExit === 0 && mainOut.trim()) {
+    planOutput = mainOut;
+  } else {
+    const [copilotExit, copilotOut] = await sandboxExec(sandboxId, 'cat $HOME/.openclaw/workspace-copilot/.openclaw/plan/architecture.json 2>/dev/null', 10);
+    if (copilotExit === 0 && copilotOut.trim()) planOutput = copilotOut;
+  }
+  if (!planOutput.trim()) throw httpError(400, 'No architecture plan found in workspace');
+
+  let plan: Record<string, unknown>;
+  try { plan = JSON.parse(planOutput); } catch { throw httpError(400, 'Architecture plan is not valid JSON'); }
+  // Ensure all array fields exist to prevent specialist prompt crashes
+  plan.skills = plan.skills ?? [];
+  plan.apiEndpoints = plan.apiEndpoints ?? [];
+  plan.dashboardPages = plan.dashboardPages ?? [];
+  plan.channels = plan.channels ?? [];
+  plan.envVars = plan.envVars ?? [];
+  plan.integrations = plan.integrations ?? [];
+  plan.triggers = plan.triggers ?? [];
+  plan.subAgents = plan.subAgents ?? [];
+  plan.workflow = plan.workflow ?? { steps: [] };
+
+  const streamId = uuidv4();
+  _streams.set(streamId, { status: 'pending', request: { agent_id: req.params.id, sandbox_id: sandboxId } });
+  res.json({ stream_id: streamId, agent_id: req.params.id });
+
+  // Fire-and-forget: start the build in the background.
+  // The SSE stream endpoint will consume the generator.
+  // Store the generator on the stream entry so the GET endpoint can iterate it.
+  const { runAgentBuild } = await import('./agentBuild');
+  const generator = runAgentBuild(req.params.id, sandboxId, plan as unknown as import('./scaffoldTemplates').ArchitecturePlan, agent.name ?? 'Agent');
+  ((_streams.get(streamId)!) as unknown as { generator: unknown }).generator = generator;
+}));
+
+app.get('/api/agents/:id/build/stream/:stream_id', requireAuth, asyncHandler(async (req, res) => {
+  const { stream_id } = req.params;
+  if (!_streams.has(stream_id)) throw httpError(404, 'Build stream not found');
+  const entry = _streams.get(stream_id)!;
+  if (entry.status === 'done' || entry.status === 'error') throw httpError(409, 'Build already completed');
+
+  entry.status = 'running';
+  const generator = (entry as unknown as { generator?: AsyncGenerator<import('./agentBuild').BuildEvent> }).generator;
+  if (!generator) throw httpError(500, 'Build generator not initialized');
+
+  const stream = initializeSseStream(req, res);
+  const { sendEvent } = stream;
+
+  try {
+    for await (const event of generator) {
+      sendEvent(event.type, event);
+
+      if (event.type === 'build_complete') {
+        entry.status = 'done';
+        break;
+      }
+      if (event.type === 'error') {
+        entry.status = 'error';
+        entry.error = event.message ?? 'Unknown build error';
+        break;
+      }
+    }
+
+    if (entry.status !== 'done' && entry.status !== 'error') {
+      entry.status = 'done';
+      sendEvent('done', { stream_id });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    entry.status = 'error';
+    entry.error = msg;
+    sendEvent('error', { message: msg });
+  }
+
+  stream.close();
+  setTimeout(() => _streams.delete(stream_id), 60_000);
+}));
+
 // ── Agent Ship (persistent repo) ──────────────────────────────────────────────
 
 app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
@@ -6821,12 +6962,19 @@ app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
   if (!agent) throw httpError(404, 'Agent not found');
   const sandboxId = agent.forge_sandbox_id || (agent.sandbox_ids?.[0] ?? null);
   if (!sandboxId) throw httpError(400, 'Agent has no sandbox — build the agent first');
-  const { githubToken, commitMessage, repoName } = req.body ?? {};
-  if (typeof githubToken !== 'string' || !githubToken.trim()) throw httpError(400, 'githubToken is required');
+  const { githubToken: bodyToken, commitMessage, repoName } = req.body ?? {};
+  // Use the explicitly provided token, or fall back to the stored OAuth token.
+  let effectiveToken = typeof bodyToken === 'string' && bodyToken.trim() ? bodyToken.trim() : null;
+  if (!effectiveToken) {
+    const { getAccessToken } = await import('./githubConnectionStore');
+    const conn = await getAccessToken(req.user!.userId);
+    effectiveToken = conn?.token ?? null;
+  }
+  if (!effectiveToken) throw httpError(400, 'No GitHub token — connect GitHub or provide a token');
   const result = await shipAgent({
     agentId: req.params.id,
     sandboxId,
-    githubToken: githubToken.trim(),
+    githubToken: effectiveToken,
     repoName: typeof repoName === 'string' ? repoName.trim() : undefined,
     commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
     onLog: (msg) => console.log(`[ship:${req.params.id.slice(0,8)}] ${msg}`),

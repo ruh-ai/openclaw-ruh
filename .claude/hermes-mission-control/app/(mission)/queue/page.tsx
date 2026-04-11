@@ -90,6 +90,7 @@ export default function QueuePage() {
   const [health, setHealth] = useState<QueueHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingRunner, setPendingRunner] = useState<AgentRunnerKind | null>(null);
+  const [recentFilter, setRecentFilter] = useState<string>("all");
   const [showSubmit, setShowSubmit] = useState(false);
   const [submitDesc, setSubmitDesc] = useState("");
   const [submitAgent, setSubmitAgent] = useState("auto");
@@ -346,9 +347,26 @@ export default function QueuePage() {
 
       {/* Recent Jobs Table */}
       <div className="mt-6">
-        <h2 className="text-sm font-bold text-[var(--text-primary)] mb-3">Recent Jobs</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-[var(--text-primary)]">Recent Jobs</h2>
+          <div className="flex gap-1 rounded-lg bg-[var(--bg-subtle)] p-0.5">
+            {["all", "completed", "failed", "active", "waiting"].map((f) => (
+              <button
+                key={f}
+                onClick={() => setRecentFilter(f)}
+                className={`rounded-md px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                  recentFilter === f
+                    ? "bg-white text-[var(--text-primary)] shadow-sm"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                }`}
+              >
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="bg-[var(--card-color)] border border-[var(--border-default)] rounded-xl overflow-hidden">
-          {recentJobs.length === 0 ? (
+          {(recentFilter === "all" ? recentJobs : recentJobs.filter((j) => j.status === recentFilter)).length === 0 ? (
             <div className="text-center py-8 text-xs text-[var(--text-tertiary)]">No jobs yet</div>
           ) : (
             <table className="w-full text-xs">
@@ -363,7 +381,7 @@ export default function QueuePage() {
                 </tr>
               </thead>
               <tbody>
-                {recentJobs.map((job) => {
+                {(recentFilter === "all" ? recentJobs : recentJobs.filter((j) => j.status === recentFilter)).map((job) => {
                   const Icon = STATUS_ICONS[job.status] || Clock;
                   const color = STATUS_COLORS[job.status] || "text-[var(--text-tertiary)]";
                   return (

@@ -163,10 +163,14 @@ function CreateAgentPageContent() {
       const decoder = new TextDecoder();
       let buffer = "";
       let sandboxReady = false;
+      const STREAM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
       try {
         while (!sandboxReady) {
-          const { done, value } = await reader.read();
+          const timeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Provisioning timed out — please try again")), STREAM_TIMEOUT_MS),
+          );
+          const { done, value } = await Promise.race([reader.read(), timeout]);
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const events = buffer.split("\n\n");
@@ -192,7 +196,9 @@ function CreateAgentPageContent() {
                 break;
               }
             } catch (e) {
-              if (e instanceof Error && (e.message.includes("failed") || e.message.includes("Failed"))) throw e;
+              // Re-throw intentional errors (from error events); only swallow JSON parse failures on non-JSON SSE data
+              if (e instanceof SyntaxError) continue;
+              throw e;
             }
           }
         }
@@ -1067,64 +1073,6 @@ function CreateAgentPageContent() {
 
   // ─── Render: CoPilot mode ───────────────────────────────────────────────────
 
-  // Push agent template to GitHub if user has connected their account.
-  // Non-blocking — failures are logged but don't prevent the deploy.
-  const pushAgentToGitHubIfConnected = async (
-    state: ReturnType<typeof coPilotStore.snapshot>,
-    agentName: string,
-  ) => {
-    try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
-      const userRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
-      if (!token || !userRaw) return;
-
-      const user = JSON.parse(userRaw) as { login: string };
-      const slug = agentName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-      const suffix = Math.random().toString(36).slice(2, 6);
-      const repoName = `${slug || "agent"}-${suffix}`;
-
-      const files: Array<{ path: string; content: string }> = [];
-      files.push({
-        path: "SOUL.md",
-        content: [
-          `# ${agentName}`, "",
-          state.description ? `> ${state.description}` : "",
-          "", "## Rules",
-          ...state.agentRules.map((r: string) => `- ${r}`),
-          "", "## Skills",
-          ...(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`),
-        ].join("\n"),
-      });
-      for (const node of state.skillGraph ?? []) {
-        if (node.skill_md) {
-          files.push({ path: `skills/${node.skill_id}/SKILL.md`, content: node.skill_md });
-        }
-      }
-      files.push({
-        path: ".openclaw/config.yml",
-        content: JSON.stringify({ name: agentName, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2),
-      });
-      files.push({
-        path: "README.md",
-        content: `# ${agentName}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n`,
-      });
-
-      const res = await fetch("/api/github", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "push", token, owner: user.login, repoName, agentName, files }),
-      });
-      const result = await res.json();
-      if (result.ok) {
-        console.log(`[GitHub] Agent pushed to ${result.repoUrl}`);
-      } else {
-        console.warn(`[GitHub] Push failed: ${result.error}`);
-      }
-    } catch (err) {
-      console.warn("[GitHub] Push failed:", err);
-    }
-  };
-
   // Auto-publish to marketplace after saving an agent. Non-blocking — fires and
   // forgets so Ship completion isn't delayed by marketplace API issues.
   const autoPublishToMarketplace = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
@@ -1256,25 +1204,17 @@ function CreateAgentPageContent() {
         }
         await new Promise((r) => setTimeout(r, 1200));
 
-        // GitHub push — non-blocking
+        // GitHub push — non-blocking, uses stored OAuth token via backend
         try {
-          const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
-          const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
-          if (ghToken && ghUserRaw) {
-            const ghUser = JSON.parse(ghUserRaw) as { login: string };
-            const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-            const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
-            const ghFiles = [
-              { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
-              ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
-              { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
-              { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
-            ];
-            const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
-            const ghResult = await ghRes.json();
-            if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
-            else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
-          }
+          const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+          const shipRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${existingAgent.id}/ship`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ commitMessage: `ship: ${finalFields.name}` }),
+          });
+          const shipResult = await shipRes.json();
+          if (shipResult.ok) console.log(`[GitHub] Agent pushed to ${shipResult.repoUrl}`);
+          else console.warn(`[GitHub] Push skipped or failed: ${shipResult.error ?? "no OAuth token"}`);
         } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
 
         resetBuilderState();
@@ -1308,26 +1248,8 @@ function CreateAgentPageContent() {
           setIsCompleting(false);
           throw error instanceof Error ? error : new Error(msg);
         }
-        // GitHub push — runs automatically if the user connected their GitHub account.
-        try {
-          const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
-          const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
-          if (ghToken && ghUserRaw) {
-            const ghUser = JSON.parse(ghUserRaw) as { login: string };
-            const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-            const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
-            const ghFiles = [
-              { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
-              ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
-              { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
-              { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
-            ];
-            const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
-            const ghResult = await ghRes.json();
-            if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
-            else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
-          }
-        } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
+        // GitHub push is handled by the Ship stage UI (step 3 in StageShip).
+        // No duplicate push needed here.
 
         void finalizeShipCompletion(existingAgent.id, finalFields.name, finalFields.description);
         setIsCompleting(false);
@@ -1414,27 +1336,8 @@ function CreateAgentPageContent() {
         throw error instanceof Error ? error : new Error(msg);
       }
 
-      // GitHub push — runs automatically if the user connected their GitHub account.
-      // Non-blocking: failures don't prevent the deploy from succeeding.
-      try {
-        const ghToken = typeof window !== "undefined" ? localStorage.getItem("ruh-github-token") : null;
-        const ghUserRaw = typeof window !== "undefined" ? localStorage.getItem("ruh-github-user") : null;
-        if (ghToken && ghUserRaw) {
-          const ghUser = JSON.parse(ghUserRaw) as { login: string };
-          const slug = finalFields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-          const ghRepoName = `${slug || "agent"}-${Math.random().toString(36).slice(2, 6)}`;
-          const ghFiles = [
-            { path: "SOUL.md", content: `# ${finalFields.name}\n\n> ${state.description || ""}\n\n## Rules\n${state.agentRules.map((r: string) => `- ${r}`).join("\n")}\n\n## Skills\n${(state.skillGraph ?? []).map((s: { name: string; description?: string }) => `- **${s.name}**: ${s.description ?? ""}`).join("\n")}` },
-            ...(state.skillGraph ?? []).filter((n: { skill_md?: string }) => n.skill_md).map((n: { skill_id: string; skill_md?: string }) => ({ path: `skills/${n.skill_id}/SKILL.md`, content: n.skill_md! })),
-            { path: ".openclaw/config.yml", content: JSON.stringify({ name: finalFields.name, description: state.description, skills: (state.skillGraph ?? []).map((s: { skill_id: string }) => s.skill_id) }, null, 2) },
-            { path: "README.md", content: `# ${finalFields.name}\n\n> ${state.description || "AI agent built with Ruh.ai"}\n\nBuilt with [Ruh.ai](https://ruh.ai)\n` },
-          ];
-          const ghRes = await fetch("/api/github", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "push", token: ghToken, owner: ghUser.login, repoName: ghRepoName, agentName: finalFields.name, files: ghFiles }) });
-          const ghResult = await ghRes.json();
-          if (ghResult.ok) console.log(`[GitHub] Agent pushed to ${ghResult.repoUrl}`);
-          else console.warn(`[GitHub] Push failed: ${ghResult.error}`);
-        }
-      } catch (ghErr) { console.warn("[GitHub] Push failed:", ghErr); }
+      // GitHub push is handled by the Ship stage UI (step 3 in StageShip).
+      // No duplicate push needed here.
 
       void finalizeShipCompletion(agentId, finalFields.name, finalFields.description);
       setIsCompleting(false);
@@ -1834,6 +1737,7 @@ function CreateAgentPageContent() {
         <ShipDialog
           sandboxId={workingAgent.forgeSandboxId}
           agentName={workingAgent.name ?? "Agent"}
+          agentId={workingAgent.id}
           onClose={() => setShowShipDialog(false)}
         />
       )}

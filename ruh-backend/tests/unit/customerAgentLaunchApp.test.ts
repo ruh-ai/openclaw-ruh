@@ -145,6 +145,8 @@ mock.module('../../src/docker', () => ({
   listManagedSandboxContainers: mock(async () => []),
   normalizePathSegment: (value: string) => value,
   parseManagedSandboxContainerList: mock(() => []),
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
+  shellQuote: (v: string) => `'${v}'`,
 }));
 
 mock.module('../../src/auditStore', () => ({

@@ -83,6 +83,18 @@ mock.module('../../../src/docker', () => ({
     if (cmd.includes('devices approve'))    return [true, 'Approved DEVICE001'];
     return [...defaultExec] as ExecResult;
   },
+
+  dockerContainerRunning: async () => true,
+  shellQuote: (v: string) => `'${v}'`,
+  joinShellArgs: (args: Array<string | number>) => args.join(' '),
+  normalizePathSegment: (v: string) => v,
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
+  buildHomeFileWriteCommand: () => '',
+  buildConfigureAgentCronAddCommand: () => '',
+  buildCronDeleteCommand: () => '',
+  buildCronRunCommand: () => '',
+  parseManagedSandboxContainerList: () => [],
+  listManagedSandboxContainers: async () => [],
 }));
 
 // Skip real sleeps (polling loops in createOpenclawSandbox)

@@ -2,6 +2,7 @@
  * use-github-connection.ts — Hook for GitHub OAuth connection status.
  */
 import { useState, useEffect, useCallback } from "react";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -13,7 +14,7 @@ export function useGitHubConnection() {
   const checkStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/github/status`, { credentials: "include" });
+      const res = await fetchBackendWithAuth(`${API_BASE}/api/auth/github/status`, {});
       if (res.ok) {
         const data = await res.json();
         setConnected(data.connected ?? false);
@@ -30,8 +31,22 @@ export function useGitHubConnection() {
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 
-  const connect = useCallback((redirectPath?: string) => {
+  const connect = useCallback(async (redirectPath?: string) => {
     const redirect = redirectPath ?? window.location.pathname + window.location.search;
+    try {
+      const res = await fetchBackendWithAuth(
+        `${API_BASE}/api/auth/github?redirect=${encodeURIComponent(redirect)}`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+          return;
+        }
+      }
+    } catch { /* fall through */ }
+    // Fallback: direct navigation
     window.location.href = `${API_BASE}/api/auth/github?redirect=${encodeURIComponent(redirect)}`;
   }, []);
 

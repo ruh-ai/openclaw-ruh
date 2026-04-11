@@ -239,7 +239,7 @@ mock.module('../../../src/docker', () => ({
   getContainerName: (id: string) => `openclaw-${id}`,
   shellQuote: (v: string) => `'${v}'`,
   normalizePathSegment: (v: string) => v,
-  normalizePathSegment: (v: string) => v,
+  readContainerPorts: () => ({ gatewayPort: 18789 }),
 }));
 
 mock.module('../../../src/auditStore', () => ({

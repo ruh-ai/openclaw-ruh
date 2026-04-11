@@ -4,6 +4,8 @@
 #
 # Called by GitHub Actions CD pipeline after tests pass.
 # Expects to run as a user with docker access at /opt/ruh.
+#
+# First-time setup: run deploy/init-ssl.sh first to get SSL certs.
 # =============================================================================
 
 set -euo pipefail
@@ -11,6 +13,7 @@ set -euo pipefail
 APP_DIR="${SSH_DEPLOY_PATH:-/opt/ruh}"
 COMPOSE_FILE="deploy/docker-compose.prod.yml"
 DOCKER_HOST_IP="172.17.0.1"
+DOMAIN="codezero2pi.com"
 
 cd "$APP_DIR"
 
@@ -53,7 +56,7 @@ with open('agent-builder-ui/lib/openclaw/bridge-auth.ts') as f:
     c = f.read()
 old = '''  const requestOrigin = new URL(req.url).origin;'''
 new = '''  const forwardedHost = req.headers.get(\"x-forwarded-host\");
-  const forwardedProto = req.headers.get(\"x-forwarded-proto\") ?? \"http\";
+  const forwardedProto = req.headers.get(\"x-forwarded-proto\") ?? \"https\";
   const requestOrigin = forwardedHost
     ? \`\${forwardedProto}://\${forwardedHost}\`
     : new URL(req.url).origin;'''
@@ -73,8 +76,9 @@ sed -i "s|http://localhost:\${port}/|http://${DOCKER_HOST_IP}:\${port}/|g" \
 sed -i "s|http://localhost:\${fallback.gateway_port}/|http://${DOCKER_HOST_IP}:\${fallback.gateway_port}/|g" \
   agent-builder-ui/app/api/openclaw/architect-sandbox/route.ts 2>/dev/null || true
 
-# Use the production nginx config (builder-only, with /api/openclaw routing)
-cp deploy/nginx-prod.conf nginx/nginx.conf
+# Use the SSL nginx config
+cp deploy/nginx-ssl.conf nginx/nginx.conf
+cp deploy/ssl-params.conf nginx/ssl-params.conf
 
 echo "  Patches applied"
 
@@ -112,14 +116,14 @@ docker exec ruh-postgres-1 psql -U openclaw -d openclaw -c \
   "UPDATE sandboxes SET dashboard_url = REPLACE(dashboard_url, 'localhost', '${DOCKER_HOST_IP}') WHERE dashboard_url LIKE '%localhost%';" \
   2>/dev/null || true
 
-# Fix sandbox gateway allowed origins (Docker host IP)
+# Fix sandbox gateway allowed origins (Docker host IP + domain)
 for SANDBOX in $(docker ps --filter "name=openclaw-" --format "{{.Names}}" | grep -v ruh); do
   docker exec "$SANDBOX" python3 -c "
 import json
 with open('/root/.openclaw/openclaw.json') as f:
     cfg = json.load(f)
 origins = cfg.get('gateway', {}).get('controlUi', {}).get('allowedOrigins', [])
-for o in ['http://${DOCKER_HOST_IP}', 'http://34.31.176.40']:
+for o in ['http://${DOCKER_HOST_IP}', 'https://builder.${DOMAIN}', 'https://app.${DOMAIN}', 'https://admin.${DOMAIN}', 'https://api.${DOMAIN}']:
     if o not in origins:
         origins.append(o)
 cfg['gateway']['controlUi']['allowedOrigins'] = origins
@@ -128,10 +132,26 @@ with open('/root/.openclaw/openclaw.json', 'w') as f:
 " 2>/dev/null && docker exec "$SANDBOX" pkill -f openclaw-gateway 2>/dev/null && sleep 2 && docker exec -d "$SANDBOX" openclaw gateway || true
 done
 
-# ── 6. Health check ──────────────────────────────────────────────────────────
-echo "[6/6] Health check..."
+# ── 6. Restart Hermes (if installed) ─────────────────────────────────────────
+if systemctl is-active --quiet hermes-backend 2>/dev/null; then
+  echo "[6/7] Restarting Hermes backend..."
+  cd "$APP_DIR/.claude/hermes-backend" && bun install --production 2>&1 | tail -1
+  sudo systemctl restart hermes-backend
+  sleep 3
+  if curl -sf http://localhost:8100/health &>/dev/null; then
+    echo "  Hermes healthy"
+  else
+    echo "  WARNING: Hermes health check failed — check: journalctl -u hermes-backend -n 20"
+  fi
+  cd "$APP_DIR"
+else
+  echo "[6/7] Hermes not installed — skipping (run deploy/setup-hermes.sh to install)"
+fi
+
+# ── 7. Health check ──────────────────────────────────────────────────────────
+echo "[7/7] Health check..."
 for i in $(seq 1 20); do
-  if curl -sf http://localhost/health &>/dev/null; then
+  if curl -sf https://api.${DOMAIN}/health &>/dev/null; then
     echo "  Healthy!"
     break
   fi
@@ -147,3 +167,9 @@ echo ""
 echo "============================================"
 echo " Deploy complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "============================================"
+echo ""
+echo "  Builder: https://builder.${DOMAIN}"
+echo "  App:     https://app.${DOMAIN}"
+echo "  Admin:   https://admin.${DOMAIN}"
+echo "  API:     https://api.${DOMAIN}"
+echo ""
