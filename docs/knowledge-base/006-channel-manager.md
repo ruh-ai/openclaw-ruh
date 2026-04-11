@@ -103,8 +103,10 @@ Returns `{ ok, channel, code, output }`.
 ```
 1. openclaw gateway stop  (ignore errors)
 2. sleep 2s
-3. nohup openclaw gateway run --bind lan --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+3. OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 nohup openclaw gateway run --bind lan --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
 ```
+
+The `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` env var is set on restart to allow WebSocket connections over non-TLS private networks (required for local Docker sandbox communication).
 
 ---
 

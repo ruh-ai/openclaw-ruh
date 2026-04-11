@@ -198,6 +198,21 @@ CREATE TABLE agents (
   channels         JSONB       NOT NULL DEFAULT '[]'::jsonb,
   discovery_documents JSONB,
   agent_credentials JSONB      NOT NULL DEFAULT '[]'::jsonb,
+  paperclip_company_id TEXT,
+  paperclip_workers JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  worker_composition JSONB      DEFAULT NULL,
+  total_budget_monthly_cents INTEGER NOT NULL DEFAULT 0,
+  total_spent_monthly_cents  INTEGER NOT NULL DEFAULT 0,
+  creation_session JSONB       DEFAULT NULL,
+  forge_stage      TEXT        DEFAULT NULL,
+  repo_url         TEXT,
+  repo_owner       TEXT,
+  repo_name        TEXT,
+  repo_default_branch TEXT     DEFAULT 'main',
+  repo_last_pushed_at TIMESTAMPTZ,
+  active_branch    TEXT        DEFAULT 'main',
+  repo_initialized_at TIMESTAMPTZ,
+  service_ports    JSONB       DEFAULT NULL,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -214,10 +229,25 @@ CREATE TABLE agents (
 - `discovery_documents` — approved PRD/TRD discovery docs that preserve the builder requirements context through autosave, save, reopen, and Improve Agent
 - `agent_credentials` — encrypted per-tool credential envelopes for direct connector setup; normal agent reads do not expose the stored values
 - `workspace_memory` — per-agent continuity and instruction payload edited from Mission Control
+- `paperclip_company_id` — links the agent to a Paperclip company for multi-worker orchestration
+- `paperclip_workers` — Paperclip worker definitions (role, skill cluster) associated with this agent
+- `worker_composition` / `total_budget_monthly_cents` / `total_spent_monthly_cents` — agent-level cost tracking fields added by migration `0022_worker_cost_tracking`
+- `creation_session` — opaque JSONB blob storing in-progress creation wizard state (migration `0025_creation_session`)
+- `forge_stage` — current forge lifecycle stage (`think`, `plan`, `build`, `review`, `test`, `ship`, `complete`); added by migration `0030_agent_forge_stage`
+- `repo_url` / `repo_owner` / `repo_name` / `repo_default_branch` / `repo_last_pushed_at` — GitHub repository metadata for agent-as-code; added by migrations `0033` and `0034`
+- `active_branch` / `repo_initialized_at` — git workflow state; added by migration `0036_agent_git_workflow`
+- `service_ports` — JSONB array of `{ name, port, healthy? }` for per-agent service endpoints; added by migration `0038_agent_service_ports`
 
 `runtime_inputs` was added by migration `0011_agent_runtime_inputs`. Older rows read as an empty array and are normalized through the store layer.
 `channels` was added by migration `0013_agent_channels`. Older rows read as an empty array and are normalized through the store layer.
 `discovery_documents` was added by migration `0014_agent_discovery_documents`. Older rows read as `null` until new discovery docs are approved and saved.
+`paperclip_company_id` / `paperclip_workers` were added by migration `0021_paperclip_integration`.
+`worker_composition` / `total_budget_monthly_cents` / `total_spent_monthly_cents` were added by migration `0022_worker_cost_tracking`.
+`creation_session` was added by migration `0025_creation_session`.
+`forge_stage` was added by migration `0030_agent_forge_stage`.
+`repo_url` was added by migration `0033_agent_repo_url`. `repo_owner`, `repo_name`, `repo_default_branch`, `repo_last_pushed_at` were added by migration `0034_agent_repo_fields`.
+`active_branch` and `repo_initialized_at` were added by migration `0036_agent_git_workflow`.
+`service_ports` was added by migration `0038_agent_service_ports`.
 
 `agents.id` is a text UUID generated in the application layer, so new tables that reference agents must also use `TEXT` foreign-key columns instead of PostgreSQL `UUID`. Migration `0022_worker_cost_tracking` now follows that rule for the cost-tracking tables below; see [[LEARNING-2026-03-30-worker-cost-tracking-agent-id-type-mismatch]].
 
@@ -315,14 +345,17 @@ These columns support multi-tenant ownership filtering across the platform.
 
 ```sql
 CREATE TABLE users (
-  id           TEXT        PRIMARY KEY,
-  email        TEXT        NOT NULL UNIQUE,
-  display_name TEXT        NOT NULL DEFAULT '',
-  password_hash TEXT       NOT NULL,
-  role         TEXT        NOT NULL DEFAULT 'end_user',  -- admin | developer | end_user
-  org_id       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id             TEXT        PRIMARY KEY,
+  email          TEXT        NOT NULL UNIQUE,
+  password_hash  TEXT        NOT NULL,
+  display_name   TEXT        NOT NULL DEFAULT '',
+  avatar_url     TEXT,
+  role           TEXT        NOT NULL DEFAULT 'end_user',  -- admin | developer | end_user
+  org_id         TEXT        REFERENCES organizations(id),
+  status         TEXT        NOT NULL DEFAULT 'active',
+  email_verified BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -408,12 +441,14 @@ This table is the bridge to future SSO providers. The local email/password flow 
 
 ```sql
 CREATE TABLE api_keys (
-  id         TEXT        PRIMARY KEY,
-  user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  key_hash   TEXT        NOT NULL,
-  name       TEXT        NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_used  TIMESTAMPTZ
+  id           TEXT        PRIMARY KEY,
+  user_id      TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT        NOT NULL,
+  key_hash     TEXT        NOT NULL UNIQUE,
+  key_prefix   TEXT        NOT NULL,
+  last_used_at TIMESTAMPTZ,
+  expires_at   TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -443,10 +478,15 @@ CREATE TABLE marketplace_listings (
   install_count INTEGER     NOT NULL DEFAULT 0,
   avg_rating    NUMERIC(3,2) DEFAULT 0,
   published_at  TIMESTAMPTZ,
+  repo_url      TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
+
+**Additional columns** (added post-creation):
+- `owner_org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL` — backfilled from `agents.org_id` by migration `0024_marketplace_owner_org`
+- `repo_url` — optional source repository link, added by migration `0033_agent_repo_url`
 
 See [[016-marketplace]] for the full marketplace contract.
 
@@ -458,10 +498,13 @@ See [[016-marketplace]] for the full marketplace contract.
 CREATE TABLE marketplace_reviews (
   id         TEXT        PRIMARY KEY,
   listing_id TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
-  user_id    TEXT        NOT NULL,
+  user_id    TEXT        NOT NULL REFERENCES users(id),
   rating     INTEGER     NOT NULL CHECK (rating >= 1 AND rating <= 5),
-  comment    TEXT        NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  title      TEXT,
+  body       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(listing_id, user_id)
 );
 ```
 
@@ -472,9 +515,10 @@ CREATE TABLE marketplace_reviews (
 ```sql
 CREATE TABLE marketplace_installs (
   id         TEXT        PRIMARY KEY,
-  listing_id TEXT        NOT NULL REFERENCES marketplace_listings(id) ON DELETE CASCADE,
-  user_id    TEXT        NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  listing_id TEXT        NOT NULL REFERENCES marketplace_listings(id),
+  user_id    TEXT        NOT NULL REFERENCES users(id),
+  version    TEXT        NOT NULL,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(listing_id, user_id)
 );
 ```
@@ -510,14 +554,132 @@ This table is the new per-user customer runtime bridge for marketplace installs.
 ```sql
 CREATE TABLE agent_versions (
   id         TEXT        PRIMARY KEY,
-  agent_id   TEXT        NOT NULL,
+  agent_id   TEXT        NOT NULL REFERENCES agents(id),
   version    TEXT        NOT NULL,
+  changelog  TEXT        NOT NULL DEFAULT '',
   snapshot   JSONB       NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_by TEXT        NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(agent_id, version)
 );
 ```
 
 Marketplace publish/install now treats `snapshot` as the reusable runtime package for installed customer agents. The current slice stores SOUL/config/skill payloads there so first-open sandbox provisioning does not have to reconstruct runtime state from listing metadata.
+
+---
+
+### `eval_results`
+
+```sql
+CREATE TABLE eval_results (
+  id           TEXT        PRIMARY KEY,
+  agent_id     TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  sandbox_id   TEXT,
+  mode         TEXT        NOT NULL DEFAULT 'mock',
+  tasks        JSONB       NOT NULL DEFAULT '[]',
+  loop_state   JSONB,
+  pass_rate    REAL        NOT NULL DEFAULT 0,
+  avg_score    REAL        NOT NULL DEFAULT 0,
+  total_tasks  INTEGER     NOT NULL DEFAULT 0,
+  passed_tasks INTEGER     NOT NULL DEFAULT 0,
+  failed_tasks INTEGER     NOT NULL DEFAULT 0,
+  iterations   INTEGER     NOT NULL DEFAULT 1,
+  stop_reason  TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_eval_results_agent ON eval_results (agent_id, created_at DESC);
+```
+
+Persists agent evaluation results (single pass or reinforcement loop). Each row stores the full task list, scores, loop state, and mutations. Enables historical eval comparison, resume after refresh, and enterprise audit trail. Added by migration `0027_eval_results`.
+
+---
+
+### `agent_config_versions`
+
+```sql
+CREATE TABLE agent_config_versions (
+  id             TEXT        PRIMARY KEY,
+  agent_id       TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  version_number INTEGER     NOT NULL,
+  snapshot       JSONB       NOT NULL,
+  message        TEXT,
+  created_at     TIMESTAMP   NOT NULL DEFAULT NOW(),
+  created_by     TEXT,
+  UNIQUE (agent_id, version_number)
+);
+
+CREATE INDEX idx_agent_config_versions_agent
+  ON agent_config_versions (agent_id, version_number DESC);
+```
+
+Auto-incrementing config snapshots per agent. `version_number` auto-increments within each agent scope. Used for config history, rollback, and diff visualization. Added by migration `0031_agent_config_versions`.
+
+---
+
+### `account_lockouts`
+
+```sql
+CREATE TABLE account_lockouts (
+  email         TEXT        PRIMARY KEY,
+  attempt_count INTEGER     NOT NULL DEFAULT 0,
+  locked_until  TIMESTAMPTZ,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Tracks failed login attempts per email address. When `attempt_count` reaches the configured threshold, `locked_until` is set to a future timestamp blocking further login attempts. Cleared on successful login. Added by migration `0032_account_lockouts`. See [[014-auth-system]].
+
+---
+
+### `github_connections`
+
+```sql
+CREATE TABLE github_connections (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id         TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  github_user_id  TEXT        NOT NULL,
+  github_username TEXT        NOT NULL,
+  access_token    TEXT        NOT NULL,
+  token_scope     TEXT        NOT NULL DEFAULT 'repo',
+  connected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id)
+);
+```
+
+One-to-one GitHub OAuth connection per user. Stores the OAuth access token and GitHub identity for agent-as-code repo push/pull operations. The store layer normalizes tokens that may have been stored as base64 JSON envelopes back to raw `gho_*` format. Added by migration `0035_github_connections`.
+
+---
+
+### `agent_branches`
+
+```sql
+CREATE TABLE agent_branches (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  agent_id        TEXT        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  branch_name     TEXT        NOT NULL,
+  base_branch     TEXT        NOT NULL DEFAULT 'main',
+  title           TEXT        NOT NULL,
+  description     TEXT        NOT NULL DEFAULT '',
+  status          TEXT        NOT NULL DEFAULT 'open',
+  pr_number       INTEGER,
+  pr_url          TEXT,
+  created_by      TEXT        REFERENCES users(id),
+  merged_at       TIMESTAMPTZ,
+  feature_stage   TEXT        DEFAULT 'think',
+  feature_context JSONB       DEFAULT NULL,
+  feature_prd     TEXT        DEFAULT NULL,
+  feature_plan    JSONB       DEFAULT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(agent_id, branch_name)
+);
+
+CREATE INDEX idx_agent_branches_agent ON agent_branches (agent_id, status);
+```
+
+Git-style feature branches for agents. Each branch tracks a feature development session through the gstack pipeline stages (`think` through `complete`). Stores the PRD, engineering plan, and baseline agent context as JSONB. Added by migration `0036_agent_branches`.
 
 ---
 
@@ -615,6 +777,9 @@ interface AgentWorkspaceMemory {
 ### `AgentRecord` (`agentStore.ts`)
 
 ```typescript
+type AgentStatus = 'active' | 'draft' | 'forging';
+type AgentForgeStage = 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'complete';
+
 interface AgentRecord {
   id: string;
   name: string;
@@ -622,9 +787,10 @@ interface AgentRecord {
   description: string;
   skills: string[];
   trigger_label: string;
-  status: "active" | "draft" | "forging";
+  status: AgentStatus;
   sandbox_ids: string[];
   forge_sandbox_id: string | null;
+  forge_stage: AgentForgeStage | null;
   skill_graph: unknown | null;
   workflow: unknown | null;
   agent_rules: string[];
@@ -635,6 +801,17 @@ interface AgentRecord {
   channels: AgentChannelRecord[];
   discovery_documents: AgentDiscoveryDocumentsRecord | null;
   workspace_memory: AgentWorkspaceMemory;
+  paperclip_company_id: string | null;
+  paperclip_workers: PaperclipWorkerRecord[];
+  creation_session: unknown | null;
+  service_ports: AgentServicePort[] | null;
+  repo_url: string | null;
+  repo_owner: string | null;
+  repo_name: string | null;
+  repo_default_branch: string;
+  repo_last_pushed_at: string | null;
+  active_branch: string;
+  repo_initialized_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -650,6 +827,12 @@ interface AgentRuntimeInputRecord {
   required: boolean;
   source: "architect_requirement" | "skill_requirement";
   value: string;
+  populationStrategy?: "user_required" | "ai_inferred" | "static_default";
+  inputType?: string;
+  defaultValue?: string;
+  example?: string;
+  options?: string[];
+  group?: string;
 }
 ```
 
@@ -685,6 +868,99 @@ interface AgentChannelRecord {
   status: "planned" | "configured" | "unsupported";
   label: string;
   description: string;
+}
+```
+
+### `PaperclipWorkerRecord` (`agentStore.ts`)
+
+```typescript
+interface PaperclipWorkerRecord {
+  worker_id: string;
+  paperclip_agent_id: string;
+  role: string;
+  name: string;
+  skill_cluster: string[];
+}
+```
+
+### `AgentServicePort` (`agentStore.ts`)
+
+```typescript
+interface AgentServicePort {
+  name: string;
+  port: number;
+  healthy?: boolean;
+}
+```
+
+### `AgentBranchRecord` (`agentBranchStore.ts`)
+
+```typescript
+type FeatureStage = 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'reflect' | 'complete';
+
+interface FeatureContext {
+  title: string;
+  description: string;
+  baselineAgent: {
+    name: string;
+    skillCount: number;
+    toolCount: number;
+    triggerCount: number;
+    ruleCount: number;
+    skills: string[];
+  };
+}
+
+interface AgentBranchRecord {
+  id: string;
+  agent_id: string;
+  branch_name: string;
+  base_branch: string;
+  title: string;
+  description: string;
+  status: 'open' | 'merged' | 'closed';
+  pr_number: number | null;
+  pr_url: string | null;
+  created_by: string | null;
+  merged_at: string | null;
+  feature_stage: FeatureStage;
+  feature_context: FeatureContext | null;
+  feature_prd: string | null;
+  feature_plan: unknown | null;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### `EvalResult` (`evalResultStore.ts`)
+
+```typescript
+interface EvalResult {
+  id: string;
+  agent_id: string;
+  sandbox_id: string | null;
+  mode: string;
+  tasks: unknown[];
+  loop_state: unknown | null;
+  pass_rate: number;
+  avg_score: number;
+  total_tasks: number;
+  passed_tasks: number;
+  failed_tasks: number;
+  iterations: number;
+  stop_reason: string | null;
+  created_at: string;
+}
+```
+
+### `AccountLockoutRecord` (`accountLockoutStore.ts`)
+
+```typescript
+interface AccountLockoutRecord {
+  email: string;
+  attemptCount: number;
+  lockedUntil: Date | null;
+  updatedAt: Date;
 }
 ```
 

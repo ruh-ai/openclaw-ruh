@@ -147,6 +147,10 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-agent-creation-v3-build-pipeline]] — **Implemented (v4).** Workspace-first build pipeline: Think = multi-step research agent, Plan = structural decisions (no inline content), Build = v4 orchestrator with scaffold + specialist sub-agents + validation
 - [[SPEC-gateway-ws-proxy]] — Backend WS proxy replaces the Next.js SSE bridge: backend authenticates with the gateway server-side, browser gets bidirectional real-time events
 - [[SPEC-agent-as-project]] — Each agent is a persistent software project: one GitHub repo, branch-based improvements, PR-driven reviews, incremental builds, and full development lifecycle
+- [[SPEC-agent-mission-control-dashboard]] — Standalone Next.js dashboard for each deployed agent: real-time ops, task tracking, execution history
+- [[SPEC-agent-runtime-v2]] — Full-stack agent runtime: SQLite database, vector store for RAG, custom API layer, Mission Control dashboard
+- [[SPEC-agent-webhook-trigger-runtime]] — Signed inbound webhook triggers with shared-secret provisioning and replay-safe delivery
+- [[SPEC-smart-agent-setup]] — AI-powered auto-population of agent config variables with three-tier classification
 
 ---
 

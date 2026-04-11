@@ -64,7 +64,9 @@ Located at: `ruh-backend/src/sandboxManager.ts`
 3. Build env args from channel tokens plus LLM API keys only when shared auth is absent
 4. `docker image inspect node:22-bookworm`; only `docker pull node:22-bookworm` when the base image is missing locally
 5. docker run -d --name openclaw-<id> -p 18789 <env-args> node:22-bookworm tail -f /dev/null
+   Preview ports also exposed: 3000, 3001, 3002, 3100, 3200, 4173, 5173, 5174, 8000, 8080
 6. docker port <container> 18789/tcp  → get host port
+   Gateway URL uses `DOCKER_HOST_IP` env var (default `localhost`) so sibling containers in Docker Compose can reach the sandbox
 7. docker exec: npm install -g openclaw@latest  (retry with --unsafe-perm on fail)
 8. docker exec: openclaw --version
 9. [if shared auth] docker exec: create parent dir + copy host auth JSON into `/root/.openclaw/credentials/oauth.json` or `/root/.codex/auth.json`
@@ -76,7 +78,7 @@ Located at: `ruh-backend/src/sandboxManager.ts`
 13. [otherwise] docker exec: node -e "..." → write auth-profiles.json
 14. [if Gemini and no shared auth] patch openclaw.json: set compat.supportsStore=false
 15. docker exec: required bootstrap apply sequence
-   - shared gateway config (`gateway.bind`, allowed origins, trusted proxies, control-UI auth override, chat completions endpoint)
+   - shared gateway config (`gateway.bind`, allowed origins, trusted proxies, control-UI auth override, chat completions endpoint); allowed origins now also include any values from the `ALLOWED_ORIGINS` env var so production domains (e.g. `https://builder.codezero2pi.com`) can reach the sandbox gateway
    - browser execution mode flags (`browser.noSandbox`, `browser.headless`)
    - tool/command profile flags (`tools.profile`, `commands.native`, `commands.nativeSkills`)
 16. docker exec: node -e "..." → read gateway token from openclaw.json
@@ -230,6 +232,10 @@ The resolved URL has trailing slashes stripped and the `path` argument appended 
 Container name = `openclaw-<sandbox_id>` (e.g., `openclaw-a1b2c3d4-...`)
 
 Function: `getContainerName(sandboxId)` in `ruh-backend/src/docker.ts`
+
+### Port Introspection
+
+`readContainerPorts(sandboxId)` (`ruh-backend/src/docker.ts`) parses `docker port` output and returns `{ gatewayPort: number; vncPort?: number } | null`. It maps container port 18789 to the gateway host port and container port 6080 to the optional VNC websockify host port. Returns `null` when the container is not running or has no port mappings.
 
 ---
 
