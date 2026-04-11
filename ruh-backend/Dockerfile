@@ -5,6 +5,10 @@ WORKDIR /app
 # Copy the workspace packages needed by ruh-backend
 # Build context is the repo root so ../packages/logger resolves correctly
 COPY packages/logger ./packages/logger
+
+# Install logger dependencies first so bun resolves the file: link correctly
+RUN cd /app/packages/logger && bun install
+
 COPY ruh-backend/package.json ruh-backend/bun.lock ./ruh-backend/
 
 WORKDIR /app/ruh-backend
