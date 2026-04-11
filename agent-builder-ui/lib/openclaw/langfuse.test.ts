@@ -333,12 +333,14 @@ describe("withLangfuseBridgeTrace", () => {
     delete process.env.LANGFUSE_SECRET_KEY;
 
     // Should not throw — addScore is silently skipped when disabled
-    await expect(langfuseModule.withLangfuseBridgeTrace(
+    const result = await langfuseModule.withLangfuseBridgeTrace(
       { name: "openclaw.bridge.request" },
       async (trace) => {
         await trace.addScore("quality", 1, "all good");
       }
-    )).resolves.toBeUndefined();
+    );
+    expect(result).toBeDefined();
+    expect(result.traceId).toBeNull();
   });
 
   test("per-agent instance ID propagates through userId and tags", async () => {
