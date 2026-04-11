@@ -332,13 +332,13 @@ describe("withLangfuseBridgeTrace", () => {
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
 
-    // Should not throw
-    await langfuseModule.withLangfuseBridgeTrace(
+    // Should not throw — addScore is silently skipped when disabled
+    await expect(langfuseModule.withLangfuseBridgeTrace(
       { name: "openclaw.bridge.request" },
       async (trace) => {
         await trace.addScore("quality", 1, "all good");
       }
-    );
+    )).resolves.toBeUndefined();
   });
 
   test("per-agent instance ID propagates through userId and tags", async () => {
@@ -369,5 +369,224 @@ describe("withLangfuseBridgeTrace", () => {
       }),
       expect.any(Function)
     );
+  });
+
+  test("fn throwing re-throws after updating trace with ERROR level", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    await expect(
+      langfuseModule.withLangfuseBridgeTrace(
+        { name: "openclaw.bridge.request" },
+        async () => {
+          throw new Error("architect crashed");
+        }
+      )
+    ).rejects.toThrow("architect crashed");
+
+    // updateActiveObservation should have been called with ERROR level
+    const errorCall = updateActiveObservation.mock.calls.find(
+      (call) => (call[0] as { level?: string }).level === "ERROR"
+    );
+    expect(errorCall).toBeDefined();
+    expect((errorCall![0] as { statusMessage?: string }).statusMessage).toBe("architect crashed");
+    // flush still called even on error
+    expect(spanProcessorForceFlush).toHaveBeenCalled();
+  });
+
+  test("fn throwing a non-Error re-throws after updating trace with String(error)", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    await expect(
+      langfuseModule.withLangfuseBridgeTrace(
+        { name: "openclaw.bridge.request" },
+        async () => {
+          // eslint-disable-next-line @typescript-eslint/no-throw-literal
+          throw "non-error string";
+        }
+      )
+    ).rejects.toBe("non-error string");
+
+    const errorCall = updateActiveObservation.mock.calls.find(
+      (call) => (call[0] as { level?: string }).level === "ERROR"
+    );
+    expect(errorCall).toBeDefined();
+    expect((errorCall![0] as { statusMessage?: string }).statusMessage).toBe("non-error string");
+  });
+
+  test("sanitizeValue truncates strings longer than 500 chars", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    const longString = "a".repeat(600);
+
+    await langfuseModule.withLangfuseBridgeTrace(
+      {
+        name: "openclaw.bridge.request",
+        metadata: { longField: longString },
+      },
+      async () => "ok"
+    );
+
+    const call = updateActiveObservation.mock.calls[0]?.[0] as {
+      metadata?: Record<string, unknown>;
+    };
+    const sanitized = call?.metadata?.longField as string | undefined;
+    expect(sanitized).toBeDefined();
+    expect(sanitized!.length).toBeLessThanOrEqual(500);
+    expect(sanitized!.endsWith("...")).toBe(true);
+  });
+
+  test("sanitizeValue handles array inputs with mixed entries", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    await langfuseModule.withLangfuseBridgeTrace(
+      {
+        name: "openclaw.bridge.request",
+        metadata: {
+          items: ["short", "safe".repeat(200)],
+        },
+      },
+      async () => "ok"
+    );
+
+    const call = updateActiveObservation.mock.calls[0]?.[0] as {
+      metadata?: Record<string, unknown>;
+    };
+    const items = call?.metadata?.items as string[] | undefined;
+    expect(Array.isArray(items)).toBe(true);
+    // Both items present (array passes through sanitizeValue)
+    expect(items!.length).toBe(2);
+  });
+
+  test("flushLangfuseSpans swallows errors from forceFlush", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    spanProcessorForceFlush.mockRejectedValueOnce(new Error("flush failed"));
+
+    // Should NOT throw even if forceFlush rejects
+    await expect(
+      langfuseModule.withLangfuseBridgeTrace(
+        { name: "openclaw.bridge.request" },
+        async () => "ok"
+      )
+    ).resolves.toEqual({ result: "ok", traceId: "trace-123" });
+  });
+
+  test("addScore posts score to Langfuse REST endpoint when traceId is available", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+    process.env.LANGFUSE_BASE_URL = "https://langfuse.example";
+
+    const fetchMock = mock(async () => new Response("", { status: 200 }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await langfuseModule.withLangfuseBridgeTrace(
+        { name: "openclaw.bridge.request" },
+        async (trace) => {
+          // trace is enabled, traceId is "trace-123"
+          await trace.addScore("quality", 0.9, "excellent");
+          return "done";
+        }
+      );
+
+      // postScore fires fetch to Langfuse scores endpoint
+      // It is fire-and-forget so we need to wait a tick
+      await new Promise((r) => setTimeout(r, 10));
+
+      const calls = fetchMock.mock.calls;
+      const scoreCall = calls.find(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/scores")
+      );
+      expect(scoreCall).toBeDefined();
+      const body = JSON.parse((scoreCall![1] as RequestInit).body as string);
+      expect(body.name).toBe("quality");
+      expect(body.value).toBe(0.9);
+      expect(body.comment).toBe("excellent");
+      expect(body.traceId).toBe("trace-123");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("addScore swallows postScore fetch errors gracefully", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+    process.env.LANGFUSE_BASE_URL = "https://langfuse.example";
+
+    const fetchMock = mock(async (_url: unknown) => {
+      if (typeof _url === "string" && _url.includes("/scores")) {
+        throw new Error("network error posting score");
+      }
+      return new Response("", { status: 200 });
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      // Should not throw even if postScore fetch fails
+      await expect(
+        langfuseModule.withLangfuseBridgeTrace(
+          { name: "openclaw.bridge.request" },
+          async (trace) => {
+            await trace.addScore("quality", 0.5);
+            return "ok";
+          }
+        )
+      ).resolves.toEqual({ result: "ok", traceId: "trace-123" });
+
+      // Allow the fire-and-forget postScore to settle
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("addScore is a no-op when traceId is null on enabled trace (edge case)", async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = "pk-test";
+    process.env.LANGFUSE_SECRET_KEY = "sk-test";
+
+    // Override startActiveObservation to return null traceId
+    startActiveObservation.mockImplementationOnce(
+      async (
+        _name: string,
+        fn: (observation: {
+          traceId: null;
+          startObservation: typeof startObservation;
+        }) => Promise<unknown>
+      ) =>
+        fn({
+          traceId: null,
+          startObservation,
+        })
+    );
+
+    const fetchMock = mock(async () => new Response("", { status: 200 }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await langfuseModule.withLangfuseBridgeTrace(
+        { name: "openclaw.bridge.request" },
+        async (trace) => {
+          // traceId is null — addScore should be a no-op
+          await trace.addScore("quality", 1);
+          return "ok";
+        }
+      );
+
+      await new Promise((r) => setTimeout(r, 10));
+      const scoreCalls = fetchMock.mock.calls.filter(
+        (c) => typeof c[0] === "string" && (c[0] as string).includes("/scores")
+      );
+      expect(scoreCalls.length).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

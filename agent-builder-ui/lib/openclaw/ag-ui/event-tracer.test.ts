@@ -93,4 +93,38 @@ describe("EventTracer", () => {
     expect(trace.timestamp).toBeGreaterThanOrEqual(before);
     expect(trace.timestamp).toBeLessThanOrEqual(after);
   });
+
+  test("enabled getter returns current enabled state", () => {
+    expect(tracer.enabled).toBe(true);
+    tracer.enabled = false;
+    expect(tracer.enabled).toBe(false);
+    tracer.enabled = true;
+    expect(tracer.enabled).toBe(true);
+  });
+
+  test("drop stores reason in trace when reason is provided", () => {
+    tracer.drop("use-agent-chat", "CUSTOM", "my-event", "explicit reason text");
+    const traces = tracer.getTraces();
+    expect(traces[0].reason).toBe("explicit reason text");
+  });
+
+  test("drop with no reason leaves reason undefined", () => {
+    tracer.drop("use-agent-chat", "CUSTOM", "my-event");
+    const traces = tracer.getTraces();
+    expect(traces[0].reason).toBeUndefined();
+  });
+
+  test("emit with no eventName leaves eventName undefined", () => {
+    tracer.emit("builder-agent", "TEXT_MESSAGE_START");
+    const traces = tracer.getTraces();
+    expect(traces[0].eventName).toBeUndefined();
+  });
+
+  test("getTraces returns readonly reference — not a copy", () => {
+    tracer.emit("builder-agent", "CUSTOM", "test");
+    const traces = tracer.getTraces();
+    expect(traces.length).toBe(1);
+    // Must still have the trace after a second call
+    expect(tracer.getTraces()).toBe(traces);
+  });
 });

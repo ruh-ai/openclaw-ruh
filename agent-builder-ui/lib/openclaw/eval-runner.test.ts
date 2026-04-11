@@ -74,4 +74,64 @@ describe("runEvalSuite", () => {
     expect(setEvalStatus).toHaveBeenLastCalledWith("done");
     expect(updateEvalTask).toHaveBeenCalledWith("eval-1", { status: "running" });
   });
+
+  test("runs task against real agent when sandbox is provided", async () => {
+    const { runEvalSuite } = await import("./eval-runner");
+
+    mockCollectExecutionTrace.mockResolvedValueOnce({
+      response: "Detailed revenue report for yesterday: $12,500 across 5 campaigns.",
+      toolCalls: [],
+      skillsActivated: ["reporting"],
+      errors: [],
+      totalDurationMs: 300,
+    });
+    mockScoreExecutionTrace.mockResolvedValueOnce({
+      passed: true,
+      score: 0.9,
+      feedback: "Good response",
+      skillDiagnosis: [],
+      suggestedFixes: [],
+    });
+
+    const updateEvalTask = mock(() => {});
+    const setEvalStatus = mock(() => {});
+    const tasks = [{
+      id: "eval-live",
+      title: "Live smoke test",
+      input: "Show revenue",
+      expectedBehavior: "Revenue summary",
+      status: "pending" as const,
+    }];
+
+    const results = await runEvalSuite(tasks, {
+      sessionId: "session-live",
+      store: { updateEvalTask, setEvalStatus },
+      skillGraph: [],
+      agentRules: [],
+      mode: "live",
+      agentSandboxId: "sandbox-live-abc",
+    });
+
+    expect(mockCollectExecutionTrace).toHaveBeenCalledTimes(1);
+    expect(results[0].status).toBe("pass");
+  });
+
+  test("sets status to running then done even when all tasks complete quickly", async () => {
+    const { runEvalSuite } = await import("./eval-runner");
+
+    const updateEvalTask = mock(() => {});
+    const setEvalStatus = mock(() => {});
+
+    await runEvalSuite([], {
+      sessionId: "session-empty",
+      store: { updateEvalTask, setEvalStatus },
+      skillGraph: [],
+      agentRules: [],
+      mode: "mock",
+      agentSandboxId: null,
+    });
+
+    expect(setEvalStatus).toHaveBeenCalledWith("running");
+    expect(setEvalStatus).toHaveBeenLastCalledWith("done");
+  });
 });

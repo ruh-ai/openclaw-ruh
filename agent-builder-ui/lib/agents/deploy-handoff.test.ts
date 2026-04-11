@@ -4,6 +4,7 @@ import {
   buildCreateDeployHref,
   resolveImproveAgentCompletionHref,
   shouldAutoStartCreateDeploy,
+  buildReflectHref,
 } from "./deploy-handoff";
 
 describe("deploy handoff helpers", () => {
@@ -20,6 +21,13 @@ describe("deploy handoff helpers", () => {
     expect(shouldAutoStartCreateDeploy("create", "1")).toBe(true);
     expect(shouldAutoStartCreateDeploy("create", null)).toBe(false);
     expect(shouldAutoStartCreateDeploy("list", "1")).toBe(false);
+  });
+
+  test("buildReflectHref encodes agentId into reflect stage URL", () => {
+    expect(buildReflectHref("agent-123")).toBe(
+      "/agents/create?stage=reflect&agentId=agent-123",
+    );
+    expect(buildReflectHref("special/agent")).toContain("agentId=special%2Fagent");
   });
 
   test("routes undeployed existing agents into deploy and deployed agents back to the list", () => {

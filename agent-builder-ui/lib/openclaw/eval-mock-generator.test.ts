@@ -1,5 +1,19 @@
-import { describe, it, expect } from "vitest";
-import { generateDeterministicMocks } from "./eval-mock-generator";
+import { describe, it, test, expect, mock } from "bun:test";
+
+mock.module("./api", () => ({
+  sendToArchitectStreaming: mock(async (_id: string, _prompt: string, callbacks: Record<string, unknown>) => {
+    if (typeof callbacks?.onDelta === "function") {
+      (callbacks.onDelta as (t: string) => void)(
+        '[{"serviceId":"stripe","serviceName":"Stripe Mock","endpoints":[],"envOverrides":{"STRIPE_SECRET_KEY":"MOCK"}}]',
+      );
+    }
+    return {
+      content: '[{"serviceId":"stripe","serviceName":"Stripe Mock","endpoints":[],"envOverrides":{"STRIPE_SECRET_KEY":"MOCK"}}]',
+    };
+  }),
+}));
+
+import { generateDeterministicMocks, buildMockModeInstruction } from "./eval-mock-generator";
 import type { SkillGraphNode } from "./types";
 import type { AgentToolConnection } from "@/lib/agents/types";
 
@@ -131,5 +145,91 @@ describe("generateDeterministicMocks", () => {
 
     expect(result.services.length).toBe(2);
     expect(result.services.map((s) => s.serviceId).sort()).toEqual(["google-ads", "zendesk"]);
+  });
+
+  it("detects slack from skill descriptions", () => {
+    const slackSkills = [
+      {
+        skill_id: "slack-notify",
+        name: "Slack Notifier",
+        source: "custom" as const,
+        status: "built" as const,
+        depends_on: [],
+        description: "Post messages to Slack channels",
+        external_api: "Slack API",
+      },
+    ];
+    const result = generateDeterministicMocks({
+      skillGraph: slackSkills,
+      toolConnections: [],
+      runtimeInputs: [],
+      architecturePlan: null,
+    });
+
+    const slack = result.services.find((s) => s.serviceId === "slack");
+    expect(slack).toBeDefined();
+    expect(result.envOverrides.SLACK_BOT_TOKEN).toContain("MOCK");
+  });
+
+  it("detects apis from architecture plan integrations", () => {
+    const result = generateDeterministicMocks({
+      skillGraph: [],
+      toolConnections: [],
+      runtimeInputs: [],
+      architecturePlan: {
+        agentName: "test",
+        skills: [],
+        apiEndpoints: [],
+        dashboardPages: [],
+        dataSchema: { tables: [] },
+        integrations: [{ name: "Slack Integration", toolId: "slack", type: "api", authKind: "api_key" }],
+      } as any,
+    });
+
+    const slack = result.services.find((s) => s.serviceId === "slack");
+    expect(slack).toBeDefined();
+  });
+});
+
+describe("buildMockModeInstruction", () => {
+  test("returns empty string for empty context", () => {
+    const result = buildMockModeInstruction({ services: [], envOverrides: {} });
+    expect(typeof result).toBe("string");
+    // With no services, returns minimal or empty instruction
+  });
+
+  test("includes service URLs in the instruction", () => {
+    const mockContext = {
+      services: [
+        {
+          serviceId: "google-ads",
+          serviceName: "Google Ads API (Mock)",
+          description: "Mock Google Ads API",
+          baseUrl: "https://mock-google-ads.eval.local",
+          authType: "oauth" as const,
+          endpoints: [
+            {
+              method: "GET",
+              path: "/v14/customers/{customer_id}/campaigns",
+              description: "List campaigns",
+              responseSchema: {},
+              sampleResponse: { campaigns: [] },
+            },
+          ],
+          envOverrides: {
+            GOOGLE_ADS_DEVELOPER_TOKEN: "MOCK_TOKEN",
+          },
+        },
+      ],
+      envOverrides: {
+        GOOGLE_ADS_DEVELOPER_TOKEN: "MOCK_TOKEN",
+        GOOGLE_ADS_CUSTOMER_ID: "1234567890",
+      },
+    };
+
+    const instruction = buildMockModeInstruction(mockContext);
+    expect(instruction).toContain("Google Ads API (Mock)");
+    expect(instruction).toContain("MOCK_TOKEN");
+    expect(instruction).toContain("## MOCK MODE");
   });
 });

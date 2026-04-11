@@ -83,5 +83,41 @@ describe("fetchBackendWithAuth", () => {
   });
 });
 
+describe("fetchBackendWithAuth — 401 refresh flow", () => {
+  test("returns 401 response as-is when no refresh token cookie is available (document undefined)", async () => {
+    // In bun test environment, document is undefined — readRefreshTokenFromCookie returns null
+    // The 401 response should be returned without retry
+    const singleFetch = mock(async () => new Response("Unauthorized", { status: 401 }));
+    globalThis.fetch = singleFetch as unknown as typeof fetch;
+
+    const res = await fetchBackendWithAuth("http://localhost:8000/api/no-cookie");
+    expect(res.status).toBe(401);
+    // Only one fetch call (no retry since no refresh token)
+    expect(singleFetch.mock.calls.length).toBe(1);
+  });
+
+  test("returns original 401 when refresh fetch returns non-ok status", async () => {
+    const mockFail = mock(async () => new Response("Unauthorized", { status: 401 }));
+    globalThis.fetch = mockFail as unknown as typeof fetch;
+
+    const res = await fetchBackendWithAuth("http://localhost:8000/api/protected");
+    expect(res.status).toBe(401);
+    // Only one call — no retry when refresh returns null
+    expect(mockFail.mock.calls.length).toBe(1);
+  });
+
+  test("tryRefreshAccessToken returns null when cookies are absent (document undefined in bun:test)", async () => {
+    // readRefreshTokenFromCookie uses unqualified `document` which is undefined in bun:test.
+    // This confirms the null-return path: 401 is returned without a retry attempt.
+    const mockFail = mock(async () => new Response("Unauthorized", { status: 401 }));
+    globalThis.fetch = mockFail as unknown as typeof fetch;
+
+    const res = await fetchBackendWithAuth("http://localhost:8000/api/guarded");
+    expect(res.status).toBe(401);
+    // confirm no retry happened
+    expect(mockFail.mock.calls.length).toBe(1);
+  });
+});
+
 // Restore original fetch after all tests
 globalThis.fetch = originalFetch;

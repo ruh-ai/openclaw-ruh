@@ -308,3 +308,79 @@ describe("advanceDevStage", () => {
     expect(store.getState().maxUnlockedDevStage).toBe("review");
   });
 });
+
+describe("copilot-state wizard phase actions", () => {
+  beforeEach(() => {
+    useCoPilotStore.getState().reset();
+  });
+
+  test("advancePhase moves to next phase", () => {
+    useCoPilotStore.setState({ phase: "purpose" });
+    useCoPilotStore.getState().advancePhase();
+    expect(useCoPilotStore.getState().phase).toBe("discovery");
+  });
+
+  test("advancePhase does nothing at last phase", () => {
+    useCoPilotStore.setState({ phase: "review" });
+    useCoPilotStore.getState().advancePhase();
+    expect(useCoPilotStore.getState().phase).toBe("review");
+  });
+
+  test("goBackPhase moves to previous phase", () => {
+    useCoPilotStore.setState({ phase: "skills" });
+    useCoPilotStore.getState().goBackPhase();
+    expect(useCoPilotStore.getState().phase).toBe("discovery");
+  });
+
+  test("goBackPhase does nothing at first phase", () => {
+    useCoPilotStore.setState({ phase: "purpose" });
+    useCoPilotStore.getState().goBackPhase();
+    expect(useCoPilotStore.getState().phase).toBe("purpose");
+  });
+
+  test("setDiscoveryQuestions sets questions and status to ready", () => {
+    const questions = [{ id: "q1", question: "What is your use case?" }] as any;
+    useCoPilotStore.getState().setDiscoveryQuestions(questions);
+    expect(useCoPilotStore.getState().discoveryQuestions).toEqual(questions);
+    expect(useCoPilotStore.getState().discoveryStatus).toBe("ready");
+  });
+
+  test("setDiscoveryAnswer sets answer for a question", () => {
+    useCoPilotStore.getState().setDiscoveryAnswer("q1", "Google Ads campaigns");
+    expect(useCoPilotStore.getState().discoveryAnswers).toEqual({ q1: "Google Ads campaigns" });
+  });
+
+  test("setDiscoveryDocuments sets documents and status to ready", () => {
+    const docs = {
+      prd: { id: "prd1", title: "PRD", sections: [] } as any,
+      trd: { id: "trd1", title: "TRD", sections: [] } as any,
+    };
+    useCoPilotStore.getState().setDiscoveryDocuments(docs);
+    expect(useCoPilotStore.getState().discoveryDocuments).toEqual(docs);
+    expect(useCoPilotStore.getState().discoveryStatus).toBe("ready");
+  });
+
+  test("skipDiscovery sets discoveryStatus to skipped and clears questions", () => {
+    useCoPilotStore.setState({ discoveryQuestions: [{ id: "q1" }] as any });
+    useCoPilotStore.getState().skipDiscovery();
+    expect(useCoPilotStore.getState().discoveryStatus).toBe("skipped");
+    expect(useCoPilotStore.getState().discoveryQuestions).toBeNull();
+    expect(useCoPilotStore.getState().discoveryAnswers).toEqual({});
+  });
+
+  test("updateDiscoveryDocSection updates a section content", () => {
+    const docs = {
+      prd: { id: "prd1", title: "PRD", sections: [{ heading: "Overview", content: "Original" }] } as any,
+      trd: { id: "trd1", title: "TRD", sections: [] } as any,
+    };
+    useCoPilotStore.getState().setDiscoveryDocuments(docs);
+    useCoPilotStore.getState().updateDiscoveryDocSection("prd", 0, "Updated content");
+    expect(useCoPilotStore.getState().discoveryDocuments!.prd.sections[0].content).toBe("Updated content");
+  });
+
+  test("updateDiscoveryDocSection does nothing when no discoveryDocuments", () => {
+    useCoPilotStore.setState({ discoveryDocuments: null });
+    useCoPilotStore.getState().updateDiscoveryDocSection("prd", 0, "Updated");
+    expect(useCoPilotStore.getState().discoveryDocuments).toBeNull();
+  });
+});

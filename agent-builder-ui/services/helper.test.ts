@@ -47,6 +47,39 @@ describe("clearUserStoreAndLogout", () => {
     expect(mockClearUser).toHaveBeenCalledTimes(1);
     expect(mockClearAuthCookies).toHaveBeenCalledTimes(1);
   });
+
+  test("redirects to login when not already on login page", async () => {
+    const originalLocation = globalThis.window?.location;
+    const mockLocation = { pathname: "/dashboard", href: "" };
+    Object.defineProperty(globalThis, "window", {
+      value: { location: mockLocation },
+      writable: true,
+      configurable: true,
+    });
+
+    await clearUserStoreAndLogout();
+    expect(mockLocation.href).toBe("/authenticate");
+
+    if (originalLocation) {
+      Object.defineProperty(globalThis, "window", {
+        value: { location: originalLocation },
+        writable: true,
+        configurable: true,
+      });
+    }
+  });
+
+  test("does not redirect when already on login page", async () => {
+    const mockLocation = { pathname: "/authenticate", href: "" };
+    Object.defineProperty(globalThis, "window", {
+      value: { location: mockLocation },
+      writable: true,
+      configurable: true,
+    });
+
+    await clearUserStoreAndLogout();
+    expect(mockLocation.href).toBe("");
+  });
 });
 
 describe("getAuthApi", () => {

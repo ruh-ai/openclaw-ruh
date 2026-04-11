@@ -335,3 +335,112 @@ describe("buildWizardStateContext", () => {
     expect(context).toContain("SOUL Summary:");
   });
 });
+
+// ─── Additional parseWizardDirectives coverage ────────────────────────────────
+
+describe("parseWizardDirectives — additional branches", () => {
+  it("emits no update_fields when agent has no name/description/system_name", () => {
+    const response: ArchitectResponse = {
+      type: "agent_response",
+      content: "Hello",
+    };
+    const directives = parseWizardDirectives(response);
+    expect(directives.find(d => d.type === "update_fields")).toBeUndefined();
+  });
+
+  it("uses system_name from response root when agent_metadata.agent_name is absent", () => {
+    const response: ArchitectResponse = {
+      type: "ready_for_review",
+      system_name: "campaign-bot",
+      skill_graph: {
+        nodes: [
+          { skill_id: "s1", name: "S1", source: "custom", status: "found", depends_on: [] },
+        ],
+        workflow: { name: "main", description: "wf", steps: [] },
+      },
+    };
+    const directives = parseWizardDirectives(response);
+    const fields = directives.find(d => d.type === "update_fields");
+    expect(fields).toBeDefined();
+    if (fields?.type === "update_fields") {
+      expect(fields.name).toBe("campaign-bot");
+    }
+  });
+
+  it("normalizes tool connection with name field as toolId fallback", () => {
+    const response: ArchitectResponse = {
+      type: "ready_for_review",
+      tool_connections: [
+        // Entry with name but no toolId — slugify should produce the toolId
+        { name: "My Custom Tool" } as Record<string, unknown>,
+      ],
+      skill_graph: {
+        nodes: [
+          { skill_id: "s1", name: "S1", source: "custom", status: "found", depends_on: [] },
+        ],
+        workflow: { name: "main", description: "wf", steps: [] },
+      },
+    };
+    const directives = parseWizardDirectives(response);
+    const tools = directives.find(d => d.type === "connect_tools");
+    expect(tools).toBeDefined();
+    if (tools?.type === "connect_tools") {
+      // slugify("My Custom Tool") = "my-custom-tool"
+      expect(tools.toolIds[0]).toBe("my-custom-tool");
+    }
+  });
+
+  it("normalizes trigger with name field when title and id are absent", () => {
+    const response: ArchitectResponse = {
+      type: "ready_for_review",
+      triggers: [
+        { name: "Weekday Check" } as unknown as import("./types").AgentTriggerDefinition,
+      ],
+      skill_graph: {
+        nodes: [
+          { skill_id: "s1", name: "S1", source: "custom", status: "found", depends_on: [] },
+        ],
+        workflow: { name: "main", description: "wf", steps: [] },
+      },
+    };
+    const directives = parseWizardDirectives(response);
+    const triggers = directives.find(d => d.type === "set_triggers");
+    expect(triggers).toBeDefined();
+    if (triggers?.type === "set_triggers") {
+      expect(triggers.triggers[0].title).toBe("Weekday Check");
+    }
+  });
+});
+
+// ─── Additional buildWizardStateContext coverage ──────────────────────────────
+
+describe("buildWizardStateContext — plan stage adds workspace context block", () => {
+  it("adds WORKSPACE CONTEXT block when devStage is plan", () => {
+    const context = buildWizardStateContext({
+      devStage: "plan",
+      phase: "plan",
+      name: "Ads Bot",
+      description: "",
+      selectedSkillIds: [],
+      connectedTools: [],
+      triggers: [],
+      agentRules: [],
+    });
+    expect(context).toContain("[WORKSPACE CONTEXT]");
+    expect(context).toContain("PRD.md");
+    expect(context).toContain("TRD.md");
+  });
+
+  it("includes heartbeat line when a trigger has a schedule field", () => {
+    const context = buildWizardStateContext({
+      phase: "tools",
+      name: "Bot",
+      description: "",
+      selectedSkillIds: [],
+      connectedTools: [],
+      triggers: [{ id: "cron-1", title: "Daily Check", schedule: "0 9 * * 1-5" }],
+      agentRules: [],
+    });
+    expect(context).toContain("Heartbeat:");
+  });
+});

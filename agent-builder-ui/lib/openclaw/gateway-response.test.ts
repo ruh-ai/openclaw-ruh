@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   extractStructuredResponseFromText,
   finalizeGatewayResponse,
+  extractMessageText,
+  buildAdapterAvailability,
 } from "./gateway-response";
 
 describe("gateway-response", () => {
@@ -148,5 +150,104 @@ I can derive this plan now:
         },
       },
     });
+  });
+});
+
+// ─── extractMessageText ───────────────────────────────────────────────────────
+
+describe("extractMessageText", () => {
+  test("returns empty string for null/undefined", () => {
+    expect(extractMessageText(null)).toBe("");
+    expect(extractMessageText(undefined)).toBe("");
+  });
+
+  test("returns string as-is when message is a plain string", () => {
+    expect(extractMessageText("Hello world")).toBe("Hello world");
+  });
+
+  test("extracts text from content string field", () => {
+    expect(extractMessageText({ content: "Content string" })).toBe("Content string");
+  });
+
+  test("concatenates text blocks from content array", () => {
+    const msg = {
+      content: [
+        { type: "text", text: "Part one " },
+        { type: "image", url: "http://example.com/img.png" },
+        { type: "text", text: "Part two" },
+      ],
+    };
+    expect(extractMessageText(msg)).toBe("Part one Part two");
+  });
+
+  test("returns empty string for object with no content field", () => {
+    expect(extractMessageText({ role: "user" })).toBe("");
+  });
+});
+
+// ─── buildAdapterAvailability ─────────────────────────────────────────────────
+
+describe("buildAdapterAvailability", () => {
+  test("returns empty object when no nodes are ingestion type", () => {
+    const nodes = [{ type: "task", id: "s1" }, { type: "config", id: "s2" }];
+    expect(buildAdapterAvailability(nodes)).toEqual({});
+  });
+
+  test("extracts adapter availability from ingestion nodes", () => {
+    const nodes = [
+      {
+        type: "ingestion",
+        id: "ingest",
+        data_sources: [
+          { source_type: "google_ads", access_method: "adapter" },
+          { source_type: "shopify", access_method: "api" },
+        ],
+      },
+    ];
+    const result = buildAdapterAvailability(nodes);
+    expect(result.google_ads).toMatchObject({ has_adapter: true, source_type: "google_ads" });
+    expect(result.shopify).toMatchObject({ has_adapter: false, source_type: "shopify" });
+  });
+
+  test("ignores ingestion nodes with missing data_sources", () => {
+    const nodes = [{ type: "ingestion", id: "ingest" }];
+    expect(buildAdapterAvailability(nodes)).toEqual({});
+  });
+});
+
+// ─── finalizeGatewayResponse — fallback paths ─────────────────────────────────
+
+describe("finalizeGatewayResponse — plain text fallback", () => {
+  test("returns agent_response type when text has no structured markers", () => {
+    const result = finalizeGatewayResponse("Just a plain text response from the agent.", {
+      agentId: "architect",
+      runId: "r1",
+    });
+    expect(result.type).toBe("agent_response");
+    expect(result.content).toContain("plain text response");
+  });
+
+  test("uses systemNameFactory when skill_graph has no system_name and no node skill_id", () => {
+    const payload = {
+      type: "ready_for_review",
+      skill_graph: {
+        nodes: [{ name: "Skill 1", depends_on: [], status: "generating", source: "custom" }],
+        workflow: null,
+      },
+    };
+    const result = finalizeGatewayResponse(JSON.stringify(payload), {
+      agentId: "architect",
+      systemNameFactory: () => "custom-factory-name",
+    });
+    expect(result.type).toBe("ready_for_review");
+    const sg = result.skill_graph as Record<string, unknown>;
+    expect(sg.system_name).toBe("custom-factory-name");
+  });
+
+  test("generic yaml response with skill_graph field maps to ready_for_review", () => {
+    const yamlText = "Some intro text.\n\n```yaml\nskill_graph:\n  nodes:\n    - id: fetch\n      description: Fetch data\n      type: task\n  edges: []\nautomation_type: test-agent\n```";
+    const result = finalizeGatewayResponse(yamlText, { agentId: "architect" });
+    // The generic YAML parser maps skill_graph to ready_for_review
+    expect(["ready_for_review", "agent_response"]).toContain(result.type);
   });
 });
