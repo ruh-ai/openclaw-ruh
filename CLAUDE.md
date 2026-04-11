@@ -411,6 +411,7 @@ Follow the gstack sprint pipeline defined in `agents.md`:
 - Maintain `TODOS.md` as you work so task state and handoff context stay current.
 - Append the daily journal and write a KB learning note whenever the run produced durable insight.
 - Update `docs/knowledge-base/` when adding new modules, endpoints, or flows.
+- **Before `/ship` or `/review`:** run `bash scripts/kb-preflight.sh` — it checks annotation integrity, KB staleness, and INDEX completeness. Broken `@kb:` refs block the ship. Staleness warnings prompt a `/kb update`.
 - Use `/document-release` after shipping to keep READMEs and KB in sync.
 
 ---

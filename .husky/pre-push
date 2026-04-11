@@ -47,4 +47,13 @@ if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
   cd ..
 fi
 
+# KB annotation validation — blocks push if @kb: refs point to deleted/renamed notes
+if [ -f "scripts/check-kb-annotations.ts" ]; then
+  echo "📚 Validating KB annotations..."
+  "$BUN" scripts/check-kb-annotations.ts --json 2>/dev/null | grep -q '"brokenRefs": \[\]' || {
+    echo "❌ Broken @kb: references found. Run: bun scripts/check-kb-annotations.ts"
+    exit 1
+  }
+fi
+
 echo "✓ Pre-push checks passed"

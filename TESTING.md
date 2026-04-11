@@ -112,6 +112,8 @@ Validates that critical source files reference their knowledge base notes and th
 ```bash
 bun scripts/check-kb-annotations.ts        # human-readable report
 bun scripts/check-kb-annotations.ts --json  # CI-friendly (exit 1 on broken refs)
+bash scripts/kb-preflight.sh               # full preflight: annotations + staleness + INDEX
+bash scripts/kb-preflight.sh --strict      # exit 1 on any warning (for CI)
 ```
 
 ---
