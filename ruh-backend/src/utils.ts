@@ -1,5 +1,7 @@
 /**
  * Pure utility helpers shared across the app and exported for unit testing.
+ *
+ * @kb: 002-backend-overview
  */
 
 import type { SandboxRecord } from './store';

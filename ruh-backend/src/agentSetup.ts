@@ -1,6 +1,8 @@
 /**
  * agentSetup.ts — Post-clone setup runner for installed agents.
  *
+ * @kb: 008-agent-builder-ui 003-sandbox-lifecycle
+ *
  * Reads .openclaw/setup.json from the workspace and executes:
  * 1. Infrastructure provisioning (PostgreSQL if required)
  * 2. Dependency installation (npm install)

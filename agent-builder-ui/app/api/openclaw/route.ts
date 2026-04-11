@@ -1,3 +1,4 @@
+// @kb: 008-agent-builder-ui 001-architecture
 import { NextRequest, NextResponse } from "next/server";
 import WebSocket from "ws";
 import { randomUUID } from "crypto";

@@ -150,6 +150,18 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 
 ---
 
+## Source Code Annotations (`@kb:`)
+
+Critical source files contain `@kb:` annotations that link them to the KB notes they implement. This creates a bidirectional bond: KB notes document the code, and code declares which notes describe it.
+
+- **Syntax:** `// @kb: 003-sandbox-lifecycle 001-architecture` (in JSDoc or standalone comment)
+- **Validation:** `bun scripts/check-kb-annotations.ts` checks for broken references and missing annotations
+- **Convention:** See CLAUDE.md "Source Code Annotations" section for full rules
+
+When a KB note is renamed, update all `@kb:` references in source files. When a new critical file is created, add an `@kb:` annotation.
+
+---
+
 ## Obsidian Graph Rules
 
 This knowledge base is designed for Obsidian graph navigation. All notes must follow these rules:

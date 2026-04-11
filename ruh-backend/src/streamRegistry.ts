@@ -3,6 +3,8 @@
  *
  * Extracted from app.ts to avoid circular imports when
  * marketplace routes need to create provisioning streams.
+ *
+ * @kb: 003-sandbox-lifecycle 002-backend-overview
  */
 
 export interface StreamEntry {

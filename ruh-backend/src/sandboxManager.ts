@@ -1,6 +1,8 @@
 /**
  * Sandbox manager: creates and manages local Docker containers pre-configured for OpenClaw.
  * Yields progress events as [eventType, data] tuples for SSE streaming.
+ *
+ * @kb: 003-sandbox-lifecycle 001-architecture
  */
 
 import fs from 'node:fs';

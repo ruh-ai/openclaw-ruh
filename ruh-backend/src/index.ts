@@ -1,5 +1,7 @@
 /**
  * Entry point — loads env, connects DB, starts HTTP server.
+ *
+ * @kb: 002-backend-overview 001-architecture
  */
 
 import { config as dotenvConfig } from 'dotenv';

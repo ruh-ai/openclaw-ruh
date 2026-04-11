@@ -1,6 +1,8 @@
 /**
  * Shared PostgreSQL connection pool for OpenClaw backend.
  * Call initPool() once at startup before using withConn().
+ *
+ * @kb: 005-data-models 002-backend-overview
  */
 
 import { Pool, PoolClient } from 'pg';
