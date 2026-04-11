@@ -55,4 +55,59 @@ describe("ruh frontend security headers", () => {
     expect(csp).toContain("connect-src 'self' http://localhost:8000 ws: wss:");
     expect(csp).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
   });
+
+  test("uses valid URL's origin (strips path from apiUrl)", () => {
+    const headers = new Map(
+      getSecurityHeaders({
+        apiUrl: "https://api.example.com/v1/graphql",
+        nodeEnv: "production",
+      }).map((h) => [h.key, h.value]),
+    );
+    const csp = headers.get("Content-Security-Policy")!;
+    expect(csp).toContain("connect-src 'self' https://api.example.com");
+    expect(csp).not.toContain("/v1/graphql");
+  });
+
+  test("deduplicates connect-src sources when apiUrl origin equals default", () => {
+    const headers = new Map(
+      getSecurityHeaders({
+        apiUrl: "http://localhost:8000/api/v1",
+        nodeEnv: "production",
+      }).map((h) => [h.key, h.value]),
+    );
+    const csp = headers.get("Content-Security-Policy")!;
+    // Should NOT appear twice
+    const matches = (csp.match(/http:\/\/localhost:8000/g) ?? []).length;
+    expect(matches).toBe(1);
+  });
+
+  test("omits 'unsafe-eval' in production", () => {
+    const headers = new Map(
+      getSecurityHeaders({ nodeEnv: "production" }).map((h) => [h.key, h.value]),
+    );
+    expect(headers.get("Content-Security-Policy")).not.toContain("'unsafe-eval'");
+  });
+
+  test("omits ws:/wss: in production", () => {
+    const headers = new Map(
+      getSecurityHeaders({ nodeEnv: "production" }).map((h) => [h.key, h.value]),
+    );
+    const csp = headers.get("Content-Security-Policy")!;
+    expect(csp).not.toContain("ws:");
+    expect(csp).not.toContain("wss:");
+  });
+
+  test("includes img-src with data: and blob:", () => {
+    const headers = new Map(
+      getSecurityHeaders().map((h) => [h.key, h.value]),
+    );
+    expect(headers.get("Content-Security-Policy")).toContain("img-src 'self' data: blob:");
+  });
+
+  test("includes font-src with data:", () => {
+    const headers = new Map(
+      getSecurityHeaders().map((h) => [h.key, h.value]),
+    );
+    expect(headers.get("Content-Security-Policy")).toContain("font-src 'self' data:");
+  });
 });

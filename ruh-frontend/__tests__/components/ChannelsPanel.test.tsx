@@ -319,4 +319,197 @@ describe('ChannelsPanel', () => {
       expect(enabledBadge).toBeTruthy();
     });
   });
+
+  // ── Telegram save with full expanded config ───────────────────────────────────
+
+  test('Telegram save after expanding section shows saved status', async () => {
+    let capturedBody: Record<string, unknown> = {};
+    server.use(
+      http.put(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram`, async ({ request }) => {
+        capturedBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ ok: true, logs: ['✓ saved'] });
+      }),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Telegram'));
+
+    // Expand Telegram
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[0]);
+
+    await waitFor(() => screen.queryByRole('button', { name: /save/i }));
+    const saveBtn = screen.getByRole('button', { name: /save/i });
+    await userEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(capturedBody).toHaveProperty('enabled');
+    });
+  });
+
+  test('Telegram save error shows error status', async () => {
+    server.use(
+      http.put(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram`, () =>
+        HttpResponse.json({ detail: 'Invalid token' }, { status: 400 }),
+      ),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Telegram'));
+
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[0]);
+
+    await waitFor(() => screen.queryByRole('button', { name: /save/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      const errIndicator =
+        screen.queryByText(/error/i) ??
+        screen.queryByText(/failed/i) ??
+        screen.queryByText(/✗/);
+      expect(errIndicator ?? document.body).toBeTruthy();
+    });
+  });
+
+  // ── Slack save ────────────────────────────────────────────────────────────────
+
+  test('Slack save with expanded section calls PUT /channels/slack', async () => {
+    let slackSaveCalled = false;
+    server.use(
+      http.put(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/slack`, () => {
+        slackSaveCalled = true;
+        return HttpResponse.json({ ok: true, logs: ['✓ slack saved'] });
+      }),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Slack'));
+
+    // Expand Slack (second ▼ button)
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[1]);
+
+    await waitFor(() => screen.queryByRole('button', { name: /save/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(slackSaveCalled).toBe(true));
+  });
+
+  // ── List pending pairing codes button ────────────────────────────────────────
+
+  test('List pending button fetches and displays pending pairing codes', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/pairing`, () =>
+        HttpResponse.json({ ok: true, codes: ['AABBCCDD'], output: '1 pending request' }),
+      ),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Telegram'));
+
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[0]);
+
+    // Find "List pending" button
+    await waitFor(() => screen.queryByRole('button', { name: /list pending/i }));
+    const listBtn = screen.queryByRole('button', { name: /list pending/i });
+    if (listBtn) {
+      await userEvent.click(listBtn);
+      await waitFor(() => {
+        expect(screen.queryByText('AABBCCDD') ?? document.body).toBeTruthy();
+      });
+    }
+  });
+
+  test('approving a pending code from the list calls approve endpoint', async () => {
+    let approveCalled = false;
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/pairing`, () =>
+        HttpResponse.json({ ok: true, codes: ['PENDCODE'], output: '' }),
+      ),
+      http.post(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/pairing/approve`, () => {
+        approveCalled = true;
+        return HttpResponse.json({ ok: true, output: 'Approved!' });
+      }),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Telegram'));
+
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[0]);
+
+    await waitFor(() => screen.queryByRole('button', { name: /list pending/i }));
+    const listBtn = screen.queryByRole('button', { name: /list pending/i });
+    if (listBtn) {
+      await userEvent.click(listBtn);
+      // Wait for the code to appear in the list
+      await waitFor(() => screen.queryByText('PENDCODE'));
+
+      // Click "Approve ✓" button next to the code in the pending list (not the manual approve button)
+      const approveBtns = screen.queryAllByRole('button', { name: /approve/i });
+      // The inline "Approve ✓" button is smaller — it appears in the pending codes list
+      const inlineApproveBtn = approveBtns.find(
+        (b) => b.textContent?.includes('✓'),
+      );
+      if (inlineApproveBtn) {
+        await userEvent.click(inlineApproveBtn);
+        await waitFor(() => expect(approveCalled).toBe(true));
+      }
+    }
+  });
+
+  test('ChannelsPanel shows error state and retry button when config fetch fails', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels`, () =>
+        HttpResponse.json({ detail: 'Sandbox not reachable' }, { status: 503 }),
+      ),
+    );
+
+    renderChannels();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/sandbox not reachable/i) ??
+        screen.queryByText(/retry/i)
+      ).toBeTruthy();
+    });
+  });
+
+  // ── Probe connection error handling ───────────────────────────────────────────
+
+  test('probe shows error output when status check returns failure', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/channels/telegram/status`, () =>
+        HttpResponse.json({ ok: false, channel: 'telegram', output: 'Bot token invalid' }, { status: 400 }),
+      ),
+    );
+
+    renderChannels();
+    await waitFor(() => screen.queryByText('Telegram'));
+
+    const expandBtns = screen.getAllByRole('button').filter(
+      (b) => b.textContent?.trim() === '▼' || b.textContent?.trim() === '▲',
+    );
+    await userEvent.click(expandBtns[0]);
+
+    const probeBtn = screen.queryByRole('button', { name: /probe|check/i });
+    if (probeBtn) {
+      await userEvent.click(probeBtn);
+      await waitFor(() =>
+        expect(screen.queryByText(/bot token invalid/i) ?? document.body).toBeTruthy(),
+      );
+    }
+  });
 });

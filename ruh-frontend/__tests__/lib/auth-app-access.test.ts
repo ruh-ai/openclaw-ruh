@@ -27,4 +27,43 @@ describe("customer app access", () => {
       })
     ).toThrow("Customer organization access required");
   });
+
+  test("returns false when record is null", () => {
+    expect(hasCustomerAppAccess(null)).toBe(false);
+  });
+
+  test("returns false when record is undefined", () => {
+    expect(hasCustomerAppAccess(undefined)).toBe(false);
+  });
+
+  test("returns false when appAccess is null", () => {
+    expect(hasCustomerAppAccess({ appAccess: null })).toBe(false);
+  });
+
+  test("returns false when appAccess is undefined", () => {
+    expect(hasCustomerAppAccess({ appAccess: undefined })).toBe(false);
+  });
+
+  test("throws when record is null", () => {
+    expect(() => assertCustomerAppAccess(null)).toThrow("Customer organization access required");
+  });
+
+  test("throws when record is undefined", () => {
+    expect(() => assertCustomerAppAccess(undefined)).toThrow("Customer organization access required");
+  });
+
+  test("error thrown by assertCustomerAppAccess has status 403", () => {
+    try {
+      assertCustomerAppAccess({ appAccess: { admin: false, builder: false, customer: false } });
+      fail("expected throw");
+    } catch (err: unknown) {
+      expect((err as { response?: { status?: number } }).response?.status).toBe(403);
+    }
+  });
+
+  test("does not throw when customer access is true", () => {
+    expect(() =>
+      assertCustomerAppAccess({ appAccess: { admin: false, builder: false, customer: true } })
+    ).not.toThrow();
+  });
 });

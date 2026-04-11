@@ -116,6 +116,155 @@ describe('HistoryPanel', () => {
     await waitFor(() => expect(screen.getByText('New Name')).toBeInTheDocument());
   });
 
+  test('successful delete removes conversation from list', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [makeConversation({ id: 'conv-del', name: 'Delete Me' })],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+      http.delete(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations/conv-del`, () =>
+        HttpResponse.json({ deleted: 'conv-del' }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Delete Me')).toBeInTheDocument());
+
+    await userEvent.hover(screen.getByText('Delete Me').closest('.group') as HTMLElement);
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Delete Me')).not.toBeInTheDocument();
+    });
+  });
+
+  test('shows "No conversations yet" when list is empty', async () => {
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('No conversations yet')).toBeInTheDocument();
+    });
+  });
+
+  test('clicking a conversation calls onOpenConversation', async () => {
+    const onOpen = jest.fn();
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [makeConversation({ id: 'conv-click', name: 'Click Me' })],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={onOpen}
+      />,
+    );
+
+    await waitFor(() => screen.getByText('Click Me'));
+    await userEvent.click(screen.getByText('Click Me').closest('.group') as HTMLElement);
+
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'conv-click' }));
+  });
+
+  test('pressing Escape in rename input cancels the rename without committing', async () => {
+    const user = userEvent.setup();
+
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>
+        HttpResponse.json({
+          items: [makeConversation({ id: 'conv-esc', name: 'Original Name' })],
+          next_cursor: null,
+          has_more: false,
+        }),
+      ),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Original Name')).toBeInTheDocument());
+
+    await user.hover(screen.getByText('Original Name').closest('.group') as HTMLElement);
+    await user.click(screen.getByTitle('Rename'));
+
+    const input = screen.getByDisplayValue('Original Name');
+    await user.clear(input);
+    await user.type(input, 'Edited Name');
+
+    // Press Escape — should cancel the rename and restore the original name
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.getByText('Original Name')).toBeInTheDocument();
+      expect(screen.queryByDisplayValue('Edited Name')).not.toBeInTheDocument();
+    });
+  });
+
+  test('refresh button re-fetches conversations', async () => {
+    let fetchCount = 0;
+    server.use(
+      http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () => {
+        fetchCount += 1;
+        return HttpResponse.json({
+          items: [makeConversation({ id: 'conv-r', name: 'Refreshable' })],
+          next_cursor: null,
+          has_more: false,
+        });
+      }),
+    );
+
+    render(
+      <HistoryPanel
+        sandbox={makeSandbox()}
+        activeConvId={null}
+        onOpenConversation={() => {}}
+      />,
+    );
+
+    await waitFor(() => screen.getByText('Refreshable'));
+    expect(fetchCount).toBe(1);
+
+    await userEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    await waitFor(() => expect(fetchCount).toBe(2));
+  });
+
   test('updates conversation name when conv:renamed event fires', async () => {
     server.use(
       http.get(`${BASE}/api/sandboxes/${SANDBOX_ID}/conversations`, () =>

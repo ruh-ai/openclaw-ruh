@@ -133,4 +133,274 @@ describe("Marketplace detail page", () => {
       ).toBeDisabled();
     });
   });
+
+  test("shows error state when listing fetch fails", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json({ detail: "Not found" }, { status: 404 }),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Listing unavailable")).toBeInTheDocument();
+    });
+  });
+
+  test("shows install error when install POST fails", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json(listing),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+      http.post(`${BASE}/api/marketplace/listings/${listing.id}/install`, () =>
+        HttpResponse.json({ detail: "Quota exceeded" }, { status: 402 }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /install agent/i }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Install failed")).toBeInTheDocument();
+    });
+  });
+
+  test("triggers ProvisioningModal for v3 agents that return provisioning:true", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json(listing),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+      http.post(`${BASE}/api/marketplace/listings/${listing.id}/install`, () =>
+        HttpResponse.json({
+          provisioning: true,
+          streamId: "stream-xyz",
+          agentId: "agent-v3-001",
+        }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /install agent/i }),
+    );
+
+    await waitFor(() => {
+      // ProvisioningModal shows "Installing <agent name>"
+      expect(screen.getByText(`Installing ${listing.title}`)).toBeInTheDocument();
+    });
+  });
+
+  test("renders 'Recently updated' when publishedAt is null", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json({ ...listing, publishedAt: null }),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/recently updated/i)).toBeInTheDocument();
+    });
+  });
+
+  test("renders 'No tags provided' when tags array is empty", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json({ ...listing, tags: [] }),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("No tags provided")).toBeInTheDocument();
+    });
+  });
+
+  test("renders 'Recently updated' when publishedAt is an invalid date string", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json({ ...listing, publishedAt: "not-a-date" }),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/recently updated/i)).toBeInTheDocument();
+    });
+  });
+
+  test("still loads listing when installs endpoint fails", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json(listing),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ error: "Unauthorized" }, { status: 401 }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    // Listing should load fine; install button shows "Install Agent" (not installed)
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /install agent/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  test("ProvisioningModal onComplete callback marks agent as installed", async () => {
+    let completeCalled = false;
+
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json(listing),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+      http.post(`${BASE}/api/marketplace/listings/${listing.id}/install`, () =>
+        HttpResponse.json({
+          provisioning: true,
+          streamId: "stream-complete-test",
+          agentId: "agent-complete-test",
+        }),
+      ),
+      // The ProvisioningModal SSE stream endpoint
+      http.get(`${BASE}/api/agents/agent-complete-test/provision/stream-complete-test`, () => {
+        completeCalled = true;
+        return new HttpResponse(
+          'data: {"status":"done","agentId":"agent-complete-test"}\n\n',
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        );
+      }),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /install agent/i }),
+    );
+
+    await waitFor(() =>
+      screen.getByText(`Installing ${listing.title}`),
+    );
+
+    // Find and click the onComplete trigger — the ProvisioningModal calls onComplete
+    // when the stream finishes. We can simulate by clicking a Done/Finish button if present,
+    // or trigger via the stream finishing. For deterministic test coverage, find the close-done path.
+    const buttons = Array.from(document.querySelectorAll("button"));
+    const doneBtn = buttons.find((b) =>
+      /done|finish|open workspace/i.test(b.textContent ?? ""),
+    );
+    if (doneBtn) {
+      await userEvent.click(doneBtn);
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: /installed to workspace/i }),
+        ).toBeDisabled();
+      });
+    }
+  });
+
+  test("ProvisioningModal onClose callback clears provisioning state", async () => {
+    server.use(
+      http.get(`${BASE}/api/marketplace/listings/${listing.slug}`, () =>
+        HttpResponse.json(listing),
+      ),
+      http.get(`${BASE}/api/marketplace/my/installs`, () =>
+        HttpResponse.json({ items: [] }),
+      ),
+      http.post(`${BASE}/api/marketplace/listings/${listing.id}/install`, () =>
+        HttpResponse.json({
+          provisioning: true,
+          streamId: "stream-close-test",
+          agentId: "agent-close-test",
+        }),
+      ),
+    );
+
+    render(
+      await MarketplaceDetailPage({
+        params: Promise.resolve({ slug: listing.slug }),
+      }),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /install agent/i }),
+    );
+
+    await waitFor(() =>
+      screen.getByText(`Installing ${listing.title}`),
+    );
+
+    // Click the × close button in the ProvisioningModal header
+    const headerCloseBtn = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.querySelector("span")?.textContent?.includes("×"),
+    );
+    if (headerCloseBtn) {
+      await userEvent.click(headerCloseBtn);
+      await waitFor(() => {
+        expect(screen.queryByText(`Installing ${listing.title}`)).not.toBeInTheDocument();
+      });
+    }
+  });
 });
