@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 import { getSecurityHeaders } from "./lib/security-headers";
 
 const remotePatterns = [
@@ -89,4 +90,9 @@ const nextConfig: NextConfig = {
 
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  // Only upload source maps when SENTRY_AUTH_TOKEN is set (CI/CD builds)
+  silent: !process.env.SENTRY_AUTH_TOKEN,
+  disableServerWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+  disableClientWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+});

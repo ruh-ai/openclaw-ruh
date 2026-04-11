@@ -7,6 +7,7 @@ import { spawnAgentProcess } from './subprocess';
 import * as queueJobStore from '../stores/queueJobStore';
 import * as taskStore from '../stores/taskStore';
 import * as boardTaskStore from '../stores/boardTaskStore';
+import { execution as log } from '../logger';
 
 /**
  * Classify a failure as retryable or permanent.
@@ -55,7 +56,7 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
     QUEUE_NAMES.EXECUTION,
     async (job: Job<ExecutionJobData>) => {
       const { taskLogId, queueJobId, agentName, agentPath, prompt, timeout } = job.data;
-      console.log(`[hermes:execution] Starting: agent=${agentName} task=${taskLogId}`);
+      log.info({ agentName, taskLogId }, 'Starting execution');
 
       // Update status to running
       await queueJobStore.updateQueueJob(queueJobId, {
@@ -132,11 +133,11 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
 
       await getQueue(QUEUE_NAMES.LEARNING).add('learn', learningData);
 
-      console.log(`[hermes:execution] ${finalStatus}: agent=${agentName} task=${taskLogId} (${result.durationMs}ms)`);
+      log.info({ status: finalStatus, agentName, taskLogId, durationMs: result.durationMs }, 'Execution finished');
 
       if (!result.success) {
         const classification = classifyFailure(result.stderr || '', result.killed, result.exitCode);
-        console.log(`[hermes:execution] Failure classified: ${classification.category} (retryable: ${classification.retryable}) — ${classification.reason}`);
+        log.info({ category: classification.category, retryable: classification.retryable, reason: classification.reason }, 'Failure classified');
 
         if (!classification.retryable) {
           // Permanent failure — don't let BullMQ retry
@@ -155,11 +156,11 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:execution] Job ${job?.id} failed (attempt ${job?.attemptsMade}):`, err.message);
+    log.error({ jobId: job?.id, attempt: job?.attemptsMade, err }, 'Job failed');
   });
 
   worker.on('completed', (job) => {
-    console.log(`[hermes:execution] Job ${job.id} completed`);
+    log.info({ jobId: job.id }, 'Job completed');
   });
 
   return worker;

@@ -153,9 +153,13 @@ function getTraceId(req: Request): string | null {
   return typedReq.__traceId;
 }
 
+import { requestContextStorage, type RequestContext } from './requestContext';
+
 app.use((req, res, next) => {
-  res.setHeader('x-request-id', getOrCreateRequestId(req));
-  next();
+  const requestId = getOrCreateRequestId(req);
+  res.setHeader('x-request-id', requestId);
+  const ctx: RequestContext = { requestId };
+  requestContextStorage.run(ctx, () => next());
 });
 
 // OTEL HTTP request tracing — creates a span per request.
@@ -175,6 +179,13 @@ app.use((req, res, next) => {
   const typedReq = req as RequestWithMetadata;
   typedReq.__otelTraceId = spanCtx.traceId;
   typedReq.__otelSpanId = spanCtx.spanId;
+
+  // Enrich AsyncLocalStorage context with trace IDs
+  const ctx = requestContextStorage.getStore();
+  if (ctx) {
+    ctx.traceId = spanCtx.traceId;
+    ctx.spanId = spanCtx.spanId;
+  }
 
   res.on('finish', () => {
     span.setAttribute('http.status_code', res.statusCode);
@@ -7514,6 +7525,12 @@ app.post('/api/sandboxes/:sandbox_id/channels/:channel/pairing/approve', asyncHa
   });
   res.json(result);
 }));
+
+// ── Sentry error handler (captures 5xx errors when SENTRY_DSN is set) ───────
+import { Sentry, sentryEnabled } from './sentry';
+if (sentryEnabled) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 // ── Error middleware (MUST be last) ──────────────────────────────────────────
 app.use((err: Error & { status?: number }, req: Request, res: Response, _next: NextFunction) => {

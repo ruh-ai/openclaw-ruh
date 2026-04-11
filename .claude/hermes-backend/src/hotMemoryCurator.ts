@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from './config';
 import { query } from './db';
+import { memory } from './logger';
 
 /**
  * Curate hot memory (MEMORY.md) from cold storage (PostgreSQL + ChromaDB).
@@ -109,11 +110,11 @@ export async function curateHotMemory(): Promise<{ lines: number; updated: boole
   // Only write if under 50 lines
   if (lineCount > 50) {
     // Trim patterns and pitfalls to fit
-    console.warn(`[hermes:memory] Hot memory ${lineCount} lines — exceeds 50, trimming`);
+    memory.warn({ lineCount }, 'Hot memory exceeds 50 lines, trimming');
   }
 
   fs.writeFileSync(memoryPath, content);
-  console.log(`[hermes:memory] MEMORY.md curated: ${lineCount} lines`);
+  memory.info({ lineCount }, 'MEMORY.md curated');
 
   return { lines: lineCount, updated: true };
 }

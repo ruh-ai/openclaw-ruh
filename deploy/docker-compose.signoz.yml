@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SigNoz Observability — uses the OFFICIAL SigNoz Docker deployment
+#
+# This file is a pointer — the actual stack runs from the SigNoz repo.
+#
+# Setup (one-time):
+#   git clone --depth 1 https://github.com/SigNoz/signoz.git /opt/signoz
+#   cd /opt/signoz/deploy/docker && docker compose up -d
+#
+# Dashboard:   http://localhost:8080
+# OTLP HTTP:   http://localhost:4318
+# OTLP gRPC:   http://localhost:4317
+#
+# To connect ruh-backend, add to ruh-backend/.env:
+#   OTEL_ENABLED=true
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+#   OTEL_SERVICE_NAME=ruh-backend
+#
+# To stop:
+#   cd /opt/signoz/deploy/docker && docker compose down
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# This Docker Compose file intentionally has no services. It serves as
+# documentation. Use the official SigNoz deploy repo above.

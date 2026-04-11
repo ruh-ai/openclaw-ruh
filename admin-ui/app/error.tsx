@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import * as Sentry from "@sentry/nextjs";
+import { logger } from "@/lib/logger";
 
 export default function Error({
   error,
@@ -11,13 +13,12 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error("[ErrorBoundary]", {
+    logger.error({
       message: error.message,
       digest: error.digest,
       stack: error.stack?.split("\n").slice(0, 5).join("\n"),
-      timestamp: new Date().toISOString(),
-      service: "admin-ui",
-    });
+    }, "Unhandled error caught by boundary");
+    Sentry.captureException(error);
   }, [error]);
 
   return (

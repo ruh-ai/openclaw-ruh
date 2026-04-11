@@ -28,6 +28,8 @@
     "test:coverage": "bun test --coverage --coverage-reporter=lcov --path-ignore-patterns 'e2e/**' --path-ignore-patterns 'test-results/**' && bun run scripts/check-coverage.ts"
   },
   "dependencies": {
+    "@ruh/logger": "file:../packages/logger",
+    "@sentry/nextjs": "^9.0.0",
     "@ag-ui/client": "^0.0.48",
     "@ag-ui/core": "^0.0.48",
     "@anthropic-ai/sdk": "^0.82.0",

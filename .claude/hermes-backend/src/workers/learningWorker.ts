@@ -11,6 +11,7 @@ import * as scoreStore from '../stores/scoreStore';
 import * as agentStore from '../stores/agentStore';
 import { recordSuccess, recordFailure } from '../circuitBreaker';
 import { query } from '../db';
+import { learning as log } from '../logger';
 
 // ── Evolution Thresholds (more aggressive) ────────────────────
 const FAILURE_THRESHOLD = 2;          // 2 failures in 24h triggers evolution (was 2, now explicit)
@@ -35,7 +36,7 @@ async function storeMemory(text: string, type: string, agent: string, tags: stri
     });
     await proc.exited;
   } catch {
-    console.warn(`[hermes:learning] Failed to store memory: ${text.slice(0, 60)}...`);
+    log.warn({ text: text.slice(0, 60) }, 'Failed to store memory');
   }
 }
 
@@ -279,7 +280,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
     QUEUE_NAMES.LEARNING,
     async (job: Job<LearningJobData>) => {
       const { taskLogId, queueJobId, agentName, success, output, error, durationMs, filesChanged } = job.data;
-      console.log(`[hermes:learning] Processing: agent=${agentName} success=${success} task=${taskLogId}`);
+      log.info({ agentName, success, taskLogId }, 'Processing learning');
 
       // ── 1. Rich extraction ──────────────────────────────────
       const learning = extractLearnings(output, error, success);
@@ -318,7 +319,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
       } else {
         const { tripped } = await recordFailure(agentName);
         if (tripped) {
-          console.log(`[hermes:learning] Circuit breaker TRIPPED for ${agentName}`);
+          log.warn({ agentName }, 'Circuit breaker TRIPPED');
         }
       }
 
@@ -344,7 +345,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
               notes: `Quality review by reviewer: ${learning.taskSummary.slice(0, 100)}`,
             });
 
-            console.log(`[hermes:learning] Quality feedback: ${reviewedAgent} scored ${qualityScore}/10 by reviewer`);
+            log.info({ reviewedAgent, qualityScore }, 'Quality feedback received');
 
             // If quality is low, store a pitfall for the reviewed agent
             if (qualityScore < 6) {
@@ -393,7 +394,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
              `skill,${learning.taskType},acquired`, taskLogId],
           );
 
-          console.log(`[hermes:learning] ${agentName} acquired new skill: ${newSkill}`);
+          log.info({ agentName, skill: newSkill }, 'New skill acquired');
           publish({ type: 'memory', action: 'created', data: { type: 'skill-acquired', agentName, skill: newSkill } });
         }
       } else {
@@ -430,7 +431,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
           `INSERT INTO memories (id, text, type, agent, tags, task_context) VALUES ($1, $2, $3, $4, $5, $6)`,
           [uuidv4(), `Skill acquired: ${skill}`, 'skill', agentName, 'skill,self-reported,acquired', taskLogId],
         );
-        console.log(`[hermes:learning] ${agentName} self-reported skill: ${skill}`);
+        log.info({ agentName, skill }, 'Self-reported skill');
         publish({ type: 'memory', action: 'created', data: { type: 'skill-acquired', agentName, skill } });
       }
 
@@ -440,11 +441,11 @@ export function createLearningWorker(): Worker<LearningJobData> {
           `INSERT INTO memories (id, text, type, agent, tags, task_context) VALUES ($1, $2, $3, $4, $5, $6)`,
           [uuidv4(), `Gap: ${gap}`, 'gap', agentName, 'gap,self-reported', taskLogId],
         );
-        console.log(`[hermes:learning] ${agentName} reported gap: ${gap}`);
+        log.info({ agentName, gap }, 'Self-reported gap');
       }
 
       if (learning.selfReportedLearnings.length + learning.selfReportedSkills.length + learning.selfReportedGaps.length > 0) {
-        console.log(`[hermes:learning] ${agentName} self-evolution: ${learning.selfReportedLearnings.length} learnings, ${learning.selfReportedSkills.length} skills, ${learning.selfReportedGaps.length} gaps`);
+        log.info({ agentName, learnings: learning.selfReportedLearnings.length, skills: learning.selfReportedSkills.length, gaps: learning.selfReportedGaps.length }, 'Self-evolution markers processed');
       }
 
       // Store structured learning in PostgreSQL
@@ -462,7 +463,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
         // Check: 2+ failures in 24h (any, not just consecutive)
         const { needsEvolution, failCount } = await checkRecentFailures(agentName);
         if (needsEvolution) {
-          console.log(`[hermes:learning] ${agentName}: ${failCount} failures in 24h → triggering evolution`);
+          log.info({ agentName, failCount }, 'Failures in 24h — triggering evolution');
           await getQueue(QUEUE_NAMES.EVOLUTION).add('refine', {
             type: 'refine-agent',
             agentName,
@@ -477,7 +478,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
       if (!evolutionTriggered) {
         const { needsEvolution, passRate, total } = await checkPassRate(agentName);
         if (needsEvolution) {
-          console.log(`[hermes:learning] ${agentName}: pass rate ${passRate}% (${total} tasks) → triggering evolution`);
+          log.info({ agentName, passRate, total }, 'Pass rate below threshold — triggering evolution');
           await getQueue(QUEUE_NAMES.EVOLUTION).add('refine', {
             type: 'refine-agent',
             agentName,
@@ -492,7 +493,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
       if (success && !evolutionTriggered) {
         const perf = await checkPerformance(agentName, durationMs);
         if (perf.slow) {
-          console.log(`[hermes:learning] ${agentName}: slow task (${perf.ratio}x median) → storing performance warning`);
+          log.info({ agentName, ratio: perf.ratio, medianMs: perf.medianMs }, 'Slow task — storing performance warning');
           await storeMemory(
             `Performance warning: ${agentName} took ${Math.round(durationMs / 1000)}s (${perf.ratio}x median of ${Math.round(perf.medianMs / 1000)}s)`,
             'pitfall',
@@ -512,12 +513,12 @@ export function createLearningWorker(): Worker<LearningJobData> {
           agentName: 'reviewer',
           priority: 8, // low priority — background quality check
         } satisfies IngestionJobData);
-        console.log(`[hermes:learning] Queued quality review for ${agentName}'s code changes`);
+        log.info({ agentName }, 'Queued quality review for code changes');
       }
 
       publish({ type: 'score', action: 'created', data: { agentName, passed: success, score, taskLogId, taskType: learning.taskType } });
 
-      console.log(`[hermes:learning] ${agentName}: ${success ? 'PASS' : 'FAIL'} ${score}/10 [${learning.taskType}] ${learning.qualitySignals.join(', ')}`);
+      log.info({ agentName, passed: success, score, taskType: learning.taskType, qualitySignals: learning.qualitySignals }, 'Scoring complete');
       return { agentName, success, score, taskType: learning.taskType, newSkill: !!learning.filesEdited.length };
     },
     {
@@ -527,7 +528,7 @@ export function createLearningWorker(): Worker<LearningJobData> {
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:learning] Job ${job?.id} failed:`, err.message);
+    log.error({ jobId: job?.id, err }, 'Job failed');
   });
 
   return worker;

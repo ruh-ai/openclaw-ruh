@@ -13,6 +13,7 @@ import { query } from '../db';
 import { spawn } from 'bun';
 import path from 'path';
 import fs from 'fs';
+import { ingestion as log } from '../logger';
 
 /**
  * Generate a deduplication hash for a task description + agent combo.
@@ -147,7 +148,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
     async (job: Job<IngestionJobData>) => {
       const { description, source, agentName, priority, timeout, goalId, metadata } = job.data;
       const boardTaskId = typeof metadata?.boardTaskId === 'string' ? metadata.boardTaskId : undefined;
-      console.log(`[hermes:ingestion] Processing: ${description.slice(0, 80)}...`);
+      log.info({ description: description.slice(0, 80) }, 'Processing task');
 
       // 1. Route to best agent
       const { agentName: resolvedAgent, agentPath } = routeToAgent(description, agentName);
@@ -155,7 +156,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
       // 1b. Circuit breaker check — skip if agent is tripped
       const circuit = await isAgentAvailable(resolvedAgent);
       if (!circuit.available) {
-        console.log(`[hermes:ingestion] Skipped: ${resolvedAgent} circuit open — ${circuit.reason}`);
+        log.info({ agent: resolvedAgent, reason: circuit.reason }, 'Skipped: circuit open');
         // Re-queue with delay to try again later
         await getQueue(QUEUE_NAMES.INGESTION).add('ingest', job.data, {
           delay: 600_000, // retry in 10 minutes
@@ -167,7 +168,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
       // 1c. Deduplication check — skip if identical active task exists
       const hash = dedupHash(description, resolvedAgent);
       if (await isDuplicate(hash)) {
-        console.log(`[hermes:ingestion] Dedup: skipped duplicate task for ${resolvedAgent}: ${description.slice(0, 60)}...`);
+        log.info({ agent: resolvedAgent, description: description.slice(0, 60) }, 'Dedup: skipped duplicate task');
         return { skipped: true, reason: 'duplicate' };
       }
 
@@ -232,7 +233,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
 
       publish({ type: 'task', action: 'created', data: { taskLogId: taskLog.id, boardTaskId, agent: resolvedAgent, source } });
 
-      console.log(`[hermes:ingestion] Routed to ${resolvedAgent} (task: ${taskLog.id})`);
+      log.info({ agent: resolvedAgent, taskLogId: taskLog.id }, 'Routed task');
       return { taskLogId: taskLog.id, queueJobId, agent: resolvedAgent };
     },
     {
@@ -242,7 +243,7 @@ export function createIngestionWorker(): Worker<IngestionJobData> {
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:ingestion] Job ${job?.id} failed:`, err.message);
+    log.error({ jobId: job?.id, err }, 'Job failed');
   });
 
   return worker;

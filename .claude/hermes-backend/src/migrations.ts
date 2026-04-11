@@ -1,4 +1,5 @@
 import { query } from './db';
+import { logger } from './logger';
 
 const MIGRATIONS = [
   {
@@ -335,5 +336,5 @@ export async function runMigrations(): Promise<void> {
     }
   }
   await applyMemoryFtsIndex();
-  console.log(`[hermes] Migrations complete (${MIGRATIONS.length} applied)`);
+  logger.info({ count: MIGRATIONS.length }, 'Migrations complete');
 }

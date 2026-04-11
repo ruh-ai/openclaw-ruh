@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GlitchTip — Self-hosted Sentry-compatible error tracking
+#
+# Lightweight alternative to full Sentry (~300MB RAM vs 4GB+).
+# All @sentry/node and @sentry/nextjs SDKs work unchanged.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.glitchtip.yml up -d
+#
+# Dashboard:   http://localhost:8200
+# DSN format:  http://<key>@localhost:8200/<project-id>
+#
+# First-time setup:
+#   1. Open http://localhost:8200 and create an admin account
+#   2. Create an organization and project
+#   3. Copy the DSN from Settings → Projects → <project> → Client Keys
+#   4. Set SENTRY_DSN=<dsn> in your service .env files
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  glitchtip-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: glitchtip
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: glitchtip_secret
+    volumes:
+      - glitchtip_pg_data:/var/lib/postgresql/data
+    networks:
+      - glitchtip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glitchtip"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  glitchtip-redis:
+    image: redis:7-alpine
+    networks:
+      - glitchtip
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  glitchtip-web:
+    image: glitchtip/glitchtip:v4.1
+    ports:
+      - "8200:8080"
+    environment:
+      DATABASE_URL: postgresql://glitchtip:glitchtip_secret@glitchtip-postgres:5432/glitchtip
+      REDIS_URL: redis://glitchtip-redis:6379/0
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:-change-me-to-a-random-secret-in-production}
+      PORT: "8080"
+      GLITCHTIP_DOMAIN: http://localhost:8200
+      DEFAULT_FROM_EMAIL: noreply@localhost
+      CELERY_WORKER_AUTOSCALE: "1,3"
+      CELERY_WORKER_MAX_TASKS_PER_CHILD: "10000"
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+    networks:
+      - glitchtip
+    restart: unless-stopped
+
+  glitchtip-worker:
+    image: glitchtip/glitchtip:v4.1
+    command: ./bin/run-celery-with-beat.sh
+    environment:
+      DATABASE_URL: postgresql://glitchtip:glitchtip_secret@glitchtip-postgres:5432/glitchtip
+      REDIS_URL: redis://glitchtip-redis:6379/0
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:-change-me-to-a-random-secret-in-production}
+      GLITCHTIP_DOMAIN: http://localhost:8200
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+    networks:
+      - glitchtip
+    restart: unless-stopped
+
+volumes:
+  glitchtip_pg_data:
+
+networks:
+  glitchtip:
+    driver: bridge

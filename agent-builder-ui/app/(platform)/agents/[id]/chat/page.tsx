@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Rocket, Loader2, ChevronDown, MessageSquare, LayoutDashboard, MessagesSquare, Settings, Brain } from "lucide-react";
+import { ChevronLeft, Rocket, Loader2, ChevronDown, MessageSquare, LayoutDashboard, MessagesSquare, Settings, Brain, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAgentsStore } from "@/hooks/use-agents-store";
 import { useSandboxHealth, type SandboxHealth } from "@/hooks/use-sandbox-health";
@@ -14,10 +14,11 @@ import { TabChats } from "./_components/TabChats";
 import { TabMissionControl } from "./_components/TabMissionControl";
 import { TabSettings } from "./_components/TabSettings";
 import { TabSkills } from "./_components/TabSkills";
+import { TabMarketplace } from "./_components/TabMarketplace";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type Tab = "chat" | "chats" | "mission" | "skills" | "settings";
+type Tab = "chat" | "chats" | "mission" | "skills" | "settings" | "marketplace";
 
 interface SandboxRecord {
   sandbox_id: string;
@@ -38,6 +39,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: st
   { id: "mission",  label: "Mission Control",  icon: LayoutDashboard },
   { id: "skills",   label: "Skills",           icon: Brain },
   { id: "settings", label: "Settings",         icon: Settings },
+  { id: "marketplace", label: "Marketplace",  icon: Store },
 ];
 
 function sandboxHealthLabel(health: SandboxHealth | undefined): string {
@@ -97,7 +99,7 @@ export default function AgentChatPage() {
 
   // Active tab — driven by ?tab= search param
   const tabParam = searchParams.get("tab") as Tab | null;
-  const activeTab: Tab = tabParam && ["chat", "chats", "mission", "skills", "settings"].includes(tabParam) ? tabParam : "chat";
+  const activeTab: Tab = tabParam && ["chat", "chats", "mission", "skills", "settings", "marketplace"].includes(tabParam) ? tabParam : "chat";
 
   const [proposedSkillCount, setProposedSkillCount] = useState(0);
 
@@ -368,6 +370,9 @@ export default function AgentChatPage() {
           )}
           {activeTab === "settings" && (
             <TabSettings agent={agent} activeSandbox={activeSandbox} />
+          )}
+          {activeTab === "marketplace" && (
+            <TabMarketplace agent={agent} />
           )}
         </div>
       )}

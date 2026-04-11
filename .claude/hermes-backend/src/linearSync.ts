@@ -3,6 +3,8 @@
  * when Hermes completes work on a Linear-originated goal.
  */
 
+import { linear } from './logger';
+
 const LINEAR_API = 'https://api.linear.app/graphql';
 
 function getLinearApiKey(): string | null {
@@ -23,13 +25,13 @@ async function linearGraphQL(query: string, variables: Record<string, unknown> =
   });
 
   if (!res.ok) {
-    console.error(`[hermes:linear-sync] GraphQL error: ${res.status} ${res.statusText}`);
+    linear.error({ status: res.status, statusText: res.statusText }, 'GraphQL error');
     return null;
   }
 
   const json = await res.json() as any;
   if (json.errors?.length) {
-    console.error(`[hermes:linear-sync] GraphQL errors:`, json.errors);
+    linear.error({ errors: json.errors }, 'GraphQL errors');
   }
   return json.data;
 }
@@ -87,7 +89,7 @@ export async function updateLinearIssueStatus(
   const states = await getTeamStates(teamId);
   const stateId = states.get(targetType);
   if (!stateId) {
-    console.error(`[hermes:linear-sync] No state of type ${targetType} found for team ${teamId}`);
+    linear.error({ targetType, teamId }, 'No state of type found for team');
     return false;
   }
 
@@ -125,7 +127,7 @@ export async function syncGoalResultToLinear(opts: {
   durationMs?: number;
 }): Promise<void> {
   if (!getLinearApiKey()) {
-    console.log('[hermes:linear-sync] No LINEAR_API_KEY — skipping sync');
+    linear.info('No LINEAR_API_KEY — skipping sync');
     return;
   }
 
@@ -136,7 +138,7 @@ export async function syncGoalResultToLinear(opts: {
     if (!issueId && opts.linearIdentifier) {
       const resolved = await resolveLinearIssueId(opts.linearIdentifier);
       if (!resolved) {
-        console.error(`[hermes:linear-sync] Could not resolve ${opts.linearIdentifier}`);
+        linear.error({ identifier: opts.linearIdentifier }, 'Could not resolve identifier');
         return;
       }
       issueId = resolved.id;
@@ -154,7 +156,7 @@ export async function syncGoalResultToLinear(opts: {
     // Update status
     const targetState = opts.success ? 'completed' : 'cancelled';
     const statusOk = await updateLinearIssueStatus(issueId, teamId, opts.success ? 'completed' : 'cancelled');
-    console.log(`[hermes:linear-sync] ${opts.linearIdentifier} status -> ${targetState}: ${statusOk}`);
+    linear.info({ identifier: opts.linearIdentifier, targetState, success: statusOk }, 'Issue status updated');
 
     // Post comment
     const duration = opts.durationMs ? `${Math.round(opts.durationMs / 1000)}s` : 'unknown';
@@ -173,8 +175,8 @@ export async function syncGoalResultToLinear(opts: {
     ].join('\n');
 
     await postLinearComment(issueId, body);
-    console.log(`[hermes:linear-sync] Posted comment on ${opts.linearIdentifier}`);
+    linear.info({ identifier: opts.linearIdentifier }, 'Posted comment');
   } catch (err) {
-    console.error('[hermes:linear-sync] Sync failed:', err);
+    linear.error({ err }, 'Sync failed');
   }
 }

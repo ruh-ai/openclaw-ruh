@@ -49,6 +49,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
       PORT: "8000"
       ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+      # SigNoz observability — enable when running deploy/docker-compose.signoz.yml
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
     ports:
       - "8000:8000"
     volumes:

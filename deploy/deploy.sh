@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# Ensure bun is in PATH (non-interactive SSH doesn't source .bashrc)
+export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+
 APP_DIR="${SSH_DEPLOY_PATH:-/opt/ruh}"
 COMPOSE_FILE="deploy/docker-compose.prod.yml"
 DOCKER_HOST_IP="172.17.0.1"

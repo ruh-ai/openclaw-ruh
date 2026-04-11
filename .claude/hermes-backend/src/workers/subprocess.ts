@@ -4,6 +4,7 @@ import path from 'path';
 import { spawn, type Subprocess } from 'bun';
 import { getConfig } from '../config';
 import { getAgentRunnerHealth } from '../agentRunner';
+import { execution as log } from '../logger';
 
 export interface SubprocessResult {
   success: boolean;
@@ -236,7 +237,7 @@ export async function spawnAgentProcess(opts: {
 
 export async function killAllSubprocesses(): Promise<void> {
   for (const [jobId, proc] of activeProcesses) {
-    console.log(`[hermes] Killing subprocess for job ${jobId}`);
+    log.info({ jobId }, 'Killing subprocess');
     try {
       proc.kill('SIGTERM');
     } catch { /* already dead */ }

@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { getConfig } from './config';
+import { logger } from './logger';
 
 let connection: Redis | null = null;
 
@@ -16,11 +17,11 @@ export function initRedis(): Redis {
   });
 
   connection.on('error', (err) => {
-    console.error('[hermes] Redis error:', err.message);
+    logger.error({ err }, 'Redis connection error');
   });
 
   connection.on('connect', () => {
-    console.log('[hermes] Redis connected');
+    logger.info('Redis connected');
   });
 
   return connection;

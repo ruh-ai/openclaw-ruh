@@ -6,6 +6,7 @@ import { publish } from '../eventBus';
 import { spawnAgentProcess } from './subprocess';
 import * as goalStore from '../stores/goalStore';
 import { query } from '../db';
+import { strategist as log } from '../logger';
 
 interface ProposedGoal {
   title: string;
@@ -97,7 +98,7 @@ Now read the codebase (docs/project-focus.md, TODOS.md, docs/knowledge-base/000-
 
 Output ONLY valid JSON matching your output format specification.`;
 
-  console.log('[hermes:strategist] Running system assessment...');
+  log.info('Running system assessment...');
 
   const result = await spawnAgentProcess({
     jobId: `strategist-${uuidv4().slice(0, 8)}`,
@@ -108,7 +109,7 @@ Output ONLY valid JSON matching your output format specification.`;
   });
 
   if (!result.success) {
-    console.error(`[hermes:strategist] Agent failed: ${result.stderr?.slice(0, 200)}`);
+    log.error({ stderr: result.stderr?.slice(0, 200) }, 'Agent failed');
     throw new Error(`Strategist agent failed: ${result.stderr?.slice(0, 200)}`);
   }
 
@@ -126,7 +127,7 @@ Output ONLY valid JSON matching your output format specification.`;
       parsed = innerMatch ? JSON.parse(innerMatch[0]) : { assessment: 'Could not parse', proposedGoals: [] };
     }
   } catch {
-    console.warn('[hermes:strategist] Could not parse output');
+    log.warn('Could not parse output');
     parsed = { assessment: 'Output parsing failed', proposedGoals: [] };
   }
 
@@ -143,7 +144,7 @@ Output ONLY valid JSON matching your output format specification.`;
     );
 
     if (isDuplicate) {
-      console.log(`[hermes:strategist] Skipped duplicate goal: ${proposed.title}`);
+      log.info({ title: proposed.title }, 'Skipped duplicate goal');
       continue;
     }
 
@@ -164,7 +165,7 @@ Output ONLY valid JSON matching your output format specification.`;
     } satisfies AnalystJobData, { priority: 5 });
 
     goalsCreated++;
-    console.log(`[hermes:strategist] Created goal: ${goal.title} (${goal.priority})`);
+    log.info({ title: goal.title, priority: goal.priority }, 'Created goal');
   }
 
   // Create follow-up goals for completed work
@@ -215,6 +216,6 @@ Output ONLY valid JSON matching your output format specification.`;
 
   publish({ type: 'memory', action: 'created', data: { type: 'strategy-assessment', goalsCreated, followups } });
 
-  console.log(`[hermes:strategist] Assessment complete: ${goalsCreated} goals, ${followups} follow-ups`);
+  log.info({ goalsCreated, followups }, 'Assessment complete');
   return { goalsCreated, assessment: parsed.assessment || '', followups };
 }

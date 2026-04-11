@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { getConfig } from './config';
 import { query } from './db';
+import { sync } from './logger';
 
 export interface ParsedAgent {
   name: string;
@@ -101,7 +102,7 @@ export async function syncAgentsFromDisk(): Promise<{
   const agentsDir = config.agentsDir;
 
   if (!fs.existsSync(agentsDir)) {
-    console.warn(`[hermes:sync] Agents directory not found: ${agentsDir}`);
+    sync.warn({ agentsDir }, 'Agents directory not found');
     return { synced: 0, created: 0, updated: 0, unchanged: 0 };
   }
 
@@ -127,7 +128,7 @@ export async function syncAgentsFromDisk(): Promise<{
          parsed.promptHash, parsed.tools, parsed.stack, JSON.stringify(parsed.skills), parsed.promptSize],
       );
       created++;
-      console.log(`[hermes:sync] Created agent: ${parsed.name}`);
+      sync.info({ agent: parsed.name }, 'Created agent');
     } else {
       const row = existing.rows[0];
       const currentHash = row.prompt_hash;
@@ -144,7 +145,7 @@ export async function syncAgentsFromDisk(): Promise<{
            parsed.tools, parsed.stack, JSON.stringify(parsed.skills), parsed.promptSize, parsed.name],
         );
         updated++;
-        console.log(`[hermes:sync] Updated agent: ${parsed.name} (prompt changed)`);
+        sync.info({ agent: parsed.name }, 'Updated agent (prompt changed)');
       } else {
         // Just update sync timestamp and fill missing fields
         await query(
@@ -164,6 +165,6 @@ export async function syncAgentsFromDisk(): Promise<{
   }
 
   const total = created + updated + unchanged;
-  console.log(`[hermes:sync] Synced ${total} agents (${created} created, ${updated} updated, ${unchanged} unchanged)`);
+  sync.info({ total, created, updated, unchanged }, 'Agent sync complete');
   return { synced: total, created, updated, unchanged };
 }

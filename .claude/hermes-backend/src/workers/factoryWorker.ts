@@ -8,6 +8,7 @@ import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type FactoryJobData, type In
 import { publish } from '../eventBus';
 import { query } from '../db';
 import { spawnAgentProcess } from './subprocess';
+import { factory as log } from '../logger';
 
 /**
  * List existing agent names and descriptions for the factory prompt.
@@ -35,7 +36,7 @@ export function createFactoryWorker(): Worker<FactoryJobData> {
     QUEUE_NAMES.FACTORY,
     async (job: Job<FactoryJobData>) => {
       const { gapDescription, recentTasks, trigger } = job.data;
-      console.log(`[hermes:factory] Creating new agent for gap: ${gapDescription.slice(0, 80)}...`);
+      log.info({ gap: gapDescription.slice(0, 80) }, 'Creating new agent for gap');
 
       const config = getConfig();
       const existingAgents = await getExistingAgents();
@@ -82,7 +83,7 @@ Output ONLY the complete .md file content, nothing else. Start with the frontmat
       });
 
       if (!result.success || !result.stdout.trim()) {
-        console.error('[hermes:factory] Agent creation subprocess failed');
+        log.error({ stderr: result.stderr?.slice(0, 200) }, 'Agent creation subprocess failed');
         throw new Error(result.stderr || 'Agent creation subprocess failed');
       }
 
@@ -99,7 +100,7 @@ Output ONLY the complete .md file content, nothing else. Start with the frontmat
       // Write the agent file
       const agentPath = path.join(config.agentsDir, `${agentName}.md`);
       if (fs.existsSync(agentPath)) {
-        console.warn(`[hermes:factory] Agent ${agentName} already exists — skipping`);
+        log.warn({ agentName }, 'Agent already exists — skipping');
         return { created: false, reason: 'Agent already exists', agentName };
       }
 
@@ -155,7 +156,7 @@ Output ONLY the complete .md file content, nothing else. Start with the frontmat
 
       publish({ type: 'refinement', action: 'created', data: { agentName, type: 'factory-creation' } });
 
-      console.log(`[hermes:factory] Created agent: ${agentName} at ${agentPath}`);
+      log.info({ agentName, agentPath }, 'Created agent');
       return { created: true, agentName, agentPath };
     },
     {
@@ -165,7 +166,7 @@ Output ONLY the complete .md file content, nothing else. Start with the frontmat
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:factory] Job ${job?.id} failed:`, err.message);
+    log.error({ jobId: job?.id, err }, 'Job failed');
   });
 
   return worker;

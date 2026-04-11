@@ -12,6 +12,9 @@ export interface MarketplaceListing {
   screenshots: string[];
   version: string;
   status: "draft" | "pending_review" | "published" | "rejected" | "archived";
+  repoUrl: string | null;
+  ownerOrgId: string | null;
+  reviewNotes: string | null;
   installCount: number;
   avgRating: number;
   publishedAt: string | null;

@@ -1,0 +1,52 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 10s
+  signozspanmetrics/prometheus:
+    metrics_exporter: prometheus
+    latency_histogram_buckets: [100us, 1ms, 2ms, 6ms, 10ms, 50ms, 100ms, 250ms, 500ms, 1000ms, 1400ms, 2000ms, 5s, 10s, 20s, 40s, 60s]
+    dimensions_cache_size: 10000
+    dimensions:
+      - name: service.namespace
+        default: default
+      - name: deployment.environment
+        default: default
+
+exporters:
+  clickhousetraces:
+    datasource: tcp://signoz-clickhouse:9000/signoz_traces
+    migrations: /signoz-collector/migrations/traces
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+  clickhousemetricswrite:
+    endpoint: tcp://signoz-clickhouse:9000/signoz_metrics
+    resource_to_telemetry_conversion:
+      enabled: true
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+extensions:
+  zpages: {}
+
+service:
+  extensions: [zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [signozspanmetrics/prometheus, batch]
+      exporters: [clickhousetraces]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhousemetricswrite]

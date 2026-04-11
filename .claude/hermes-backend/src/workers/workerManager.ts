@@ -13,13 +13,14 @@ import * as workerPoolStore from '../stores/workerPoolStore';
 import * as goalStore from '../stores/goalStore';
 import * as scheduledTaskStore from '../stores/scheduledTaskStore';
 import { publish } from '../eventBus';
+import { workers as log } from '../logger';
 
 export async function shouldRunBuiltInSchedule(scheduleName: string): Promise<boolean> {
   try {
     const schedule = await scheduledTaskStore.getScheduledTaskByName(scheduleName);
     return schedule?.enabled ?? true;
   } catch (err) {
-    console.warn(`[hermes:workers] Could not read built-in schedule "${scheduleName}", defaulting to enabled`, err);
+    log.warn({ err, scheduleName }, 'Could not read built-in schedule, defaulting to enabled');
     return true;
   }
 }
@@ -31,7 +32,7 @@ export class WorkerManager {
   async start(): Promise<void> {
     if (this.running) return;
 
-    console.log('[hermes:workers] Starting worker pool...');
+    log.info('Starting worker pool...');
 
     // Create all workers and store in Map keyed by queue name
     const workers: Array<[string, Worker]> = [
@@ -48,7 +49,7 @@ export class WorkerManager {
     }
 
     this.running = true;
-    console.log(`[hermes:workers] ${this.workerMap.size} workers started`);
+    log.info({ count: this.workerMap.size }, 'Workers started');
   }
 
   /**
@@ -125,13 +126,12 @@ export class WorkerManager {
     // Sync built-in schedules to DB (readable from Mission Control)
     await this._syncBuiltInSchedules(config);
 
-    console.log('[hermes:workers] Scheduled jobs registered:');
-    console.log(`  - Evolution analysis: every ${config.evolutionIntervalMs / 60000}min`);
-    console.log(`  - Memory maintenance: every ${config.maintenanceIntervalMs / 60000}min`);
-    console.log('  - Performance report: every 24h');
-    console.log('  - Agent health check: every 24h');
-    console.log(`  - Analyst sweep: every ${config.analystIntervalMs / 60000}min`);
-    console.log(`  - Strategist: every ${config.strategistIntervalMs / 60000}min`);
+    log.info({
+      evolutionMin: config.evolutionIntervalMs / 60000,
+      maintenanceMin: config.maintenanceIntervalMs / 60000,
+      analystMin: config.analystIntervalMs / 60000,
+      strategistMin: config.strategistIntervalMs / 60000,
+    }, 'Scheduled jobs registered');
   }
 
   /**
@@ -208,7 +208,7 @@ export class WorkerManager {
     const sweep = async () => {
       try {
         if (!(await shouldRunBuiltInSchedule('analyst-sweep'))) {
-          console.log('[hermes:workers] Analyst sweep skipped because the schedule is disabled');
+          log.info('Analyst sweep skipped because the schedule is disabled');
           return;
         }
 
@@ -226,13 +226,13 @@ export class WorkerManager {
         }
 
         if (goals.items.length > 0) {
-          console.log(`[hermes:workers] Analyst sweep: enqueued ${goals.items.length} goals`);
+          log.info({ count: goals.items.length }, 'Analyst sweep: enqueued goals');
           // Track in scheduled_tasks for Mission Control visibility
           const { query: dbQuery } = await import('../db');
           await dbQuery(`UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE name = 'analyst-sweep'`).catch(() => {});
         }
       } catch (err) {
-        console.error('[hermes:workers] Analyst sweep failed:', err);
+        log.error({ err }, 'Analyst sweep failed');
       }
     };
 
@@ -248,18 +248,18 @@ export class WorkerManager {
     const run = async () => {
       try {
         if (!(await shouldRunBuiltInSchedule('strategist-assessment'))) {
-          console.log('[hermes:workers] Strategist skipped because the schedule is disabled');
+          log.info('Strategist skipped because the schedule is disabled');
           return;
         }
 
         const { runStrategist } = await import('./strategistWorker');
         const result = await runStrategist();
-        console.log(`[hermes:workers] Strategist: "${result.assessment.slice(0, 80)}..." — ${result.goalsCreated} goals, ${result.followups} follow-ups`);
+        log.info({ goalsCreated: result.goalsCreated, followups: result.followups, assessment: result.assessment.slice(0, 80) }, 'Strategist completed');
         // Track in scheduled_tasks for Mission Control visibility
         const { query: dbQuery } = await import('../db');
         await dbQuery(`UPDATE scheduled_tasks SET last_run_at = NOW(), run_count = run_count + 1 WHERE name = 'strategist-assessment'`).catch(() => {});
       } catch (err) {
-        console.error('[hermes:workers] Strategist failed:', err);
+        log.error({ err }, 'Strategist failed');
       }
     };
 
@@ -286,10 +286,10 @@ export class WorkerManager {
     }
 
     if (changes.length > 0) {
-      console.log(`[hermes:workers] Concurrency reloaded: ${changes.join(', ')}`);
+      log.info({ changes }, 'Concurrency reloaded');
       publish({ type: 'session', action: 'updated', data: { type: 'concurrency-reloaded', changes } });
     } else {
-      console.log('[hermes:workers] Concurrency reload: no changes');
+      log.info('Concurrency reload: no changes');
     }
   }
 
@@ -299,25 +299,25 @@ export class WorkerManager {
   async shutdown(): Promise<void> {
     if (!this.running) return;
 
-    console.log('[hermes:workers] Shutting down...');
+    log.info('Shutting down...');
     this.running = false;
 
     const workers = Array.from(this.workerMap.values());
 
     // 1. Pause all workers
     await Promise.all(workers.map(w => w.pause()));
-    console.log('[hermes:workers] Workers paused');
+    log.info('Workers paused');
 
     // 2. Wait for active jobs (30s timeout)
     const drainStart = Date.now();
     while (activeSubprocessCount() > 0 && Date.now() - drainStart < 30_000) {
-      console.log(`[hermes:workers] Waiting for ${activeSubprocessCount()} active subprocesses...`);
+      log.info({ count: activeSubprocessCount() }, 'Waiting for active subprocesses...');
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
     // 3. Kill remaining
     if (activeSubprocessCount() > 0) {
-      console.log(`[hermes:workers] Force-killing ${activeSubprocessCount()} remaining subprocesses`);
+      log.warn({ count: activeSubprocessCount() }, 'Force-killing remaining subprocesses');
       await killAllSubprocesses();
     }
 
@@ -329,7 +329,7 @@ export class WorkerManager {
     await closeQueues();
     await closeFlowProducer();
 
-    console.log('[hermes:workers] Shutdown complete');
+    log.info('Shutdown complete');
   }
 
   /**

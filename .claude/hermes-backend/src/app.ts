@@ -10,6 +10,7 @@ import * as refinementStore from './stores/refinementStore';
 import * as sessionStore from './stores/sessionStore';
 import { query } from './db';
 import * as eventBus from './eventBus';
+import { logger } from './logger';
 import { queueRouter } from './routes/queueRoutes';
 import { scheduleRouter } from './routes/scheduleRoutes';
 import { evolutionRouter } from './routes/evolutionRoutes';
@@ -370,7 +371,7 @@ app.patch('/api/sessions/:id', asyncHandler(async (req, res) => {
 app.use((err: Error & { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = err.status ?? 500;
   if (status >= 500) {
-    console.error(`[hermes] Error: ${err.message}`, err.stack);
+    logger.error({ err }, 'Unhandled request error');
     res.status(status).json({ error: 'Internal server error' });
   } else {
     res.status(status).json({ error: err.message });

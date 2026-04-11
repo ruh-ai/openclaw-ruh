@@ -6,6 +6,7 @@ import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type AnalystJobData, type IngestionJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
 import { spawnAgentProcess } from './subprocess';
+import { analyst as log } from '../logger';
 import * as taskStore from '../stores/taskStore';
 import * as goalStore from '../stores/goalStore';
 import * as boardTaskStore from '../stores/boardTaskStore';
@@ -77,7 +78,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
     QUEUE_NAMES.ANALYST,
     async (job: Job<AnalystJobData>) => {
       const { goalId, goalTitle, trigger } = job.data;
-      console.log(`[hermes:analyst] Analyzing goal: ${goalTitle} (${goalId})`);
+      log.info({ goalTitle, goalId }, 'Analyzing goal');
 
       // Assemble the prompt
       const prompt = await assembleAnalystPrompt(job.data);
@@ -93,7 +94,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
       });
 
       if (!result.success) {
-        console.error(`[hermes:analyst] Agent failed for goal ${goalId}: ${result.stderr?.slice(0, 200)}`);
+        log.error({ goalId, stderr: result.stderr?.slice(0, 200) }, 'Agent failed for goal');
         throw new Error(`Analyst agent failed: ${result.stderr?.slice(0, 200)}`);
       }
 
@@ -113,7 +114,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
           parsed = innerMatch ? JSON.parse(innerMatch[0]) : { goalId, analysis: 'Could not parse output', tasks: [] };
         }
       } catch {
-        console.warn(`[hermes:analyst] Could not parse analyst output for goal ${goalId}`);
+        log.warn({ goalId }, 'Could not parse analyst output');
         parsed = { goalId, analysis: 'Output parsing failed', tasks: [] };
       }
 
@@ -183,7 +184,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
 
       publish({ type: 'task', action: 'created', data: { type: 'analyst-decomposition', goalId, tasksCreated } });
 
-      console.log(`[hermes:analyst] Goal "${goalTitle}": ${parsed.analysis}. Created ${tasksCreated} tasks.`);
+      log.info({ goalTitle, analysis: parsed.analysis, tasksCreated }, 'Goal analysis complete');
       return { goalId, analysis: parsed.analysis, tasksCreated };
     },
     {
@@ -193,7 +194,7 @@ export function createAnalystWorker(): Worker<AnalystJobData> {
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:analyst] Job ${job?.id} failed:`, err.message);
+    log.error({ jobId: job?.id, err }, 'Job failed');
   });
 
   return worker;

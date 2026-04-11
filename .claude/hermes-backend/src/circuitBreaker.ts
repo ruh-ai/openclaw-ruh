@@ -1,5 +1,6 @@
 import { query } from './db';
 import { publish } from './eventBus';
+import { circuit } from './logger';
 
 const FAILURE_THRESHOLD = 3;      // consecutive failures to trip
 const OPEN_DURATION_MS = 1800000; // 30 minutes in open state before half-open
@@ -48,7 +49,7 @@ export async function recordFailure(agentName: string): Promise<{ tripped: boole
       [agentName],
     );
 
-    console.log(`[hermes:circuit] TRIPPED: ${agentName} (${failures} consecutive failures) — paused for 30min`);
+    circuit.warn({ agentName, consecutiveFailures: failures }, 'TRIPPED — paused for 30min');
     publish({ type: 'refinement', action: 'created', data: {
       type: 'circuit-breaker-tripped',
       agentName,
@@ -89,7 +90,7 @@ export async function isAgentAvailable(agentName: string): Promise<{ available: 
         `UPDATE agents SET circuit_state = 'half-open', updated_at = NOW() WHERE name = $1`,
         [agentName],
       );
-      console.log(`[hermes:circuit] ${agentName} transitioned to half-open (${Math.round(elapsed / 60000)}min elapsed)`);
+      circuit.info({ agentName, elapsedMin: Math.round(elapsed / 60000) }, 'Transitioned to half-open');
       return { available: true, state: 'half-open' };
     }
 

@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getConfig } from './config';
 import { query } from './db';
 import { syncAgentsFromDisk } from './agentSync';
+import { skills } from './logger';
 
 /**
  * Get skills an agent has acquired from task execution (stored as type='skill' memories).
@@ -78,7 +79,7 @@ export async function writeSkillsToAgent(agentName: string): Promise<{ added: nu
   // Re-sync to update prompt hash and skills list
   await syncAgentsFromDisk();
 
-  console.log(`[hermes:skills] ${agentName}: added ${newSkills.length} learned skills`);
+  skills.info({ agent: agentName, added: newSkills.length }, 'Added learned skills');
   return { added: newSkills.length, total: acquiredSkills.length };
 }
 
@@ -107,7 +108,7 @@ export async function runSkillAcquisitionSweep(): Promise<{ agentsUpdated: numbe
   }
 
   if (totalSkillsAdded > 0) {
-    console.log(`[hermes:skills] Sweep: ${agentsUpdated} agents updated, ${totalSkillsAdded} skills added`);
+    skills.info({ agentsUpdated, totalSkillsAdded }, 'Skill acquisition sweep complete');
   }
 
   return { agentsUpdated, totalSkillsAdded };

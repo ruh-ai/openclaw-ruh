@@ -8,6 +8,7 @@ import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type EvolutionJobData, type 
 import { publish } from '../eventBus';
 import { query } from '../db';
 import { spawnAgentProcess } from './subprocess';
+import { evolution as log } from '../logger';
 
 /**
  * Query agent performance trends from PostgreSQL.
@@ -81,7 +82,7 @@ async function findGaps(): Promise<string[]> {
  * Run scheduled evolution analysis.
  */
 async function runScheduledAnalysis(): Promise<Record<string, unknown>> {
-  console.log('[hermes:evolution] Running scheduled analysis...');
+  log.info('Running scheduled analysis...');
 
   const trends = await getAgentTrends();
   const gaps = await findGaps();
@@ -90,7 +91,7 @@ async function runScheduledAnalysis(): Promise<Record<string, unknown>> {
   // Check for declining agents (lowered thresholds: 2 streak or <80% pass rate)
   for (const trend of trends) {
     if (trend.failStreak >= 2 || trend.passRate < 80) {
-      console.log(`[hermes:evolution] Agent ${trend.agentName} needs refinement (pass rate: ${trend.passRate}%, streak: ${trend.failStreak})`);
+      log.info({ agentName: trend.agentName, passRate: trend.passRate, failStreak: trend.failStreak }, 'Agent needs refinement');
 
       await getQueue(QUEUE_NAMES.EVOLUTION).add('refine', {
         type: 'refine-agent',
@@ -115,7 +116,7 @@ async function runScheduledAnalysis(): Promise<Record<string, unknown>> {
   `);
   if (selfGapsResult.rows.length >= 2) {
     const gapTexts = selfGapsResult.rows.map(r => `[${r.agent}] ${r.text}`);
-    console.log(`[hermes:evolution] ${selfGapsResult.rows.length} self-reported gaps from agents`);
+    log.info({ count: selfGapsResult.rows.length }, 'Self-reported gaps from agents');
     actions.push({
       type: 'gaps-detected',
       description: `${selfGapsResult.rows.length} self-reported capability gaps: ${gapTexts.slice(0, 3).join('; ')}`,
@@ -125,7 +126,7 @@ async function runScheduledAnalysis(): Promise<Record<string, unknown>> {
   // Check for gaps (tasks consistently routed to hermes — lowered from 5 to 3)
   if (gaps.length >= 3) {
     const gapSummary = gaps.slice(0, 5).join('; ');
-    console.log(`[hermes:evolution] Gap detected: ${gaps.length} tasks routed to hermes`);
+    log.info({ count: gaps.length }, 'Gap detected: tasks routed to hermes');
 
     await getQueue(QUEUE_NAMES.FACTORY).add('create', {
       gapDescription: `${gaps.length} tasks in the last 7 days were routed to hermes (no specialist). Examples: ${gapSummary}`,
@@ -171,7 +172,7 @@ async function refineAgent(agentName: string, failureContext?: string): Promise<
   const agentPath = path.join(config.agentsDir, `${agentName}.md`);
 
   if (!fs.existsSync(agentPath)) {
-    console.warn(`[hermes:evolution] Agent file not found: ${agentPath}`);
+    log.warn({ agentPath }, 'Agent file not found');
     return { refined: false, reason: 'Agent file not found' };
   }
 
@@ -281,7 +282,7 @@ Be surgical — add the minimum instructions needed to prevent these specific fa
 
   publish({ type: 'refinement', action: 'created', data: { agentName, reason: failureContext } });
 
-  console.log(`[hermes:evolution] Refined ${agentName} — test task scheduled`);
+  log.info({ agentName }, 'Refined agent — test task scheduled');
   return { refined: true, agentName, failureCount: failures.rows.length };
 }
 
@@ -326,7 +327,7 @@ async function runMemoryMaintenance(): Promise<Record<string, unknown>> {
   `);
   const staleCleaned = staleResult.rows.length;
   if (staleCleaned > 0) {
-    console.log(`[hermes:evolution] Cleaned ${staleCleaned} stale running tasks`);
+    log.info({ count: staleCleaned }, 'Cleaned stale running tasks');
     for (const row of staleResult.rows) {
       await query('UPDATE agents SET tasks_failed = tasks_failed + 1 WHERE name = $1', [row.delegated_to]);
     }
@@ -371,7 +372,7 @@ export function createEvolutionWorker(): Worker<EvolutionJobData> {
     QUEUE_NAMES.EVOLUTION,
     async (job: Job<EvolutionJobData>) => {
       const { type, agentName, failureContext, trigger } = job.data;
-      console.log(`[hermes:evolution] Processing: type=${type} trigger=${trigger}`);
+      log.info({ type, trigger }, 'Processing evolution job');
 
       switch (type) {
         case 'scheduled-analysis': {
@@ -442,7 +443,7 @@ export function createEvolutionWorker(): Worker<EvolutionJobData> {
   );
 
   worker.on('failed', (job, err) => {
-    console.error(`[hermes:evolution] Job ${job?.id} failed:`, err.message);
+    log.error({ jobId: job?.id, err }, 'Job failed');
   });
 
   return worker;

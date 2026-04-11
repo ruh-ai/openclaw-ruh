@@ -58,6 +58,11 @@ export async function fetchBackendWithAuth(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  // Distributed trace correlation — lets backend trace requests back to this client
+  if (!headers.has("x-request-id")) {
+    headers.set("x-request-id", crypto.randomUUID());
+  }
+
   const res = await fetch(input, {
     ...init,
     credentials: init.credentials ?? "include",
