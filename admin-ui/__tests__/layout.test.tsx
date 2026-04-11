@@ -1,5 +1,5 @@
-import { describe, expect, test, mock } from "bun:test";
-import { render } from "@testing-library/react";
+import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { render, act } from "@testing-library/react";
 import lucideMock from "../test-lucide-mock";
 mock.module("lucide-react", () => lucideMock);
 
@@ -72,6 +72,51 @@ describe("AdminLayout", () => {
       </AdminLayout>,
     );
     expect(getByText("My page content")).toBeTruthy();
+  });
+
+  test("Sign Out button calls logout endpoint and redirects", async () => {
+    const mockFetch = mock(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response),
+    );
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    // Mock window.location.href setter
+    const originalLocation = window.location;
+    const locationMock = { ...originalLocation, href: "" };
+    Object.defineProperty(window, "location", {
+      value: locationMock,
+      writable: true,
+    });
+
+    const { default: AdminLayout } = await import("../app/(admin)/layout");
+    const { container } = render(
+      <AdminLayout>
+        <div>Test</div>
+      </AdminLayout>,
+    );
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const signOutBtn = buttons.find((b) => b.textContent?.includes("Sign Out"));
+    expect(signOutBtn).toBeTruthy();
+
+    await act(async () => {
+      signOutBtn!.click();
+      // Let the async handler complete
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Verify logout was called
+    const urls = mockFetch.mock.calls.map((c) => (c as unknown[])[0] as string);
+    expect(urls.some((u) => u.includes("/api/auth/logout"))).toBe(true);
+
+    // Verify redirect
+    expect(locationMock.href).toBe("/login");
+
+    // Restore
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+    });
   });
 
   test("navigation links have correct hrefs", async () => {

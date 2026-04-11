@@ -137,4 +137,129 @@ describe("AgentsPage", () => {
     });
     expect(container.textContent).toContain("draft");
   });
+
+  test("restartSandboxes: calls restart endpoint when confirmed", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    globalThis.confirm = mock(() => true) as unknown as typeof confirm;
+
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Google Ads Agent");
+    });
+
+    // Click the "Restart runtime" button
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const restartBtn = buttons.find((b) => b.textContent?.includes("Restart runtime"));
+    expect(restartBtn).toBeTruthy();
+    await act(async () => {
+      restartBtn!.click();
+    });
+
+    await waitFor(() => {
+      const urls = mockFetch.mock.calls.map((c) => (c as unknown[])[0] as string);
+      expect(urls.some((u) => u.includes("/restart"))).toBe(true);
+    });
+  });
+
+  test("restartSandboxes: no request when confirm is cancelled", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    globalThis.confirm = mock(() => false) as unknown as typeof confirm;
+
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Google Ads Agent");
+    });
+
+    const callsBefore = mockFetch.mock.calls.length;
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const restartBtn = buttons.find((b) => b.textContent?.includes("Restart runtime"));
+    if (restartBtn) {
+      await act(async () => {
+        restartBtn.click();
+      });
+    }
+    // No extra fetch calls should have been made
+    expect(mockFetch.mock.calls.length).toBe(callsBefore);
+  });
+
+  test("deleteAgent: calls delete endpoint when confirmed", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    globalThis.confirm = mock(() => true) as unknown as typeof confirm;
+
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Google Ads Agent");
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const deleteBtn = buttons.find((b) => b.textContent?.includes("Delete agent"));
+    expect(deleteBtn).toBeTruthy();
+    await act(async () => {
+      deleteBtn!.click();
+    });
+
+    await waitFor(() => {
+      const urls = mockFetch.mock.calls.map((c) => (c as unknown[])[0] as string);
+      expect(urls.some((u) => u.includes("/api/admin/agents/"))).toBe(true);
+    });
+  });
+
+  test("deleteAgent: no request when confirm is cancelled", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    globalThis.confirm = mock(() => false) as unknown as typeof confirm;
+
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Google Ads Agent");
+    });
+
+    const callsBefore = mockFetch.mock.calls.length;
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const deleteBtn = buttons.find((b) => b.textContent?.includes("Delete agent"));
+    if (deleteBtn) {
+      await act(async () => {
+        deleteBtn.click();
+      });
+    }
+    expect(mockFetch.mock.calls.length).toBe(callsBefore);
+  });
+
+  test("shows error message when API returns error", async () => {
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ message: "Internal server error" }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Internal server error");
+    });
+  });
 });

@@ -85,7 +85,6 @@ describe("AgentCard", () => {
 
   test("does not crash without onClick", () => {
     const { container } = render(<AgentCard listing={baseListing} />);
-    fireEvent.click(container.querySelector("button")!);
-    // No error = pass
+    expect(() => fireEvent.click(container.querySelector("button")!)).not.toThrow();
   });
 });

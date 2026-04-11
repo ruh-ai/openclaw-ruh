@@ -8,8 +8,8 @@
 
 import { readFileSync } from 'fs';
 
-const LINE_THRESHOLD = 0.60;   // 60%
-const FUNC_THRESHOLD = 0.60;   // 60%
+const LINE_THRESHOLD = 0.90;   // 90%
+const FUNC_THRESHOLD = 0.90;   // 90%
 
 const lcovPath = './coverage/lcov.info';
 

@@ -1,11 +1,13 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
 import { render, fireEvent, waitFor } from "@testing-library/react";
 import lucideMock from "../test-lucide-mock";
 mock.module("lucide-react", () => lucideMock);
 
+const pushFn = mock(() => {});
+
 // Mock next/navigation before importing the component
 mock.module("next/navigation", () => ({
-  useRouter: () => ({ push: mock(() => {}), replace: mock(() => {}), back: mock(() => {}) }),
+  useRouter: () => ({ push: pushFn, replace: mock(() => {}), back: mock(() => {}) }),
   usePathname: () => "/login",
 }));
 
@@ -21,6 +23,7 @@ const mockFetch = mock(() =>
 describe("AdminLogin", () => {
   beforeEach(() => {
     mockFetch.mockClear();
+    pushFn.mockClear();
     globalThis.fetch = mockFetch as unknown as typeof fetch;
   });
 
@@ -67,6 +70,63 @@ describe("AdminLogin", () => {
 
     await waitFor(() => {
       expect(getByText("Signing in...")).toBeTruthy();
+    });
+  });
+
+  test("redirects to /dashboard on successful admin login", async () => {
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            user: { role: "admin" },
+            appAccess: { admin: true, builder: true, customer: false },
+            accessToken: "admin-tok",
+          }),
+      } as Response),
+    );
+
+    const { default: AdminLogin } = await import("../app/(auth)/login/page");
+    const { getByPlaceholderText, container } = render(<AdminLogin />);
+
+    fireEvent.change(getByPlaceholderText("admin@ruh.ai"), {
+      target: { value: "admin@ruh.ai" },
+    });
+
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: "SuperSecret1!" } });
+
+    const form = container.querySelector("form");
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(pushFn).toHaveBeenCalledWith("/dashboard");
+    });
+  });
+
+  test("shows error message when login fetch returns non-ok response", async () => {
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: false,
+        json: () => Promise.resolve({ message: "Invalid credentials" }),
+      } as Response),
+    );
+
+    const { default: AdminLogin } = await import("../app/(auth)/login/page");
+    const { getByText, getByPlaceholderText, container } = render(<AdminLogin />);
+
+    fireEvent.change(getByPlaceholderText("admin@ruh.ai"), {
+      target: { value: "wrong@ruh.ai" },
+    });
+
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(passwordInput, { target: { value: "wrongPass!" } });
+
+    const form = container.querySelector("form");
+    fireEvent.submit(form!);
+
+    await waitFor(() => {
+      expect(getByText("Invalid credentials")).toBeTruthy();
     });
   });
 

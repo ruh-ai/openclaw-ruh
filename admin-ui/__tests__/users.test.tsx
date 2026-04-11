@@ -117,6 +117,223 @@ describe("UsersPage", () => {
     }
   });
 
+  test("updateUser: calls PATCH endpoint when Suspend button is clicked", async () => {
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+
+    // Find the Suspend button (user is active so button reads "Suspend")
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const suspendBtn = buttons.find((b) => b.textContent?.includes("Suspend"));
+    expect(suspendBtn).toBeTruthy();
+
+    const callsBefore = mockFetch.mock.calls.length;
+    await act(async () => {
+      suspendBtn!.click();
+    });
+
+    await waitFor(() => {
+      expect(mockFetch.mock.calls.length).toBeGreaterThan(callsBefore);
+      const inits = mockFetch.mock.calls.map((c) => (c as unknown[])[1] as RequestInit);
+      expect(inits.some((i) => i?.method === "PATCH")).toBe(true);
+    });
+  });
+
+  test("deleteUser: calls DELETE endpoint when confirmed", async () => {
+    globalThis.confirm = mock(() => true) as unknown as typeof confirm;
+
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const deleteBtn = buttons.find((b) => b.textContent?.includes("Delete user"));
+    expect(deleteBtn).toBeTruthy();
+
+    const callsBefore = mockFetch.mock.calls.length;
+    await act(async () => {
+      deleteBtn!.click();
+    });
+
+    await waitFor(() => {
+      expect(mockFetch.mock.calls.length).toBeGreaterThan(callsBefore);
+      const inits = mockFetch.mock.calls.map((c) => (c as unknown[])[1] as RequestInit);
+      expect(inits.some((i) => i?.method === "DELETE")).toBe(true);
+    });
+  });
+
+  test("deleteUser: no DELETE request when confirm is cancelled", async () => {
+    globalThis.confirm = mock(() => false) as unknown as typeof confirm;
+
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+
+    const callsBefore = mockFetch.mock.calls.length;
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const deleteBtn = buttons.find((b) => b.textContent?.includes("Delete user"));
+    if (deleteBtn) {
+      await act(async () => {
+        deleteBtn.click();
+      });
+    }
+    expect(mockFetch.mock.calls.length).toBe(callsBefore);
+  });
+
+  test("search input onChange fires", async () => {
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    const searchInput = container.querySelector(
+      'input[placeholder="Search email or display name"]',
+    ) as HTMLInputElement;
+    expect(searchInput).toBeTruthy();
+    await act(async () => {
+      await userEvent.type(searchInput, "admin");
+    });
+    expect(searchInput.value).toBe("admin");
+  });
+
+  test("role filter onChange fires", async () => {
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    const selects = Array.from(container.querySelectorAll("select"));
+    const roleSelect = selects.find((s) =>
+      Array.from(s.options).some((o) => o.textContent === "All roles"),
+    );
+    expect(roleSelect).toBeTruthy();
+    await act(async () => {
+      await userEvent.selectOptions(roleSelect!, "admin");
+    });
+    expect(roleSelect!.value).toBe("admin");
+  });
+
+  test("updateUser: shows error when PATCH fails", async () => {
+    let callCount = 0;
+    mockFetch.mockImplementation(() => {
+      callCount++;
+      if (callCount > 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: () => Promise.resolve({ message: "Update failed" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            items: [
+              {
+                id: "u1", email: "test@ruh.ai", displayName: "Test User",
+                role: "developer", status: "active", emailVerified: true,
+                createdAt: "2026-01-01",
+                appAccess: { admin: false, builder: true, customer: false },
+                memberships: [], primaryOrganization: null,
+              },
+            ],
+            total: 1,
+          }),
+      } as Response);
+    });
+
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const suspendBtn = buttons.find((b) => b.textContent?.includes("Suspend"));
+    expect(suspendBtn).toBeTruthy();
+
+    await act(async () => {
+      suspendBtn!.click();
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Update failed");
+    }, { timeout: 3000 });
+  });
+
+  test("deleteUser: shows error when DELETE fails", async () => {
+    globalThis.confirm = mock(() => true) as unknown as typeof confirm;
+    let callCount = 0;
+    mockFetch.mockImplementation(() => {
+      callCount++;
+      if (callCount > 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: () => Promise.resolve({ message: "Delete failed" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            items: [
+              {
+                id: "u1", email: "test@ruh.ai", displayName: "Test User",
+                role: "developer", status: "active", emailVerified: true,
+                createdAt: "2026-01-01",
+                appAccess: { admin: false, builder: true, customer: false },
+                memberships: [], primaryOrganization: null,
+              },
+            ],
+            total: 1,
+          }),
+      } as Response);
+    });
+
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("test@ruh.ai");
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    const deleteBtn = buttons.find((b) => b.textContent?.includes("Delete user"));
+    expect(deleteBtn).toBeTruthy();
+
+    await act(async () => {
+      deleteBtn!.click();
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Delete failed");
+    }, { timeout: 3000 });
+  });
+
+  test("roleTone returns neutral for end_user role", async () => {
+    const endUser = {
+      id: "u3", email: "user@ruh.ai", displayName: "End User",
+      role: "end_user", status: "pending", emailVerified: false,
+      createdAt: "2026-01-01",
+      appAccess: { admin: false, builder: false, customer: true },
+      memberships: [], primaryOrganization: null,
+    };
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [endUser], total: 1 }),
+      } as Response),
+    );
+    const { default: UsersPage } = await import("../app/(admin)/users/page");
+    const { container } = render(<UsersPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("user@ruh.ai");
+    });
+    expect(container.textContent).toContain("end_user");
+    // statusTone("pending") returns "warning"
+    expect(container.textContent).toContain("pending");
+  });
+
   test("renders admin and suspended user tone variants", async () => {
     const adminUser = {
       id: "u2",
