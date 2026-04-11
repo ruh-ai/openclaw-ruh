@@ -107,6 +107,15 @@ Hooks are managed by Husky and run automatically.
 npm install  # Installs husky via prepare script
 ```
 
+### KB Annotation Validation
+Validates that critical source files reference their knowledge base notes and that all references point to existing notes:
+```bash
+bun scripts/check-kb-annotations.ts        # human-readable report
+bun scripts/check-kb-annotations.ts --json  # CI-friendly (exit 1 on broken refs)
+bash scripts/kb-preflight.sh               # full preflight: annotations + staleness + INDEX
+bash scripts/kb-preflight.sh --strict      # exit 1 on any warning (for CI)
+```
+
 ---
 
 ## CI Pipeline

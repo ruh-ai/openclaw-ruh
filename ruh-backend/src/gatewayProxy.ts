@@ -2,6 +2,8 @@
  * WebSocket proxy: forwards bidirectional frames between the browser
  * and an OpenClaw gateway running inside a sandbox container.
  *
+ * @kb: 004-api-reference 001-architecture
+ *
  * The backend authenticates with the gateway server-side using the
  * stored gateway_token — the browser never sees the token.
  *

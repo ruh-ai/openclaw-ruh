@@ -78,6 +78,24 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 | key_hash | TEXT UNIQUE | SHA-256 hash of key |
 | key_prefix | TEXT | First 8 chars for display |
 
+### account_lockouts
+| Column | Type | Notes |
+|--------|------|-------|
+| email | TEXT PK | Login identifier (matches users.email) |
+| attempt_count | INTEGER | Failed login attempts since last reset |
+| locked_until | TIMESTAMPTZ | NULL when not locked; set to now + 30 min after 5 failures |
+| updated_at | TIMESTAMPTZ | Last update timestamp |
+
+### github_connections
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | TEXT PK FK → users | One connection per user |
+| github_user_id | TEXT | GitHub numeric user ID |
+| github_username | TEXT | GitHub login handle |
+| access_token | TEXT | OAuth access token (scope: repo) |
+| token_scope | TEXT | Granted OAuth scopes |
+| connected_at | TIMESTAMPTZ | When the connection was established |
+
 ## API Endpoints
 
 | Method | Path | Auth | Purpose |
@@ -89,6 +107,12 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 | POST | /api/auth/switch-org | Required | Change active org for the current refresh session |
 | GET | /api/auth/me | Required | Current user profile |
 | PATCH | /api/auth/me | Required | Update displayName, avatarUrl |
+| GET | /api/auth/me/export | Required | GDPR data export (Art. 20) — downloadable JSON of all user data |
+| DELETE | /api/auth/me | Required | GDPR data deletion (Art. 17) — deletes user and all associated data |
+| GET | /api/auth/github/status | Required | Check if GitHub OAuth is connected for the current user |
+| GET | /api/auth/github | Required | Initiate GitHub OAuth flow (returns JSON `{ url }` for `Accept: application/json`, otherwise redirects) |
+| GET | /api/auth/github/callback | Public | GitHub OAuth callback — exchanges code for token, stores connection, redirects to builder |
+| DELETE | /api/auth/github | Required | Disconnect GitHub OAuth |
 
 ## Middleware
 
@@ -105,10 +129,13 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 | `ruh-backend/src/auth/passwords.ts` | bcrypt hash + verify |
 | `ruh-backend/src/auth/tokens.ts` | JWT sign/verify |
 | `ruh-backend/src/auth/middleware.ts` | Express middleware |
-| `ruh-backend/src/authRoutes.ts` | Auth API routes |
+| `ruh-backend/src/auth/appAccess.ts` | `deriveSessionAppAccess` — fail-closed app-access decisions |
+| `ruh-backend/src/authRoutes.ts` | Auth API routes (login, register, refresh, GDPR, GitHub OAuth) |
 | `ruh-backend/src/userStore.ts` | User CRUD |
 | `ruh-backend/src/sessionStore.ts` | Session management |
 | `ruh-backend/src/orgStore.ts` | Organization CRUD |
+| `ruh-backend/src/accountLockoutStore.ts` | Database-persisted account lockout (replaces in-memory map) |
+| `ruh-backend/src/githubConnectionStore.ts` | GitHub OAuth connection storage (upsert/get/delete per user) |
 
 ## Implementation Notes
 
@@ -140,6 +167,9 @@ Custom JWT-based authentication with transitional multi-tenant foundations plus 
 - Local builder fallback auth only renders when `agent-builder-ui` runs with `NEXT_PUBLIC_AUTH_URL` blank; if local env points that value at another app, `/authenticate` switches to external-redirect mode instead of showing the seeded email/password form. `NEXT_PUBLIC_APP_URL` should match the live builder origin when testing redirects locally
 - Builder auth redirect targets are now sanitized before existing sessions are bounced off `/authenticate`: invalid or self-referential `redirect_url` values fail closed to `/agents` instead of looping between the login page and missing builder routes
 - Admin org-ops now uses the same session model for governance: org detail screens can clear `active_org_id` or revoke refresh sessions pinned to a specific org without touching unrelated sessions
+- Account lockout is now database-persisted via `account_lockouts` table (previously in-memory, lost on restart). 5 failed attempts lock the account for 30 minutes. GDPR deletion also clears lockout records
+- GitHub OAuth is implemented for the Ship stage (repo push): `GET /api/auth/github` initiates the flow, callback exchanges code for token and stores the connection in `github_connections`. The `/github` endpoint returns JSON `{ url }` when the frontend sends `Accept: application/json`, otherwise redirects directly. Callback redirects use `ALLOWED_ORIGINS` to resolve the builder origin instead of hardcoding localhost
+- GDPR data portability (`GET /api/auth/me/export`) returns a downloadable JSON of all user data. GDPR data deletion (`DELETE /api/auth/me`) cascades through marketplace data, sessions, API keys, lockouts, and nullifies agent ownership before deleting the user
 - Config: `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` env vars (dev defaults provided)
 - When those JWT env vars are omitted in development or test, the backend now generates one fallback access secret and one fallback refresh secret per process and reuses them for the lifetime of that server. Recomputing them per `getConfig()` call breaks every login by making newly minted tokens unverifiable on the next request. See [[LEARNING-2026-03-31-dev-jwt-secret-instability]].
 - Ownership columns (`created_by`, `org_id`) added to agents and sandboxes tables

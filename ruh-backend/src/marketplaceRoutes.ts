@@ -1,6 +1,8 @@
 /**
  * Marketplace routes — browse, publish, review, and install agent listings.
  * Mounted at /api/marketplace in app.ts.
+ *
+ * @kb: 016-marketplace 004-api-reference
  */
 
 import {

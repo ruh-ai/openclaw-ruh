@@ -1,6 +1,8 @@
 /**
  * Express application — routes only, no startup side-effects.
  * Imported by src/index.ts (production) and tests/helpers/app.ts (tests).
+ *
+ * @kb: 004-api-reference 002-backend-overview
  */
 
 import express, { Request, Response, NextFunction } from 'express';

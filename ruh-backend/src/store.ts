@@ -1,5 +1,7 @@
 /**
  * PostgreSQL-backed store for OpenClaw sandbox records.
+ *
+ * @kb: 005-data-models 002-backend-overview
  */
 
 import { withConn } from './db';

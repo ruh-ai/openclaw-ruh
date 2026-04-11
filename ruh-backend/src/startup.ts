@@ -1,3 +1,4 @@
+// @kb: 002-backend-overview 001-architecture
 import type { Server } from 'node:http';
 import { execSync } from 'node:child_process';
 import { BackendConfig, getConfig } from './config';

@@ -1,5 +1,7 @@
 /**
  * PostgreSQL-backed store for agent records.
+ *
+ * @kb: 005-data-models 008-agent-builder-ui
  */
 
 import { v4 as uuidv4 } from 'uuid';

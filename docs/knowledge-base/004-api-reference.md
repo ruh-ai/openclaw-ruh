@@ -134,6 +134,12 @@ Get a single sandbox. Also works with a `stream_id` to check creation status.
 
 ---
 
+### `POST /api/sandboxes/:sandbox_id/gateway/restart`
+Kill and restart the OpenClaw gateway process inside the sandbox container, then health-check.
+
+**Response:** `{ "restarted": true, "healthy": true }`
+Returns `502` if the gateway health check fails after restart.
+
 ### `DELETE /api/sandboxes/:sandbox_id`
 Delete sandbox record + stop Docker container (best-effort).
 
@@ -601,6 +607,9 @@ It requires auth and the same creator ownership as the main builder agent routes
 ### `GET /api/skills`
 Read the current builder-visible skill registry.
 
+**Query params:**
+- `q` — optional search string; when present, returns fuzzy-matched results
+
 **Response:**
 ```json
 [
@@ -617,10 +626,99 @@ Read the current builder-visible skill registry.
 The first slice is static/file-backed and exists so `/agents/create` can resolve generated skills to `registry_match` versus `needs_build` without pretending every architect-generated skill is already available.
 The same registry is also reused during `configure-agent`: matched skills write the seeded `skill_md` content into the sandbox, while unmatched skills fall back to a stub that includes `# TODO: Implement this skill`.
 
+### `GET /api/skills/stats`
+Return aggregate statistics for the skill registry.
+
 ### `GET /api/skills/:skill_id`
 Read one skill-registry entry by id.
 
 Matching normalizes underscores and hyphens, so `/api/skills/slack_reader` and `/api/skills/slack-reader` resolve to the same entry. Returns `404` when the registry has no matching skill.
+
+### `POST /api/skills`
+Publish a skill to the registry. Requires auth.
+
+**Body:**
+```json
+{
+  "skill_id": "my-skill",
+  "name": "My Skill",
+  "description": "Does something useful",
+  "tags": ["automation"],
+  "skill_md": "---\nname: my-skill\n...",
+  "agent_id": "optional-publishing-agent"
+}
+```
+
+Returns `201` if newly added, `200` if already existed.
+
+### `POST /api/agents/:id/eval-results`
+Create a new evaluation result for an agent. Requires auth and creator ownership.
+
+**Body:** `{ "sandbox_id", "mode", "tasks", "loop_state", "pass_rate", "avg_score", "total_tasks", "passed_tasks", "failed_tasks", "iterations", "stop_reason" }`
+
+### `GET /api/agents/:id/eval-results`
+List evaluation results for an agent. Requires auth and creator ownership.
+
+**Query params:** `limit` (default 20, max 100), `offset` (default 0)
+
+### `GET /api/agents/:id/eval-results/:evalId`
+Get one evaluation result. Requires auth and creator ownership.
+
+### `DELETE /api/agents/:id/eval-results/:evalId`
+Delete one evaluation result. Requires auth and creator ownership.
+
+### `POST /api/agents/:id/clone`
+Clone/fork an agent into a new draft agent. Copies skills, config, triggers, and tool connections. Requires auth, active developer-org membership, and creator ownership.
+
+**Response:** the new cloned `AgentRecord`
+
+### `POST /api/agents/:id/infer-inputs`
+AI-powered inference of sensible default values for runtime input variables. Uses the agent's name and description to generate suggestions. Requires auth and creator ownership.
+
+**Body:** `{ "variables": [{ "key", "label", "description", "example?", "options?" }] }`
+**Response:** `{ "values": { "KEY": "suggested-value" } }`
+
+### `POST /api/infer-inputs`
+Same as above but for agents that have not been saved yet (during creation flow). Requires auth.
+
+**Body:** `{ "agentName", "agentDescription", "variables": [...] }`
+
+### `POST /api/agents/:id/versions`
+Create a snapshot of the agent's current config as a versioned checkpoint. Requires auth and creator ownership.
+
+**Body:** `{ "message": "optional changelog text" }`
+
+### `GET /api/agents/:id/versions`
+List agent config version history. Requires auth and creator ownership.
+
+**Query params:** `limit` (default 20, max 100)
+
+### `GET /api/agents/:id/versions/:version`
+Get one specific config version by version number. Requires auth and creator ownership.
+
+### `POST /api/agents/:id/versions/:version/rollback`
+Rollback the agent's config to a previous version. Requires auth and creator ownership. Emits an `agent.config.rollback` audit event.
+
+### `GET /api/agents/:id/metrics`
+Return agent monitoring metrics derived from control-plane audit events. Requires auth and creator ownership.
+
+**Response:**
+```json
+{
+  "total_conversations": 42,
+  "total_messages": 180,
+  "errors_last_24h": 2,
+  "last_active": "2026-04-10T14:30:00.000Z",
+  "tool_usage": { "web-search": 15, "code-exec": 8 }
+}
+```
+
+### `GET /api/agents/:id/activity`
+Return a chronological activity feed for one agent. Requires auth and creator ownership.
+
+**Query params:** `limit` (default 50, max 200)
+
+**Response:** array of `{ id, type, timestamp, summary, details }`
 
 ### `POST /api/agents/:id/sandbox`
 Attach a sandbox to an existing agent.
@@ -727,6 +825,48 @@ Return forge sandbox status for one agent.
   "standard_url": "http://localhost:32770"
 }
 ```
+
+### `GET /api/agents/:id/forge`
+Get forge sandbox info for an agent.
+
+**Response:** `{ "status": "ready" | "stopped" | "none" | "missing", "forge_sandbox_id", "sandbox" }`
+
+### `PATCH /api/agents/:id/forge/stage`
+Update the agent's forge lifecycle stage. Called by the frontend on each creation-lifecycle stage transition.
+
+**Body:** `{ "stage": "think" | "plan" | "build" | "review" | "test" | "ship" | "complete" }`
+
+When `stage` reaches `"complete"`, the agent's status is also promoted to `"active"`. At stage transitions, the backend auto-commits and pushes the workspace for Agent-as-Code repos.
+
+### `DELETE /api/agents/:id/forge`
+Full discard: stops and removes the Docker container, cleans up sandbox records, and deletes the agent record. Emits an `agent.forge_delete` audit event.
+
+Route requires auth and creator ownership of the target agent.
+
+### `PATCH /api/agents/:id/mode`
+Switch the agent's forge container between `building` (Architect SOUL.md restored) and `live` (agent's own SOUL.md active). Both modes restart the gateway.
+
+**Body:** `{ "mode": "building" | "live" }`
+
+Route requires auth and creator ownership plus a forge sandbox.
+
+### `POST /api/agents/:id/forge/sync-workspace`
+Sync workspace skills from the forge sandbox back into the agent record. Reads `SKILL.md` files from the sandbox `skills/` directory, parses frontmatter, and updates the agent's `skill_graph` and `skills` arrays.
+
+**Response:** `{ "synced": 3, "skills": ["Web Search", "Reporting", "Analytics"] }`
+
+### `POST /api/agents/reproduce`
+Create a new agent from a GitHub repo template. Creates the agent record, provisions a container, and clones the repo workspace.
+
+**Body:** `{ "name", "description?", "repo_url", "github_token?" }`
+**Response:** `{ "agent_id", "stream_id" }` — stream SSE for progress.
+
+Route requires auth and an active developer-org membership.
+
+### `POST /api/agents/create`
+Full agent creation flow: creates an agent record, provisions a forge sandbox, and begins the creation lifecycle. Returns `{ "agent_id", "stream_id" }` — stream SSE for progress.
+
+Route requires auth and an active developer-org membership.
 
 ### `POST /api/agents/:id/forge/promote`
 Promote the forge sandbox to the agent's active production sandbox, clear `forge_sandbox_id`, and mark the agent `active`.
@@ -883,6 +1023,128 @@ Behavior:
 - returns `401` on missing or invalid secret
 - returns `404` on unknown webhook
 - returns `409` when the same delivery id is replayed for the same public webhook or when no active sandbox is available
+
+---
+
+## Agent Templates
+
+### `GET /api/templates`
+List agent templates. No auth required.
+
+**Query params:**
+- `category` — optional category filter
+- `q` — optional search string
+
+List responses strip `architecturePlan` to keep payloads small. Fetch the full template via `GET /api/templates/:id`.
+
+### `GET /api/templates/categories`
+List available template categories. No auth required.
+
+### `GET /api/templates/:id`
+Get one template by id, including the full `architecturePlan`. No auth required.
+
+---
+
+## Workspace Write / Copilot
+
+### `POST /api/sandboxes/:sandbox_id/workspace/write`
+Write a single file to the sandbox workspace. Requires auth.
+
+**Body:** `{ "path": "relative/path.md", "content": "file content" }`
+
+### `POST /api/sandboxes/:sandbox_id/workspace/write-batch`
+Write multiple files to the sandbox workspace in one request. Requires auth. Maximum 50 files per batch.
+
+**Body:** `{ "files": [{ "path": "file1.md", "content": "..." }, ...] }`
+
+### `GET /api/sandboxes/:sandbox_id/workspace/status`
+Return workspace status summary (file counts, sizes). No auth required.
+
+### `GET /api/sandboxes/:sandbox_id/workspace-copilot/file`
+Read a file from the copilot workspace (the secondary workspace used during build). Requires auth.
+
+**Query params:** `path` — required relative file path
+
+### `POST /api/sandboxes/:sandbox_id/workspace/merge-copilot`
+Merge the copilot workspace into the main workspace. Auto-commits and pushes for Agent-as-Code repos. Requires auth.
+
+### `POST /api/sandboxes/:sandbox_id/workspace/git-push`
+Push workspace directly to GitHub from inside the container. Auth via GitHub PAT in the request body.
+
+**Body:** `{ "repo": "owner/repo", "githubToken?", "commitMessage?", "agentName?" }`
+
+---
+
+## Build / Ship / Branches
+
+### `POST /api/sandboxes/:sandbox_id/setup`
+Run agent setup after build: starts services (e.g., dev servers), waits for health checks, and persists discovered service ports on the agent record.
+
+### `POST /api/sandboxes/:sandbox_id/validate`
+Run deep post-build integration validation against the architecture plan.
+
+**Body:** `{ "plan": { ... } }` (the architecture plan JSON)
+**Response:** `{ "overallStatus", "passCount", "failCount", ... }`
+
+### `POST /api/sandboxes/:sandbox_id/exec`
+Execute an arbitrary command inside the sandbox container. Requires auth.
+
+**Body:** `{ "command": "ls -la", "timeoutMs": 60000 }`
+**Response:** `{ "ok": true, "output": "...", "exitCode": 0 }`
+
+Timeout is capped at 300 seconds. Output is truncated to the last 5000 characters.
+
+### `POST /api/agents/:id/build`
+Start the server-side build pipeline for an agent. Reads the architecture plan from the workspace, then fires off a background build. Requires auth.
+
+**Response:** `{ "stream_id", "agent_id" }`
+
+### `GET /api/agents/:id/build/stream/:stream_id`
+SSE stream for build progress. Emits structured build events. Requires auth.
+
+### `POST /api/agents/:id/ship`
+Ship an agent to GitHub: pushes the workspace, creates the repo if needed, and updates the agent record with repo metadata. Requires auth. Uses the stored GitHub OAuth token or a token from the request body.
+
+**Body:** `{ "githubToken?", "commitMessage?", "repoName?" }`
+
+### Agent Branches (Agent-as-Code feature workflow)
+
+Feature branches enable iterative agent development with git-backed version control.
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/agents/:id/branches` | Required | Create a feature branch |
+| GET | `/api/agents/:id/branches` | Required | List branches (`?status=open\|merged\|closed`) |
+| GET | `/api/agents/:id/branches/:branch` | Required | Get one branch |
+| POST | `/api/agents/:id/branches/:branch/checkout` | Required | Checkout branch in sandbox |
+| POST | `/api/agents/:id/branches/:branch/commit` | Required | Commit workspace changes |
+| GET | `/api/agents/:id/branches/:branch/diff` | Required | Diff summary against base branch |
+| GET | `/api/agents/:id/branches/:branch/session` | Required | Get feature session state |
+| PATCH | `/api/agents/:id/branches/:branch/session` | Required | Update feature session state |
+| POST | `/api/agents/:id/branches/:branch/pr` | Required | Create a GitHub PR |
+| POST | `/api/agents/:id/branches/:branch/merge` | Required | Squash-merge the PR |
+| DELETE | `/api/agents/:id/branches/:branch` | Required | Close/delete branch |
+
+All branch routes require auth and creator ownership. Branches auto-commit before checkout and auto-push to remote when GitHub is connected.
+
+Related: [[SPEC-agent-as-project]]
+
+---
+
+## Cost Tracking
+
+Cost tracking routes are mounted at `/api/agents/:agentId/...`. Requires auth on all routes.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/agents/:agentId/cost-events` | Record a cost event |
+| GET | `/api/agents/:agentId/cost-events` | List cost events (`?limit`, `?offset`, `?run_id`) |
+| GET | `/api/agents/:agentId/cost-events/summary` | Monthly cost summary (`?month=YYYY-MM`) |
+| PUT | `/api/agents/:agentId/budget-policy` | Create/update budget policy |
+| GET | `/api/agents/:agentId/budget-policy` | Get budget policy (`?worker_id`) |
+| GET | `/api/agents/:agentId/budget-status` | Get current budget status (`?worker_id`) |
+| POST | `/api/agents/:agentId/execution-recordings` | Record an execution |
+| GET | `/api/agents/:agentId/execution-recordings` | List execution recordings (`?limit`, `?offset`) |
 
 ## Related Specs
 
@@ -1432,6 +1694,12 @@ See [[014-auth-system]] for the full auth contract.
 | POST | `/api/auth/switch-org` | Required | Switch the active organization for the current refresh session |
 | GET | `/api/auth/me` | Required | Current user |
 | PATCH | `/api/auth/me` | Required | Update profile |
+| GET | `/api/auth/me/export` | Required | GDPR data export (Art. 20 — right to portability) |
+| DELETE | `/api/auth/me` | Required | GDPR data deletion (Art. 17 — right to be forgotten) |
+| GET | `/api/auth/github/status` | Required | GitHub OAuth connection status |
+| GET | `/api/auth/github` | Required | Start GitHub OAuth flow (returns URL or redirects) |
+| GET | `/api/auth/github/callback` | Public | GitHub OAuth callback (exchanges code → token) |
+| DELETE | `/api/auth/github` | Required | Disconnect GitHub OAuth |
 
 Auth responses are now tenant-aware. `register`, `login`, `refresh`, `switch-org`, and `me` may include:
 - `platformRole` — `platform_admin` or `user`
@@ -1475,10 +1743,13 @@ See [[015-admin-panel]] for the full admin panel contract.
 | PATCH | `/api/admin/users/:id` | Admin | Update user |
 | DELETE | `/api/admin/users/:id` | Admin | Delete user |
 | GET | `/api/admin/agents` | Admin | All agents with creator/org/runtime context |
+| DELETE | `/api/admin/agents/:id` | Admin | Delete an agent with full sandbox cleanup |
 | GET | `/api/admin/runtime` | Admin | Sandbox runtime + reconciliation view for the admin panel |
 | GET | `/api/admin/audit-events` | Admin token or admin session | Filterable audit event feed |
 | GET | `/api/admin/marketplace` | Admin | Marketplace summary, recent listings, and top installs |
 | POST | `/api/admin/sandboxes/:sandbox_id/reconcile/repair` | Admin token or admin session | Safe runtime repair action for reconciliation drift |
+| POST | `/api/admin/sandboxes/:sandbox_id/restart` | Admin | Restart sandbox container + gateway (starts stopped containers) |
+| POST | `/api/admin/sandboxes/:sandbox_id/gateway/restart` | Admin | Restart only the gateway inside a running sandbox |
 
 Organization admin contract notes:
 - org `status` is now a control-plane field (`active`, `suspended`, `archived`)
@@ -1499,6 +1770,7 @@ See [[016-marketplace]] for the full marketplace contract.
 | PATCH | `/api/marketplace/listings/:id` | Owner org | Update |
 | POST | `/api/marketplace/listings/:id/submit` | Owner org | Submit for review |
 | POST | `/api/marketplace/listings/:id/review` | Admin | Approve/reject |
+| POST | `/api/marketplace/listings/auto-publish` | Auth (developer org) | One-step create + publish (used by Ship stage) |
 | GET | `/api/marketplace/listings/:id/reviews` | Public | List reviews |
 | POST | `/api/marketplace/listings/:id/reviews` | Auth | Add review |
 | POST | `/api/marketplace/listings/:id/install` | Customer org | Install into a personal runtime agent for the active customer org/user |
