@@ -211,8 +211,7 @@ describe('recordAndAnalyze', () => {
     }));
 
     const agent = makeAgent();
-    // Should not throw
-    await recordAndAnalyze(agent as any, 'sandbox-1', makeExecution() as any);
+    await expect(recordAndAnalyze(agent as any, 'sandbox-1', makeExecution() as any)).resolves.not.toThrow();
   });
 
   test('logs cost to Paperclip when company is configured and tool calls exist', async () => {
@@ -243,12 +242,12 @@ describe('teardownPaperclipCompany', () => {
 
   test('does nothing when agent has no Paperclip company', async () => {
     mockGetAgent.mockImplementation(async () => makeAgent());
-    await teardownPaperclipCompany('agent-1');
+    await expect(teardownPaperclipCompany('agent-1')).resolves.not.toThrow();
   });
 
   test('does nothing when agent not found', async () => {
     mockGetAgent.mockImplementation(async () => null);
-    await teardownPaperclipCompany('unknown');
+    await expect(teardownPaperclipCompany('unknown')).resolves.not.toThrow();
   });
 });
 

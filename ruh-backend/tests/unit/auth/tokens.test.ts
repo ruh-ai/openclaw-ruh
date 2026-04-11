@@ -34,4 +34,40 @@ describe('tokens', () => {
   test('verifyRefreshToken returns null for invalid token', () => {
     expect(verifyRefreshToken('garbage')).toBeNull();
   });
+
+  test('verifyAccessToken returns null for token signed with wrong secret', () => {
+    // Sign with a different secret by temporarily changing the env
+    const saved = process.env.JWT_ACCESS_SECRET;
+    process.env.JWT_ACCESS_SECRET = 'wrong-secret-for-this-test';
+    const wrongToken = signAccessToken({ userId: 'u2', email: 'b@c.com', role: 'developer', orgId: null });
+    process.env.JWT_ACCESS_SECRET = saved;
+    // Now verify with the original secret — should reject
+    expect(verifyAccessToken(wrongToken)).toBeNull();
+  });
+
+  test('verifyRefreshToken returns null for token signed with wrong secret', () => {
+    const saved = process.env.JWT_REFRESH_SECRET;
+    process.env.JWT_REFRESH_SECRET = 'wrong-refresh-secret';
+    const wrongToken = signRefreshToken({ sessionId: 's-bad' });
+    process.env.JWT_REFRESH_SECRET = saved;
+    expect(verifyRefreshToken(wrongToken)).toBeNull();
+  });
+
+  test('verifyAccessToken returns null for a malformed JWT structure', () => {
+    expect(verifyAccessToken('not.a.validjwt')).toBeNull();
+    expect(verifyAccessToken('')).toBeNull();
+    expect(verifyAccessToken('onlyone')).toBeNull();
+  });
+
+  test('verifyRefreshToken returns null for completely malformed input', () => {
+    expect(verifyRefreshToken('x.y')).toBeNull();
+    expect(verifyRefreshToken('')).toBeNull();
+  });
+
+  test('verifyAccessToken payload preserves null orgId', () => {
+    const token = signAccessToken({ userId: 'u3', email: 'c@d.com', role: 'end_user', orgId: null });
+    const decoded = verifyAccessToken(token);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.orgId).toBeNull();
+  });
 });

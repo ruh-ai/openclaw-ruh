@@ -42,6 +42,7 @@ describe('telemetry', () => {
   test('initTelemetry does nothing when otelEnabled is false', () => {
     initTelemetry(makeConfig({ otelEnabled: false }));
     const tracer = getTracer();
+    expect(tracer).toBeDefined();
     const span = tracer.startSpan('test');
     span.end();
   });
@@ -49,13 +50,14 @@ describe('telemetry', () => {
   test('initTelemetry does nothing when endpoint is missing', () => {
     initTelemetry(makeConfig({ otelEnabled: true, otelExporterOtlpEndpoint: null }));
     const tracer = getTracer();
+    expect(tracer).toBeDefined();
     const span = tracer.startSpan('test');
     span.end();
   });
 
   test('shutdownTelemetry is safe to call when no provider is active', async () => {
     await shutdownTelemetry();
-    await shutdownTelemetry();
+    await expect(shutdownTelemetry()).resolves.toBeUndefined();
   });
 
   // This test must be last — it registers a global provider with an unreachable

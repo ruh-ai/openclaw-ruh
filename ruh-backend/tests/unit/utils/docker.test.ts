@@ -13,10 +13,12 @@ const {
   listManagedSandboxContainers,
   normalizePathSegment,
   parseManagedSandboxContainerList,
+  readContainerPorts,
   shellQuote,
 } = await import('../../../src/docker?unitDocker');
 
 const originalSpawn = Bun.spawn;
+const originalSpawnSync = Bun.spawnSync;
 
 function streamFromText(text: string) {
   return new Response(text).body as ReadableStream<Uint8Array>;
@@ -24,6 +26,7 @@ function streamFromText(text: string) {
 
 afterEach(() => {
   Bun.spawn = originalSpawn;
+  Bun.spawnSync = originalSpawnSync;
 });
 
 describe('shellQuote', () => {
@@ -171,6 +174,70 @@ describe('parseManagedSandboxContainerList', () => {
         status: 'Exited (0) 2 minutes ago',
       },
     ]);
+  });
+});
+
+describe('readContainerPorts', () => {
+  test('parses gateway port and optional vnc port from docker port output', () => {
+    Bun.spawnSync = mock(() => ({
+      stdout: Buffer.from('18789/tcp -> 0.0.0.0:32001\n6080/tcp -> 0.0.0.0:32002\n'),
+      stderr: Buffer.from(''),
+      exitCode: 0,
+    })) as typeof Bun.spawnSync;
+
+    const result = readContainerPorts('sb-1');
+    expect(result).not.toBeNull();
+    expect(result!.gatewayPort).toBe(32001);
+    expect(result!.vncPort).toBe(32002);
+  });
+
+  test('returns null when docker port exits non-zero', () => {
+    Bun.spawnSync = mock(() => ({
+      stdout: Buffer.from(''),
+      stderr: Buffer.from('Error: No such container'),
+      exitCode: 1,
+    })) as typeof Bun.spawnSync;
+
+    expect(readContainerPorts('sb-missing')).toBeNull();
+  });
+
+  test('returns null when output is empty', () => {
+    Bun.spawnSync = mock(() => ({
+      stdout: Buffer.from(''),
+      stderr: Buffer.from(''),
+      exitCode: 0,
+    })) as typeof Bun.spawnSync;
+
+    expect(readContainerPorts('sb-empty')).toBeNull();
+  });
+
+  test('returns null when gateway port 18789 is not mapped', () => {
+    Bun.spawnSync = mock(() => ({
+      stdout: Buffer.from('6080/tcp -> 0.0.0.0:32002\n'),
+      stderr: Buffer.from(''),
+      exitCode: 0,
+    })) as typeof Bun.spawnSync;
+
+    expect(readContainerPorts('sb-no-gateway')).toBeNull();
+  });
+
+  test('omits vncPort when 6080 is not mapped', () => {
+    Bun.spawnSync = mock(() => ({
+      stdout: Buffer.from('18789/tcp -> 0.0.0.0:55001\n'),
+      stderr: Buffer.from(''),
+      exitCode: 0,
+    })) as typeof Bun.spawnSync;
+
+    const result = readContainerPorts('sb-no-vnc');
+    expect(result).not.toBeNull();
+    expect(result!.gatewayPort).toBe(55001);
+    expect(result!.vncPort).toBeUndefined();
+  });
+
+  test('returns null when spawnSync throws', () => {
+    Bun.spawnSync = mock(() => { throw new Error('docker not found'); }) as typeof Bun.spawnSync;
+
+    expect(readContainerPorts('sb-throw')).toBeNull();
   });
 });
 

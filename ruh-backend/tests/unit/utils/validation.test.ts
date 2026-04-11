@@ -8,6 +8,13 @@ import {
   validateAgentSandboxAttachBody,
   validateAgentWorkspaceMemoryPatchBody,
   validateConversationMessagesAppendBody,
+  validateCustomerAgentConfigPatchBody,
+  expectStrictObject,
+  readRequiredString,
+  readOptionalString,
+  readOptionalEnum,
+  readOptionalStringArray,
+  readOptionalUnknown,
 } from '../../../src/validation';
 
 describe('validateUuid', () => {
@@ -925,5 +932,319 @@ describe('agent improvement validation', () => {
         },
       ],
     })).toThrow('Unknown field: rawTranscript');
+  });
+});
+
+// ── validateCustomerAgentConfigPatchBody ─────────────────────────────────────
+
+describe('validateCustomerAgentConfigPatchBody', () => {
+  test('rejects non-object body', () => {
+    expect(() => validateCustomerAgentConfigPatchBody(null)).toThrow('body must be an object');
+    expect(() => validateCustomerAgentConfigPatchBody('string')).toThrow('body must be an object');
+  });
+
+  test('rejects unknown top-level keys', () => {
+    expect(() => validateCustomerAgentConfigPatchBody({
+      name: 'Agent',
+      unknownKey: true,
+    })).toThrow('Unknown field: unknownKey');
+  });
+
+  test('requires at least one supported field', () => {
+    expect(() => validateCustomerAgentConfigPatchBody({})).toThrow('At least one config field is required');
+  });
+
+  test('requires non-empty name when provided', () => {
+    expect(() => validateCustomerAgentConfigPatchBody({
+      name: '   ',
+    })).toThrow('name is required');
+  });
+
+  test('rejects non-array runtimeInputValues', () => {
+    expect(() => validateCustomerAgentConfigPatchBody({
+      runtimeInputValues: 'not-array',
+    })).toThrow('runtimeInputValues must be an array');
+  });
+
+  test('rejects runtimeInputValues item missing key', () => {
+    expect(() => validateCustomerAgentConfigPatchBody({
+      runtimeInputValues: [{ value: 'x' }],
+    })).toThrow('key is required');
+  });
+
+  test('normalizes accepted payloads', () => {
+    const result = validateCustomerAgentConfigPatchBody({
+      name: '  My Agent  ',
+      description: '  helps with ads  ',
+      agentRules: ['  be concise  '],
+      runtimeInputValues: [
+        { key: 'CUSTOMER_ID', value: '123-456' },
+      ],
+    });
+
+    expect(result.name).toBe('My Agent');
+    expect(result.description).toBe('helps with ads');
+    expect(result.agentRules).toEqual(['be concise']);
+    expect(result.runtimeInputValues).toEqual([{ key: 'CUSTOMER_ID', value: '123-456' }]);
+  });
+
+  test('accepts description-only patch', () => {
+    const result = validateCustomerAgentConfigPatchBody({ description: 'Updated description' });
+    expect(result.description).toBe('Updated description');
+    expect(result.name).toBeUndefined();
+  });
+});
+
+// ── expectStrictObject ───────────────────────────────────────────────────────
+
+describe('expectStrictObject', () => {
+  test('rejects arrays and primitives', () => {
+    expect(() => expectStrictObject([], { allowedKeys: [] })).toThrow('body must be an object');
+    expect(() => expectStrictObject(42, { allowedKeys: [] })).toThrow('body must be an object');
+    expect(() => expectStrictObject(null, { allowedKeys: [] })).toThrow('body must be an object');
+  });
+
+  test('accepts object with all allowed keys', () => {
+    const obj = { a: 1, b: 2 };
+    expect(expectStrictObject(obj, { allowedKeys: ['a', 'b'] })).toBe(obj);
+  });
+
+  test('uses fieldName in error messages', () => {
+    expect(() => expectStrictObject('x', {
+      fieldName: 'myField',
+      allowedKeys: [],
+    })).toThrow('myField must be an object');
+  });
+});
+
+// ── readRequiredString ───────────────────────────────────────────────────────
+
+describe('readRequiredString', () => {
+  test('throws when value is not a string', () => {
+    expect(() => readRequiredString({ x: 42 }, 'x')).toThrow('x is required');
+    expect(() => readRequiredString({ x: null }, 'x')).toThrow('x is required');
+  });
+
+  test('throws when string exceeds maxLength', () => {
+    expect(() => readRequiredString({ x: 'x'.repeat(11) }, 'x', { maxLength: 10 })).toThrow(
+      'x must be at most 10 characters',
+    );
+  });
+
+  test('returns trimmed value by default', () => {
+    expect(readRequiredString({ x: '  hello  ' }, 'x')).toBe('hello');
+  });
+
+  test('preserves whitespace when trim is false', () => {
+    expect(readRequiredString({ x: '  hello  ' }, 'x', { trim: false })).toBe('  hello  ');
+  });
+});
+
+// ── readOptionalString ───────────────────────────────────────────────────────
+
+describe('readOptionalString', () => {
+  test('returns undefined when field is absent', () => {
+    expect(readOptionalString({}, 'missing')).toBeUndefined();
+  });
+
+  test('throws when field is present but not a string', () => {
+    expect(() => readOptionalString({ x: 123 }, 'x')).toThrow('x must be a string');
+  });
+
+  test('throws when string exceeds maxLength', () => {
+    expect(() => readOptionalString({ x: 'x'.repeat(6) }, 'x', { maxLength: 5 })).toThrow(
+      'x must be at most 5 characters',
+    );
+  });
+
+  test('returns empty string for empty value without throwing', () => {
+    expect(readOptionalString({ x: '' }, 'x')).toBe('');
+  });
+});
+
+// ── readOptionalEnum ─────────────────────────────────────────────────────────
+
+describe('readOptionalEnum', () => {
+  test('returns undefined when field absent', () => {
+    expect(readOptionalEnum({}, 'status', ['a', 'b'] as const)).toBeUndefined();
+  });
+
+  test('throws when field is not a string', () => {
+    expect(() => readOptionalEnum({ status: 42 }, 'status', ['a', 'b'] as const)).toThrow(
+      'status must be one of: a, b',
+    );
+  });
+
+  test('throws when value not in allowed list', () => {
+    expect(() => readOptionalEnum({ status: 'c' }, 'status', ['a', 'b'] as const)).toThrow(
+      'status must be one of: a, b',
+    );
+  });
+
+  test('returns the matching enum value', () => {
+    expect(readOptionalEnum({ status: 'b' }, 'status', ['a', 'b'] as const)).toBe('b');
+  });
+});
+
+// ── readOptionalStringArray ──────────────────────────────────────────────────
+
+describe('readOptionalStringArray', () => {
+  test('returns undefined when field absent', () => {
+    expect(readOptionalStringArray({}, 'tags')).toBeUndefined();
+  });
+
+  test('throws when field is not an array', () => {
+    expect(() => readOptionalStringArray({ tags: 'nope' }, 'tags')).toThrow('tags must be an array');
+  });
+
+  test('throws when array exceeds maxItems', () => {
+    expect(() => readOptionalStringArray(
+      { tags: ['a', 'b', 'c'] },
+      'tags',
+      { maxItems: 2 },
+    )).toThrow('tags must contain at most 2 items');
+  });
+
+  test('throws when item exceeds itemMaxLength', () => {
+    expect(() => readOptionalStringArray(
+      { tags: ['ok', 'x'.repeat(11)] },
+      'tags',
+      { itemMaxLength: 10 },
+    )).toThrow('tags[1] must be at most 10 characters');
+  });
+
+  test('returns trimmed array items', () => {
+    expect(readOptionalStringArray({ tags: ['  a  ', '  b  '] }, 'tags')).toEqual(['a', 'b']);
+  });
+});
+
+// ── readOptionalUnknown ──────────────────────────────────────────────────────
+
+describe('readOptionalUnknown', () => {
+  test('returns undefined when field is not in input', () => {
+    expect(readOptionalUnknown({}, 'data')).toBeUndefined();
+  });
+
+  test('returns the value as-is when field is present', () => {
+    const obj = { nested: true };
+    expect(readOptionalUnknown({ data: obj }, 'data')).toBe(obj);
+    expect(readOptionalUnknown({ x: null }, 'x')).toBeNull();
+  });
+});
+
+// ── validateAgentConfigPatchBody: triggers and runtimeInputs edge cases ──────
+
+describe('validateAgentConfigPatchBody: triggers edge cases', () => {
+  test('rejects non-array triggers', () => {
+    expect(() => validateAgentConfigPatchBody({ triggers: 'not-array' })).toThrow(
+      'triggers must be an array',
+    );
+  });
+
+  test('rejects trigger missing required kind field', () => {
+    expect(() => validateAgentConfigPatchBody({
+      triggers: [{
+        id: 'trig-1',
+        title: 'My Trigger',
+        // kind omitted
+        status: 'supported',
+        description: 'Does something.',
+      }],
+    })).toThrow('kind is required');
+  });
+
+  test('rejects trigger with invalid status', () => {
+    expect(() => validateAgentConfigPatchBody({
+      triggers: [{
+        id: 'trig-1',
+        title: 'My Trigger',
+        kind: 'manual',
+        status: 'broken', // invalid
+        description: 'Does something.',
+      }],
+    })).toThrow('status must be one of: supported, unsupported');
+  });
+
+  test('accepts webhook trigger with optional fields', () => {
+    const result = validateAgentConfigPatchBody({
+      triggers: [{
+        id: 'wh-1',
+        title: 'Webhook',
+        kind: 'webhook',
+        status: 'supported',
+        description: 'Triggered by external event.',
+        webhookPublicId: 'pub-abc',
+        webhookSecretLastFour: 'xyzw',
+        webhookSecretIssuedAt: '2026-01-01T00:00:00Z',
+        webhookLastDeliveryAt: '2026-04-01T00:00:00Z',
+        webhookLastDeliveryStatus: 'delivered',
+      }],
+    });
+
+    expect(result.triggers![0].kind).toBe('webhook');
+    expect(result.triggers![0].webhookPublicId).toBe('pub-abc');
+    expect(result.triggers![0].webhookLastDeliveryStatus).toBe('delivered');
+  });
+});
+
+describe('validateAgentConfigPatchBody: runtimeInputs edge cases', () => {
+  test('rejects non-array runtimeInputs', () => {
+    expect(() => validateAgentConfigPatchBody({ runtimeInputs: 'not-array' })).toThrow(
+      'runtimeInputs must be an array',
+    );
+  });
+
+  test('rejects runtimeInput with non-boolean required field', () => {
+    expect(() => validateAgentConfigPatchBody({
+      runtimeInputs: [{
+        key: 'API_KEY',
+        label: 'API Key',
+        description: 'Auth key',
+        required: 'yes', // should be boolean
+        source: 'architect_requirement',
+      }],
+    })).toThrow('required must be a boolean');
+  });
+
+  test('accepts runtimeInput with enriched metadata fields', () => {
+    const result = validateAgentConfigPatchBody({
+      runtimeInputs: [{
+        key: 'CUSTOMER_ID',
+        label: 'Customer ID',
+        description: 'Google Ads customer ID.',
+        required: true,
+        source: 'architect_requirement',
+        value: '123-456',
+        inputType: 'text',
+        defaultValue: '',
+        example: '123-456-7890',
+        options: ['opt-a', 'opt-b'],
+        group: 'credentials',
+        populationStrategy: 'user_required',
+      }],
+    });
+
+    const ri = result.runtimeInputs![0];
+    expect(ri.key).toBe('CUSTOMER_ID');
+    expect(ri.inputType).toBe('text');
+    expect(ri.options).toEqual(['opt-a', 'opt-b']);
+    expect(ri.populationStrategy).toBe('user_required');
+  });
+});
+
+// ── validateAgentConfigPatchBody: creationSession size limit ─────────────────
+
+describe('validateAgentConfigPatchBody: creationSession', () => {
+  test('rejects creationSession exceeding 512 KB', () => {
+    expect(() => validateAgentConfigPatchBody({
+      creationSession: { data: 'x'.repeat(513_000) },
+    })).toThrow('creationSession exceeds 512 KB size limit');
+  });
+
+  test('accepts valid creationSession object', () => {
+    const result = validateAgentConfigPatchBody({
+      creationSession: { stage: 'architect', turn: 3 },
+    });
+    expect(result.creationSession).toEqual({ stage: 'architect', turn: 3 });
   });
 });

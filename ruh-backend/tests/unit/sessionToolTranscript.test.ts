@@ -114,6 +114,153 @@ describe('extractToolEventsFromTranscript', () => {
     ]);
   });
 
+  test('returns empty array when transcript is empty', () => {
+    expect(extractToolEventsFromTranscript('')).toEqual([]);
+    expect(extractToolEventsFromTranscript('   \n  ')).toEqual([]);
+  });
+
+  test('skips malformed JSON lines without throwing', () => {
+    const transcript = [
+      'NOT VALID JSON {{{',
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      }),
+      'ALSO NOT JSON',
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: 't1', name: 'exec', arguments: { command: 'pwd' } }],
+        },
+      }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 't1',
+          toolName: 'exec',
+          content: [{ type: 'text', text: '/root' }],
+        },
+      }),
+    ].join('\n');
+
+    const events = extractToolEventsFromTranscript(transcript);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('tool_start');
+    expect(events[1].type).toBe('tool_end');
+  });
+
+  test('ignores tool results with missing toolName', () => {
+    const transcript = [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: [] } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'tc1',
+          toolName: '',  // empty — should be skipped
+          content: [{ type: 'text', text: 'result' }],
+        },
+      }),
+    ].join('\n');
+
+    expect(extractToolEventsFromTranscript(transcript)).toEqual([]);
+  });
+
+  test('uses JSON.stringify for arguments objects with no known key', () => {
+    const transcript = [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: [] } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'toolCall',
+            id: 't-obj',
+            name: 'custom_tool',
+            arguments: { alpha: 'x', beta: 'y' },
+          }],
+        },
+      }),
+    ].join('\n');
+
+    const events = extractToolEventsFromTranscript(transcript);
+    expect(events).toHaveLength(1);
+    expect(events[0].input).toContain('alpha');
+  });
+
+  test('uses details.output key when present', () => {
+    const transcript = [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: [] } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'td1',
+          toolName: 'read_file',
+          details: { output: 'file contents here' },
+        },
+      }),
+    ].join('\n');
+
+    const events = extractToolEventsFromTranscript(transcript);
+    expect(events).toHaveLength(1);
+    expect(events[0].output).toBe('file contents here');
+  });
+
+  test('uses details.result key as fallback', () => {
+    const transcript = [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: [] } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'tr1',
+          toolName: 'compute',
+          details: { result: '42' },
+        },
+      }),
+    ].join('\n');
+
+    const events = extractToolEventsFromTranscript(transcript);
+    expect(events).toHaveLength(1);
+    expect(events[0].output).toBe('42');
+  });
+
+  test('uses details object as JSON when no known string key exists', () => {
+    const transcript = [
+      JSON.stringify({ type: 'message', message: { role: 'user', content: [] } }),
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolCallId: 'td2',
+          toolName: 'complex_tool',
+          details: { nested: { value: 123 } },
+        },
+      }),
+    ].join('\n');
+
+    const events = extractToolEventsFromTranscript(transcript);
+    expect(events).toHaveLength(1);
+    expect(events[0].output).toContain('nested');
+  });
+
+  test('resolveSessionTranscriptFile returns null for invalid JSON', () => {
+    expect(resolveSessionTranscriptFile('NOT JSON', 'agent:main:x')).toBeNull();
+    expect(resolveSessionTranscriptFile('null', 'agent:main:x')).toBeNull();
+    expect(resolveSessionTranscriptFile('"string"', 'agent:main:x')).toBeNull();
+  });
+
+  test('resolveSessionTranscriptFile returns null when sessionFile is missing', () => {
+    const indexJson = JSON.stringify({ 'agent:main:s1': { sessionId: 's1' } });
+    expect(resolveSessionTranscriptFile(indexJson, 'agent:main:s1')).toBeNull();
+  });
+
   test('uses details output when the tool result has no text content', () => {
     const transcript = [
       JSON.stringify({

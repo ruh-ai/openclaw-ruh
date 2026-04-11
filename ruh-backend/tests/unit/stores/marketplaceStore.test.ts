@@ -526,6 +526,182 @@ describe("removeInstall", () => {
   });
 });
 
+// ── getListingByAgentId ──────────────────────────────────────────────────────
+
+describe("getListingByAgentId", () => {
+  test("returns null when no listing found for agent", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await marketplaceStore.getListingByAgentId("agent-xyz");
+    expect(result).toBeNull();
+  });
+
+  test("queries by agent_id", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    await marketplaceStore.getListingByAgentId("agent-456");
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("WHERE agent_id = $1");
+    expect(mockQuery.mock.calls[0][1]).toEqual(["agent-456"]);
+  });
+});
+
+// ── listReviews ──────────────────────────────────────────────────────────────
+
+describe("listReviews", () => {
+  test("returns empty array when no reviews", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await marketplaceStore.listReviews("listing-1");
+    expect(result).toEqual([]);
+  });
+
+  test("queries reviews by listing_id ordered by created_at DESC", async () => {
+    const fakeReview = {
+      id: "review-1",
+      listing_id: "listing-1",
+      user_id: "user-1",
+      rating: 4,
+      title: "Good",
+      body: "Works well",
+      created_at: "2026-04-01T00:00:00Z",
+      updated_at: "2026-04-01T00:00:00Z",
+    };
+    mockQuery.mockImplementation(async () => ({ rows: [fakeReview], rowCount: 1 }));
+
+    const reviews = await marketplaceStore.listReviews("listing-1");
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0].rating).toBe(4);
+    expect(reviews[0].title).toBe("Good");
+
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("WHERE listing_id = $1");
+    expect(sql).toContain("ORDER BY created_at DESC");
+  });
+});
+
+// ── listUserInstalls ─────────────────────────────────────────────────────────
+
+describe("listUserInstalls", () => {
+  test("returns empty array when no installs", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await marketplaceStore.listUserInstalls("user-1", "org-1");
+    expect(result).toEqual([]);
+  });
+
+  test("queries by user_id and org_id", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    await marketplaceStore.listUserInstalls("user-abc", "org-def");
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("WHERE user_id = $1 AND org_id = $2");
+    expect(mockQuery.mock.calls[0][1]).toEqual(["user-abc", "org-def"]);
+  });
+});
+
+// ── getInstall ───────────────────────────────────────────────────────────────
+
+describe("getInstall", () => {
+  test("returns null when install not found", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await marketplaceStore.getInstall("listing-1", "org-1", "user-1");
+    expect(result).toBeNull();
+  });
+
+  test("returns install record when found", async () => {
+    const fakeInstall = {
+      id: "install-abc",
+      listing_id: "listing-1",
+      org_id: "org-1",
+      user_id: "user-1",
+      agent_id: "agent-1",
+      source_agent_version_id: null,
+      version: "1.0.0",
+      installed_at: "2026-04-01T00:00:00Z",
+      last_launched_at: null,
+    };
+    mockQuery.mockImplementation(async () => ({ rows: [fakeInstall], rowCount: 1 }));
+
+    const result = await marketplaceStore.getInstall("listing-1", "org-1", "user-1");
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("install-abc");
+    expect(result!.lastLaunchedAt).toBeNull();
+  });
+});
+
+// ── markInstallLaunched ──────────────────────────────────────────────────────
+
+describe("markInstallLaunched", () => {
+  test("updates last_launched_at for the install record", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 1 }));
+    await marketplaceStore.markInstallLaunched("install-abc");
+
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("last_launched_at = NOW()");
+    expect(sql).toContain("WHERE id = $1");
+    expect(mockQuery.mock.calls[0][1]).toEqual(["install-abc"]);
+  });
+});
+
+// ── listUserListings ─────────────────────────────────────────────────────────
+
+describe("listUserListings", () => {
+  test("queries by publisher_id", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    await marketplaceStore.listUserListings("publisher-123");
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain("WHERE publisher_id = $1");
+    expect(mockQuery.mock.calls[0][1]).toEqual(["publisher-123"]);
+  });
+});
+
+// ── listPublishedListings with pagination ────────────────────────────────────
+
+describe("listPublishedListings pagination", () => {
+  test("applies page and limit to offset calculation", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [{ count: "5" }], rowCount: 1 }));
+    await marketplaceStore.listPublishedListings({ page: 3, limit: 10 });
+
+    // Second call is the SELECT with LIMIT/OFFSET
+    const selectSql = mockQuery.mock.calls[1][0] as string;
+    expect(selectSql).toContain("LIMIT");
+    expect(selectSql).toContain("OFFSET");
+    // params include: limit=10, offset=(3-1)*10=20
+    const params = mockQuery.mock.calls[1][1] as unknown[];
+    expect(params).toContain(10);
+    expect(params).toContain(20);
+  });
+
+  test("returns items and total from query results", async () => {
+    const fakeRow = {
+      id: "l1", agent_id: "a1", publisher_id: "u1", title: "T", slug: "t",
+      summary: "", description: "", category: "general", tags: "[]",
+      icon_url: null, screenshots: "[]", version: "1.0.0", status: "published",
+      review_notes: null, reviewed_by: null, reviewed_at: null,
+      install_count: 5, avg_rating: 4.5, published_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    };
+    let callCount = 0;
+    mockQuery.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return { rows: [{ count: "1" }], rowCount: 1 };
+      return { rows: [fakeRow], rowCount: 1 };
+    });
+
+    const result = await marketplaceStore.listPublishedListings();
+    expect(result.total).toBe(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].id).toBe("l1");
+  });
+});
+
+// ── updateListing with empty patch ──────────────────────────────────────────
+
+describe("updateListing edge cases", () => {
+  test("falls through to getListingById when patch is empty", async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await marketplaceStore.updateListing("listing-1", {});
+    // With empty patch, calls getListingById which returns null
+    expect(result).toBeNull();
+  });
+});
+
 // ── Serialization ────────────────────────────────────────────────────────────
 
 describe("serialization", () => {

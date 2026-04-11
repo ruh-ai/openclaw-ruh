@@ -14,8 +14,8 @@
 
 import { readFileSync } from 'fs';
 
-const LINE_THRESHOLD = 0.80;   // 80%
-const FUNC_THRESHOLD = 0.80;   // 80%
+const LINE_THRESHOLD = 0.90;   // 90%
+const FUNC_THRESHOLD = 0.90;   // 90%
 const MIN_FILE_COVERAGE = 0.10; // 10% — below this, file is considered untested
 
 const lcovPath = './coverage/lcov.info';
