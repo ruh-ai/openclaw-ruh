@@ -373,6 +373,156 @@ Every new feature, endpoint, or behavioral change must include tests:
 
 ---
 
+## Observability Stack
+
+Three observability tools run locally for debugging and monitoring. Use these before guessing at issues.
+
+### Quick Health Check
+
+```bash
+# All-in-one status
+curl -s http://localhost:8080 -o /dev/null -w 'SigNoz: %{http_code}\n'
+curl -s http://localhost:8200 -o /dev/null -w 'GlitchTip: %{http_code}\n'
+curl -s http://localhost:8000/health | jq .status
+```
+
+### SigNoz (Distributed Tracing)
+
+| Component | URL/Port |
+|-----------|----------|
+| Dashboard | `http://localhost:8080` |
+| OTLP HTTP Collector | `http://localhost:4318` |
+| OTLP gRPC Collector | `http://localhost:4317` |
+
+**Query traces via ClickHouse:**
+```bash
+# List services sending traces
+docker exec signoz-clickhouse clickhouse-client --query \
+  "SELECT DISTINCT serviceName FROM signoz_traces.distributed_signoz_index_v3 LIMIT 20"
+
+# Recent error traces (last hour)
+docker exec signoz-clickhouse clickhouse-client --query \
+  "SELECT serviceName, httpUrl, statusCode, statusMessage, toDateTime(timestamp) as ts
+   FROM signoz_traces.distributed_signoz_index_v3
+   WHERE hasError = true AND timestamp > now() - INTERVAL 1 HOUR
+   ORDER BY timestamp DESC LIMIT 20"
+
+# Slow requests (>1s)
+docker exec signoz-clickhouse clickhouse-client --query \
+  "SELECT serviceName, httpMethod, httpUrl, durationNano/1000000 as ms, toDateTime(timestamp) as ts
+   FROM signoz_traces.distributed_signoz_index_v3
+   WHERE durationNano > 1000000000 AND timestamp > now() - INTERVAL 1 HOUR
+   ORDER BY durationNano DESC LIMIT 10"
+
+# Trace by specific endpoint
+docker exec signoz-clickhouse clickhouse-client --query \
+  "SELECT traceID, httpMethod, httpUrl, statusCode, durationNano/1000000 as ms
+   FROM signoz_traces.distributed_signoz_index_v3
+   WHERE httpUrl LIKE '%/api/agents%' AND timestamp > now() - INTERVAL 1 HOUR
+   ORDER BY timestamp DESC LIMIT 10"
+```
+
+**Backend sends traces when:** `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` are set in `ruh-backend/.env`.
+
+**Key source files:** `ruh-backend/src/telemetry.ts` (SDK init), `ruh-backend/src/agentTracing.ts` (span helpers), `ruh-backend/src/requestLogger.ts` (trace ID correlation).
+
+### GlitchTip (Sentry-Compatible Error Tracking)
+
+| Component | URL/Port |
+|-----------|----------|
+| Dashboard | `http://localhost:8200` |
+| DSN endpoint | `http://<key>@localhost:8200/<project-id>` |
+
+**Query errors via API:**
+```bash
+# Get API token from: http://localhost:8200 → Settings → API Tokens
+TOKEN="<your-glitchtip-api-token>"
+
+# List recent issues
+curl -s http://localhost:8200/api/0/organizations/openclaw/issues/ \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | {id, title, count, lastSeen}'
+
+# List events for a specific issue
+curl -s http://localhost:8200/api/0/issues/<issue-id>/events/ \
+  -H "Authorization: Bearer $TOKEN" | jq '.[0]'
+
+# Project stats
+curl -s http://localhost:8200/api/0/projects/openclaw/ruh-backend/stats/ \
+  -H "Authorization: Bearer $TOKEN" | jq '.'
+```
+
+**First-time setup:**
+1. Go to `http://localhost:8200`, create admin account
+2. Create organization "openclaw"
+3. Create projects: "ruh-backend", "agent-builder", "ruh-frontend", "admin-ui"
+4. Copy DSN from Settings → Projects → Client Keys
+5. Set `SENTRY_DSN=<dsn>` in each service's `.env`
+
+**Backend sends errors when:** `SENTRY_DSN` is set in `ruh-backend/.env`. Source: `ruh-backend/src/sentry.ts`.
+
+**Frontend SDKs:** All Next.js apps support `NEXT_PUBLIC_SENTRY_DSN` env var for client-side error reporting.
+
+### Langfuse (LLM Trace Analytics)
+
+| Component | URL/Port |
+|-----------|----------|
+| Dashboard | `http://localhost:3002` |
+| OTLP ingestion | `http://localhost:3002/api/public/otel` |
+
+**Setup:**
+```bash
+./scripts/langfuse-local.sh up      # Starts full stack, auto-generates credentials
+./scripts/langfuse-local.sh status  # Shows ports and credentials
+./scripts/langfuse-local.sh down    # Stops services
+```
+
+**Query LLM traces:**
+```bash
+# Auth: base64(publicKey:secretKey) from langfuse/.env
+AUTH=$(echo -n "$(grep LANGFUSE_PUBLIC_KEY langfuse/.env | cut -d= -f2):$(grep LANGFUSE_SECRET_KEY langfuse/.env | cut -d= -f2)" | base64)
+
+# Recent traces
+curl -s http://localhost:3002/api/public/traces?limit=10 \
+  -H "Authorization: Bearer $AUTH" | jq '.data[] | {id, name, userId, timestamp}'
+
+# Trace details
+curl -s http://localhost:3002/api/public/traces/<trace-id> \
+  -H "Authorization: Bearer $AUTH" | jq '.'
+```
+
+**Agent Builder sends LLM traces when:** `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set in `agent-builder-ui/.env.development.local`. Source: `agent-builder-ui/lib/openclaw/langfuse.ts`.
+
+### When to Use Which Tool
+
+| Question | Tool | Command |
+|----------|------|---------|
+| "Why is this API call slow?" | SigNoz | Query ClickHouse for slow traces on that endpoint |
+| "Is the backend throwing errors?" | GlitchTip | Check issues dashboard or API |
+| "Why did the architect give a bad response?" | Langfuse | Check LLM trace for prompt/response quality |
+| "Is the OTLP pipeline healthy?" | Docker | `docker logs signoz-otel-collector --tail 20` |
+| "What's the error rate?" | GlitchTip | Project stats API or dashboard |
+| "What traces exist for an agent operation?" | SigNoz | Query by `httpUrl LIKE '%/api/agents/<id>%'` |
+
+### Environment Variables (Observability)
+
+```bash
+# ruh-backend/.env
+OTEL_ENABLED=true                                    # Enable OpenTelemetry tracing
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318    # SigNoz collector
+OTEL_SERVICE_NAME=ruh-backend                        # Service name in traces
+OTEL_SAMPLE_RATE=1.0                                 # 0.0-1.0 sampling ratio
+SENTRY_DSN=http://<key>@localhost:8200/<project>     # GlitchTip error tracking
+SENTRY_TRACES_SAMPLE_RATE=0.1                        # Sentry performance sampling
+
+# agent-builder-ui/.env.development.local
+LANGFUSE_BASE_URL=http://localhost:3002
+LANGFUSE_PUBLIC_KEY=lf_pk_...
+LANGFUSE_SECRET_KEY=lf_sk_...
+NEXT_PUBLIC_SENTRY_DSN=http://<key>@localhost:8200/<project>
+```
+
+---
+
 ## Development Process
 
 Follow the gstack sprint pipeline defined in `agents.md`:
