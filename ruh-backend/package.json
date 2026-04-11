@@ -25,9 +25,9 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "pino": "^9.0.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.52.0",
-    "@opentelemetry/resources": "^1.25.0",
-    "@opentelemetry/sdk-trace-base": "^1.25.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.214.0",
+    "@opentelemetry/resources": "^2.6.1",
+    "@opentelemetry/sdk-trace-base": "^2.6.1",
     "@opentelemetry/semantic-conventions": "^1.25.0",
     "@ruh/logger": "file:../packages/logger",
     "axios": "^1.7.0",
@@ -35,11 +35,11 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
-    "express": "^4.19.0",
+    "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.12.0",
-    "uuid": "^10.0.0",
+    "uuid": "^13.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
