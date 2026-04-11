@@ -50,6 +50,34 @@ export function normalizePathSegment(value: string): string {
   return normalized;
 }
 
+/**
+ * Read Docker port mappings for a container and return key port numbers.
+ * Returns null if the container is not running or has no port mappings.
+ */
+export function readContainerPorts(sandboxId: string): { gatewayPort: number; vncPort?: number } | null {
+  const containerName = getContainerName(sandboxId);
+  try {
+    const proc = Bun.spawnSync(['docker', 'port', containerName]);
+    const stdout = proc.stdout?.toString().trim() ?? '';
+    if (proc.exitCode !== 0 || !stdout) return null;
+
+    let gatewayPort = 0;
+    let vncPort = 0;
+    for (const line of stdout.split('\n')) {
+      const match = line.match(/^(\d+)\/tcp\s+->\s+.*:(\d+)/);
+      if (!match) continue;
+      const containerPort = parseInt(match[1], 10);
+      const hostPort = parseInt(match[2], 10);
+      if (containerPort === 18789 && hostPort > 0) gatewayPort = hostPort;
+      if (containerPort === 6080 && hostPort > 0) vncPort = hostPort;
+    }
+    if (gatewayPort === 0) return null;
+    return { gatewayPort, ...(vncPort > 0 ? { vncPort } : {}) };
+  } catch {
+    return null;
+  }
+}
+
 export function buildHomeFileWriteCommand(relativePath: string, content: string): string {
   const trimmedPath = String(relativePath).trim().replace(/^\/+/, '');
   if (!trimmedPath || trimmedPath.includes('..') || /[^A-Za-z0-9._/-]/.test(trimmedPath)) {

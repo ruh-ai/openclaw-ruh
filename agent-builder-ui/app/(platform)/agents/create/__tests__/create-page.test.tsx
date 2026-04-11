@@ -55,6 +55,8 @@ mock.module("@/lib/openclaw/copilot-flow", () => ({
   countSkillAvailability: () => ({ available: 0, total: 0 }),
   resolveCoPilotToolResearchUseCase: () => "",
   createCoPilotSeedFromAgent: () => ({}),
+  canPersistReviewOrLaterForgeStage: () => false,
+  planHasInlineContent: () => false,
 }));
 
 mock.module("@/hooks/use-architect-sandbox", () => ({

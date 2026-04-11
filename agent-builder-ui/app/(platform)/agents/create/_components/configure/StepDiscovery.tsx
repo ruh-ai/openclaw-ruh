@@ -174,7 +174,7 @@ export function StepDiscovery({
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
           >
             <Check className="h-3 w-3" />
-            Let's Plan
+            Let&apos;s Plan
           </button>
         </div>
       )}

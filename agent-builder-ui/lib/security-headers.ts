@@ -53,6 +53,7 @@ export function getSecurityHeaders({
     formatDirective("form-action", ["'self'"]),
     formatDirective("frame-ancestors", ["'none'"]),
     formatDirective("object-src", ["'none'"]),
+    formatDirective("frame-src", ["'self'", "http://localhost:*"]),
     formatDirective("connect-src", connectSources),
     formatDirective("img-src", uniqueSources(["'self'", "data:", "blob:", ...imageSources])),
     formatDirective("font-src", ["'self'", "data:"]),

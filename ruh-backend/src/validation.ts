@@ -184,13 +184,15 @@ function readOptionalToolConnections(input: ObjectShape, field: string) {
   return value.map((item, index) => {
     const entry = expectStrictObject(item, {
       fieldName: `${field}[${index}]`,
-      allowedKeys: ['toolId', 'name', 'description', 'status', 'authKind', 'connectorType', 'configSummary'],
+      allowedKeys: ['toolId', 'name', 'description', 'status', 'authKind', 'connectorType', 'configSummary', 'researchPlan'],
     });
 
     const configSummary = readOptionalStringArray(entry, 'configSummary', {
       maxItems: 6,
       itemMaxLength: 240,
     }) ?? [];
+
+    const researchPlan = readOptionalUnknown(entry, 'researchPlan');
 
     return {
       toolId: readRequiredString(entry, 'toolId', { maxLength: 120 }),
@@ -203,6 +205,7 @@ function readOptionalToolConnections(input: ObjectShape, field: string) {
       connectorType: readOptionalEnum(entry, 'connectorType', ['mcp', 'api', 'cli'] as const)
         ?? (() => { throw httpError(400, `${field}[${index}].connectorType is required`); })(),
       configSummary,
+      ...(researchPlan !== undefined ? { researchPlan } : {}),
     };
   });
 }
@@ -223,6 +226,7 @@ function readOptionalRuntimeInputs(input: ObjectShape, field: string) {
         'key', 'label', 'description', 'required', 'source', 'value',
         // Enriched metadata for type-aware setup page UX
         'inputType', 'defaultValue', 'example', 'options', 'group',
+        'populationStrategy',
       ],
     });
 
@@ -245,6 +249,7 @@ function readOptionalRuntimeInputs(input: ObjectShape, field: string) {
       ...(typeof entry.example === 'string' ? { example: entry.example } : {}),
       ...(Array.isArray(entry.options) ? { options: entry.options.filter((o: unknown): o is string => typeof o === 'string') } : {}),
       ...(typeof entry.group === 'string' ? { group: entry.group } : {}),
+      ...(typeof entry.populationStrategy === 'string' ? { populationStrategy: entry.populationStrategy as 'user_required' | 'ai_inferred' | 'static_default' } : {}),
     };
   });
 }
@@ -283,7 +288,9 @@ function readOptionalTriggers(input: ObjectShape, field: string) {
   return value.map((item, index) => {
     const entry = expectStrictObject(item, {
       fieldName: `${field}[${index}]`,
-      allowedKeys: ['id', 'title', 'kind', 'status', 'description', 'schedule'],
+      allowedKeys: ['id', 'title', 'kind', 'status', 'description', 'schedule',
+        'webhookPublicId', 'webhookSecretLastFour', 'webhookSecretIssuedAt',
+        'webhookLastDeliveryAt', 'webhookLastDeliveryStatus'],
     });
 
     return {
@@ -295,6 +302,11 @@ function readOptionalTriggers(input: ObjectShape, field: string) {
         ?? (() => { throw httpError(400, `${field}[${index}].status is required`); })(),
       description: readRequiredString(entry, 'description', { maxLength: 400 }),
       schedule: readOptionalString(entry, 'schedule', { maxLength: 120 }),
+      webhookPublicId: readOptionalString(entry, 'webhookPublicId', { maxLength: 200 }),
+      webhookSecretLastFour: readOptionalString(entry, 'webhookSecretLastFour', { maxLength: 10 }),
+      webhookSecretIssuedAt: readOptionalString(entry, 'webhookSecretIssuedAt', { maxLength: 40 }),
+      webhookLastDeliveryAt: readOptionalString(entry, 'webhookLastDeliveryAt', { maxLength: 40 }),
+      webhookLastDeliveryStatus: readOptionalEnum(entry, 'webhookLastDeliveryStatus', ['delivered', 'failed'] as const),
     };
   });
 }

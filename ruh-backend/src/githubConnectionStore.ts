@@ -4,6 +4,21 @@
 
 import { withConn } from './db';
 
+/**
+ * If the stored token is base64-encoded JSON like `{"token":"gho_..."}`,
+ * unwrap it to the raw token. Otherwise return as-is.
+ */
+function normalizeToken(raw: string): string {
+  if (!raw || raw.startsWith('gho_') || raw.startsWith('ghp_') || raw.startsWith('github_pat_')) {
+    return raw;
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, 'base64').toString('utf-8'));
+    if (typeof decoded?.token === 'string') return decoded.token;
+  } catch { /* not base64 JSON — return as-is */ }
+  return raw;
+}
+
 export async function getAccessToken(userId: string): Promise<{ token: string; username: string } | null> {
   return withConn(async (client) => {
     const res = await client.query(
@@ -11,7 +26,7 @@ export async function getAccessToken(userId: string): Promise<{ token: string; u
       [userId],
     );
     if (res.rows.length === 0) return null;
-    return { token: res.rows[0].access_token as string, username: res.rows[0].github_username as string };
+    return { token: normalizeToken(res.rows[0].access_token as string), username: res.rows[0].github_username as string };
   });
 }
 

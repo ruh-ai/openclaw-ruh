@@ -6,7 +6,7 @@
  * and writes files via `mkdir -p && cat > file << 'EOF'`.
  */
 
-import type { ArchitecturePlan } from "@/lib/openclaw/types";
+import type { ArchitecturePlan } from "./scaffoldTemplates";
 
 export type SpecialistType = "scaffold" | "identity" | "database" | "backend" | "skills" | "dashboard" | "verify";
 
@@ -75,7 +75,7 @@ After writing all 3 files, confirm with:
 
 Agent name: ${agentName}
 Skills: ${plan.skills.map((s) => s.name).join(", ")}
-Channels: ${plan.channels.join(", ") || "none"}
+Channels: ${(plan.channels ?? []).join(", ") || "none"}
 `;
 }
 
@@ -83,7 +83,7 @@ Channels: ${plan.channels.join(", ") || "none"}
 
 export function buildDatabasePrompt(plan: ArchitecturePlan): string {
   const tables = plan.dataSchema?.tables ?? [];
-  const tableList = tables.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+  const tableList = tables.map((t) => `- ${t.name}: ${t.columns.map(c => c.name).join(", ")}`).join("\n");
 
   return `[SPECIALIST: Database Engineer]
 

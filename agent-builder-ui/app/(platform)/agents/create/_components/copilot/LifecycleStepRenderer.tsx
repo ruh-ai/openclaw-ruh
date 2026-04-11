@@ -1852,7 +1852,7 @@ export function LifecycleStepRenderer({
         </div>
         <button
           onClick={() => store.advanceDevStage()}
-          disabled={stageIdx >= AGENT_DEV_STAGES.length - 1 || anyStageLoading}
+          disabled={stageIdx >= AGENT_DEV_STAGES.length - 1 || anyStageLoading || !store.canAdvanceDevStage()}
           className="px-3 py-1.5 text-xs font-satoshi-bold text-[var(--primary)] hover:text-[var(--primary)]/80 disabled:opacity-30 disabled:text-[var(--text-tertiary)] transition-colors"
         >
           {stageIdx >= AGENT_DEV_STAGES.length - 1 ? "Done" : "Next →"}
@@ -1873,12 +1873,6 @@ function StageThinkPlaceholder({
   onDiscoveryComplete?: () => void;
   sandboxId?: string | null;
 }) {
-  // While generating, show the animated Think activity panel instead of a
-  // static "Preparing documents..." text box.
-  if (store.thinkStatus === "generating") {
-    return <ThinkActivityPanel thinkActivity={store.thinkActivity} thinkStep={store.thinkStep} researchFindings={store.researchFindings} />;
-  }
-
   // New XML flow: workspace paths are set but in-memory documents are not.
   // Read the files from workspace and hydrate discoveryDocuments so StepDiscovery
   // can show the full PRD/TRD with tabs, editing, and the original approval UI.
@@ -1942,6 +1936,12 @@ function StageThinkPlaceholder({
       }).catch(() => setLoadingDocs(false));
     }
   }, [store.thinkStatus, hasWorkspaceDocs, store.discoveryDocuments, loadingDocs, sandboxId, store.agentSandboxId, store.prdPath, store.trdPath, store]);
+
+  // While generating, show the animated Think activity panel instead of a
+  // static "Preparing documents..." text box.
+  if (store.thinkStatus === "generating") {
+    return <ThinkActivityPanel thinkActivity={store.thinkActivity} thinkStep={store.thinkStep} researchFindings={store.researchFindings} />;
+  }
 
   // Once documents are ready (or idle/error), delegate to StepDiscovery.
   const effectiveStatus = store.discoveryDocuments ? "ready" as const
@@ -2370,6 +2370,15 @@ function StagePlan({
             ))}
           </div>
         </PlanSection>
+      )}
+
+      {/* Error banner — shown when plan approval failed (e.g. missing sandbox) */}
+      {status === "ready" && store.skillGenerationError && (
+        <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 px-4 py-3">
+          <p className="text-xs font-satoshi-medium text-[var(--error)]">
+            {store.skillGenerationError}
+          </p>
+        </div>
       )}
 
       {/* Action bar */}

@@ -245,6 +245,8 @@ export interface CoPilotActions {
   // ── Lifecycle actions ──────────────────────────────────────────────────────
   setDevStage: (stage: AgentDevStage) => void;
   advanceDevStage: () => void;
+  /** Returns true if the current stage's hard gate is satisfied. */
+  canAdvanceDevStage: () => boolean;
   goBackDevStage: () => void;
   setThinkStatus: (status: StageStatus) => void;
   setUserTriggeredThink: (triggered: boolean) => void;
@@ -637,20 +639,54 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       maxUnlockedDevStage: maxDevStage(state.maxUnlockedDevStage, stage),
     })),
 
-  advanceDevStage: () => {
-    const { devStage, evalStatus, maxUnlockedDevStage } = get();
-    const idx = AGENT_DEV_STAGES.indexOf(devStage);
-    if (idx < AGENT_DEV_STAGES.length - 1) {
-      const nextStage = AGENT_DEV_STAGES[idx + 1];
-      const updates: Partial<CoPilotState> = {
-        devStage: nextStage,
-        maxUnlockedDevStage: maxDevStage(maxUnlockedDevStage, nextStage),
-      };
-      if (devStage === "test" && (evalStatus === "idle" || evalStatus === "running")) {
-        (updates as Record<string, unknown>).evalStatus = "done";
-      }
-      set(updates as Partial<CoPilotState>);
+  canAdvanceDevStage: () => {
+    const state = get();
+    const idx = AGENT_DEV_STAGES.indexOf(state.devStage);
+    if (idx >= AGENT_DEV_STAGES.length - 1) return false;
+    switch (state.devStage) {
+      case "think":
+        return state.thinkStatus === "approved" || state.thinkStatus === "done";
+      case "plan":
+        return state.planStatus === "approved" || state.planStatus === "done";
+      case "build":
+        return state.buildStatus === "done";
+      default:
+        return true;
     }
+  },
+
+  advanceDevStage: () => {
+    const state = get();
+    const { devStage, evalStatus, maxUnlockedDevStage } = state;
+    const idx = AGENT_DEV_STAGES.indexOf(devStage);
+    if (idx >= AGENT_DEV_STAGES.length - 1) return;
+
+    // Gate: don't advance past an incomplete stage.
+    // Each stage has a hard approval/completion requirement.
+    const canAdvance = (() => {
+      switch (devStage) {
+        case "think":
+          return state.thinkStatus === "approved" || state.thinkStatus === "done";
+        case "plan":
+          return state.planStatus === "approved" || state.planStatus === "done";
+        case "build":
+          return state.buildStatus === "done";
+        // review, test, ship — allow free navigation once reached
+        default:
+          return true;
+      }
+    })();
+    if (!canAdvance) return;
+
+    const nextStage = AGENT_DEV_STAGES[idx + 1];
+    const updates: Partial<CoPilotState> = {
+      devStage: nextStage,
+      maxUnlockedDevStage: maxDevStage(maxUnlockedDevStage, nextStage),
+    };
+    if (devStage === "test" && (evalStatus === "idle" || evalStatus === "running")) {
+      (updates as Record<string, unknown>).evalStatus = "done";
+    }
+    set(updates as Partial<CoPilotState>);
   },
 
   goBackDevStage: () => {

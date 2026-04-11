@@ -360,19 +360,21 @@ export async function runAgentSetup(
   if (manifest.install) {
     result.install = await runInstallStep(containerName, manifest.install, log);
     if (!result.install.ok) {
-      log('Dependency install failed — aborting.');
-      return result;
+      log('Dependency install failed — continuing (services may still start with partial deps).');
     }
   }
 
   // 4. Run setup steps
+  // Continue past failures instead of aborting — AI-generated setup steps
+  // frequently have issues (broken migrations, missing types, etc.).
+  // The deep validation + auto-fix loop catches and repairs these.
+  // Aborting here prevents dashboard builds and service starts from ever running.
   if (manifest.setup) {
     for (const step of manifest.setup) {
       const stepResult = await runSetupStep(containerName, step, log);
       result.setup.push(stepResult);
       if (!stepResult.ok && !step.optional) {
-        log(`Required setup step "${step.name}" failed — aborting.`);
-        return result;
+        log(`Setup step "${step.name}" failed — continuing with remaining steps.`);
       }
     }
   }

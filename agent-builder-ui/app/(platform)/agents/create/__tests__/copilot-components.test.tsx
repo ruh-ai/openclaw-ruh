@@ -38,6 +38,9 @@ mock.module("@/lib/openclaw/copilot-flow", () => ({
   countSkillAvailability: () => ({ available: 0, total: 0 }),
   resolveCoPilotToolResearchUseCase: () => "",
   resolveCoPilotCompletionKind: () => null,
+  createCoPilotSeedFromAgent: () => ({}),
+  canPersistReviewOrLaterForgeStage: () => false,
+  planHasInlineContent: () => false,
 }));
 
 mock.module("@/lib/openclaw/builder-state", () => ({

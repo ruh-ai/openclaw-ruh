@@ -188,7 +188,8 @@ export async function runDeepValidationWithAutoFix(
   opts: { maxRetries?: number; totalTimeoutMs?: number } = {},
 ): Promise<DeepValidationReport> {
   const maxRetries = opts.maxRetries ?? 3;
-  const totalTimeoutMs = opts.totalTimeoutMs ?? 120_000; // 2 minutes total budget
+  // 10-minute hard cap — generous enough for real fixes, still prevents infinite hangs
+  const totalTimeoutMs = opts.totalTimeoutMs ?? 600_000;
   const sessionId = `validate-${uuidv4()}`;
   let totalFixAttempts = 0;
   let totalFixSuccesses = 0;
@@ -207,26 +208,26 @@ export async function runDeepValidationWithAutoFix(
   for (const check of report.checks) callbacks.onCheckResult?.(check);
 
   for (let round = 0; round < maxRetries && report.overallStatus === "fail"; round++) {
-    if (isTimedOut()) {
-      callbacks.onStatus?.("Validation time budget exceeded — stopping auto-fix.");
-      break;
-    }
-
     const failures = report.checks.filter(c => c.status === "fail" && c.fixContext);
     if (failures.length === 0) break;
 
+    // Hard timeout: only check between rounds, never mid-fix.
+    // This lets each repair attempt finish cleanly before deciding to stop.
+    if (isTimedOut()) {
+      callbacks.onStatus?.(`Validation time budget exceeded after ${Math.round((Date.now() - startedAt) / 1000)}s — ${failures.length} issue${failures.length !== 1 ? "s" : ""} remain.`);
+      break;
+    }
+
     callbacks.onStatus?.(`Found ${failures.length} issue${failures.length > 1 ? "s" : ""} — auto-fixing (round ${round + 1}/${maxRetries})...`);
 
+    let roundFixSuccesses = 0;
     for (const failure of failures) {
-      if (isTimedOut()) break;
       totalFixAttempts++;
       callbacks.onAutoFixAttempt?.(failure, round + 1);
       callbacks.onStatus?.(`Fixing: ${failure.label}`);
       const fixed = await sendFixToArchitect(sandboxId, failure.fixContext!, sessionId);
       callbacks.onStatus?.(fixed ? `Fix applied for: ${failure.label}` : `Fix failed for: ${failure.label}`);
     }
-
-    if (isTimedOut()) break;
 
     callbacks.onStatus?.("Rebuilding and restarting services...");
     try { await restartServices(sandboxId); } catch { callbacks.onStatus?.("Service restart failed — continuing validation..."); }
@@ -244,11 +245,19 @@ export async function runDeepValidationWithAutoFix(
       const oldCheck = report.checks.find(c => c.check === newCheck.check && c.endpoint === newCheck.endpoint && c.status === "fail");
       if (oldCheck && newCheck.status === "pass") {
         totalFixSuccesses++;
+        roundFixSuccesses++;
         newCheck.attempt = round + 1;
       }
       callbacks.onCheckResult?.(newCheck);
     }
     report = newReport;
+
+    // Progress-aware early exit: if this round fixed nothing, further rounds
+    // won't help either — stop instead of burning time on the same failures.
+    if (roundFixSuccesses === 0 && report.overallStatus === "fail") {
+      callbacks.onStatus?.(`Auto-fix round ${round + 1} made no progress — stopping. ${report.failCount} issue${report.failCount !== 1 ? "s" : ""} remain.`);
+      break;
+    }
   }
 
   return { ...report, autoFixAttempts: totalFixAttempts, autoFixSuccesses: totalFixSuccesses };

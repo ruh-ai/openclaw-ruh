@@ -301,11 +301,14 @@ export async function runBuildPipeline(
       await Promise.all(parallelTasks);
     }
 
-    // Phase E: Dashboard (depends on backend routes)
+    // Phase E: Dashboard — no longer an LLM specialist.
+    // The scaffold generates the complete working dashboard from templates.
+    // Mark as done if present in the manifest (backward compat).
     const dashboardTask = findTask("dashboard");
     if (dashboardTask) {
-      callbacks.onStatus("Building dashboard...");
-      await runSpecialist(dashboardTask, plan, agentName, sandboxId, manifest, callbacks);
+      dashboardTask.status = "done";
+      dashboardTask.completedAt = new Date().toISOString();
+      callbacks.onTaskComplete(dashboardTask);
       markDone();
     }
 
@@ -348,62 +351,51 @@ export async function runBuildPipeline(
     console.warn("[build-orchestrator] Workspace merge failed:", err);
   }
 
-  // Phase G: Run agent setup (install deps, run migrations, start services)
-  // Only if the build produced a setup.json (v3 agents with backend/dashboard)
-  callbacks.onStatus("Starting agent services...");
+  // Phase G: Verification specialist
+  // The architect runs inside the forge container with full tool access (bash + file write),
+  // executes a structured checklist (deps, compile, dashboard build, database, services,
+  // endpoints), fixes failures in-place, and writes a verification report.
+  callbacks.onStatus("Preparing post-build verification...");
   try {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-    const setupRes = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/setup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (setupRes.ok) {
-      const setupResult = await setupRes.json();
-      if (setupResult.ok) {
-        callbacks.onStatus("Agent services started.");
-        // Log service health
-        for (const svc of setupResult.services ?? []) {
-          callbacks.onStatus(`  ${svc.name}: ${svc.healthy ? "healthy" : "unhealthy"} (port ${svc.port})`);
-        }
+    const { writeVerificationPlan, readVerificationReport } = await import("./build-harness");
+
+    // Step 1: Generate and write the verification plan
+    const verificationPlan = await writeVerificationPlan(sandboxId, plan, agentName);
+    callbacks.onStatus(`Verification plan: ${verificationPlan.checks.length} checks`);
+
+    // Step 2: Run the verification specialist (same pattern as identity/backend/dashboard)
+    const verifyTask: BuildManifestTask = {
+      id: `verify-${Date.now()}`,
+      specialist: "verify" as BuildManifestTask["specialist"],
+      status: "pending",
+      files: [],
+    };
+    manifest.tasks.push(verifyTask);
+
+    callbacks.onStatus("Running verification specialist...");
+    await runSpecialist(verifyTask, plan, agentName, sandboxId, manifest, callbacks);
+
+    // Step 3: Read the verification report
+    const harnessReport = await readVerificationReport(sandboxId, verificationPlan);
+    if (harnessReport) {
+      if (harnessReport.overallStatus === "pass") {
+        callbacks.onStatus(
+          `Verification passed: all ${harnessReport.phases.length} phases OK` +
+          (harnessReport.totalFixSuccesses > 0 ? `, ${harnessReport.totalFixSuccesses} auto-fixed` : ""),
+        );
       } else {
-        callbacks.onStatus("Agent setup completed with issues — some services may not be running.");
+        const failed = harnessReport.phases.filter((p) => p.status === "fail");
+        callbacks.onStatus(`Verification completed with ${failed.length} failing phase(s)`);
+        for (const phase of failed) {
+          callbacks.onStatus(`  ⚠️ ${phase.phase}: ${phase.detail}`);
+        }
       }
     } else {
-      console.warn("[build-orchestrator] Setup endpoint returned", setupRes.status);
+      callbacks.onStatus("Verification specialist finished but no report was written.");
     }
   } catch (err) {
-    console.warn("[build-orchestrator] Agent setup failed:", err);
-    callbacks.onStatus("Agent setup skipped — services not started.");
-  }
-
-  // Phase H: Deep validation + auto-fix loop
-  callbacks.onStatus("Validating agent stack...");
-  try {
-    const { runDeepValidationWithAutoFix } = await import("./build-validator");
-    const deepReport = await runDeepValidationWithAutoFix(sandboxId, plan, {
-      onStatus: (msg) => callbacks.onStatus(msg),
-      onCheckResult: (check) => {
-        const icon = check.status === "pass" ? "\u2705" : check.status === "fail" ? "\u274c" : "\u23ed\ufe0f";
-        callbacks.onStatus(`  ${icon} ${check.label}`);
-      },
-      onAutoFixAttempt: (check, attempt) => {
-        callbacks.onStatus(`  \ud83d\udd27 Auto-fixing: ${check.label} (attempt ${attempt}/3)`);
-      },
-    }, { maxRetries: 3 });
-
-    try {
-      const { writeWorkspaceFiles } = await import("./workspace-writer");
-      await writeWorkspaceFiles(sandboxId, [{ path: ".openclaw/build/deep-validation-report.json", content: JSON.stringify(deepReport, null, 2) }]);
-    } catch { /* non-fatal */ }
-
-    if (deepReport.overallStatus === "pass") {
-      callbacks.onStatus(`Validation passed: ${deepReport.passCount} checks OK${deepReport.autoFixSuccesses > 0 ? `, ${deepReport.autoFixSuccesses} auto-fixed` : ""}`);
-    } else {
-      callbacks.onStatus(`Validation completed with ${deepReport.failCount} issue${deepReport.failCount !== 1 ? "s" : ""} remaining`);
-    }
-  } catch (err) {
-    console.warn("[build-orchestrator] Deep validation failed:", err);
-    callbacks.onStatus("Validation skipped — could not run deep checks.");
+    console.warn("[build-orchestrator] Verification specialist failed:", err);
+    callbacks.onStatus("Post-build verification skipped — specialist error.");
   }
 
   return manifest;
