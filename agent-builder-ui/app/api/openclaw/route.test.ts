@@ -309,7 +309,7 @@ beforeEach(() => {
         ? String((init.headers as Record<string, unknown>).Authorization)
         : null;
 
-    if (url === "http://backend.test/users/me") {
+    if (url === "http://backend.test/api/auth/me") {
       scenario.authFetches.push({ url, authorization });
 
       return new Response(
@@ -444,7 +444,7 @@ describe("POST /api/openclaw auth boundary", () => {
 
     expect(scenario.authFetches).toEqual([
       {
-        url: "http://backend.test/users/me",
+        url: "http://backend.test/api/auth/me",
         authorization: "Bearer token-123",
       },
     ]);
@@ -490,7 +490,7 @@ describe("POST /api/openclaw forge requirement", () => {
     );
     expect(scenario.authFetches).toEqual([
       {
-        url: "http://backend.test/users/me",
+        url: "http://backend.test/api/auth/me",
         authorization: "Bearer token-123",
       },
     ]);
