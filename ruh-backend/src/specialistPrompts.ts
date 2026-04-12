@@ -75,7 +75,7 @@ After writing all 3 files, confirm with:
 
 Agent name: ${agentName}
 Skills: ${plan.skills.map((s) => s.name).join(", ")}
-Channels: ${(plan.channels ?? []).join(", ") || "none"}
+Channels: ${plan.channels.join(", ") || "none"}
 `;
 }
 
@@ -83,7 +83,7 @@ Channels: ${(plan.channels ?? []).join(", ") || "none"}
 
 export function buildDatabasePrompt(plan: ArchitecturePlan): string {
   const tables = plan.dataSchema?.tables ?? [];
-  const tableList = tables.map((t) => `- ${t.name}: ${t.columns.map(c => c.name).join(", ")}`).join("\n");
+  const tableList = tables.map((t) => `- ${t.name}: ${t.description}`).join("\n");
 
   return `[SPECIALIST: Database Engineer]
 
@@ -115,7 +115,29 @@ cat > ~/.openclaw/workspace/db/migrations/001_initial.sql << 'ENDSQL'
 ENDSQL
 \`\`\`
 
-After writing all files, confirm:
+## Self-Validation — Run after writing all files
+
+After writing the migration and seed, actually run them to verify they work:
+\`\`\`bash
+# Create the .env file so DATABASE_URL is available
+cat > ~/.openclaw/workspace/.env << 'ENDENV'
+DATABASE_URL=postgresql://agent:agent@localhost:5432/agent
+ENDENV
+
+# Create the database and user if they don't exist
+sudo -u postgres psql -c "SELECT 1 FROM pg_roles WHERE rolname='agent'" | grep -q 1 || sudo -u postgres psql -c "CREATE USER agent WITH PASSWORD 'agent';"
+sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='agent'" | grep -q 1 || sudo -u postgres psql -c "CREATE DATABASE agent OWNER agent;"
+
+# Run the migration
+cd ~/.openclaw/workspace && DATABASE_URL=postgresql://agent:agent@localhost:5432/agent npx tsx db/migrate.ts
+
+# Run the seed
+cd ~/.openclaw/workspace && DATABASE_URL=postgresql://agent:agent@localhost:5432/agent npx tsx db/seed.ts
+\`\`\`
+
+If migration or seed fails, fix the SQL/TypeScript and re-run. Only confirm after both succeed.
+
+After writing and validating all files, confirm:
 \`\`\`json
 {"type": "specialist_done", "specialist": "database", "files": ["db/migrations/001_initial.sql", "db/types.ts", "db/seed.ts", "db/migrate.ts"]}
 \`\`\`
@@ -128,6 +150,8 @@ export function buildBackendPrompt(plan: ArchitecturePlan): string {
   const endpoints = plan.apiEndpoints ?? [];
   const endpointList = endpoints.map((e) => `- ${e.method} ${e.path}: ${e.description}`).join("\n");
 
+  const hasDb = Boolean(plan.dataSchema?.tables?.length);
+
   return `[SPECIALIST: Backend Engineer]
 
 You are writing the backend API layer. Read the architecture plan:
@@ -135,7 +159,7 @@ You are writing the backend API layer. Read the architecture plan:
 cat ~/.openclaw/workspace/.openclaw/plan/architecture.json
 \`\`\`
 
-${plan.dataSchema?.tables?.length ? "Also read the database types:\n```bash\ncat ~/.openclaw/workspace/db/types.ts\n```\n" : ""}
+${hasDb ? "Also read the database types and migration:\n```bash\ncat ~/.openclaw/workspace/db/types.ts\ncat ~/.openclaw/workspace/db/migrations/001_initial.sql\n```\n" : ""}
 
 The plan specifies these endpoints:
 ${endpointList}
@@ -147,12 +171,26 @@ Write these files:
 1. **backend/routes/*.ts** — One file per resource group (e.g., campaigns.ts, reports.ts). Each exports an Express Router. The route file name must match what backend/index.ts imports.
 
 2. **backend/services/*.ts** — Business logic functions called by routes. Each service file handles one domain.
+${hasDb ? `
+3. **backend/services/db.ts** — A shared database client module that connects to PostgreSQL using DATABASE_URL from the environment. Export a \`query(text, params)\` helper. Use the \`pg\` package (already in package.json).
 
-3. **backend/middleware/auth.ts** — Simple auth middleware (check Bearer token or API key from env).
+CRITICAL: The plan has a PostgreSQL database schema. Your services MUST query PostgreSQL using the db.ts client — do NOT use file-based JSON storage, in-memory stores, or SQLite. The database specialist already wrote migrations and seed data for PostgreSQL.
+` : ""}
+4. **backend/middleware/auth.ts** — Simple auth middleware (check Bearer token or API key from env).
 
-Use TypeScript, Express 4, async/await. Import types from db/types.ts if database exists.
+Use TypeScript, Express 4, async/await.${hasDb ? " Import types from db/types.ts and use the db client for all data access." : ""}
 Keep routes thin — delegate logic to services.
 Return proper HTTP status codes and JSON error responses.
+
+## Self-Validation
+
+After writing all files, verify your work:
+\`\`\`bash
+# Check that all route files exist and are non-empty
+ls -la ~/.openclaw/workspace/backend/routes/
+ls -la ~/.openclaw/workspace/backend/services/
+${hasDb ? "# Verify db.ts uses pg, not file I/O\ngrep -l 'Pool\\|Client' ~/.openclaw/workspace/backend/services/db.ts" : ""}
+\`\`\`
 
 Write each file:
 \`\`\`bash
@@ -169,14 +207,19 @@ After writing all files, confirm:
 `;
 }
 
-// ─── Skill Handler Specialist ────────────────────────────────────────────────
+// ─── Skill Specialist (OpenClaw SKILL.md format) ────────────────────────────
 
 export function buildSkillHandlerPrompt(plan: ArchitecturePlan): string {
-  const skillList = plan.skills.map((s) => `- ${s.id}: ${s.description} (env: ${s.envVars.join(", ") || "none"})`).join("\n");
+  const skillList = plan.skills.map((s) => {
+    const env = s.envVars.length ? s.envVars.join(", ") : "none";
+    return `- ${s.id}: ${s.description} (env: ${env})`;
+  }).join("\n");
 
-  return `[SPECIALIST: Skill Builder]
+  return `[SPECIALIST: Skill Builder — OpenClaw SKILL.md format]
 
-You are writing TypeScript handler implementations for each skill. Read the plan:
+You are writing OpenClaw skills as **SKILL.md** files. These are markdown files that the agent LLM reads and follows as instructions. The agent is an LLM — it reads the SKILL.md to understand what to do, then uses its tools (bash, file I/O, API calls) to execute the skill.
+
+Read the plan:
 \`\`\`bash
 cat ~/.openclaw/workspace/.openclaw/plan/architecture.json
 \`\`\`
@@ -184,32 +227,110 @@ cat ~/.openclaw/workspace/.openclaw/plan/architecture.json
 Skills to implement:
 ${skillList}
 
-For EACH skill, write:
+## SKILL.md Format
 
-1. **skills/<skill-id>/handler.ts** — A TypeScript module that exports:
-   - \`async function execute(input: SkillInput): Promise<SkillOutput>\`
-   - Types for SkillInput and SkillOutput
-   - Real implementation logic (API calls, data processing, etc.)
-   - Error handling with descriptive messages
+For EACH skill, write ONE file: **skills/<skill-id>/SKILL.md**
 
-2. **skills/<skill-id>/handler.test.ts** — Basic test with vitest:
-   - Test the happy path
-   - Test error handling
-   - Mock external dependencies
+Each SKILL.md must have:
 
-The handler should be the actual implementation, not a stub. Use the env vars and integrations from the plan.
-
-Write each file:
-\`\`\`bash
-mkdir -p ~/.openclaw/workspace/skills/<skill-id>
-cat > ~/.openclaw/workspace/skills/<skill-id>/handler.ts << 'ENDTS'
-[content]
-ENDTS
+### 1. YAML Frontmatter
+\`\`\`yaml
+---
+name: <skill-id>
+version: 1.0.0
+description: "<one-line description>"
+user-invocable: false
+metadata:
+  openclaw:
+    requires:
+      bins: [bash, curl, jq]
+      env: [ENV_VAR_1, ENV_VAR_2]
+    primaryEnv: <main env var>
+---
 \`\`\`
 
-After writing all skill handlers, confirm:
+### 2. Markdown Content — a clear, step-by-step guide the agent follows
+
+Structure each skill with these sections:
+- **Purpose**: What this skill does and when to use it
+- **Input**: What the agent receives (user message, parameters, context)
+- **Process**: Step-by-step instructions with inline bash/curl commands the agent executes
+- **Output**: What the agent returns to the user
+- **Error Handling**: How to handle failures gracefully
+
+### Key Rules
+- Skills are documentation for the agent LLM, NOT executable code
+- Include inline \`bash\` or \`curl\` commands the agent can copy and run via its shell tool
+- Reference environment variables from the plan: \`\${APOLLO_API_KEY}\`, \`\${SENDGRID_API_KEY}\`, etc.
+- Each skill should be self-contained — the agent reads ONE file and knows everything
+- Use clear markdown formatting — headers, lists, code blocks
+- Include realistic example API calls with actual endpoint paths, headers, and JSON payloads
+- Keep skills focused — one skill does one thing well
+
+## Example SKILL.md
+
+\`\`\`markdown
+---
+name: search-leads
+version: 1.0.0
+description: "Search for leads matching an ICP using Apollo API"
+user-invocable: false
+metadata:
+  openclaw:
+    requires:
+      bins: [curl, jq]
+      env: [APOLLO_API_KEY]
+    primaryEnv: APOLLO_API_KEY
+---
+
+# Search Leads
+
+## Purpose
+Find prospective leads that match the user's Ideal Customer Profile using the Apollo people search API.
+
+## Input
+The user provides targeting criteria: job titles, industries, company sizes, geographies.
+
+## Process
+
+1. Parse the user's targeting criteria into Apollo search filters
+2. Call the Apollo people search API:
+\\\`\\\`\\\`bash
+curl -s -X POST "https://api.apollo.io/api/v1/mixed_people/search" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Api-Key: \${APOLLO_API_KEY}" \\
+  -d '{
+    "person_titles": ["VP Sales", "Director of Marketing"],
+    "organization_num_employees_ranges": ["51,200"],
+    "person_locations": ["United States"],
+    "per_page": 25
+  }'
+\\\`\\\`\\\`
+3. Parse the response and extract: name, title, company, email, LinkedIn URL
+4. Format results as a table for the user
+
+## Output
+Return a formatted list of leads with contact details, or a clear message if no matches found.
+
+## Error Handling
+- If API returns 401: tell the user their Apollo API key may be invalid
+- If API returns 429: wait and retry, tell the user about rate limits
+- If no results: suggest broadening the search criteria
+\`\`\`
+
+## Writing Skills
+
+Write each skill:
+\`\`\`bash
+mkdir -p ~/.openclaw/workspace/skills/<skill-id>
+cat > ~/.openclaw/workspace/skills/<skill-id>/SKILL.md << 'ENDSKILL'
+[SKILL.md content with frontmatter + markdown]
+ENDSKILL
+\`\`\`
+
+After writing ALL skills, confirm:
 \`\`\`json
-{"type": "specialist_done", "specialist": "skills", "files": ["skills/<id>/handler.ts", ...]}
+{"type": "specialist_done", "specialist": "skills", "files": ["skills/<id>/SKILL.md", ...]}
 \`\`\`
 `;
 }
@@ -385,6 +506,28 @@ ENDREPORT
 - For service checks: kill any existing process on the port first, start the service, wait 3 seconds, then check.
 - ALWAYS write verification-report.json at the end, even if some checks fail.
 - Process checks in the order they appear in the plan. Dependencies matter (deps before compile, compile before services).
+
+## Skill Verification
+
+Skills must be OpenClaw SKILL.md files, NOT TypeScript handlers. For EACH skill directory:
+\`\`\`bash
+ls ~/.openclaw/workspace/skills/*/SKILL.md
+\`\`\`
+Every skill MUST have a SKILL.md file with YAML frontmatter (---name, version, description---).
+If a skill has handler.ts but no SKILL.md, that is a FAILURE — the skill was built in the wrong format.
+
+## Database & Backend Consistency
+
+If the plan has a database schema (db/migrations/ exists):
+1. Verify .env file exists with DATABASE_URL
+2. Verify the database was migrated: \`psql $DATABASE_URL -c "\\dt"\` should show tables
+3. Verify backend services use PostgreSQL (pg Pool/Client), NOT file-based JSON:
+   \`\`\`bash
+   grep -rl "readFile\\|writeFile\\|store.json\\|fs.read\\|fs.write" ~/.openclaw/workspace/backend/services/ && echo "FAIL: backend uses file storage instead of PostgreSQL" || echo "PASS: no file storage found"
+   grep -rl "Pool\\|Client\\|pg" ~/.openclaw/workspace/backend/services/ && echo "PASS: backend uses PostgreSQL" || echo "FAIL: backend missing PostgreSQL client"
+   \`\`\`
+4. If the backend uses file storage instead of PostgreSQL, rewrite the services to use the pg client.
+5. Verify seed data exists: \`psql $DATABASE_URL -c "SELECT count(*) FROM <first_table>"\`
 
 ## Dashboard-Backend Integration
 
