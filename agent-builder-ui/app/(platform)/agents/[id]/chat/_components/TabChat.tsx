@@ -38,10 +38,11 @@ import {
 } from "@/lib/openclaw/copilot-state";
 import { buildBuilderChatSuggestions } from "@/lib/openclaw/builder-chat-suggestions";
 
-// ─── DashboardIframe — loads agent dashboard via direct Docker port ─────────
-// Fetches the Docker-mapped host port from the backend, then embeds the
-// dashboard at that direct URL. This avoids the SPA-breaking proxy rewrite.
-// Falls back to the proxy URL if port discovery fails.
+// ─── DashboardIframe — loads agent dashboard preview ────────────────────────
+// In local dev, embeds the dashboard via direct Docker host port for speed.
+// In production, uses the same-origin proxy path (/api/sandbox-preview/...)
+// which Next.js rewrites to the backend, avoiding localhost access from the
+// user's browser to the remote VM.
 
 function DashboardIframe({ sandboxId, containerPort, backendPort }: {
   sandboxId: string;
@@ -50,10 +51,19 @@ function DashboardIframe({ sandboxId, containerPort, backendPort }: {
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const isLocal = API_BASE.includes("localhost") || API_BASE.includes("127.0.0.1");
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // In production, always use the proxy — direct localhost is unreachable
+      if (!isLocal) {
+        if (!cancelled) {
+          setSrc(`/api/sandbox-preview/${sandboxId}/proxy/${containerPort}/?backendPort=${backendPort}`);
+        }
+        return;
+      }
+      // Local dev: try direct Docker host port for speed (no proxy overhead)
       try {
         const res = await fetch(`${API_BASE}/api/sandboxes/${sandboxId}/preview/ports`);
         if (!res.ok) throw new Error("ports endpoint failed");
@@ -71,7 +81,7 @@ function DashboardIframe({ sandboxId, containerPort, backendPort }: {
       }
     })();
     return () => { cancelled = true; };
-  }, [sandboxId, containerPort, backendPort, API_BASE]);
+  }, [sandboxId, containerPort, backendPort, API_BASE, isLocal]);
 
   if (!src) {
     return (
