@@ -83,7 +83,7 @@ Channels: ${plan.channels.join(", ") || "none"}
 
 export function buildDatabasePrompt(plan: ArchitecturePlan): string {
   const tables = plan.dataSchema?.tables ?? [];
-  const tableList = tables.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+  const tableList = tables.map((t) => `- ${t.name}`).join("\n");
 
   return `[SPECIALIST: Database Engineer]
 
