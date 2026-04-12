@@ -76,19 +76,24 @@ export async function GET() {
       );
     }
 
-    // Health-check: verify the gateway port is reachable before returning.
+    // Health-check: verify the gateway is reachable before returning.
     // If the sandbox container is running but its gateway process is dead,
     // returning it causes ECONNRESET errors downstream.
-    const port = typeof match.gateway_port === "number" ? match.gateway_port : 0;
-    if (port > 0) {
+    // Use the stored standard_url/dashboard_url (set correctly by the backend
+    // for both local dev and Docker environments) instead of hardcoding localhost.
+    const probeUrl =
+      (typeof match.standard_url === "string" && match.standard_url) ||
+      (typeof match.dashboard_url === "string" && match.dashboard_url) ||
+      "";
+    if (probeUrl) {
       try {
-        const probe = await fetch(`http://localhost:${port}/`, {
+        const probe = await fetch(`${probeUrl}/`, {
           signal: AbortSignal.timeout(3000),
         });
         if (!probe.ok) throw new Error(`probe status ${probe.status}`);
       } catch {
         console.warn(
-          `[architect-sandbox] Gateway at port ${port} (sandbox ${match.sandbox_id}) is unreachable, skipping`,
+          `[architect-sandbox] Gateway at ${probeUrl} (sandbox ${match.sandbox_id}) is unreachable, skipping`,
         );
         // Try to find another healthy sandbox
         const fallback = sandboxes.find(
@@ -98,16 +103,21 @@ export async function GET() {
             (sb.gateway_port as number) > 0,
         );
         if (fallback) {
-          try {
-            const fbProbe = await fetch(
-              `http://localhost:${fallback.gateway_port}/`,
-              { signal: AbortSignal.timeout(3000) },
-            );
-            if (fbProbe.ok) {
-              match = fallback;
+          const fbUrl =
+            (typeof fallback.standard_url === "string" && fallback.standard_url) ||
+            (typeof fallback.dashboard_url === "string" && fallback.dashboard_url) ||
+            "";
+          if (fbUrl) {
+            try {
+              const fbProbe = await fetch(`${fbUrl}/`, {
+                signal: AbortSignal.timeout(3000),
+              });
+              if (fbProbe.ok) {
+                match = fallback;
+              }
+            } catch {
+              // fallback also dead — continue with original match anyway
             }
-          } catch {
-            // fallback also dead — continue with original match anyway
           }
         }
       }

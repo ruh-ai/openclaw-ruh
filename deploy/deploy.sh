@@ -70,11 +70,8 @@ else:
 " 2>/dev/null || true
 fi
 
-# Builder architect-sandbox: probe Docker host IP, not localhost
-sed -i "s|http://localhost:\${port}/|http://${DOCKER_HOST_IP}:\${port}/|g" \
-  agent-builder-ui/app/api/openclaw/architect-sandbox/route.ts 2>/dev/null || true
-sed -i "s|http://localhost:\${fallback.gateway_port}/|http://${DOCKER_HOST_IP}:\${fallback.gateway_port}/|g" \
-  agent-builder-ui/app/api/openclaw/architect-sandbox/route.ts 2>/dev/null || true
+# NOTE: architect-sandbox and gateway URL patches are no longer needed —
+# the source code now uses DOCKER_HOST_IP env var / stored URLs natively.
 
 # Use the SSL nginx config
 cp deploy/nginx-ssl.conf nginx/nginx.conf
@@ -107,14 +104,8 @@ fi
 echo "[5/6] Restarting services..."
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans 2>&1 | tail -10
 
-# Fix sandbox URLs in DB (localhost → Docker host IP)
-sleep 5
-docker exec ruh-postgres-1 psql -U openclaw -d openclaw -c \
-  "UPDATE sandboxes SET standard_url = REPLACE(standard_url, 'localhost', '${DOCKER_HOST_IP}') WHERE standard_url LIKE '%localhost%';" \
-  2>/dev/null || true
-docker exec ruh-postgres-1 psql -U openclaw -d openclaw -c \
-  "UPDATE sandboxes SET dashboard_url = REPLACE(dashboard_url, 'localhost', '${DOCKER_HOST_IP}') WHERE dashboard_url LIKE '%localhost%';" \
-  2>/dev/null || true
+# NOTE: DB URL patches (localhost → DOCKER_HOST_IP) are no longer needed —
+# the backend now uses DOCKER_HOST_IP when writing sandbox URLs to the DB.
 
 # Fix sandbox gateway allowed origins (Docker host IP + domain)
 for SANDBOX in $(docker ps --filter "name=openclaw-" --format "{{.Names}}" | grep -v ruh); do
