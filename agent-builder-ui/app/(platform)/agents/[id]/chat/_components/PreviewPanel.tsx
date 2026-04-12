@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const IS_LOCAL = API_BASE.includes("localhost") || API_BASE.includes("127.0.0.1");
 
 interface PreviewPanelProps {
   sandboxId: string | null;
@@ -115,9 +116,14 @@ export default function PreviewPanel({
     fetchPorts();
   }, [fetchPorts]);
 
-  // Build the proxy URL for the iframe
+  // Build the proxy URL for the iframe.
+  // In production, use the same-origin rewrite path so the iframe loads from
+  // builder.codezero2pi.com (avoiding cross-origin and mixed-content issues).
+  // In local dev, hit the backend directly for simplicity.
   const proxyUrl = sandboxId && selectedPort
-    ? `${API_BASE}/api/sandboxes/${sandboxId}/preview/proxy/${selectedPort}/`
+    ? IS_LOCAL
+      ? `${API_BASE}/api/sandboxes/${sandboxId}/preview/proxy/${selectedPort}/`
+      : `/api/sandbox-preview/${sandboxId}/proxy/${selectedPort}/`
     : null;
 
   // Empty state
