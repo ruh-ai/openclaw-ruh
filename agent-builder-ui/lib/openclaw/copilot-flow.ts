@@ -322,13 +322,27 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     ? skillGraph.map((node) => node.skill_id)
     : [];
 
-  // Restore only the viewed lifecycle stage from persisted agent truth.
-  // Completion badges must come from saved co-pilot lifecycle state, not from
-  // inferred agent status alone, otherwise reopened improve-agent flows paint
-  // Think/Plan/Build green even when this session never completed them.
+  // Restore the viewed lifecycle stage AND preceding stage statuses from
+  // persisted agent truth. Without this, a page reload resets all stage
+  // statuses to "idle" even though the backend knows the agent has progressed,
+  // causing the UI to show incomplete/stuck states.
   const lifecycleOverrides: Partial<CoPilotAgentSeed> = {};
   if (forgeStage && canPersistReviewOrLaterForgeStage(forgeStage, skillGraph.length)) {
     lifecycleOverrides.devStage = forgeStage;
+    // Derive completion statuses for all stages the agent has already passed.
+    // This ensures the stage pills show as done rather than idle on reload.
+    const THINK_IDX = STAGE_ORDER.indexOf("think");
+    const PLAN_IDX = STAGE_ORDER.indexOf("plan");
+    const BUILD_IDX = STAGE_ORDER.indexOf("build");
+    if (forgeStageIdx > THINK_IDX) {
+      lifecycleOverrides.thinkStatus = "approved" as StageStatus;
+    }
+    if (forgeStageIdx > PLAN_IDX) {
+      lifecycleOverrides.planStatus = "approved" as StageStatus;
+    }
+    if (forgeStageIdx > BUILD_IDX) {
+      lifecycleOverrides.buildStatus = "done" as StageStatus;
+    }
   } else if (agent.status === "active" && hasSkills) {
     // Older active agents without saved lifecycle state reopen in Review so the
     // operator can inspect current config, but we intentionally do not infer

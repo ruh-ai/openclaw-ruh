@@ -10,6 +10,10 @@ export interface StreamEntry {
   request: Record<string, unknown>;
   result?: Record<string, unknown>;
   error?: string;
+  /** Buffered build events for replay/reconnection support. */
+  events?: Array<{ type: string; data: unknown; timestamp: number }>;
+  /** AbortController for build cancellation. */
+  abortController?: AbortController;
 }
 
 export const streams = new Map<string, StreamEntry>();

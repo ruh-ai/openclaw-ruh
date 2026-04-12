@@ -6876,6 +6876,9 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
   const sandboxId = agent.forge_sandbox_id;
   if (!sandboxId) throw httpError(400, 'Agent has no forge sandbox — create the agent first');
 
+  // Fix 1: Accept parallel build flag from frontend
+  const { parallelBuild = false } = req.body ?? {};
+
   // Read architecture plan from workspace (check both main and copilot locations)
   let planOutput = '';
   const [mainExit, mainOut] = await sandboxExec(sandboxId, 'cat $HOME/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null', 10);
@@ -6900,59 +6903,106 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
   plan.subAgents = plan.subAgents ?? [];
   plan.workflow = plan.workflow ?? { steps: [] };
 
+  // Fix 5: Create AbortController for cancellation support
+  const abortController = new AbortController();
+
   const streamId = uuidv4();
-  _streams.set(streamId, { status: 'pending', request: { agent_id: req.params.id, sandbox_id: sandboxId } });
+  const entry: StreamEntry = {
+    status: 'pending',
+    request: { agent_id: req.params.id, sandbox_id: sandboxId },
+    events: [],
+    abortController,
+  };
+  _streams.set(streamId, entry);
   res.json({ stream_id: streamId, agent_id: req.params.id });
 
-  // Fire-and-forget: start the build in the background.
-  // The SSE stream endpoint will consume the generator.
-  // Store the generator on the stream entry so the GET endpoint can iterate it.
+  // Fix 1 + 5: Start build with parallel flag and abort signal
   const { runAgentBuild } = await import('./agentBuild');
-  const generator = runAgentBuild(req.params.id, sandboxId, plan as unknown as import('./scaffoldTemplates').ArchitecturePlan, agent.name ?? 'Agent');
-  ((_streams.get(streamId)!) as unknown as { generator: unknown }).generator = generator;
+  const generator = runAgentBuild(
+    req.params.id,
+    sandboxId,
+    plan as unknown as import('./scaffoldTemplates').ArchitecturePlan,
+    agent.name ?? 'Agent',
+    { parallelBuild: Boolean(parallelBuild), signal: abortController.signal },
+  );
+
+  // Fix 3: Start consuming generator in background immediately.
+  // Events are buffered so the SSE GET endpoint can replay + follow.
+  (async () => {
+    try {
+      for await (const event of generator) {
+        entry.events!.push({ type: event.type, data: event, timestamp: Date.now() });
+        if (event.type === 'build_complete') { entry.status = 'done'; break; }
+        if (event.type === 'error') { entry.status = 'error'; entry.error = event.message; break; }
+      }
+      if (entry.status !== 'done' && entry.status !== 'error') entry.status = 'done';
+    } catch (err) {
+      entry.status = 'error';
+      entry.error = err instanceof Error ? err.message : String(err);
+    }
+  })();
+
+  // Fix 3: Persist stream ID on agent record for reconnection (best-effort, non-blocking)
+  import('./agentStore').then(({ updateAgentConfig }) =>
+    updateAgentConfig(req.params.id, {
+      creationSession: { ...(agent.creation_session as Record<string, unknown> ?? {}), buildStreamId: streamId },
+    }).catch(() => { /* best-effort */ }),
+  ).catch(() => { /* best-effort */ });
 }));
 
+// Fix 3: GET endpoint replays buffered events + follows live events
 app.get('/api/agents/:id/build/stream/:stream_id', requireAuth, asyncHandler(async (req, res) => {
   const { stream_id } = req.params;
   if (!_streams.has(stream_id)) throw httpError(404, 'Build stream not found');
   const entry = _streams.get(stream_id)!;
-  if (entry.status === 'done' || entry.status === 'error') throw httpError(409, 'Build already completed');
-
-  entry.status = 'running';
-  const generator = (entry as unknown as { generator?: AsyncGenerator<import('./agentBuild').BuildEvent> }).generator;
-  if (!generator) throw httpError(500, 'Build generator not initialized');
+  const events = entry.events ?? [];
 
   const stream = initializeSseStream(req, res);
   const { sendEvent } = stream;
 
-  try {
-    for await (const event of generator) {
-      sendEvent(event.type, event);
-
-      if (event.type === 'build_complete') {
-        entry.status = 'done';
-        break;
-      }
-      if (event.type === 'error') {
-        entry.status = 'error';
-        entry.error = event.message ?? 'Unknown build error';
-        break;
-      }
-    }
-
-    if (entry.status !== 'done' && entry.status !== 'error') {
-      entry.status = 'done';
-      sendEvent('done', { stream_id });
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    entry.status = 'error';
-    entry.error = msg;
-    sendEvent('error', { message: msg });
+  // Replay already-buffered events
+  let cursor = 0;
+  for (; cursor < events.length; cursor++) {
+    sendEvent(events[cursor].type, events[cursor].data);
   }
 
-  stream.close();
-  setTimeout(() => _streams.delete(stream_id), 60_000);
+  // If build already finished, close immediately after replay
+  if (entry.status === 'done' || entry.status === 'error') {
+    sendEvent('done', { stream_id });
+    stream.close();
+    return;
+  }
+
+  // Follow live events via polling (200ms interval)
+  const interval = setInterval(() => {
+    while (cursor < events.length) {
+      sendEvent(events[cursor].type, events[cursor].data);
+      cursor++;
+    }
+    if (entry.status === 'done' || entry.status === 'error') {
+      sendEvent('done', { stream_id });
+      stream.close();
+      clearInterval(interval);
+    }
+  }, 200);
+
+  req.on('close', () => clearInterval(interval));
+
+  // Fix 3: Extend cleanup timeout from 60s to 10 minutes for reconnection
+  setTimeout(() => _streams.delete(stream_id), 10 * 60 * 1000);
+}));
+
+// Fix 5: Build cancellation endpoint
+app.post('/api/agents/:id/build/cancel/:stream_id', requireAuth, asyncHandler(async (req, res) => {
+  const { stream_id } = req.params;
+  if (!_streams.has(stream_id)) throw httpError(404, 'Build stream not found');
+  const entry = _streams.get(stream_id)!;
+  const controller = entry.abortController;
+  if (!controller) throw httpError(400, 'Build cannot be cancelled — no controller found');
+
+  controller.abort();
+  entry.status = 'cancelled';
+  res.json({ cancelled: true, stream_id });
 }));
 
 // ── Agent Ship (persistent repo) ──────────────────────────────────────────────

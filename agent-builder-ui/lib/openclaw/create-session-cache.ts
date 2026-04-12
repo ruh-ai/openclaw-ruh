@@ -131,6 +131,8 @@ export function clearCreateSessionCache(agentId: string): void {
   }
 }
 
+const DEV_STAGE_ORDER: AgentDevStage[] = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+
 export function buildResumedCoPilotSeed(
   agent: SavedAgent | null,
   cachedCoPilot: Partial<CoPilotState> | null,
@@ -153,6 +155,24 @@ export function buildResumedCoPilotSeed(
       (merged as Record<string, unknown>)[field] = persisted;
     }
   }
+
+  // Never let a stale cache regress devStage behind the backend forge_stage.
+  // The persisted seed derives devStage from the agent's forge_stage which is
+  // the source of truth for how far creation has actually progressed. A
+  // localStorage cache may be from an earlier session that never advanced.
+  const seed = persistedSeed as Partial<CoPilotState>;
+  const persistedStageIdx = DEV_STAGE_ORDER.indexOf(seed.devStage as AgentDevStage);
+  const mergedStageIdx = DEV_STAGE_ORDER.indexOf(merged.devStage as AgentDevStage);
+  if (persistedStageIdx > mergedStageIdx) {
+    merged.devStage = seed.devStage;
+    // Also carry forward the stage statuses from the persisted seed since
+    // they were derived from forge_stage and are more authoritative than
+    // whatever the stale cache had.
+    if (seed.thinkStatus) merged.thinkStatus = seed.thinkStatus;
+    if (seed.planStatus) merged.planStatus = seed.planStatus;
+    if (seed.buildStatus) merged.buildStatus = seed.buildStatus;
+  }
+
   return merged;
 }
 
