@@ -312,6 +312,9 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install workspace package dependencies
+        run: cd ../packages/logger && bun install
+
       - name: Install dependencies
         run: bun install --frozen-lockfile || bun install
 
