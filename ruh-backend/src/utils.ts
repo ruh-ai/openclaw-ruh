@@ -20,9 +20,10 @@ export function gatewayUrlAndHeaders(
   record: SandboxRecord,
   path: string,
 ): [string, Record<string, string>] {
+  const gatewayHost = process.env.DOCKER_HOST_IP || '127.0.0.1';
   const localGatewayBase =
     Number.isFinite(record.gateway_port) && record.gateway_port > 0
-      ? `http://127.0.0.1:${record.gateway_port}`
+      ? `http://${gatewayHost}:${record.gateway_port}`
       : null;
   const signed = record.signed_url?.trim() || null;
   const standard = record.standard_url?.trim() || null;
