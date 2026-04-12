@@ -346,8 +346,19 @@ export function CoPilotLayout({
           try {
             const plan = JSON.parse(planJson);
             coPilotStore.setArchitecturePlan(plan);
+            // If the plan was successfully parsed, mark plan status as ready
+            // so the UI shows the plan content with the "Approve & Start Build"
+            // button instead of a stale "generating" spinner or "idle" state.
+            if (coPilotStore.planStatus === "idle" || coPilotStore.planStatus === "generating") {
+              coPilotStore.setPlanStatus("ready");
+            }
+            // If we're still on Think but have a plan, advance to Plan stage
+            if (coPilotStore.devStage === "think" && prd && trd) {
+              coPilotStore.setThinkStatus("approved");
+              coPilotStore.setDevStage("plan");
+            }
           } catch {
-            // Ignore parse errors
+            // Ignore parse errors — fresh state is fine
           }
         }
       }).catch(() => {
@@ -516,6 +527,11 @@ export function CoPilotLayout({
     // The TabChat useEffect approach has timing issues with Zustand prop subscriptions,
     // so we call the architect directly here.
     const forgeSandboxId = activeSandbox?.sandbox_id;
+    if (!forgeSandboxId) {
+      console.warn("[Plan] No forge sandbox available — cannot generate plan. The agent's container may still be provisioning.");
+      setPlanStatus("failed");
+      return;
+    }
     if (forgeSandboxId) {
       const agentId = existingAgent?.id;
       import("@/lib/openclaw/api").then(({ sendToArchitectStreaming }) => {
@@ -587,6 +603,7 @@ export function CoPilotLayout({
       const startRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/build`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parallelBuild: coPilotStore.parallelBuildEnabled }),
       });
 
       if (!startRes.ok) {
@@ -595,6 +612,7 @@ export function CoPilotLayout({
       }
 
       const { stream_id } = (await startRes.json()) as { stream_id: string };
+      buildStreamIdRef.current = stream_id;
 
       // Consume the SSE stream for build progress
       const streamRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/build/stream/${stream_id}`);
@@ -642,6 +660,9 @@ export function CoPilotLayout({
                 break;
               case "status":
                 pushBuildActivity({ type: "tool", label: String(evt.message ?? "") });
+                break;
+              case "setup_progress":
+                pushBuildActivity({ type: "tool", label: `Setup: ${String(evt.message ?? "")}` });
                 break;
               case "build_complete": {
                 buildDone = true;
@@ -708,6 +729,26 @@ export function CoPilotLayout({
     // Re-enter the plan-approved flow which detects v3 vs v2 automatically
     handlePlanApproved();
   }, [handlePlanApproved]);
+
+  // Fix 5: Build cancellation
+  const buildStreamIdRef = useRef<string | null>(null);
+  const handleCancelBuild = useCallback(async () => {
+    const agentId = existingAgent?.id;
+    const streamId = buildStreamIdRef.current;
+    if (!agentId || !streamId) return;
+
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+      const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+      await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/build/cancel/${streamId}`, {
+        method: "POST",
+      });
+      pushBuildActivity({ type: "tool", label: "Build cancelled by user." });
+      setBuildStatus("failed");
+    } catch {
+      pushBuildActivity({ type: "tool", label: "Failed to cancel build." });
+    }
+  }, [existingAgent?.id, pushBuildActivity, setBuildStatus]);
 
   // Called when user clicks Done on reflect stage
   const handleDone = useCallback(() => {
@@ -835,6 +876,7 @@ export function CoPilotLayout({
           onDiscoveryComplete={handleDiscoveryComplete}
           onPlanApproved={handlePlanApproved}
           onRetryBuild={handleRetryBuild}
+          onCancelBuild={handleCancelBuild}
           onDone={handleDone}
         />
       </div>

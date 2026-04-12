@@ -142,6 +142,8 @@ interface TabChatProps {
   onPlanApproved?:       () => void;
   /** Callback when user clicks retry after build failure. */
   onRetryBuild?:         () => void;
+  /** Callback when user clicks cancel during an active build. */
+  onCancelBuild?:        () => void;
   /** Callback when user clicks Done on the reflect stage. */
   onDone?:               () => void;
 }
@@ -547,6 +549,7 @@ function ComputerView({
   onDiscoveryComplete,
   onPlanApproved,
   onRetryBuild,
+  onCancelBuild,
   onDone,
 }: {
   liveSteps:        AgentStep[];
@@ -589,6 +592,8 @@ function ComputerView({
   onPlanApproved?: () => void;
   /** Called when user retries build after failure */
   onRetryBuild?: () => void;
+  /** Called when user cancels an active build */
+  onCancelBuild?: () => void;
   /** Called when user clicks Done on reflect stage */
   onDone?: () => void;
 }) {
@@ -915,6 +920,7 @@ function ComputerView({
             onDiscoveryComplete={onDiscoveryComplete}
             onPlanApproved={onPlanApproved}
             onRetryBuild={onRetryBuild}
+            onCancelBuild={onCancelBuild}
             onDone={onDone}
           />
         </div>
@@ -932,7 +938,7 @@ export function TabChat({
   onBuilderComplete, canBuilderComplete = false, isCompletingBuilder = false,
   showCoPilotConfig = false, coPilotPhase, coPilotStore: coPilotStoreProp,
   builderBridgeMode, onDiscoveryComplete, onPlanApproved,
-  onRetryBuild, onDone,
+  onRetryBuild, onCancelBuild, onDone,
 }: TabChatProps) {
   const isBuilderMode = mode === "builder";
   const [input, setInput] = useState("");
@@ -1554,6 +1560,7 @@ export function TabChat({
               onDiscoveryComplete={onDiscoveryComplete}
               onPlanApproved={onPlanApproved}
               onRetryBuild={onRetryBuild}
+              onCancelBuild={onCancelBuild}
               onDone={onDone}
             />
         </div>

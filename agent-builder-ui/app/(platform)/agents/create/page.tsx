@@ -670,11 +670,14 @@ function CreateAgentPageContent() {
     if (!agentId || !hasRestoredSession || isCompleting) return;
 
     if (existingAgent) {
-      // For existing agents, only persist when devStage changes (stage transitions)
-      // to avoid update loops. The localStorage cache handles frequent saves.
+      // For existing agents, persist when devStage changes OR when a stage status
+      // transitions to a terminal state (ready/done/approved/failed). This ensures
+      // plan completion is saved even when devStage doesn't change, avoiding the
+      // "stuck at generating" problem after a page reload.
       const currentStage = coPilotStore.devStage;
-      if (lastPersistedStageRef.current === currentStage) return;
-      lastPersistedStageRef.current = currentStage;
+      const statusKey = `${currentStage}:${coPilotStore.thinkStatus}:${coPilotStore.planStatus}:${coPilotStore.buildStatus}`;
+      if (lastPersistedStageRef.current === statusKey) return;
+      lastPersistedStageRef.current = statusKey;
     }
 
     const timeout = window.setTimeout(() => {

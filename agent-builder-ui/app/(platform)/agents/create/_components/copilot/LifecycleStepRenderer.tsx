@@ -1607,6 +1607,7 @@ interface LifecycleStepRendererProps {
   onDiscoveryComplete?: () => void;
   onPlanApproved?: () => void;
   onRetryBuild?: () => void;
+  onCancelBuild?: () => void;
   onDone?: () => void;
 }
 
@@ -1619,6 +1620,7 @@ export function LifecycleStepRenderer({
   onDiscoveryComplete,
   onPlanApproved,
   onRetryBuild,
+  onCancelBuild,
   onDone,
 }: LifecycleStepRendererProps) {
   const store = useCoPilotStore();
@@ -1748,10 +1750,22 @@ export function LifecycleStepRenderer({
             </div>
 
             {store.buildStatus === "building" && (
-              <BuildActivityPanel
-                buildActivity={store.buildActivity}
-                buildProgress={store.buildProgress}
-              />
+              <>
+                <BuildActivityPanel
+                  buildActivity={store.buildActivity}
+                  buildProgress={store.buildProgress}
+                />
+                {onCancelBuild && (
+                  <div className="flex justify-center mt-3">
+                    <button
+                      onClick={onCancelBuild}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-satoshi-medium text-[var(--text-tertiary)] border border-[var(--border-default)] rounded-lg hover:border-red-300 hover:text-red-500 transition-colors"
+                    >
+                      Cancel Build
+                    </button>
+                  </div>
+                )}
+              </>
             )}
 
             {store.buildStatus === "done" && (
