@@ -73,6 +73,7 @@ import {
 import {
   httpError,
   gatewayUrlAndHeaders,
+  GATEWAY_HOST,
   parseJsonOutput,
   syntheticModels,
 } from './utils';
@@ -365,8 +366,8 @@ async function getRecord(sandboxId: string): Promise<store.SandboxRecord> {
       console.log(`[port-reconcile] sandbox ${sandboxId}: DB port ${record.gateway_port} → Docker port ${actualPorts.gatewayPort}`);
       const updates: Partial<store.SandboxRecord> = {
         gateway_port: actualPorts.gatewayPort,
-        standard_url: `http://localhost:${actualPorts.gatewayPort}`,
-        dashboard_url: `http://localhost:${actualPorts.gatewayPort}`,
+        standard_url: `http://${GATEWAY_HOST}:${actualPorts.gatewayPort}`,
+        dashboard_url: `http://${GATEWAY_HOST}:${actualPorts.gatewayPort}`,
       };
       if (actualPorts.vncPort) updates.vnc_port = actualPorts.vncPort;
       await store.updateSandbox(sandboxId, updates);
@@ -6190,13 +6191,12 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
     sandboxExec(req.params.sandbox_id, `mkdir -p "${sessionPath}" 2>/dev/null`, 10).catch(() => {});
   }
 
-  // Resolve gateway WebSocket URL — use localhost:<gateway_port> so the connection
-  // is from a secure context (localhost is always secure by spec). The external URL
-  // would require HTTPS which isn't available in local dev.
+  // Resolve gateway WebSocket URL — use GATEWAY_HOST (DOCKER_HOST_IP in Docker,
+  // 127.0.0.1 in local dev) so it works in both environments.
   const gwPort = record.gateway_port || 18789;
-  const wsUrl = `ws://localhost:${gwPort}`;
+  const wsUrl = `ws://${GATEWAY_HOST}:${gwPort}`;
   const token = record.gateway_token || '';
-  const origin = 'http://localhost';
+  const origin = `http://${GATEWAY_HOST}`;
 
   // Set up SSE response
   res.setHeader('Content-Type', 'text/event-stream');

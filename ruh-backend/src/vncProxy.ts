@@ -9,6 +9,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import * as _ws from 'ws';
 import * as store from './store';
+import { GATEWAY_HOST } from './utils';
 
 // Match: /api/sandboxes/<uuid>/vnc
 const VNC_PATH_RE = /^\/api\/sandboxes\/([^/]+)\/vnc$/;
@@ -66,7 +67,7 @@ async function proxyToContainer(clientWs: WebSocketType, sandboxId: string): Pro
     return;
   }
 
-  const targetUrl = `ws://localhost:${record.vnc_port}`;
+  const targetUrl = `ws://${GATEWAY_HOST}:${record.vnc_port}`;
   const WS = (_ws as any).WebSocket ?? (_ws as any).default;
   const containerWs: WebSocketType = new WS(targetUrl, {
     // noVNC uses binary frames

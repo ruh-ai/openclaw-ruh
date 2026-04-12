@@ -17,6 +17,7 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import * as store from "./store";
 import { verifyAccessToken } from "./auth/tokens";
+import { GATEWAY_HOST } from "./utils";
 
 // Match: /ws/gateway/<uuid>
 const GATEWAY_PATH_RE = /^\/ws\/gateway\/([^/]+)$/;
@@ -118,7 +119,7 @@ async function proxyToGateway(
   }
 
   const gatewayToken = record.gateway_token ?? "";
-  const targetUrl = `ws://localhost:${record.gateway_port}`;
+  const targetUrl = `ws://${GATEWAY_HOST}:${record.gateway_port}`;
 
   // 2. Connect to the gateway inside the container
   const gatewayWs = new WebSocket(targetUrl);
