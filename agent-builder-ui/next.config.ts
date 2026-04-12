@@ -44,6 +44,7 @@ const imageSources = remotePatterns.map((pattern) =>
 const nextConfig: NextConfig = {
   output: "standalone",
   serverExternalPackages: ["ws", "bufferutil", "utf-8-validate"],
+  transpilePackages: ["@ruh/logger"],
 
   typescript: {
     ignoreBuildErrors: false,

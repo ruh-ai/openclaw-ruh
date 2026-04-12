@@ -42,7 +42,7 @@ describe('Error boundary (error.tsx)', () => {
     const error = Object.assign(new Error('logged'), { digest: 'xyz' });
     render(<ErrorPage error={error} reset={() => {}} />);
     expect(spy).toHaveBeenCalledWith(
-      '[ErrorBoundary]',
+      '[ruh-frontend] Unhandled error caught by boundary',
       expect.objectContaining({ message: 'logged', digest: 'xyz' }),
     );
     spy.mockRestore();

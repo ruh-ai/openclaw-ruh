@@ -67,11 +67,10 @@ describe("Error boundary page", () => {
     render(<ErrorPage error={error} reset={reset} />);
 
     expect(consoleSpy).toHaveBeenCalledWith(
-      "[ErrorBoundary]",
+      "[ruh-frontend] Unhandled error caught by boundary",
       expect.objectContaining({
         message: "logged error",
         digest: "xyz",
-        service: "ruh-frontend",
       })
     );
   });

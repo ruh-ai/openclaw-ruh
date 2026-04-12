@@ -4,6 +4,7 @@ import { getSecurityHeaders } from "./lib/security-headers";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  transpilePackages: ["@ruh/logger"],
   async headers() {
     return [
       {
