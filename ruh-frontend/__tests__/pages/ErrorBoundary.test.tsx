@@ -1,5 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+const mockLoggerError = jest.fn();
+jest.mock('@/lib/logger', () => ({
+  logger: { error: mockLoggerError, info: jest.fn(), warn: jest.fn(), debug: jest.fn() },
+}));
+
 import ErrorPage from '@/app/error';
 import GlobalError from '@/app/global-error';
 
@@ -37,15 +43,14 @@ describe('Error boundary (error.tsx)', () => {
     expect(homeLink.closest('a')).toHaveAttribute('href', '/');
   });
 
-  test('logs error to console on mount', () => {
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  test('logs error via logger on mount', () => {
+    mockLoggerError.mockClear();
     const error = Object.assign(new Error('logged'), { digest: 'xyz' });
     render(<ErrorPage error={error} reset={() => {}} />);
-    expect(spy).toHaveBeenCalledWith(
-      '[ruh-frontend] Unhandled error caught by boundary',
+    expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'logged', digest: 'xyz' }),
+      'Unhandled error caught by boundary',
     );
-    spy.mockRestore();
   });
 });
 

@@ -312,11 +312,19 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install workspace package dependencies
-        run: cd ../packages/logger && bun install
-
       - name: Install dependencies
         run: bun install --frozen-lockfile || bun install
+
+      - name: Resolve workspace packages for Turbopack
+        run: |
+          cd ../packages/logger && bun install
+          cd ../../agent-builder-ui
+          # Replace bun symlink with real copy so Turbopack can parse package.json
+          if [ -L node_modules/@ruh/logger ]; then
+            TARGET=$(readlink node_modules/@ruh/logger)
+            rm node_modules/@ruh/logger
+            cp -r "$TARGET" node_modules/@ruh/logger
+          fi
 
       - name: Type check
         run: bun run typecheck || true   # non-fatal until types are fully clean
