@@ -544,6 +544,9 @@ export default function AgentsPage() {
 
       {/* Agent grid */}
       <div className="flex-1 overflow-y-auto px-6 md:px-8 py-6">
+        <div className="mb-6 rounded-2xl border border-[var(--primary)]/20 bg-[var(--primary)]/6 px-4 py-3 text-sm font-satoshi-bold text-[var(--primary)]">
+          Welcome to Ruh Agent Builder
+        </div>
         {filtered.length === 0 ? (
           <p className="text-sm font-satoshi-regular text-[var(--text-tertiary)] text-center mt-12">
             No agents match &ldquo;{search}&rdquo;
