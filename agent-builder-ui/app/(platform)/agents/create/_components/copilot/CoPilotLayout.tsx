@@ -534,7 +534,10 @@ export function CoPilotLayout({
     }
     if (forgeSandboxId) {
       const agentId = existingAgent?.id;
-      import("@/lib/openclaw/api").then(({ sendToArchitectStreaming }) => {
+      Promise.all([
+        import("@/lib/openclaw/api"),
+        import("@/lib/openclaw/ag-ui/builder-agent"),
+      ]).then(([{ sendToArchitectStreaming }, { PLAN_SYSTEM_INSTRUCTION }]) => {
         let planPrompt = "Generate the architecture plan for this agent.";
         if (docs) {
           const prdSummary = docs.prd.sections.map((s: { heading: string; content: string }) => `### ${s.heading}\n${s.content}`).join("\n\n");
@@ -548,7 +551,7 @@ export function CoPilotLayout({
             onDelta: () => {},
             onStatus: () => {},
           },
-          { forgeSandboxId, agentId: agentId ?? undefined },
+          { forgeSandboxId, agentId: agentId ?? undefined, soulOverride: PLAN_SYSTEM_INSTRUCTION },
         ).then(async () => {
           // Read architecture.json from workspace
           try {

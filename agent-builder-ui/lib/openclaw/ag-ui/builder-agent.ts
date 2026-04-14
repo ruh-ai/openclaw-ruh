@@ -179,19 +179,6 @@ Think about: What DATA will this agent store? What do end users NEED TO SEE? Wha
 - Your conversational text should narrate what you're finding and deciding.
 - The user will review and edit these documents before you build anything.
 
-## Backward Compatibility
-
-If for any reason you cannot write files to the workspace, you may fall back to outputting the PRD and TRD as a JSON code block in your text (the old format). Use this format:
-\`\`\`ready_for_review
-{
-  "type": "discovery",
-  "system_name": "kebab-case-agent-name",
-  "content": "Brief summary",
-  "prd": { "title": "...", "sections": [{ "heading": "...", "content": "..." }] },
-  "trd": { "title": "...", "sections": [{ "heading": "...", "content": "..." }] }
-}
-\`\`\`
-The frontend can parse both formats.
 [/INSTRUCTION]`;
 
 // ─── Plan-stage system instruction ──────────────────────────────────────────
@@ -202,9 +189,9 @@ You are the architect agent in PLAN mode. You have approved PRD and TRD document
 ## Step 1: Read Requirements from Workspace
 First, read the approved documents:
 \`\`\`bash
-cat ~/.openclaw/workspace/.openclaw/discovery/PRD.md
-cat ~/.openclaw/workspace/.openclaw/discovery/TRD.md
-cat ~/.openclaw/workspace/.openclaw/discovery/research-brief.md
+cat ~/.openclaw/workspace-copilot/.openclaw/discovery/PRD.md
+cat ~/.openclaw/workspace-copilot/.openclaw/discovery/TRD.md
+cat ~/.openclaw/workspace-copilot/.openclaw/discovery/research-brief.md 2>/dev/null || true
 \`\`\`
 
 ## Step 2: Design Structural Decisions
@@ -234,6 +221,21 @@ Emit: \`<plan_api_endpoints apiEndpoints='[{"method":"GET","path":"/api/...","de
 Overview: MetricCards + ActivityFeed. Data: DataTable. Trends: LineChart.
 Emit: \`<plan_dashboard_pages dashboardPages='[{"path":"/overview","title":"...","description":"...","components":[{"type":"metric-cards","title":"...","dataSource":"/api/..."}]}]'/>\`
 
+### Triggers & Scheduling (if agent has periodic tasks)
+For any skill that syncs, polls, monitors, or generates reports on a schedule, define a cron trigger.
+Include in the architecture_plan JSON triggers array:
+- type: "cron" for recurring schedules
+- name: human-readable name
+- schedule: cron expression (5-field) or interval like "every 30m", "every 1h"
+- skillId: which skill this trigger activates
+- message: the instruction sent to the agent when the trigger fires
+
+Common patterns:
+- Data sync skills (poll, sync, ingest) → every 15-60 minutes
+- Alert/reconciliation skills → every 1-6 hours
+- Report/summary skills → daily or weekly
+- Health check skills → every 5-15 minutes
+
 ### Environment Variables (required)
 ALL required env vars with real names from the TRD.
 Emit: \`<plan_env_vars envVars='[{"key":"API_KEY","label":"...","description":"...","required":true,"inputType":"text","group":"Authentication"}]'/>\`
@@ -243,13 +245,13 @@ When all decisions are made:
 Emit: \`<plan_complete/>\`
 
 ## Step 3: Write to Workspace
-Write the full plan and a readable summary:
+Write the full plan and a readable summary to the copilot workspace:
 \`\`\`bash
-mkdir -p ~/.openclaw/workspace/.openclaw/plan
-cat > ~/.openclaw/workspace/.openclaw/plan/architecture.json << 'EOF'
+mkdir -p ~/.openclaw/workspace-copilot/.openclaw/plan
+cat > ~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json << 'EOF'
 { ... full plan JSON ... }
 EOF
-cat > ~/.openclaw/workspace/.openclaw/plan/PLAN.md << 'EOF'
+cat > ~/.openclaw/workspace-copilot/.openclaw/plan/PLAN.md << 'EOF'
 # Architecture Plan
 ## Skills
 ...
@@ -265,18 +267,6 @@ EOF
 - Emit progress markers in your TEXT response.
 - Write architecture.json and PLAN.md to workspace at the end.
 
-## Backward Compatibility
-If you cannot write files or emit markers, fall back to a JSON code block:
-
-\`\`\`ready_for_review
-{
-  "type": "architecture_plan",
-  "system_name": "kebab-case-agent-name",
-  "content": "Brief summary",
-  "architecture_plan": { "skills": [...], "workflow": {...}, ... }
-}
-\`\`\`
-The frontend parses both formats.
 [/INSTRUCTION]`;
 
 // ─── Review/Refine-stage system instruction ────────────────────────────────
@@ -649,8 +639,6 @@ export interface BuilderAgentConfig {
   onSessionRotate?: (newSessionId: string) => void;
   /** Route chat through a specific forge sandbox's gateway instead of the shared one. */
   forgeSandboxId?: string;
-  /** @deprecated No longer used — intermediate events drive progressive updates. */
-  stageDelayMs?: number;
 }
 
 // ─── Agent ──────────────────────────────────────────────────────────────────
@@ -661,7 +649,6 @@ export class BuilderAgent extends AbstractAgent {
   private onSessionRotate?: (newSessionId: string) => void;
   private forgeSandboxId?: string;
   private isFirstMessage = true;
-  readonly stageDelayMs: number;
 
   constructor(config: BuilderAgentConfig) {
     super();
@@ -669,7 +656,6 @@ export class BuilderAgent extends AbstractAgent {
     this.mode = config.mode ?? "build";
     this.onSessionRotate = config.onSessionRotate;
     this.forgeSandboxId = config.forgeSandboxId;
-    this.stageDelayMs = config.stageDelayMs ?? 800;
   }
 
   run(input: RunAgentInput): Observable<BaseEvent> {

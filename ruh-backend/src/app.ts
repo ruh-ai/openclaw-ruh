@@ -6586,6 +6586,9 @@ function classifyWorkspaceExecError(output: string, operation: string): never {
   if (lower.includes('timeout') || lower.includes('timed out')) {
     throw httpError(504, `Workspace ${operation} timed out. The container may be overloaded.`);
   }
+  if (lower.includes('enoent') || lower.includes('no such file or directory')) {
+    throw httpError(404, `File not found in workspace`);
+  }
   throw httpError(502, `Workspace ${operation} failed: ${output.slice(0, 300)}`);
 }
 

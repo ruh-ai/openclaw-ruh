@@ -191,9 +191,15 @@ async function resolveForgeGateway(
   const wsUrl = httpUrl
     .replace(/^https:/, "wss:")
     .replace(/^http:/, "ws:");
-  // Derive an origin the forge sandbox will accept (localhost sandboxes allow http://localhost)
+  // Derive an origin the forge sandbox will accept.
+  // Docker host IPs (172.x.x.x) aren't in the gateway's allowedOrigins — use
+  // http://localhost instead since the connection is local and localhost is
+  // always allowed.
   const parsedUrl = new URL(httpUrl);
-  const forgeOrigin = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+  const isDockerInternal = /^172\.\d+\.\d+\.\d+$/.test(parsedUrl.hostname);
+  const forgeOrigin = isDockerInternal
+    ? "http://localhost"
+    : `${parsedUrl.protocol}//${parsedUrl.hostname}`;
   return {
     url: wsUrl,
     token: record.gateway_token || "",
