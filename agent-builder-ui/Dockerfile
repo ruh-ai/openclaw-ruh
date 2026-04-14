@@ -4,7 +4,7 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # ── Stage 2: Build ─────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
@@ -12,7 +12,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm install
 
 COPY . .
 
@@ -30,7 +30,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
+ENV PORT=3010
 ENV HOSTNAME="0.0.0.0"
 
 RUN addgroup --system --gid 1001 nodejs && \
@@ -44,9 +44,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static   ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 3010
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3000/ || exit 1
+    CMD wget -qO- http://127.0.0.1:3010/ || exit 1
 
 CMD ["node", "server.js"]

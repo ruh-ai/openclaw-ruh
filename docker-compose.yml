@@ -1,153 +1,63 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# openclaw-ruh — Production Docker Compose
+# =============================================================================
+# docker-compose.yml — Nikita workspace (workspace/nikita branch)
+#
+# Subdomains:
+#   nikita.builder.codezero2pi.com → nikita-builder:3010
+#   nikita.api.codezero2pi.com     → nikita-backend:8010
 #
 # Usage:
-#   cp .env.example .env   # fill in LLM keys + secrets
-#   docker compose up -d
-#
-# Services exposed via nginx on port 80:
-#   /api/*          → backend:8000
-#   /builder/*      → agent-builder-ui:3000
-#   /admin/*        → admin-ui:3002
-#   /app/*          → ruh-app:3003  (Flutter web)
-#   /*              → ruh-frontend:3001  (default)
-# ─────────────────────────────────────────────────────────────────────────────
+#   cd /opt/ruh/workspaces/nikita
+#   docker compose up -d --build
+# =============================================================================
 
 services:
-
-  # ── PostgreSQL ─────────────────────────────────────────────────────────────
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER:     ${POSTGRES_USER:-openclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB:       ${POSTGRES_DB:-openclaw}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-    networks:
-      - internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openclaw} -d ${POSTGRES_DB:-openclaw}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # ── TypeScript/Bun backend ─────────────────────────────────────────────────
-  backend:
+  nikita-backend:
+    user: root
     build:
       context: .
       dockerfile: ./ruh-backend/Dockerfile
     env_file:
-      - .env
+      - /opt/ruh/.env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-openclaw}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-openclaw}
-      PORT: "8000"
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3001,http://localhost:3000,http://localhost:3002}
+      DATABASE_URL: "postgresql://openclaw:e308bf812473e805e7b1f7bfad6d605e@ruh-postgres-1:5432/openclaw"
+      PORT: "8010"
+      ALLOWED_ORIGINS: "https://nikita.builder.codezero2pi.com,https://nikita.api.codezero2pi.com,https://builder.codezero2pi.com,https://api.codezero2pi.com"
+      DOCKER_HOST_IP: "172.17.0.1"
+      CODEX_AUTH_JSON_PATH: /root/.codex/auth.json
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ruh/.codex/auth.json:/root/.codex/auth.json:ro
+    ports:
+      - "8010:8010"
     restart: unless-stopped
     networks:
-      - internal
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - ruh_internal
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
 
-  # ── Agent Builder UI (Next.js 15) ──────────────────────────────────────────
-  agent-builder-ui:
+  nikita-builder:
     build:
       context: ./agent-builder-ui
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
-        OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
-        OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-        OPENCLAW_GATEWAY_ORIGIN: ${OPENCLAW_GATEWAY_ORIGIN:-https://clawagentbuilder.ruh.ai}
+        NEXT_PUBLIC_API_URL: "https://nikita.api.codezero2pi.com"
     environment:
       NODE_ENV: production
-      PORT: "3000"
-    restart: unless-stopped
-    networks:
-      - internal
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ── Ruh Frontend / Client App (Next.js 16) ─────────────────────────────────
-  frontend:
-    build:
-      context: .
-      dockerfile: ./ruh-frontend/Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
-    environment:
-      NODE_ENV: production
-      PORT: "3001"
-    restart: unless-stopped
-    networks:
-      - internal
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ── Admin UI (Next.js 15) ──────────────────────────────────────────────────
-  admin-ui:
-    build:
-      context: ./admin-ui
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
-    environment:
-      NODE_ENV: production
-      PORT: "3002"
-    restart: unless-stopped
-    networks:
-      - internal
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ── Ruh App / Flutter Web ───────────────────────────────────────────────────
-  ruh-app:
-    build:
-      context: ./ruh_app
-      dockerfile: Dockerfile
-      args:
-        API_BASE_URL: ${FLUTTER_API_URL:-}
-    restart: unless-stopped
-    networks:
-      - internal
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ── Nginx reverse proxy ────────────────────────────────────────────────────
-  nginx:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
+      PORT: "3010"
+      OPENCLAW_TIMEOUT_MS: "600000"
     ports:
-      - "80:80"
+      - "3010:3010"
     restart: unless-stopped
     networks:
-      - internal
+      - ruh_internal
     depends_on:
-      - backend
-      - frontend
-      - agent-builder-ui
-      - admin-ui
-      - ruh-app
-
-volumes:
-  postgres_data:
+      nikita-backend:
+        condition: service_healthy
 
 networks:
-  internal:
-    driver: bridge
+  ruh_internal:
+    external: true
