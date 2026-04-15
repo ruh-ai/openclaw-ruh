@@ -371,6 +371,9 @@ export async function POST(req: NextRequest) {
                 onLifecycleEvent({ phase: "connecting", message: "Connecting to agent..." });
 
                 const sessionKey = buildGatewaySessionKey(resolvedAgent, session_id, resolvedMode);
+                // Use stream:false because OpenClaw v2026.4.14's streaming mode
+                // returns empty deltas. Non-streaming returns full content which
+                // we re-emit as a single delta event.
                 const chatRes = await fetch(
                   `${BACKEND_URL}/api/sandboxes/${forge_sandbox_id}/chat`,
                   {
@@ -381,7 +384,7 @@ export async function POST(req: NextRequest) {
                     },
                     body: JSON.stringify({
                       model: "openclaw",
-                      stream: true,
+                      stream: false,
                       messages: [
                         ...(typeof soul_override === "string" ? [{ role: "system", content: soul_override }] : []),
                         { role: "user", content: message },
@@ -401,6 +404,27 @@ export async function POST(req: NextRequest) {
 
                 onLifecycleEvent({ phase: "thinking", message: "Agent thinking..." });
 
+                // Non-streaming response: parse JSON, extract content, emit as delta + result
+                {
+                  const chatJson = await chatRes.json().catch(() => null);
+                  const content = chatJson?.choices?.[0]?.message?.content
+                    ?? chatJson?.detail
+                    ?? "";
+                  if (typeof content === "string" && content) {
+                    send("delta", { text: content });
+                    send("result", { text: content });
+                    const response = finalizeGatewayResponse(content, {
+                      agentId: typeof agent_id === "string" ? agent_id : "",
+                      runId: requestId,
+                    });
+                    return response;
+                  }
+                  // Fallback: empty response
+                  return { type: "assistant", content: "", agent_metadata: {} };
+                }
+
+                // The streaming reader below is unreachable with stream:false
+                // but kept for reference if streaming is re-enabled later.
                 const reader = chatRes.body?.getReader();
                 if (!reader) throw new Error("No response body from forge bridge");
 
@@ -486,7 +510,7 @@ export async function POST(req: NextRequest) {
 
                 try {
                   while (true) {
-                    const { done, value } = await reader.read();
+                    const { done, value } = await reader!.read();
                     if (done) break;
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split("\n");
@@ -505,11 +529,11 @@ export async function POST(req: NextRequest) {
                           send("tool_start", { tool: parsed.tool, input: parsed.input || "" });
                           const cmd = String(parsed.input || "");
                           const skillMatch = cmd.match(/skills\/([a-z0-9_-]+)\/SKILL\.md/i);
-                          if (skillMatch) send("skill_created", { skillId: skillMatch[1], path: `skills/${skillMatch[1]}/SKILL.md` });
+                          if (skillMatch?.[1]) send("skill_created", { skillId: skillMatch![1]!, path: `skills/${skillMatch![1]!}/SKILL.md` });
                           const fileMatch = cmd.match(/\.openclaw\/workspace\/([^\s'"]+)/);
-                          if (fileMatch) {
-                            send("file_written", { path: fileMatch[1], tool: parsed.tool });
-                            send("workspace_changed", { action: "create", path: fileMatch[1] });
+                          if (fileMatch?.[1]) {
+                            send("file_written", { path: fileMatch![1]!, tool: parsed.tool });
+                            send("workspace_changed", { action: "create", path: fileMatch![1]! });
                           }
                           continue;
                         }
