@@ -315,6 +315,80 @@ export function CoPilotLayout({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, description]);
 
+  // ── Auto-trigger Reveal stage ─────────────────────────────────────────────
+  // When CoPilotLayout mounts with devStage="reveal", auto-send the user's
+  // description to the Architect with REVEAL_SYSTEM_INSTRUCTION. The Architect
+  // responds with <employee_reveal data='...'/>  which the marker extractor
+  // converts to an AG-UI custom event, consumed by consumeEmployeeReveal.
+  const revealTriggeredRef = useRef(false);
+  useEffect(() => {
+    const currentDevStage = useCoPilotStore.getState().devStage;
+    if (currentDevStage !== "reveal" || revealTriggeredRef.current) return;
+
+    const forgeSandboxId = activeSandbox?.sandbox_id;
+    const agentDescription = description || builderState.description || "";
+    const agentName = name || builderState.name || "";
+    if (!forgeSandboxId || !agentDescription.trim()) return;
+
+    revealTriggeredRef.current = true;
+    coPilotStore.setRevealStatus("generating");
+
+    Promise.all([
+      import("@/lib/openclaw/api"),
+      import("@/lib/openclaw/ag-ui/builder-agent"),
+    ]).then(([{ sendToArchitectStreaming }, { REVEAL_SYSTEM_INSTRUCTION }]) => {
+      const revealPrompt = `Agent name: ${agentName}\n\nAgent description: ${agentDescription}`;
+      const agentId = existingAgent?.id;
+      let accumulated = "";
+      const REVEAL_RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/;
+
+      sendToArchitectStreaming(
+        `agent:main:${forgeSandboxId}`,
+        revealPrompt,
+        {
+          onDelta: (delta: string) => {
+            accumulated += delta;
+            // Check if the reveal marker has arrived
+            const match = REVEAL_RE.exec(accumulated);
+            if (match && coPilotStore.revealStatus !== "ready") {
+              try {
+                const parsed = JSON.parse(match[1]);
+                coPilotStore.setRevealData({
+                  name: parsed.name ?? agentName,
+                  title: parsed.title ?? "",
+                  opening: parsed.opening ?? "",
+                  what_i_heard: parsed.what_i_heard ?? [],
+                  what_i_will_own: parsed.what_i_will_own ?? [],
+                  what_i_wont_do: parsed.what_i_wont_do ?? [],
+                  first_move: parsed.first_move ?? "",
+                  clarifying_question: parsed.clarifying_question ?? "",
+                });
+                coPilotStore.setRevealStatus("ready");
+                coPilotStore.setDevStage("reveal");
+              } catch (e) {
+                console.warn("[Reveal] Failed to parse reveal marker JSON:", e);
+              }
+            }
+          },
+          onStatus: () => {},
+        },
+        { forgeSandboxId, agentId: agentId ?? undefined, soulOverride: REVEAL_SYSTEM_INSTRUCTION },
+      ).then(() => {
+        // If stream completed without a reveal marker, fallback to think
+        if (coPilotStore.revealStatus !== "ready") {
+          console.warn("[Reveal] Architect did not emit employee_reveal marker — skipping to think");
+          coPilotStore.setRevealStatus("failed");
+          coPilotStore.setDevStage("think");
+        }
+      }).catch((err) => {
+        console.warn("[Reveal] Architect streaming failed:", err);
+        coPilotStore.setRevealStatus("failed");
+        coPilotStore.setDevStage("think");
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSandbox?.sandbox_id, description, name]);
+
   // ── Workspace rehydration: restore Think/Plan state from workspace files ──
   const rehydratedRef = useRef(false);
   useEffect(() => {
