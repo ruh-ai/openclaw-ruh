@@ -249,6 +249,17 @@ function CreateAgentPageContent() {
       // CoPilotLayout mounts and can send the first message to the Architect.
       // The devStage starts at "reveal", so the Architect gets REVEAL_SYSTEM_INSTRUCTION.
       // MeetYourEmployee renders inside the copilot section when revealData arrives.
+
+      // Seed the copilot store with name/description from the form BEFORE
+      // CoPilotLayout mounts, so the reveal auto-trigger has the description
+      // it needs to fire. Without this, the store is empty and the reveal
+      // effect early-returns because agentDescription.trim() is "".
+      coPilotStore.hydrateFromSeed({
+        name,
+        description,
+        devStage: "reveal" as const,
+      });
+
       setCreatedAgentId(agent_id);
       setForgePhase(null);
     } catch (err) {
