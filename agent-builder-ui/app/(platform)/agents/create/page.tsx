@@ -1468,6 +1468,15 @@ function CreateAgentPageContent() {
             </span>
           </div>
           <p className="text-sm text-text-secondary">Your digital employee is reviewing your brief...</p>
+          <button
+            onClick={() => {
+              coPilotStore.setRevealStatus("failed");
+              coPilotStore.setDevStage("think");
+            }}
+            className="mt-6 px-4 py-2 text-xs font-satoshi-medium text-[var(--text-secondary)] border border-[var(--border-default)] rounded-lg hover:bg-[var(--color-light,#f5f5f5)] transition-colors"
+          >
+            Skip to Think stage
+          </button>
         </div>
       </>
     );
