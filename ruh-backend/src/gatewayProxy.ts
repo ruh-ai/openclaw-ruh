@@ -82,7 +82,7 @@ const CONNECT_REQUEST = (token: string) =>
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: "ruh-backend-proxy",
+        id: "openclaw-control-ui",
         version: "2026.4.14",
         platform: "web",
         mode: "webchat",
@@ -122,7 +122,8 @@ async function proxyToGateway(
   const targetUrl = `ws://${GATEWAY_HOST}:${record.gateway_port}`;
 
   // 2. Connect to the gateway inside the container
-  const gatewayWs = new WebSocket(targetUrl);
+  // Origin header is required by the gateway — localhost is always in allowedOrigins.
+  const gatewayWs = new WebSocket(targetUrl, { headers: { Origin: "http://localhost" } });
   let gatewayAuthenticated = false;
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
