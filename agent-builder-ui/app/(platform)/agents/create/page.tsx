@@ -168,6 +168,8 @@ function CreateAgentPageContent() {
   const [revealAttemptCount, setRevealAttemptCount] = useState(1);
   const sseAbortRef = useRef<AbortController | null>(null);
 
+  const revealFiredRef = useRef(false);
+
   const handleInitSubmit = useCallback(async (name: string, description: string) => {
     setForgePhase("provisioning");
     setForgeLog(["Creating your agent..."]);
@@ -336,6 +338,74 @@ function CreateAgentPageContent() {
   // the hook is mid-fetch, the agent record hasn't hydrated yet, or the
   // sandbox API hasn't returned a ready sandbox.
   const forgeSandboxPending = hasForgeAgent && !forgeSandbox;
+
+  // ── Reveal trigger (page-level) ──────────────────────────────────────────
+  // The reveal waiting screen in the render block returns BEFORE CoPilotLayout
+  // mounts, so CoPilotLayout's internal reveal useEffect never runs. This
+  // effect fires the architect call from page.tsx directly.
+  useEffect(() => {
+    if (coPilotStore.devStage !== "reveal" || revealFiredRef.current) return;
+    if (coPilotStore.revealData) return;
+
+    const sandboxId = effectiveSandbox?.sandbox_id;
+    const desc = builderState.description || workingAgent?.description || "";
+    const agName = builderState.name || workingAgent?.name || "";
+    if (!sandboxId || !desc.trim()) return;
+
+    revealFiredRef.current = true;
+    coPilotStore.setRevealStatus("generating");
+
+    console.log("[Reveal] FIRING from page.tsx:", { sandboxId, name: agName.slice(0, 30) });
+
+    Promise.all([
+      import("@/lib/openclaw/api"),
+      import("@/lib/openclaw/ag-ui/builder-agent"),
+    ]).then(([{ sendToArchitectStreaming }, { REVEAL_SYSTEM_INSTRUCTION }]) => {
+      const prompt = `Agent name: ${agName}\n\nAgent description: ${desc}`;
+      let accumulated = "";
+      const RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/;
+
+      sendToArchitectStreaming(
+        `agent:main:${sandboxId}`,
+        prompt,
+        {
+          onDelta: (delta: string) => {
+            accumulated += delta;
+            const m = RE.exec(accumulated);
+            if (m && coPilotStore.revealStatus !== "ready") {
+              try {
+                const d = JSON.parse(m[1]);
+                coPilotStore.setRevealData({
+                  name: d.name ?? agName, title: d.title ?? "",
+                  opening: d.opening ?? "",
+                  what_i_heard: d.what_i_heard ?? [],
+                  what_i_will_own: d.what_i_will_own ?? [],
+                  what_i_wont_do: d.what_i_wont_do ?? [],
+                  first_move: d.first_move ?? "",
+                  clarifying_question: d.clarifying_question ?? "",
+                });
+                coPilotStore.setRevealStatus("ready");
+                console.log("[Reveal] SUCCESS — profile received");
+              } catch (e) { console.warn("[Reveal] Parse failed:", e); }
+            }
+          },
+          onStatus: () => {},
+        },
+        { forgeSandboxId: sandboxId, agentId: workingAgent?.id ?? undefined, soulOverride: REVEAL_SYSTEM_INSTRUCTION },
+      ).then(() => {
+        if (coPilotStore.revealStatus !== "ready") {
+          console.warn("[Reveal] No marker — skipping to think");
+          coPilotStore.setRevealStatus("failed");
+          coPilotStore.setDevStage("think");
+        }
+      }).catch((err) => {
+        console.warn("[Reveal] Failed:", err);
+        coPilotStore.setRevealStatus("failed");
+        coPilotStore.setDevStage("think");
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSandbox?.sandbox_id, builderState.description, builderState.name, workingAgent?.description, workingAgent?.name, coPilotStore.devStage]);
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
