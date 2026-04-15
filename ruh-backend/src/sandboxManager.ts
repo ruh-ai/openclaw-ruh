@@ -1530,21 +1530,9 @@ export async function* createOpenclawSandbox(
     yield ['log', 'Device pre-pairing skipped (may already be paired or using insecure auth)'];
   }
 
-  // Re-read the device operator token now that a device may be paired.
-  // The device operator token is what the gateway's WS connect method
-  // validates — the config auth token alone is not sufficient in v2026.3.24.
-  const [deviceTokenRefreshOk, deviceTokenRefreshOut] = await run(
-    `node -e "const fs=require('fs');const path=require('path');const os=require('os');` +
-    `try{const p=path.join(os.homedir(),'.openclaw','devices','paired.json');` +
-    `const d=JSON.parse(fs.readFileSync(p,'utf8'));` +
-    `const dev=Object.values(d)[0];` +
-    `const t=dev?.tokens?.operator?.token;` +
-    `if(t){process.stdout.write(t)}else{process.exit(1)}}catch{process.exit(1)}"`,
-  );
-  if (deviceTokenRefreshOk && deviceTokenRefreshOut.trim()) {
-    gatewayToken = deviceTokenRefreshOut.trim();
-    yield ['log', 'Gateway device token refreshed'];
-  }
+  // Keep the config auth token (read earlier from openclaw.json) — it's what
+  // the HTTP /v1/chat/completions endpoint validates. The WS connect method
+  // is handled by dangerouslyDisableDeviceAuth in v2026.4.14+.
 
   createSpan.setStatus({ code: SpanStatusCode.OK });
   createSpan.end();
