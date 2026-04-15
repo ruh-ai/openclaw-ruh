@@ -619,6 +619,8 @@ async function ensureGatewayControlUiBypass(containerName: string): Promise<void
 }
 
 export async function restartGateway(containerName: string): Promise<void> {
+  // Ensure reliable DNS — Docker Desktop's resolver can be flaky for external APIs.
+  await dockerExec(containerName, 'echo "nameserver 8.8.8.8" > /etc/resolv.conf && echo "nameserver 1.1.1.1" >> /etc/resolv.conf', 5_000).catch(() => {});
   await ensureGatewayControlUiBypass(containerName);
   await dockerExec(containerName, 'openclaw gateway stop 2>/dev/null || true', 15_000);
   await Bun.sleep(2000);
