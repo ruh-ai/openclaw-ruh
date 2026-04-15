@@ -1455,99 +1455,140 @@ function CreateAgentPageContent() {
         />
       );
     }
-    // Reveal data not yet arrived — show employee profile card with persona
-    const meetAgentName = builderState.name || workingAgent?.name || "Your New Employee";
+    // Reveal data not yet arrived — show employee resume card
+    const meetAgentName = builderState.name || workingAgent?.name || "New Employee";
     const meetDescription = builderState.description || workingAgent?.description || "";
 
-    // Generate a human persona from the agent name deterministically
-    const PERSONAS: Array<{ first: string; last: string; emoji: string; trait: string }> = [
-      { first: "Ava", last: "Chen", emoji: "🎯", trait: "Precise and data-driven" },
-      { first: "Marcus", last: "Rivera", emoji: "⚡", trait: "Fast and proactive" },
-      { first: "Priya", last: "Sharma", emoji: "🔍", trait: "Detail-oriented analyst" },
-      { first: "Noah", last: "Kim", emoji: "🤝", trait: "Collaborative communicator" },
-      { first: "Zara", last: "Osei", emoji: "📊", trait: "Metrics-obsessed optimizer" },
-      { first: "Leo", last: "Tanaka", emoji: "🛡️", trait: "Reliable and thorough" },
-      { first: "Maya", last: "Patel", emoji: "🚀", trait: "Initiative-taker" },
-      { first: "Ethan", last: "Nowak", emoji: "🧠", trait: "Strategic thinker" },
+    // Deterministic persona from agent name
+    const PERSONAS = [
+      { first: "Ava", last: "Chen", location: "San Francisco, CA", lang: "English, Mandarin" },
+      { first: "Marcus", last: "Rivera", location: "Austin, TX", lang: "English, Spanish" },
+      { first: "Priya", last: "Sharma", location: "London, UK", lang: "English, Hindi" },
+      { first: "Noah", last: "Kim", location: "Seoul, KR", lang: "English, Korean" },
+      { first: "Zara", last: "Osei", location: "Toronto, CA", lang: "English, French" },
+      { first: "Leo", last: "Tanaka", location: "Tokyo, JP", lang: "English, Japanese" },
+      { first: "Maya", last: "Patel", location: "Mumbai, IN", lang: "English, Gujarati" },
+      { first: "Ethan", last: "Nowak", location: "Berlin, DE", lang: "English, German" },
     ];
-    const personaIdx = meetAgentName.split("").reduce((sum: number, ch: string) => sum + ch.charCodeAt(0), 0) % PERSONAS.length;
-    const persona = PERSONAS[personaIdx];
-    const personaName = `${persona.first} ${persona.last}`;
-    const personaInitials = `${persona.first[0]}${persona.last[0]}`;
+    const pIdx = meetAgentName.split("").reduce((s: number, c: string) => s + c.charCodeAt(0), 0) % PERSONAS.length;
+    const p = PERSONAS[pIdx];
+    const resumeName = `${p.first} ${p.last}`;
+    const resumeInitials = `${p.first[0]}${p.last[0]}`;
+    const resumeTitle = meetAgentName.replace(/agent|bot|assistant/gi, "").trim() + " Specialist";
 
-    // Derive a title from the agent name
-    const personaTitle = meetAgentName.replace(/agent|bot|assistant/gi, "").trim() + " Specialist";
+    // Extract keywords from description for skills
+    const skillKeywords = meetDescription
+      .split(/[.,;]/)
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 5 && s.length < 50)
+      .slice(0, 4);
 
     return (
       <>
-        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center px-6 py-12">
-          <div className="w-full max-w-[520px]">
-            {/* Header badge */}
-            <div className="mb-6 text-center">
-              <span className="inline-block rounded-full border border-[var(--primary)]/20 bg-[var(--primary)]/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-                {persona.emoji} Meeting your new teammate
-              </span>
-            </div>
+        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-start px-6 py-10">
+          <div className="w-full max-w-[600px]">
 
-            {/* Profile card */}
-            <div className="rounded-2xl border border-[var(--border-default)] bg-white shadow-sm overflow-hidden">
-              {/* Banner */}
-              <div className="h-16" style={{ background: "linear-gradient(135deg, #ae00d0 0%, #7b5aff 50%, #ae00d0 100%)", backgroundSize: "200% 100%", animation: "gradient-drift 6s ease-in-out infinite" }} />
+            {/* Resume document */}
+            <div className="rounded-xl border border-[var(--border-default)] bg-white shadow-lg overflow-hidden">
 
-              <div className="px-8 pb-8">
-                {/* Avatar overlapping banner */}
-                <div className="-mt-10 mb-4 flex items-end gap-4">
+              {/* Resume header — dark section */}
+              <div className="relative px-8 pt-8 pb-6" style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)" }}>
+                <div className="flex items-start gap-5">
                   <div
-                    className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl text-2xl font-bold text-white border-4 border-white shadow-md"
-                    style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}
+                    className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-xl text-2xl font-bold text-white shadow-lg"
+                    style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
                   >
-                    {personaInitials}
+                    {resumeInitials}
                   </div>
-                  <div className="min-w-0 pb-1">
-                    <h2 className="text-xl font-bold text-[var(--text-primary)] truncate">{personaName}</h2>
-                    <p className="text-sm text-[var(--text-secondary)]">{personaTitle}</p>
+                  <div className="min-w-0 flex-1">
+                    <h1 className="text-2xl font-bold text-white tracking-tight">{resumeName}</h1>
+                    <p className="text-sm text-white/70 mt-0.5">{resumeTitle}</p>
+                    <div className="flex items-center gap-4 mt-3">
+                      <span className="text-xs text-white/50">📍 {p.location}</span>
+                      <span className="text-xs text-white/50">🌐 {p.lang}</span>
+                    </div>
                   </div>
                 </div>
-
-                {/* Status badge */}
-                <div className="mb-5 flex items-center gap-2">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ae00d0] opacity-75" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#ae00d0]" />
+                {/* Status pill */}
+                <div className="absolute top-6 right-6 flex items-center gap-1.5 rounded-full bg-white/10 backdrop-blur-sm px-3 py-1">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
                   </span>
-                  <span className="text-xs font-medium text-[var(--primary)]">Coming online</span>
-                  <span className="ml-auto text-xs text-[var(--text-tertiary)]">{persona.trait}</span>
+                  <span className="text-[11px] font-medium text-white/80">Available</span>
                 </div>
+              </div>
 
-                {/* Personality traits */}
-                <div className="mb-5 grid grid-cols-3 gap-2">
-                  {["Autonomous", "Accurate", "Always-on"].map((trait) => (
-                    <div key={trait} className="rounded-lg bg-[var(--sidebar-bg,#fafafa)] px-3 py-2 text-center">
-                      <span className="text-xs font-medium text-[var(--text-secondary)]">{trait}</span>
-                    </div>
-                  ))}
-                </div>
+              {/* Resume body */}
+              <div className="px-8 py-6 space-y-5">
 
-                {/* Mission brief */}
+                {/* Summary / Objective */}
                 {meetDescription && (
-                  <div className="mb-5 rounded-xl border border-[var(--border-default)] p-4">
-                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
-                      Mission Brief
-                    </div>
-                    <p className="text-sm leading-relaxed text-[var(--text-primary)]">
-                      &ldquo;{meetDescription}&rdquo;
+                  <div>
+                    <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
+                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                      <span>Professional Summary</span>
+                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                    </h3>
+                    <p className="text-[13px] leading-relaxed text-[var(--text-secondary)]">
+                      {meetDescription}
                     </p>
                   </div>
                 )}
 
-                {/* Preparing status */}
-                <div className="flex items-center gap-3 rounded-xl bg-[var(--primary)]/[0.04] p-4">
-                  <div className="h-7 w-7 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
+                {/* Core Competencies */}
+                {skillKeywords.length > 0 && (
                   <div>
-                    <p className="text-sm font-medium text-[var(--text-primary)]">Reading your brief and preparing...</p>
-                    <p className="text-xs text-[var(--text-tertiary)]">Your employee will introduce themselves shortly</p>
+                    <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
+                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                      <span>Core Competencies</span>
+                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      {skillKeywords.map((skill: string, i: number) => (
+                        <span key={i} className="rounded-md border border-[var(--border-default)] bg-[var(--sidebar-bg,#fafafa)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Work Style */}
+                <div>
+                  <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
+                    <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                    <span>Work Style</span>
+                    <span className="h-px flex-1 bg-[var(--primary)]/20" />
+                  </h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: "Availability", value: "24/7" },
+                      { label: "Response Time", value: "< 1 min" },
+                      { label: "Work Mode", value: "Autonomous" },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="text-center rounded-lg bg-[var(--sidebar-bg,#fafafa)] p-3">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">{label}</div>
+                        <div className="text-sm font-bold text-[var(--text-primary)] mt-0.5">{value}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
+
+                {/* Onboarding status */}
+                <div className="flex items-center gap-3 rounded-lg border border-dashed border-[var(--primary)]/30 bg-[var(--primary)]/[0.02] p-4">
+                  <div className="h-6 w-6 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--text-primary)]">Onboarding in progress</p>
+                    <p className="text-[11px] text-[var(--text-tertiary)]">Reviewing your brief and preparing a personalized introduction...</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Resume footer */}
+              <div className="border-t border-[var(--border-default)] bg-[var(--sidebar-bg,#fafafa)] px-8 py-3 flex items-center justify-between">
+                <span className="text-[10px] text-[var(--text-tertiary)]">Powered by Ruh AI</span>
+                <span className="text-[10px] text-[var(--text-tertiary)]">Digital Employee Profile</span>
               </div>
             </div>
 
