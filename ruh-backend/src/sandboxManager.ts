@@ -1018,8 +1018,8 @@ export async function* createOpenclawSandbox(
     }
   } else {
     // Legacy path: install everything from scratch (slow ~3min)
-    yield ['log', 'Installing OpenClaw (npm install -g openclaw@2026.3.24)...'];
-    let [ok, out] = await run('npm install -g openclaw@2026.3.24', 600);
+    yield ['log', 'Installing OpenClaw (npm install -g openclaw@latest)...'];
+    let [ok, out] = await run('npm install -g openclaw@latest', 600);
     if (!ok) {
       yield ['log', 'Retrying with --unsafe-perm...'];
       [ok, out] = await run('npm install -g --unsafe-perm openclaw@latest', 600);
@@ -1501,6 +1501,51 @@ export async function* createOpenclawSandbox(
     `mkdir -p ~/.openclaw/workspace/skills/task-planner && node -e "const fs=require('fs');fs.writeFileSync(require('path').join(require('os').homedir(),'.openclaw','workspace','skills','task-planner','SKILL.md'),Buffer.from(process.argv[1],'base64').toString('utf8'))" ${JSON.stringify(taskPlannerPayload)}`,
   );
 
+  // ── Pre-pair a device so the frontend can connect immediately ──
+  // The gateway requires device pairing for WS connect. We trigger a local
+  // connection from inside the container, approve it, then re-read the
+  // device operator token (which the gateway validates on WS connect).
+  yield ['log', 'Pre-pairing gateway device...'];
+
+  // Trigger a local connection + immediately approve in a tight loop.
+  // The `openclaw chat` command connects via WS, creating a pending request.
+  await run(
+    `( timeout 8 openclaw chat --message "exit" --no-conversation 2>/dev/null || true ) &`,
+    3,
+  );
+
+  // Approve the pending device in a tight loop (polls every 500ms)
+  let prePaired = false;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await Bun.sleep(500);
+    const [, approveOut] = await run('openclaw devices approve --latest 2>&1', 10);
+    if (approveOut.includes('Approved')) {
+      yield ['log', `Device pre-paired: ${approveOut.split('\n').find(l => l.includes('Approved'))?.trim() ?? 'OK'}`];
+      prePaired = true;
+      break;
+    }
+  }
+
+  if (!prePaired) {
+    yield ['log', 'Device pre-pairing skipped (may already be paired or using insecure auth)'];
+  }
+
+  // Re-read the device operator token now that a device may be paired.
+  // The device operator token is what the gateway's WS connect method
+  // validates — the config auth token alone is not sufficient in v2026.3.24.
+  const [deviceTokenRefreshOk, deviceTokenRefreshOut] = await run(
+    `node -e "const fs=require('fs');const path=require('path');const os=require('os');` +
+    `try{const p=path.join(os.homedir(),'.openclaw','devices','paired.json');` +
+    `const d=JSON.parse(fs.readFileSync(p,'utf8'));` +
+    `const dev=Object.values(d)[0];` +
+    `const t=dev?.tokens?.operator?.token;` +
+    `if(t){process.stdout.write(t)}else{process.exit(1)}}catch{process.exit(1)}"`,
+  );
+  if (deviceTokenRefreshOk && deviceTokenRefreshOut.trim()) {
+    gatewayToken = deviceTokenRefreshOut.trim();
+    yield ['log', 'Gateway device token refreshed'];
+  }
+
   createSpan.setStatus({ code: SpanStatusCode.OK });
   createSpan.end();
 
@@ -1522,10 +1567,9 @@ export async function* createOpenclawSandbox(
   };
   yield ['result', resultData];
 
-  // Auto-approve device pairing
-  yield ['log', 'Waiting for device pairing (open the UI and connect)...'];
-
-  const APPROVAL_TIMEOUT = 300_000;
+  // Post-result approval loop — handles any additional devices that connect
+  // after the initial pre-pair (e.g., the actual frontend connection).
+  const APPROVAL_TIMEOUT = 60_000;
   const approvedLines = new Set<string>();
   const deadline = Date.now() + APPROVAL_TIMEOUT;
 
@@ -1541,10 +1585,6 @@ export async function* createOpenclawSandbox(
       }
       break;
     }
-    await Bun.sleep(3000);
-  }
-
-  if (approvedLines.size === 0) {
-    yield ['log', "Approval timeout — run 'openclaw devices approve --latest' manually inside the container"];
+    await Bun.sleep(2000);
   }
 }
