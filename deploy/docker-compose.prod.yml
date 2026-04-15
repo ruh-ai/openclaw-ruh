@@ -111,7 +111,7 @@ services:
 
   website:
     build:
-      context: ./codezero2pi-website
+      context: ../codezero2pi-website
       dockerfile: Dockerfile
     environment:
       NODE_ENV: production
