@@ -28,6 +28,7 @@ import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { CreationProgressCard, deriveCreationPhase } from "./_components/CreationProgressCard";
 import { AnimatedRuhLogo } from "./_components/AnimatedRuhLogo";
 import { OnboardingSequence } from "./_components/OnboardingSequence";
+import { MeetYourEmployee } from "./_components/MeetYourEmployee";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { AgentTriggerDefinition } from "@/lib/agents/types";
 import {
@@ -120,9 +121,34 @@ function CreateAgentPageContent() {
   const { sandbox: architectSandbox } = useArchitectSandbox();
 
   // ── v2: per-agent forge sandbox ──────────────────────────────────────────
-  // Each new agent gets its own container. forgePhase tracks the provisioning
-  // lifecycle. Once ready, the chat routes to the agent's own container.
-  const [forgePhase, setForgePhase] = useState<"init" | "provisioning" | null>(() =>
+  // Each new agent gets its own container. forgePhase tracks creation lifecycle.
+  //
+  // Agent Creation State Machine
+  // ============================
+  //
+  //   "init"  ──submit──>  POST /api/agents/create
+  //                              │
+  //                              ▼
+  //                     "provisioning" (SSE stream, OnboardingSequence shown)
+  //                              │
+  //                         container ready
+  //                              │
+  //                              ▼
+  //                     Architect generates employee_reveal event
+  //                              │
+  //                         ┌────▼────┐
+  //                         │"reveal"  │  ← user sees MeetYourEmployee
+  //                         │         │
+  //                         ├─"Yes"───┼──> save answer + advance to copilot
+  //                         ├─"Not quite"─> regenerate (max 2x)
+  //                         └─"Skip"──┼──> (after 3x)
+  //                              │
+  //                              ▼
+  //                     null (copilot) → Think stage with reveal context
+  //
+  //   Error at any point ──> reset to "init"
+  //
+  const [forgePhase, setForgePhase] = useState<"init" | "provisioning" | "reveal" | null>(() =>
     editingAgentId ? null : "init"
   );
   const [forgeLog, setForgeLog] = useState<string[]>([]);
@@ -137,6 +163,10 @@ function CreateAgentPageContent() {
   const [workspaceBadge, setWorkspaceBadge] = useState(false);
   const [isRouteAgentHydrated, setIsRouteAgentHydrated] = useState(() => !editingAgentId);
   const [hasRestoredSession, setHasRestoredSession] = useState(() => !editingAgentId);
+
+  // Track reveal regeneration attempts (max 3 total views)
+  const [revealAttemptCount, setRevealAttemptCount] = useState(1);
+  const sseAbortRef = useRef<AbortController | null>(null);
 
   const handleInitSubmit = useCallback(async (name: string, description: string) => {
     setForgePhase("provisioning");
@@ -156,7 +186,13 @@ function CreateAgentPageContent() {
       window.history.replaceState(null, "", `/agents/create?agentId=${agent_id}`);
       setForgeLog((prev) => [...prev, "Starting container..."]);
 
-      const sseRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`);
+      const abortController = new AbortController();
+      sseAbortRef.current = abortController;
+
+      const sseRes = await fetchBackendWithAuth(
+        `${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`,
+        { signal: abortController.signal },
+      );
       if (!sseRes.ok || !sseRes.body) throw new Error("Failed to open provisioning stream");
 
       const reader = sseRes.body.getReader();
@@ -196,26 +232,30 @@ function CreateAgentPageContent() {
                 break;
               }
             } catch (e) {
-              // Re-throw intentional errors (from error events); only swallow JSON parse failures on non-JSON SSE data
               if (e instanceof SyntaxError) continue;
               throw e;
             }
           }
         }
       } finally {
+        try { abortController.abort(); } catch { /* ignore */ }
         try { await reader.cancel(); } catch { /* ignore cancel errors */ }
         try { reader.releaseLock(); } catch { /* may already be released */ }
+        sseAbortRef.current = null;
       }
 
-      setForgeLog((prev) => [...prev, "Agent workspace ready — opening chat..."]);
-      // Use window.location for hard navigation — router.push can be blocked
-      // by the still-pending fetch response cleanup
-      window.location.href = `/agents/create?agentId=${agent_id}`;
+      setForgeLog((prev) => [...prev, "Agent workspace ready — preparing your digital employee..."]);
+      // Container is ready. Transition to reveal phase instead of hard navigation.
+      // The copilot layout will auto-send the first message to the Architect with
+      // devStage="reveal", which triggers the employee_reveal event.
+      setForgePhase("reveal");
+      setCreatedAgentId(agent_id);
     } catch (err) {
+      if ((err as Error).name === "AbortError") return; // User navigated away
       setForgeError(err instanceof Error ? err.message : "Failed to provision agent workspace");
       setForgePhase("init");
     }
-  }, [router]);
+  }, []);
 
   const coPilotStore = useCoPilotStore();
 
@@ -1365,7 +1405,7 @@ function CreateAgentPageContent() {
     return true;
   }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, finalizeShipCompletion, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
-  // ── v2 init form: shown when creating a brand-new agent ──────────────────
+  // ── v2 init/provisioning: shown when creating a brand-new agent ────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {
     return (
       <ForgeInitScreen
@@ -1375,6 +1415,47 @@ function CreateAgentPageContent() {
         onSubmit={handleInitSubmit}
         onBack={() => router.push("/agents")}
       />
+    );
+  }
+
+  // ── Reveal phase: employee profile brief-back ─────────────────────────────
+  if (forgePhase === "reveal" && coPilotStore.revealData) {
+    return (
+      <MeetYourEmployee
+        reveal={coPilotStore.revealData}
+        agentName={builderState.name ?? "Agent"}
+        attemptCount={revealAttemptCount}
+        isProvisioning={false}
+        onConfirm={(answer) => {
+          coPilotStore.setRevealAnswer(answer);
+          coPilotStore.setRevealStatus("approved");
+          coPilotStore.setDevStage("think");
+          setForgePhase(null);
+        }}
+        onRegenerate={() => {
+          setRevealAttemptCount((c) => c + 1);
+          coPilotStore.setRevealStatus("idle");
+          coPilotStore.setRevealData(null);
+          // The copilot layout will re-send the reveal message to the Architect
+        }}
+      />
+    );
+  }
+
+  // Reveal phase but data not yet arrived — show a loading state
+  if (forgePhase === "reveal" && !coPilotStore.revealData) {
+    return (
+      <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center px-6 py-12">
+        <div
+          className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
+          style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
+        >
+          <span className="text-2xl font-bold text-white">
+            {(builderState.name ?? "A").charAt(0).toUpperCase()}
+          </span>
+        </div>
+        <p className="text-sm text-text-secondary">Your digital employee is reviewing your brief...</p>
+      </div>
     );
   }
 

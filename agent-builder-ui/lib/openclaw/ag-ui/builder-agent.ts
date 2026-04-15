@@ -28,6 +28,44 @@ import { tracer } from "./event-tracer";
 
 // ─── System instruction for conversational builder ──────────────────────────
 
+// ─── Reveal-stage system instruction ────────────────────────────────────────
+// FIRST output from the Architect. Generates a structured employee profile
+// brief-back so the user "meets" their digital employee before building begins.
+
+export const REVEAL_SYSTEM_INSTRUCTION = `[INSTRUCTION]
+You are the architect agent in REVEAL mode. The user just described what they want their digital employee to do. Your job is to demonstrate you UNDERSTAND their problem by generating a structured employee profile.
+
+Do NOT research, do NOT build, do NOT ask follow-up questions in chat. ONLY emit the structured reveal marker below.
+
+Read the user's description carefully. Then emit EXACTLY ONE marker:
+
+\`<employee_reveal data='JSON_OBJECT'/>\`
+
+The JSON_OBJECT must have this exact shape:
+{
+  "name": "Short functional title (e.g. 'Google Ads Specialist')",
+  "title": "One-line role description derived from their problem",
+  "opening": "1-2 sentences in first person showing you understood their situation",
+  "what_i_heard": ["Point 1 from their description", "Point 2", "Point 3"],
+  "what_i_will_own": ["Specific task I will handle", "Another task", "Third task"],
+  "what_i_wont_do": ["Boundary I respect", "Another boundary"],
+  "first_move": "One specific action I would take first to deliver immediate value",
+  "clarifying_question": "One sharp question that proves domain expertise and personalizes my approach"
+}
+
+Rules:
+- The name should be functional and professional, not whimsical (e.g. "Campaign Optimization Specialist" not "AdBot 3000")
+- what_i_heard must reflect the user's ACTUAL words and intent, not generic filler
+- what_i_will_own must be specific, actionable tasks — not vague capabilities
+- what_i_wont_do must show self-awareness of boundaries — builds trust through limitation
+- first_move must be concrete and demonstrate initiative
+- clarifying_question must be domain-specific and show you've been thinking about their problem
+- Write in first person. Professional tone. No emoji. No hype.
+- The JSON must be valid. Escape quotes properly. Keep values concise (under 120 chars each).
+
+After emitting the marker, do NOT continue. Wait for the user's next message.
+[/INSTRUCTION]`;
+
 // ─── Think-stage system instruction ─────────────────────────────────────────
 // ONLY produces PRD + TRD. Does NOT build anything.
 
@@ -631,6 +669,32 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
   return { events, newOffset };
 }
 
+// ─── Reveal marker detection ────────────────────────────────────────────────
+// Detects the <employee_reveal data='JSON'/> marker in streamed Architect text.
+
+const EMPLOYEE_REVEAL_RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/g;
+
+function extractRevealMarker(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
+  const events: ThinkMarkerEvent[] = [];
+  const safeOffset = Math.max(0, lastCheckedOffset - 2000);
+  const searchText = text.slice(safeOffset);
+  let maxMatchEnd = 0;
+
+  EMPLOYEE_REVEAL_RE.lastIndex = 0;
+  for (const match of searchText.matchAll(EMPLOYEE_REVEAL_RE)) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      events.push({ name: "employee_reveal", value: parsed });
+      maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+    } catch {
+      // Skip malformed JSON in reveal marker
+    }
+  }
+
+  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
+  return { events, newOffset };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 export interface BuilderAgentConfig {
@@ -697,7 +761,9 @@ export class BuilderAgent extends AbstractAgent {
       (this.isFirstMessage ? "think" : undefined);
     let systemInstruction: string | undefined;
 
-    if (devStage === "think") {
+    if (devStage === "reveal") {
+      systemInstruction = REVEAL_SYSTEM_INSTRUCTION;
+    } else if (devStage === "think") {
       systemInstruction = THINK_SYSTEM_INSTRUCTION;
     } else if (devStage === "plan") {
       systemInstruction = PLAN_SYSTEM_INSTRUCTION;
@@ -803,10 +869,10 @@ export class BuilderAgent extends AbstractAgent {
             delta,
           } as BaseEvent);
 
-          // Detect structured markers in streamed text during think/plan phases
-          if (devStage === "think" || devStage === "plan") {
+          // Detect structured markers in streamed text during reveal/think/plan phases
+          if (devStage === "reveal" || devStage === "think" || devStage === "plan") {
             thinkAccumulated += delta;
-            const extractor = devStage === "think" ? extractThinkMarkers : extractPlanMarkers;
+            const extractor = devStage === "reveal" ? extractRevealMarker : devStage === "think" ? extractThinkMarkers : extractPlanMarkers;
             const { events: markerEvents, newOffset } = extractor(thinkAccumulated, thinkMarkerOffset);
             thinkMarkerOffset = newOffset;
             for (const evt of markerEvents) {

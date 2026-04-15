@@ -131,7 +131,7 @@ export function clearCreateSessionCache(agentId: string): void {
   }
 }
 
-const DEV_STAGE_ORDER: AgentDevStage[] = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+const DEV_STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
 
 export function buildResumedCoPilotSeed(
   agent: SavedAgent | null,

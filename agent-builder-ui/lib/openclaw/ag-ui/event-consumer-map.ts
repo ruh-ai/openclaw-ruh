@@ -52,6 +52,8 @@ export interface ConsumerDeps {
 // Minimal interfaces to avoid circular imports
 interface CoPilotStoreLike {
   setDiscoveryDocuments: (docs: { prd: DiscoveryDocument; trd: DiscoveryDocument }) => void;
+  setRevealData: (data: { name: string; title: string; opening: string; what_i_heard: string[]; what_i_will_own: string[]; what_i_wont_do: string[]; first_move: string; clarifying_question: string }) => void;
+  setRevealStatus: (status: StageStatus) => void;
   setThinkStatus: (status: StageStatus) => void;
   setDevStage: (stage: AgentDevStage) => void;
   setPhase: (phase: WizardSetPhasePayload["phase"]) => void;
@@ -222,6 +224,41 @@ export function consumeDiscoveryDocuments(value: unknown, deps: ConsumerDeps): v
     deps.coPilotStore.setDevStage("think");
   }
   tracer.apply("copilot-store", "CUSTOM", "discovery_documents");
+}
+
+export function consumeEmployeeReveal(value: unknown, deps: ConsumerDeps): void {
+  if (!deps.coPilotStore) {
+    pushDropWarning(deps, "employee_reveal", "coPilotStore is null");
+    tracer.drop("use-agent-chat", "CUSTOM", "employee_reveal", "coPilotStore is null");
+    return;
+  }
+  const payload = value as {
+    name?: string;
+    title?: string;
+    opening?: string;
+    what_i_heard?: string[];
+    what_i_will_own?: string[];
+    what_i_wont_do?: string[];
+    first_move?: string;
+    clarifying_question?: string;
+  };
+  if (!payload.name || !payload.what_i_heard) {
+    tracer.drop("use-agent-chat", "CUSTOM", "employee_reveal", "required fields missing");
+    return;
+  }
+  deps.coPilotStore.setRevealData({
+    name: payload.name,
+    title: payload.title ?? "",
+    opening: payload.opening ?? "",
+    what_i_heard: payload.what_i_heard ?? [],
+    what_i_will_own: payload.what_i_will_own ?? [],
+    what_i_wont_do: payload.what_i_wont_do ?? [],
+    first_move: payload.first_move ?? "",
+    clarifying_question: payload.clarifying_question ?? "",
+  });
+  deps.coPilotStore.setRevealStatus("ready");
+  deps.coPilotStore.setDevStage("reveal");
+  tracer.apply("copilot-store", "CUSTOM", "employee_reveal");
 }
 
 export function consumeArchitecturePlanReady(value: unknown, deps: ConsumerDeps): void {
@@ -487,6 +524,7 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.PLAN_DASHBOARD_PAGES]: consumePlanDashboardPages,
   [CustomEventName.PLAN_ENV_VARS]: consumePlanEnvVars,
   [CustomEventName.PLAN_COMPLETE]: consumePlanComplete,
+  [CustomEventName.EMPLOYEE_REVEAL]: consumeEmployeeReveal,
 };
 
 // Wizard events that go through commitBuilderMetadata (need the event name)

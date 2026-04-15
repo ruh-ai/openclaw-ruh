@@ -172,12 +172,20 @@ describe("goBackDevStage", () => {
     expect(store.getState().thinkStatus).toBe("idle");
   });
 
-  test("does nothing at think stage (no underflow)", () => {
+  test("goes back from think to reveal", () => {
     const store = useCoPilotStore;
     store.setState({ devStage: "think", maxUnlockedDevStage: "think" });
     store.getState().goBackDevStage();
-    expect(store.getState().devStage).toBe("think");
-    expect(store.getState().maxUnlockedDevStage).toBe("think");
+    expect(store.getState().devStage).toBe("reveal");
+    expect(store.getState().maxUnlockedDevStage).toBe("reveal");
+  });
+
+  test("does nothing at reveal stage (no underflow)", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "reveal", maxUnlockedDevStage: "reveal" });
+    store.getState().goBackDevStage();
+    expect(store.getState().devStage).toBe("reveal");
+    expect(store.getState().maxUnlockedDevStage).toBe("reveal");
   });
 
   test("does not reset unrelated statuses", () => {

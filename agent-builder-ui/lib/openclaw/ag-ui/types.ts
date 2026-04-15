@@ -83,8 +83,6 @@ export const CustomEventName = {
   WIZARD_SET_RULES: "wizard_set_rules",
   WIZARD_SET_CHANNELS: "wizard_set_channels",
   PREVIEW_SERVER_DETECTED: "preview_server_detected",
-  /** @deprecated Use AG-UI REASONING_* EventType instead. Kept for backward compatibility. */
-  REASONING: "reasoning",
   // ── Workspace & build events (from tool execution via WebSocket) ──
   /** A file was written to the agent workspace via exec. */
   FILE_WRITTEN: "file_written",
@@ -118,6 +116,9 @@ export const CustomEventName = {
   PLAN_ENV_VARS: "plan_env_vars",
   /** All plan decisions emitted — plan is complete. */
   PLAN_COMPLETE: "plan_complete",
+  // ── Reveal phase events (employee profile reveal) ──
+  /** The Architect's first structured output: employee profile brief-back. */
+  EMPLOYEE_REVEAL: "employee_reveal",
 } as const;
 
 // ─── Event payload types ─────────────────────────────────────────────────────
@@ -199,6 +200,19 @@ export interface PlanDashboardPagesPayload {
 
 export interface PlanEnvVarsPayload {
   envVars: Array<{ key: string; label: string; description: string; required: boolean; inputType?: string; defaultValue?: string; group?: string }>;
+}
+
+// ─── Employee reveal payload ────────────────────────────────────────────────
+
+export interface EmployeeRevealPayload {
+  name: string;
+  title: string;
+  opening: string;
+  what_i_heard: string[];
+  what_i_will_own: string[];
+  what_i_wont_do: string[];
+  first_move: string;
+  clarifying_question: string;
 }
 
 // ─── Editor file changed payload ────────────────────────────────────────────

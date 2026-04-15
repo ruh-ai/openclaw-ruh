@@ -54,6 +54,7 @@ import {
   Compass,
   Layers,
   Target,
+  UserCheck,
 } from "lucide-react";
 import type {
   ArchitecturePlan,
@@ -75,6 +76,7 @@ import { StepDiscovery } from "../configure/StepDiscovery";
 export { getTestStageContainerState } from "@/lib/openclaw/test-stage-readiness";
 
 const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb; description: string }> = {
+  reveal: { label: "Meet", icon: UserCheck, description: "Meet your digital employee" },
   think: { label: "Think", icon: Lightbulb, description: "Define requirements (PRD + TRD)" },
   plan: { label: "Plan", icon: Map, description: "Lock architecture" },
   build: { label: "Build", icon: Hammer, description: "Create skills & config" },
@@ -85,6 +87,7 @@ const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb;
 };
 
 const FEATURE_STAGE_META: Record<AgentDevStage, { label: string; description: string }> = {
+  reveal:  { label: "Meet",           description: "Meet your digital employee" },
   think:   { label: "Discover",       description: "Analyze feature requirements" },
   plan:    { label: "Plan Changes",   description: "Design the delta" },
   build:   { label: "Build Feature",  description: "Create new skills & config" },

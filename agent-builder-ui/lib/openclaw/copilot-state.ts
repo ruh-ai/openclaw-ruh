@@ -140,6 +140,12 @@ export interface CoPilotState {
   devStage: AgentDevStage;
   maxUnlockedDevStage: AgentDevStage;
 
+  // Reveal stage — employee profile brief-back
+  revealStatus: StageStatus;
+  revealData: import("./ag-ui/types").EmployeeRevealPayload | null;
+  /** User's answer to the clarifying question on the reveal screen. */
+  revealAnswer: string | null;
+
   // Think stage
   thinkStatus: StageStatus;
   thinkActivity: ThinkActivityItem[];
@@ -248,6 +254,11 @@ export interface CoPilotActions {
   /** Returns true if the current stage's hard gate is satisfied. */
   canAdvanceDevStage: () => boolean;
   goBackDevStage: () => void;
+  // Reveal
+  setRevealStatus: (status: StageStatus) => void;
+  setRevealData: (data: import("./ag-ui/types").EmployeeRevealPayload | null) => void;
+  setRevealAnswer: (answer: string | null) => void;
+  // Think
   setThinkStatus: (status: StageStatus) => void;
   setUserTriggeredThink: (triggered: boolean) => void;
   markThinkRunDispatched: (runId: string | null) => void;
@@ -318,8 +329,11 @@ function createInitialState(): CoPilotState {
     improvements: [],
     systemName: null,
     // Lifecycle
-    devStage: "think",
-    maxUnlockedDevStage: "think",
+    devStage: "reveal",
+    maxUnlockedDevStage: "reveal",
+      revealStatus: "idle",
+      revealData: null,
+      revealAnswer: null,
       thinkStatus: "idle",
       thinkActivity: [],
       userTriggeredThink: false,
@@ -380,6 +394,11 @@ function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage 
 // ─── Stage-status reset map (used by goBackDevStage) ────────────────────────
 
 const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> = {
+  reveal: {
+    revealStatus: "idle" as StageStatus,
+    revealData: null,
+    revealAnswer: null,
+  },
   think: {
     thinkStatus: "idle" as StageStatus,
     thinkActivity: [] as ThinkActivityItem[],
@@ -698,6 +717,9 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     }
   },
 
+  setRevealStatus: (status) => set({ revealStatus: status }),
+  setRevealData: (data) => set({ revealData: data }),
+  setRevealAnswer: (answer) => set({ revealAnswer: answer }),
   setThinkStatus: (status) => set({ thinkStatus: status }),
   setUserTriggeredThink: (triggered) =>
     set((state) => ({
@@ -897,6 +919,9 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       // Lifecycle
       devStage: state.devStage,
       maxUnlockedDevStage: state.maxUnlockedDevStage,
+      revealStatus: state.revealStatus,
+      revealData: state.revealData,
+      revealAnswer: state.revealAnswer,
       thinkStatus: state.thinkStatus,
       thinkActivity: state.thinkActivity,
       userTriggeredThink: state.userTriggeredThink,

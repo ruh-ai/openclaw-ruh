@@ -131,7 +131,7 @@ export interface ArchitectResponse {
   skill_graph?: {
     system_name?: string; // present only in YAML-normalized path
     nodes: SkillGraphNode[];
-    workflow: WorkflowDefinition | { steps: string[] };
+    workflow: WorkflowDefinition;
     agents?: Array<{ id: string; skills: string[] }>;
   };
   deployment?: { repo_url: string };
@@ -193,9 +193,9 @@ export interface DiscoveryDocuments {
 
 // ─── Agent Development Lifecycle Types ──────────────────────────────────────
 
-export type AgentDevStage = "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
+export type AgentDevStage = "reveal" | "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
 
-export const AGENT_DEV_STAGES: AgentDevStage[] = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+export const AGENT_DEV_STAGES: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
 
 export type StageStatus = "idle" | "generating" | "ready" | "approved" | "building" | "running" | "done" | "failed";
 
