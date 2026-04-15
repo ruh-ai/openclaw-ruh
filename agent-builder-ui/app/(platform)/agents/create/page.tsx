@@ -1455,28 +1455,82 @@ function CreateAgentPageContent() {
         />
       );
     }
-    // Reveal data not yet arrived — show loading with CoPilotLayout hidden underneath
+    // Reveal data not yet arrived — show employee profile preview card
+    const meetName = builderState.name || workingAgent?.name || "Your New Employee";
+    const meetDescription = builderState.description || workingAgent?.description || "";
+    const meetInitials = meetName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+
     return (
       <>
         <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center px-6 py-12">
-          <div
-            className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
-            style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
-          >
-            <span className="text-2xl font-bold text-white">
-              {(builderState.name ?? "A").charAt(0).toUpperCase()}
-            </span>
+          <div className="w-full max-w-[520px]">
+            {/* Header badge */}
+            <div className="mb-6 text-center">
+              <span className="inline-block rounded-full border border-[var(--primary)]/20 bg-[var(--primary)]/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--primary)]">
+                Meeting your new teammate
+              </span>
+            </div>
+
+            {/* Profile card */}
+            <div
+              className="rounded-2xl border border-[var(--border-default)] bg-white p-8 shadow-sm"
+              style={{ animation: "soul-pulse 4s ease-in-out infinite" }}
+            >
+              {/* Avatar + Name */}
+              <div className="mb-6 flex items-center gap-4">
+                <div
+                  className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
+                  style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}
+                >
+                  {meetInitials}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-lg font-bold text-[var(--text-primary)] truncate">{meetName}</h2>
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ae00d0] opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-[#ae00d0]" />
+                    </span>
+                    <span className="text-xs text-[var(--text-tertiary)]">Getting ready...</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Role description */}
+              {meetDescription && (
+                <div className="mb-6 rounded-xl bg-[var(--sidebar-bg,#fafafa)] p-4">
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                    Role
+                  </div>
+                  <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
+                    {meetDescription}
+                  </p>
+                </div>
+              )}
+
+              {/* Preparing status */}
+              <div className="flex items-center gap-3 rounded-xl border border-[var(--primary)]/10 bg-[var(--primary)]/[0.03] p-4">
+                <div className="h-8 w-8 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
+                <div>
+                  <p className="text-sm font-medium text-[var(--text-primary)]">Reviewing your brief</p>
+                  <p className="text-xs text-[var(--text-tertiary)]">Preparing a personalized introduction...</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Skip action */}
+            <div className="mt-4 text-center">
+              <button
+                onClick={() => {
+                  coPilotStore.setRevealStatus("failed");
+                  coPilotStore.setDevStage("think");
+                }}
+                className="px-4 py-2 text-xs font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+              >
+                Skip introduction &rarr;
+              </button>
+            </div>
           </div>
-          <p className="text-sm text-text-secondary">Your digital employee is reviewing your brief...</p>
-          <button
-            onClick={() => {
-              coPilotStore.setRevealStatus("failed");
-              coPilotStore.setDevStage("think");
-            }}
-            className="mt-6 px-4 py-2 text-xs font-satoshi-medium text-[var(--text-secondary)] border border-[var(--border-default)] rounded-lg hover:bg-[var(--color-light,#f5f5f5)] transition-colors"
-          >
-            Skip to Think stage
-          </button>
         </div>
       </>
     );
