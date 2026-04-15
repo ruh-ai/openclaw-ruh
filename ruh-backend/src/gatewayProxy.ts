@@ -83,9 +83,9 @@ const CONNECT_REQUEST = (token: string) =>
       maxProtocol: 3,
       client: {
         id: "ruh-backend-proxy",
-        version: "1.0.0",
-        platform: "server",
-        mode: "proxy",
+        version: "2026.4.14",
+        platform: "web",
+        mode: "webchat",
       },
       role: "operator",
       scopes: ["operator.read", "operator.write"],
