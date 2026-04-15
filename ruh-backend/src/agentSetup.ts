@@ -173,12 +173,12 @@ async function checkCondition(
 ): Promise<boolean> {
   if (condition.startsWith('file:')) {
     const path = condition.slice(5);
-    const [ok] = await dockerExec(
+    const [, output] = await dockerExec(
       containerName,
       `test -e "$HOME/.openclaw/workspace/${path}" && echo YES || echo NO`,
       5_000,
     );
-    return ok;
+    return output.trim() === 'YES';
   }
   return true;
 }

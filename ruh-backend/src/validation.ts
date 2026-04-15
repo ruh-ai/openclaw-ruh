@@ -398,7 +398,7 @@ function readOptionalDiscoveryDocuments(input: ObjectShape, field: string) {
         });
         return {
           heading: readRequiredString(entry, 'heading', { maxLength: 160 }),
-          content: readRequiredString(entry, 'content', { maxLength: 8000, trim: false }),
+          content: readRequiredString(entry, 'content', { maxLength: 32000, trim: false }),
         };
       }),
     };
