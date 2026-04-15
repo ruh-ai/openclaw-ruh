@@ -45,6 +45,7 @@ const LoginPage = () => {
                 {authMode === "external" ? <AuthButton /> : <LocalAuthForm />}
               </Suspense>
             </div>
+            <p className="mt-6 text-center text-xs text-[#9CA3AF]">Powered by Ruh AI</p>
           </div>
         </div>
       </div>
