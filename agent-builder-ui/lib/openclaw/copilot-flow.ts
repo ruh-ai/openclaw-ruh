@@ -348,6 +348,12 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     // operator can inspect current config, but we intentionally do not infer
     // earlier stage completion from "active" alone.
     lifecycleOverrides.devStage = "review";
+  } else if (agent.status === "forging" && agent.forgeSandboxId) {
+    // Forging agents with a sandbox have already passed the reveal stage
+    // (the reveal happens at initial creation time). Default to "think" so
+    // the page doesn't get stuck at "reviewing your brief" on reload.
+    // This covers the case where forge_stage is null in the API response.
+    lifecycleOverrides.devStage = "think";
   }
 
   return {
