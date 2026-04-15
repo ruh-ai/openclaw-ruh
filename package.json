@@ -24,6 +24,8 @@
     "typecheck:agent-builder": "cd agent-builder-ui && npx tsc --noEmit",
     "typecheck:admin": "cd admin-ui && npx tsc --noEmit",
     "typecheck:marketplace": "cd packages/marketplace-ui && npx tsc --noEmit",
+    "kb:check": "bun scripts/check-kb-annotations.ts",
+    "kb:preflight": "bash scripts/kb-preflight.sh",
     "prepare": "husky"
   },
   "devDependencies": {

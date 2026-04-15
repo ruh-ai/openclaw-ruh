@@ -1,6 +1,8 @@
 /**
  * agentBuild.ts — Server-side build pipeline for agent creation.
  *
+ * @kb: 008-agent-builder-ui 005-data-models
+ *
  * Runs entirely on the backend: scaffold → specialists → validation → setup.
  * No browser dependency. Direct docker exec for file writes. Direct gateway
  * HTTP for specialist calls. Yields progress events as an async generator

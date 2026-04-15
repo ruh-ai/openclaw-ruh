@@ -1,6 +1,8 @@
 /**
  * Express application — routes only, no startup side-effects.
  * Imported by src/index.ts (production) and tests/helpers/app.ts (tests).
+ *
+ * @kb: 004-api-reference 002-backend-overview
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -71,6 +73,7 @@ import {
 import {
   httpError,
   gatewayUrlAndHeaders,
+  GATEWAY_HOST,
   parseJsonOutput,
   syntheticModels,
 } from './utils';
@@ -363,8 +366,8 @@ async function getRecord(sandboxId: string): Promise<store.SandboxRecord> {
       console.log(`[port-reconcile] sandbox ${sandboxId}: DB port ${record.gateway_port} → Docker port ${actualPorts.gatewayPort}`);
       const updates: Partial<store.SandboxRecord> = {
         gateway_port: actualPorts.gatewayPort,
-        standard_url: `http://localhost:${actualPorts.gatewayPort}`,
-        dashboard_url: `http://localhost:${actualPorts.gatewayPort}`,
+        standard_url: `http://${GATEWAY_HOST}:${actualPorts.gatewayPort}`,
+        dashboard_url: `http://${GATEWAY_HOST}:${actualPorts.gatewayPort}`,
       };
       if (actualPorts.vncPort) updates.vnc_port = actualPorts.vncPort;
       await store.updateSandbox(sandboxId, updates);
@@ -6188,13 +6191,12 @@ app.post('/api/sandboxes/:sandbox_id/chat/ws', asyncHandler(async (req, res) => 
     sandboxExec(req.params.sandbox_id, `mkdir -p "${sessionPath}" 2>/dev/null`, 10).catch(() => {});
   }
 
-  // Resolve gateway WebSocket URL — use localhost:<gateway_port> so the connection
-  // is from a secure context (localhost is always secure by spec). The external URL
-  // would require HTTPS which isn't available in local dev.
+  // Resolve gateway WebSocket URL — use GATEWAY_HOST (DOCKER_HOST_IP in Docker,
+  // 127.0.0.1 in local dev) so it works in both environments.
   const gwPort = record.gateway_port || 18789;
-  const wsUrl = `ws://localhost:${gwPort}`;
+  const wsUrl = `ws://${GATEWAY_HOST}:${gwPort}`;
   const token = record.gateway_token || '';
-  const origin = 'http://localhost';
+  const origin = `http://${GATEWAY_HOST}`;
 
   // Set up SSE response
   res.setHeader('Content-Type', 'text/event-stream');
@@ -6474,67 +6476,63 @@ app.get('/api/sandboxes/:sandbox_id/preview/ports', asyncHandler(async (req, res
 }));
 
 app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (req, res) => {
-  await getRecord(req.params.sandbox_id);
+  const record = await getRecord(req.params.sandbox_id);
   const containerPort = parseInt(req.params.port, 10);
   if (isNaN(containerPort) || !PREVIEW_PORTS.includes(containerPort)) {
     throw httpError(400, `Port ${req.params.port} is not a valid preview port`);
   }
 
-  const containerName = getContainerName(req.params.sandbox_id);
+  const containerName = getContainerName(record.sandbox_id);
   const proxyPath = req.params[0] || '';
-  const qs = req.url.includes('?') ? '?' + req.url.split('?')[1] : '';
-  const internalUrl = `http://127.0.0.1:${containerPort}/${proxyPath}${qs}`;
+  // Strip the backendPort query param (used by shims) from the upstream request
+  const rawQs = req.url.includes('?') ? req.url.split('?')[1] : '';
+  const upstreamParams = new URLSearchParams(rawQs);
+  upstreamParams.delete('backendPort');
+  const qs = upstreamParams.toString() ? `?${upstreamParams}` : '';
+
   // Use frontend rewrite path so sub-resource requests from the iframe
   // flow through the same-origin Next.js rewrite
   const proxyBase = `/api/sandbox-preview/${req.params.sandbox_id}/proxy/${containerPort}`;
 
-  // Use docker exec + curl to reach the container's localhost-bound service.
-  const acceptHeader = (req.headers.accept || '*/*').replace(/'/g, "'\\''");
-  const curlCmd = `curl -s -i --max-time 15 -H 'Accept: ${acceptHeader}' '${internalUrl.replace(/'/g, "'\\''")}'`;
+  // Resolve the Docker host port for this container port.
+  // The backend container can reach sandbox host ports via DOCKER_HOST_IP.
+  const dockerHostIp = process.env.DOCKER_HOST_IP ?? 'localhost';
+  let hostPort: number | null = null;
+  try {
+    const proc = Bun.spawnSync(['docker', 'port', containerName, `${containerPort}/tcp`], { timeout: 5_000 });
+    if (proc.exitCode === 0) {
+      const parsed = parseInt((proc.stdout?.toString().trim() ?? '').split(':').pop() ?? '', 10);
+      if (!isNaN(parsed)) hostPort = parsed;
+    }
+  } catch { /* container may not be running */ }
+
+  if (!hostPort) {
+    throw httpError(502, `Preview proxy: no host port mapping for container port ${containerPort}`);
+  }
+
+  const targetUrl = `http://${dockerHostIp}:${hostPort}/${proxyPath}${qs}`;
 
   try {
-    const execProc = Bun.spawnSync(['docker', 'exec', containerName, 'sh', '-c', curlCmd], { timeout: 20_000 });
-    const rawBytes = execProc.stdout as Uint8Array;
+    // Proper HTTP reverse proxy via fetch — faster than docker exec + curl,
+    // supports streaming, and gives us clean response objects.
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers: { 'Accept': req.headers.accept || '*/*' },
+      signal: AbortSignal.timeout(15_000),
+    });
 
-    if (execProc.exitCode !== 0 || !rawBytes || rawBytes.length === 0) {
-      throw httpError(502, `Preview proxy: container curl failed (exit ${execProc.exitCode})`);
-    }
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
 
-    // Find the blank line separating HTTP headers from body (\r\n\r\n)
-    let headerEndIdx = -1;
-    for (let i = 0; i < rawBytes.length - 3; i++) {
-      if (rawBytes[i] === 0x0d && rawBytes[i + 1] === 0x0a && rawBytes[i + 2] === 0x0d && rawBytes[i + 3] === 0x0a) {
-        headerEndIdx = i;
-        break;
-      }
-    }
-    if (headerEndIdx === -1) {
-      res.status(200);
-      res.setHeader('Content-Type', 'text/html');
-      res.setHeader('X-Frame-Options', 'ALLOWALL');
-      res.setHeader('Content-Security-Policy', 'frame-ancestors *');
-      res.send(Buffer.from(rawBytes));
-      return;
-    }
-
-    const headerText = Buffer.from(rawBytes.slice(0, headerEndIdx)).toString('utf-8');
-    const bodyBytes = rawBytes.slice(headerEndIdx + 4);
-
-    const statusMatch = headerText.match(/^HTTP\/[\d.]+ (\d+)/);
-    const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 200;
-    const ctMatch = headerText.match(/^content-type:\s*(.+)$/im);
-    const contentType = ctMatch ? ctMatch[1].trim() : 'application/octet-stream';
-
-    res.status(statusCode);
+    res.status(upstream.status);
     res.setHeader('Content-Type', contentType);
     res.setHeader('X-Frame-Options', 'ALLOWALL');
     res.setHeader('Content-Security-Policy', 'frame-ancestors *');
     res.setHeader('Access-Control-Allow-Origin', '*');
 
     // Rewrite absolute paths in HTML so sub-resources load through the proxy,
-    // and inject a fetch shim so dashboard API calls route to the agent's backend.
+    // and inject shims so dashboard API calls and SPA routing work correctly.
     if (contentType.includes('text/html')) {
-      let html = Buffer.from(bodyBytes).toString('utf-8');
+      let html = await upstream.text();
       html = html.replace(/((?:src|href|action)\s*=\s*["'])\//g, `$1${proxyBase}/`);
       html = html.replace(/"(\/_next\/)/g, `"${proxyBase}/_next/`);
 
@@ -6551,10 +6549,8 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
       //      (b) intercept <a> clicks as pushState + popstate so React Router handles
       //          navigation client-side without full reloads that exit the proxy.
       const spaShim = `(function(){var pb="${proxyBase}";`
-        // Strip proxy prefix on initial load
         + `var p=location.pathname;`
         + `if(p.startsWith(pb)){history.replaceState(null,"",p.slice(pb.length)||"/");}`
-        // Convert <a href="/..."> clicks into client-side navigation
         + `document.addEventListener("click",function(e){`
         + `var a=e.target&&e.target.closest?e.target.closest("a[href]"):null;`
         + `if(!a)return;var h=a.getAttribute("href");`
@@ -6568,7 +6564,9 @@ app.all('/api/sandboxes/:sandbox_id/preview/proxy/:port/*', asyncHandler(async (
 
       res.send(html);
     } else {
-      res.send(Buffer.from(bodyBytes));
+      // Stream binary content (JS, CSS, images, fonts) directly
+      const body = await upstream.arrayBuffer();
+      res.send(Buffer.from(body));
     }
   } catch (err) {
     if (err && typeof err === 'object' && 'status' in err) throw err;

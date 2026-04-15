@@ -1,5 +1,7 @@
 /**
  * Pure utility helpers shared across the app and exported for unit testing.
+ *
+ * @kb: 002-backend-overview
  */
 
 import type { SandboxRecord } from './store';
@@ -14,13 +16,20 @@ export function httpError(status: number, detail: string): Error & { status: num
   return err;
 }
 
+/**
+ * Host IP used to reach Docker-published ports from sibling containers.
+ * In Docker Compose: set DOCKER_HOST_IP=172.17.0.1 (Docker bridge).
+ * In local dev (backend runs on host): defaults to 127.0.0.1.
+ */
+export const GATEWAY_HOST = process.env.DOCKER_HOST_IP || '127.0.0.1';
+
 export function gatewayUrlAndHeaders(
   record: SandboxRecord,
   path: string,
 ): [string, Record<string, string>] {
   const localGatewayBase =
     Number.isFinite(record.gateway_port) && record.gateway_port > 0
-      ? `http://127.0.0.1:${record.gateway_port}`
+      ? `http://${GATEWAY_HOST}:${record.gateway_port}`
       : null;
   const signed = record.signed_url?.trim() || null;
   const standard = record.standard_url?.trim() || null;

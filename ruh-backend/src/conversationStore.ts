@@ -4,6 +4,8 @@
  * Tables:
  *   conversations — metadata (id, sandbox_id, name, model, session_key, timestamps, message_count)
  *   messages      — individual messages (conversation_id FK, role, content, ordered by id)
+ *
+ * @kb: 007-conversation-store 005-data-models
  */
 
 import { v4 as uuidv4 } from 'uuid';

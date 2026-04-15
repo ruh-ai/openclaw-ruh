@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # GitHub Actions — one PR for all action bumps
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: "dev"
@@ -9,62 +10,57 @@ updates:
       actions:
         patterns: ["*"]
 
+  # Backend — single PR for all deps
   - package-ecosystem: "npm"
     directory: "/ruh-backend"
     target-branch: "dev"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      production:
-        dependency-type: "production"
-      dev:
-        dependency-type: "development"
+      all-deps:
+        patterns: ["*"]
 
+  # Agent Builder UI — single PR for all deps
   - package-ecosystem: "npm"
     directory: "/agent-builder-ui"
     target-branch: "dev"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      production:
-        dependency-type: "production"
-      dev:
-        dependency-type: "development"
+      all-deps:
+        patterns: ["*"]
 
+  # Ruh Frontend — single PR for all deps
   - package-ecosystem: "npm"
     directory: "/ruh-frontend"
     target-branch: "dev"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      production:
-        dependency-type: "production"
-      dev:
-        dependency-type: "development"
+      all-deps:
+        patterns: ["*"]
 
+  # Admin UI — single PR for all deps
   - package-ecosystem: "npm"
     directory: "/admin-ui"
     target-branch: "dev"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      production:
-        dependency-type: "production"
-      dev:
-        dependency-type: "development"
+      all-deps:
+        patterns: ["*"]
 
+  # Marketplace UI — single PR for all deps
   - package-ecosystem: "npm"
     directory: "/packages/marketplace-ui"
     target-branch: "dev"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      production:
-        dependency-type: "production"
-      dev:
-        dependency-type: "development"
+      all-deps:
+        patterns: ["*"]

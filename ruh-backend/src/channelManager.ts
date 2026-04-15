@@ -1,6 +1,8 @@
 /**
  * Channel manager: reads and writes Telegram/Slack channel config on a running
  * Docker sandbox container via the OpenClaw CLI.
+ *
+ * @kb: 006-channel-manager 004-api-reference
  */
 
 import { dockerExec, getContainerName } from './sandboxManager';

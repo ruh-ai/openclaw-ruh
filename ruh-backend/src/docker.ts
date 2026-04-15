@@ -1,6 +1,8 @@
 /**
  * Low-level Docker spawn helpers.
  * Isolated into their own module so tests can mock them via mock.module().
+ *
+ * @kb: 003-sandbox-lifecycle 002-backend-overview
  */
 
 const SIMPLE_SHELL_TOKEN = /^[A-Za-z0-9_./:-]+$/;

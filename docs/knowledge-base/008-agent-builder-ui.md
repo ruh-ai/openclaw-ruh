@@ -30,8 +30,16 @@ app/
         chat/page.tsx             — Chat with deployed agent
         deploy/page.tsx           — Deploy agent to sandbox
       create/
-        page.tsx                  — Agent creation flow
+        page.tsx                  — Agent creation flow (also handles feature-branch mode via `?branch=`)
         _components/              — Chat UI + configure + review sub-flows
+        _components/copilot/CoPilotLayout.tsx — Main Co-Pilot workspace (chat + lifecycle)
+        _components/copilot/LifecycleStepRenderer.tsx — 7-stage lifecycle stepper UI
+        _components/AddFeatureDialog.tsx — Feature branch creation dialog
+        _components/BranchDiffPanel.tsx  — Git diff display for feature branches
+        _components/BranchIndicator.tsx  — Branch badge indicator
+        _components/FeatureBriefCard.tsx — Feature context card
+        _components/MergeReviewDialog.tsx — PR creation and merge review
+        _components/ShipDialog.tsx       — GitHub push dialog (uses OAuth, not PAT)
         _config/agentChatSteps.ts — Step config for creation wizard
   api/
     openclaw/route.ts             — Forge-backed bridge to the agent's own OpenClaw gateway (SSE out; fails closed without `forge_sandbox_id`)
@@ -52,9 +60,11 @@ The agent creation lifecycle follows a 7-stage state machine: `think` → `plan`
 
 **Plan** (`PLAN_SYSTEM_INSTRUCTION`): Structural architect. Reads PRD/TRD from workspace, produces structural decisions (skills, workflow, data schema, API endpoints, dashboard pages, env vars) without generating file content (no inline `skillMd` or `soulContent`). Emits `<plan_skills>`, `<plan_workflow>`, `<plan_data_schema>`, `<plan_api_endpoints>`, `<plan_dashboard_pages>`, `<plan_env_vars>`, `<plan_complete>` markers. Writes `architecture.json` + `PLAN.md` to `.openclaw/plan/`. Falls back to JSON blob if markers fail.
 
-**Build** (`build-orchestrator.ts`): Single v4 orchestrator path (v1 sequential and v2 parallel removed). Execution order: scaffold (deterministic, no LLM) → identity → database → backend+skills (parallel) → dashboard. Manifest write-through for live progress. Post-build validation (`build-validator.ts`) checks plan coverage and file existence. `retryFailedTasks()` for targeted retries. Specialist prompts in `specialist-prompts.ts`.
+**Build** (`build-orchestrator.ts` + `build-harness.ts`): Build is now server-side. `CoPilotLayout.tsx` delegates to `POST /api/agents/:id/build` which returns a `stream_id`. The UI consumes SSE progress via `GET /api/agents/:id/build/stream/:stream_id`, processing `task_start`, `task_complete`, `task_failed`, `file_written`, `progress`, `status`, `build_complete`, and `error` events. Post-build verification uses `build-harness.ts` (v2): `generateVerificationPlan()` deterministically produces checks from the architecture plan (deps, TypeScript compile, dashboard build, database migration, backend service, dashboard routes, API endpoints, page quality), then the "verify" specialist runs inside the forge container with full tool access. Specialist prompts in `specialist-prompts.ts`. The previous client-side `runBuildPipeline()` path has been replaced.
 
 **Workspace persistence**: Think/Plan outputs survive page refresh. `CoPilotLayout.tsx` rehydrates from workspace on mount via `readWorkspaceFile()`. File layout: `.openclaw/discovery/{research-brief,PRD,TRD}.md`, `.openclaw/plan/{architecture.json,PLAN.md,build-manifest.json}`, `.openclaw/build/validation-report.json`.
+
+**Lifecycle gating**: `copilot-state.ts` enforces hard gates per stage via `canAdvanceDevStage()`. Think requires `thinkStatus === "approved" | "done"`, Plan requires `planStatus === "approved" | "done"`, Build requires `buildStatus === "done"`. Later stages (review, test, ship) allow free navigation once reached. `LifecycleStepRenderer.tsx` disables the `Next` button when the gate is unsatisfied, and `advanceDevStage()` is a no-op if the gate fails.
 
 **Event pipeline**: Markers in streamed text → `extractThinkMarkers()`/`extractPlanMarkers()` in `builder-agent.ts` → AG-UI custom events → `event-consumer-map.ts` consumers → `copilot-state.ts` Zustand store → UI re-renders. Key state fields: `thinkStep`, `researchFindings[]`, `planStep`, `planActivity[]`, `buildManifest`, `buildValidation`.
 
@@ -71,11 +81,30 @@ The Co-Pilot path is now purpose-gated per [[SPEC-agent-builder-gated-skill-tool
 The same Co-Pilot chat now treats AG-UI builder metadata as the live safe draft source. `useAgentChat()` reduces `skill_graph_ready` plus the builder wizard custom events into canonical metadata, debounces `saveAgentDraft()` through the backend-backed agent store, and surfaces `Saving draft…`, `Draft saved`, or `Draft save failed` in the workspace chrome before the operator ever reaches Review. In copilot-mode `ready_for_review` streams, `BuilderAgent` now emits `skill_graph_ready` and wizard metadata before the delayed `TEXT_MESSAGE_END`, which keeps the review handoff metadata authoritative while the transcript reducer work from [[SPEC-agui-protocol-adoption]] is still in flight and avoids a duplicate assistant review-summary turn. The final deploy path reuses `draftAgentId` so the saved draft is promoted to `active` instead of creating a duplicate agent, and only safe metadata is autosaved in this slice. Forge-backed autosave now keeps the persisted `forging` status truthful as well: the metadata PATCH contract accepts `forging`, so resumed `/agents/create?agentId=...` drafts do not fail autosave just because the agent is still in its forge lifecycle. The same metadata layer now also persists `improvements[]` per [[SPEC-agent-improvement-persistence]], letting Review accept or dismiss a Google Ads recommendation and keeping that decision visible after save, Improve Agent reopen, and on the deploy page without reading chat history. Per [[SPEC-architect-structured-config-handoff]], that metadata path now also preserves explicit architect-emitted `tool_connections` and `triggers` objects instead of reducing everything back to keyword hints before draft save and reopen. Approved discovery documents now persist through the saved-agent contract as well per [[SPEC-agent-discovery-doc-persistence]], so the edited PRD/TRD pair survives draft autosave, final save, reopen, and Improve Agent review instead of disappearing with the transient Co-Pilot store. Route entry now also follows [[SPEC-agent-create-session-resume]]: `/agents/create?agentId=...` fetches the backend agent record on mount and merges it with a safe local create-session cache, so refreshes recover forge linkage plus in-progress non-secret builder state instead of reopening blank.
 That resume path now also fails closed when lifecycle markers outrun persisted build data. If a forging agent reopens with `forge_stage=review` or later but still has no persisted `skillGraph`, the create flow no longer paints Think/Plan/Build as completed from that optimistic stage marker alone. The page also stops writing `review` or later back to `forge_stage` until build artifacts exist, which prevents a fast refresh from reopening on a green stepper backed by an empty build record. [[LEARNING-2026-04-03-builder-forge-stage-truthfulness]] documents the root cause.
 The lifecycle stepper now also follows [[SPEC-create-flow-lifecycle-navigation]]. The Co-Pilot store keeps both the currently viewed stage (`devStage`) and the furthest stage already reached (`maxUnlockedDevStage`), so a refresh-resumed Review draft can safely jump back to Build, Plan, or Think for inspection without losing access to Review. The footer `Back` button remains the destructive rewind path: it resets the previous stage back to `idle` and intentionally caps forward progress there.
+Plan failure is now surfaced visually. When `planStatus` is `"ready"` but `skillGenerationError` is set (e.g. missing sandbox at build start), `LifecycleStepRenderer.tsx` renders an error banner inside the Plan stage panel so operators see why `Approve & Start Build` failed instead of getting a silent no-op.
+
 The plan-to-build handoff is now stricter as well. When the operator clicks `Approve & Start Build`, the build helper forwards the approved PRD/TRD plus the full `architecturePlan` back into the architect request and explicitly requires `skill_graph.nodes[].skill_md` in the `ready_for_review` payload. That keeps Build aligned with the reviewed plan instead of re-inferring a detached skill list and gives draft autosave/deploy a durable custom-skill artifact to persist.
 The same AG-UI layer now keeps reasoning-step lifecycle truthful as well. `event-consumer-map.ts` custom `reasoning` events and the standard `REASONING_*` events in `useAgentChat()` share one mutable thinking-step id through `reasoning-step.ts`, so the live reasoning list and `TaskProgressFooter` stop animating as soon as reasoning ends instead of leaving the builder stuck on a perpetual `Thinking` state.
 The next builder-loop truthfulness slice now extends that same discipline to stage loading, prompt suggestions, and architect context. Later-stage Co-Pilot messages no longer regress `thinkStatus` back to `generating`, the left-chat empty state swaps from unrelated canned examples to stage-aware suggestions once `name + description` exist, and post-build architect runs now use a dedicated refine-mode instruction plus a richer `[WIZARD_STATE]` block that carries tools, runtime inputs, triggers/heartbeat, channels, architecture-plan summary, and SOUL summary forward. See [[SPEC-builder-contextual-refine-loop]].
 That seeded metadata path also preserves `channelHints` from the page-owned builder state, so architect-suggested delivery channels survive remount or reopen long enough for the Co-Pilot store to rehydrate the same channel intent instead of silently clearing it during AG-UI session resets.
 Accepted Google Ads tool improvements now project into the same truthful config contract instead of remaining passive badges. The bounded projector in `create-session-config.ts` maps the accepted recommendation onto the supported `google-ads` connector, preserves stronger saved states such as `configured`, and otherwise lands the connector as `missing_secret` so Review, Connect Tools, draft autosave, and Improve Agent reopen all show the same fail-closed runtime expectation.
+
+### Feature Branch Mode (Agent-as-Project)
+
+`/agents/create?agentId=<id>&branch=<name>` enters feature-branch mode per [[SPEC-agent-as-project]]. This lets operators add capabilities to an existing deployed agent through a branch-based lifecycle instead of replacing the entire agent.
+
+**New components:**
+- `AddFeatureDialog.tsx` — modal for creating a feature branch (`POST /api/agents/:id/branches`). Auto-generates a `feature/<slug>` branch name from the title.
+- `FeatureBriefCard.tsx` — displays the feature title, description, baseline agent info (name, skill count, existing skills), and current stage status.
+- `BranchDiffPanel.tsx` — fetches and renders git diff stats (files, additions, deletions) and optional PR link from `GET /api/agents/:id/branches/:name/diff`.
+- `BranchIndicator.tsx` — compact branch badge showing `<branch> from <base>`.
+- `MergeReviewDialog.tsx` — full diff review dialog with PR creation (`POST .../pr`) and merge (`POST .../merge`) actions plus raw diff viewer.
+
+**Hook:** `use-feature-session.ts` — loads the feature session from `GET /api/agents/:id/branches/:name/session`, syncs `featureStage` back via PATCH, and builds an architect prompt scoped to the delta (existing agent context + new feature description).
+
+**State:** `copilot-state.ts` now carries `featureContext` (title, description, baseline agent snapshot) and `hydrateForFeature()` to seed the Co-Pilot store for branch mode. `LifecycleStepRenderer.tsx` uses `FEATURE_STAGE_META` (Discover / Plan Changes / Build Feature / Review Diff / Test Feature / Merge / Summary) instead of the standard stage labels when in feature-branch mode.
+
+The create page detects branch mode via `isFeatureBranchMode = Boolean(featureBranch && editingAgentId)`, hydrates the copilot store from the session on mount, and syncs `devStage` changes back to the feature session database.
 
 ### Phase 2: Configure (`_components/configure/`)
 - `ConfigureAgent.tsx` — stepper wrapper
@@ -114,6 +143,8 @@ In the embedded Co-Pilot flow from [[SPEC-copilot-config-workspace]], the final 
 That same embedded Co-Pilot review step now reuses the shared saved-config formatter contract from `operator-config-summary.ts` instead of flattening tools and triggers into plain name lists. The default `/agents/create` review surface shows connector readiness such as `Configured`, `Needs credentials`, and `Manual setup`, shows trigger support/runtime state, and mirrors the same `Ready to deploy` vs `Action needed before deploy` summary already used by the richer Review and Deploy surfaces. The saved-config formatter now also understands `runtimeInputs[]`, so the richer Review and Deploy surfaces call out missing runtime values distinctly from missing connector credentials even when both exist on the same agent.
 
 The default Co-Pilot stepper now also exposes the same `Runtime Inputs` editor used by the advanced Configure flow. `CoPilotLayout.tsx` continuously merges architect-required env vars into the shared Co-Pilot store with `mergeRuntimeInputDefinitions()`, `WizardStepRenderer.tsx` mounts `StepRuntimeInputs` between Tools and Triggers, and the final Co-Pilot `Deploy Agent` CTA now reads the shared deploy-readiness contract so missing required values such as `GOOGLE_ADS_CUSTOMER_ID` keep the primary builder path fail-closed until the operator fills them. Improve Agent reopen seeds those saved runtime inputs back into the same Co-Pilot workspace instead of only restoring them in the advanced fallback.
+
+`ShipDialog.tsx` now accepts an `agentId` prop and checks GitHub OAuth connection via `GET /api/auth/github/status` instead of the previous PAT-based auth flow (`getStoredToken`/`validateToken`). The dialog saves `repoUrl` to the agent record after a successful push so marketplace publish can reference it. The Ship stage in `LifecycleStepRenderer.tsx` also uses the OAuth status check for the GitHub connection indicator instead of local PAT storage.
 
 For new agents and autosaved drafts, that `Deploy Agent` action now follows [[SPEC-agent-create-deploy-handoff]] instead of a save-and-exit path. The create page saves or promotes the same agent record, finalizes any pending first-save credential-backed connectors, and routes into `/agents/[id]/deploy?source=create`. The deploy page shows the same saved connector/trigger/improvement summary immediately and auto-starts only when the saved config is already marked ready.
 
@@ -248,8 +279,14 @@ HTTP client that calls `/api/openclaw`, consumes SSE, returns `ArchitectResponse
 `agent-builder-ui/package.json` now exposes a first-class unit-test contract: `npm test` fans out into isolated Bun buckets (`test:unit:api`, `test:unit:store`, `test:unit:ag-ui`, `test:unit:core`) instead of relying on one giant `bun test` invocation. That split matters because Bun `mock.module(...)` state is process-global in this package, so suites that mock shared modules like `@/lib/openclaw/api` leak into each other when run in one process. Production `typecheck` also excludes `*.test.ts` plus `e2e/**` from the build-time TS program, and Playwright specs that hit non-dev platform routes must seed builder auth cookies plus mock `GET /users/me` before navigation because the auth gate now fails closed outside local development.
 Playwright coverage for the live new-agent path must also enter through the forge init screen. A truthful `/agents/create` browser test now submits the `name` / `description` form, waits for the URL rewrite to `/agents/create?agentId=...`, then asserts the post-provision Co-Pilot shell. Specs that jump straight from blank `/agents/create` into chat, review, or mode-toggle assertions are modeling the retired pre-forge entry contract instead of the current builder flow. See [[LEARNING-2026-04-02-agent-create-e2e-contract]].
 
+### `lib/openclaw/build-harness.ts` — Post-build verification harness
+Generates a deterministic `VerificationPlan` from the `ArchitecturePlan` and converts the container's `VerificationReport` into a typed `HarnessReport`. Check categories: dependency install, TypeScript compilation, dashboard build, database migration, backend service health, dashboard service, individual API endpoints, dashboard route reachability, and page component quality. Each check supports multiple retry attempts with in-container fix attempts. The harness is a thin orchestrator; actual fix+verify work happens inside the forge container via the "verify" specialist.
+
 ### `lib/openclaw/types.ts`
 All TypeScript interfaces for the architect protocol. See [[005-data-models]].
+
+### `hooks/use-feature-session.ts`
+Loads and manages a feature session from `GET /api/agents/:id/branches/:name/session`. Returns `session` (stage, context, PRD, plan, branch metadata), `setFeatureStage()` for PATCH updates, `buildArchitectPrompt()` for delta-scoped architect instructions, and `isActive` for open branch detection.
 
 ### `lib/openclaw/agent-config.ts`
 Agent configuration utilities.
@@ -286,6 +323,8 @@ The builder is now statically light-only at the app shell. `app/layout.tsx` no l
 ---
 
 ## Key Dependencies
+
+**`use-agents-store.ts` error handling**: Agent update and config update error responses now check `errBody.detail` in addition to `.message` and `.error`, improving compatibility with backend validation responses that return `detail` as the primary error field.
 
 - `zustand` + `zustand/middleware` — state management with persistence
 - `ws` — WebSocket client in the bridge route

@@ -3,6 +3,8 @@
  *
  * Refresh tokens are raw UUIDs stored in the session table.
  * Access tokens are short-lived JWTs (15 min).
+ *
+ * @kb: 014-auth-system 004-api-reference
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';

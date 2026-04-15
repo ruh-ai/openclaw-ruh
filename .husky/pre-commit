@@ -50,4 +50,29 @@ if echo "$CHANGED" | grep -q "^packages/marketplace-ui/"; then
   typecheck_service packages/marketplace-ui || exit 1
 fi
 
+# KB staleness warning — non-blocking reminder when source files change without their KB note
+kb_warn() {
+  src_pattern="$1"; kb_note="$2"
+  if echo "$CHANGED" | grep -q "$src_pattern" && ! echo "$CHANGED" | grep -q "docs/knowledge-base/$kb_note"; then
+    echo "  ⚠️  $src_pattern changed → consider updating docs/knowledge-base/$kb_note"
+    KB_STALE=1
+  fi
+}
+KB_STALE=0
+kb_warn "ruh-backend/src/sandboxManager" "003-sandbox-lifecycle.md"
+kb_warn "ruh-backend/src/app\.ts" "004-api-reference.md"
+kb_warn "ruh-backend/src/store\.ts" "005-data-models.md"
+kb_warn "ruh-backend/src/agentStore" "005-data-models.md"
+kb_warn "ruh-backend/src/schemaMigrations" "005-data-models.md"
+kb_warn "ruh-backend/src/channelManager" "006-channel-manager.md"
+kb_warn "ruh-backend/src/conversationStore" "007-conversation-store.md"
+kb_warn "agent-builder-ui/app/api/openclaw" "008-agent-builder-ui.md"
+kb_warn "agent-builder-ui/lib/openclaw" "008-agent-builder-ui.md"
+kb_warn "ruh-backend/src/authRoutes" "014-auth-system.md"
+kb_warn "ruh-backend/src/marketplaceStore" "016-marketplace.md"
+kb_warn "ruh-backend/src/marketplaceRoutes" "016-marketplace.md"
+if [ "$KB_STALE" -eq 1 ]; then
+  echo "  💡 Run /kb update after shipping, or update the notes now."
+fi
+
 echo "✓ Pre-commit checks passed"

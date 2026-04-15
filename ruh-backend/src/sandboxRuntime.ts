@@ -1,3 +1,4 @@
+// @kb: 003-sandbox-lifecycle 005-data-models
 import type { SandboxRecord } from './store';
 import type { ManagedSandboxContainer } from './docker';
 

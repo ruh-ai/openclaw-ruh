@@ -98,6 +98,33 @@ This replaces the old shared architect sandbox. Do not implement any feature tha
 6. **`000-INDEX.md` must be updated** whenever a new standard KB note or spec is added — add it to the appropriate section and the Quick Navigation table. Individual `LEARNING-*` notes are indexed through backlinks and `013-agent-learning-system.md`, not one-by-one in the index.
 7. **Use the `/document-release` skill** after shipping to verify all KB notes are current and properly linked.
 
+### Source Code Annotations (`@kb:`)
+
+Critical source files include `@kb:` annotations that link them to the KB notes they implement.
+This enables drift detection — when a KB note is renamed or removed, the validator catches broken references.
+
+**Annotation syntax:**
+```typescript
+// In JSDoc blocks:
+/**
+ * Sandbox manager: creates Docker containers for OpenClaw.
+ *
+ * @kb: 003-sandbox-lifecycle 001-architecture
+ */
+
+// As standalone comments:
+// @kb: 002-backend-overview
+```
+
+**Rules:**
+1. Every file in the `CRITICAL_FILES` list in `scripts/check-kb-annotations.ts` MUST have at least one `@kb:` annotation.
+2. A single `@kb:` line can reference multiple notes separated by spaces.
+3. Place annotations inside existing JSDoc blocks (preferred) or as a `//` comment before imports.
+4. When renaming a KB note, update all `@kb:` references in source files.
+5. When creating a new source file that implements KB-documented behavior, add an `@kb:` annotation.
+
+**Validation:** `bun scripts/check-kb-annotations.ts` — run during `/kb audit` or before PRs.
+
 ### Spec Template
 
 New specs should follow this structure:
@@ -384,6 +411,7 @@ Follow the gstack sprint pipeline defined in `agents.md`:
 - Maintain `TODOS.md` as you work so task state and handoff context stay current.
 - Append the daily journal and write a KB learning note whenever the run produced durable insight.
 - Update `docs/knowledge-base/` when adding new modules, endpoints, or flows.
+- **Before `/ship` or `/review`:** run `bash scripts/kb-preflight.sh` — it checks annotation integrity, KB staleness, and INDEX completeness. Broken `@kb:` refs block the ship. Staleness warnings prompt a `/kb update`.
 - Use `/document-release` after shipping to keep READMEs and KB in sync.
 
 ---

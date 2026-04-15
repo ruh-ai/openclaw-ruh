@@ -353,7 +353,27 @@ If the source file is significantly newer (> 1 week) than the KB note: flag as *
 Verify that every file in `docs/knowledge-base/` and `docs/knowledge-base/specs/` appears
 in `000-INDEX.md` (either in the main sections or the Feature Specs section).
 
-### Step 6: Output health report
+### Step 6: Validate @kb: source annotations
+
+Run the annotation validator to check that source files properly reference KB notes:
+
+```bash
+bun scripts/check-kb-annotations.ts
+```
+
+This checks:
+- **Broken references:** `@kb:` annotations pointing to KB notes that don't exist (renamed or deleted)
+- **Missing annotations:** Critical source files that lack any `@kb:` annotation
+
+If the script is not available, manually grep for annotations and verify:
+
+```bash
+grep -rn '@kb:' ruh-backend/src/ agent-builder-ui/app/ ruh-frontend/ --include='*.ts' --include='*.tsx'
+```
+
+For each `@kb:` reference, confirm the target file exists in `docs/knowledge-base/`.
+
+### Step 7: Output health report
 
 ```
 === KB AUDIT REPORT ===
@@ -385,16 +405,24 @@ Index Completeness:
   Listed in INDEX: N / M total files
   Missing from INDEX: [list]
 
+Source Annotations (@kb:):
+  Annotated files: N
+  Total references: N
+  Broken references: [count] [details if any]
+  Critical files missing @kb: [count] [details if any]
+
 Overall: HEALTHY | NEEDS_ATTENTION | UNHEALTHY
 ```
 
-### Step 7: Suggest fixes
+### Step 8: Suggest fixes
 
 For each issue, suggest a concrete action:
 - Stale draft → "Run `/kb spec <name>` to update, or change status to `implemented`"
 - Coverage gap → "Add section to `[[<note>]]` covering `<file>`" or "Create new note"
 - Stale note → "Read `<source-file>` and update `[[<note>]]`"
 - Missing from INDEX → "Add `[[<note>]]` to `000-INDEX.md` section: <suggested section>"
+- Broken @kb: ref → "Update annotation in `<file>` — KB note `<ref>` was renamed/removed"
+- Missing @kb: → "Add `// @kb: <note>` to `<file>` (see critical files list in `scripts/check-kb-annotations.ts`)"
 
 ---
 
@@ -473,18 +501,25 @@ Compare the KB note's content against the current code. Look for:
 - Changing architecture descriptions or design decisions
 - Anything that changes the "why" rather than the "what"
 
-### Step 6: Update wikilinks if new notes were created
+### Step 6: Maintain @kb: source annotations
+
+If any source files were renamed, moved, or created:
+1. Ensure renamed/moved files keep their `@kb:` annotation
+2. Add `@kb:` annotations to new source files that implement significant KB-documented behavior
+3. If a KB note is renamed, update all `@kb:` references in source files that pointed to it
+
+### Step 7: Update wikilinks if new notes were created
 
 If any new KB notes were created during the update:
 1. Add them to `000-INDEX.md`
 2. Add `[[wikilinks]]` from related existing notes
 3. Add backlinks in the new notes to existing notes
 
-### Step 7: Run link verification
+### Step 8: Run link verification
 
 Execute Mode: link to verify graph integrity after all updates.
 
-### Step 8: Output
+### Step 9: Output
 
 ```
 KB Update Report:
@@ -493,6 +528,7 @@ KB Update Report:
   Notes updated: [list with what changed in each]
   Notes created: [list, if any]
   No changes needed: [list of notes that were already current]
+  Annotations: [new/updated @kb: refs, if any]
   Graph: HEALTHY | N issues
 ```
 

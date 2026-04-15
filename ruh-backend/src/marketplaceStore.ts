@@ -1,6 +1,8 @@
 /**
  * Data store for the Employee Marketplace — listings, reviews, installs.
  * Follows the same withConn + raw SQL pattern as userStore.ts.
+ *
+ * @kb: 016-marketplace 005-data-models
  */
 
 import { v4 as uuidv4 } from "uuid";
