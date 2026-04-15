@@ -1,6 +1,7 @@
 import 'package:ruh_app/models/agent.dart';
 import 'package:ruh_app/models/auth_session.dart';
 import 'package:ruh_app/models/conversation.dart';
+import 'package:ruh_app/models/customer_agent_config.dart';
 import 'package:ruh_app/models/marketplace_listing.dart';
 import 'package:ruh_app/models/sandbox.dart';
 import 'package:ruh_app/services/agent_service.dart';
@@ -66,6 +67,14 @@ class FakeAuthService implements AuthService {
     }
     return loginResult!;
   }
+
+  @override
+  Future<AuthSession> updateProfile({String? displayName}) async {
+    if (loginResult == null) {
+      throw const AuthException('Missing fake login result');
+    }
+    return loginResult!;
+  }
 }
 
 class FakeLoginPreferencesService implements LoginPreferencesService {
@@ -95,6 +104,7 @@ class FakeAgentService implements AgentService {
   Agent? getResult;
   Agent? launchResult;
   Agent? updateResult;
+  CustomerAgentConfig? customerConfigResult;
   WorkspaceMemory? workspaceMemoryResult;
   SandboxHealth? healthResult;
   Object? listError;
@@ -135,12 +145,30 @@ class FakeAgentService implements AgentService {
   }
 
   @override
+  Future<CustomerAgentConfig> getCustomerConfig(String id) async {
+    return customerConfigResult ?? _defaultCustomerConfig();
+  }
+
+  @override
+  Future<CustomerAgentConfig> updateCustomerConfig(
+    String id, {
+    String? name,
+    String? description,
+    List<String>? agentRules,
+    List<RuntimeInputValueUpdate>? runtimeInputValues,
+  }) async {
+    return customerConfigResult ?? _defaultCustomerConfig();
+  }
+
+  @override
   Future<WorkspaceMemory> getWorkspaceMemory(String agentId) async {
     return workspaceMemoryResult ?? const WorkspaceMemory();
   }
 
   @override
-  Future<void> updateWorkspaceMemory(String agentId, WorkspaceMemory memory) async {}
+  Future<WorkspaceMemory> updateWorkspaceMemory(String agentId, WorkspaceMemory memory) async {
+    return workspaceMemoryResult ?? const WorkspaceMemory();
+  }
 
   @override
   Future<SandboxHealth> getSandboxHealth(String sandboxId) async {
@@ -350,6 +378,22 @@ AuthSession buildAuthSession({
       admin: false,
       builder: !customerAccess,
       customer: customerAccess,
+    ),
+  );
+}
+
+CustomerAgentConfig _defaultCustomerConfig() {
+  final now = DateTime.now();
+  return CustomerAgentConfig(
+    agent: CustomerConfigAgentSummary(
+      id: 'agent-1',
+      name: 'Test Agent',
+      avatar: '🤖',
+      description: 'A test agent',
+      status: 'active',
+      sandboxIds: const ['sb-1'],
+      createdAt: now,
+      updatedAt: now,
     ),
   );
 }

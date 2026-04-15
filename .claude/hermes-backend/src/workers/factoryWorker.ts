@@ -10,6 +10,26 @@ import { query } from '../db';
 import { spawnAgentProcess } from './subprocess';
 
 /**
+ * Extract the agent's text output from Claude CLI JSON envelope.
+ * Claude CLI with --output-format json wraps the actual result in a JSON object.
+ * If the input is already plain text (not JSON), return it as-is.
+ */
+function extractAgentOutput(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed.result === 'string') {
+        return parsed.result.trim();
+      }
+    } catch {
+      // Not valid JSON — fall through to return raw
+    }
+  }
+  return trimmed;
+}
+
+/**
  * List existing agent names and descriptions for the factory prompt.
  */
 async function getExistingAgents(): Promise<Array<{ name: string; description: string }>> {
@@ -86,7 +106,14 @@ Output ONLY the complete .md file content, nothing else. Start with the frontmat
         throw new Error(result.stderr || 'Agent creation subprocess failed');
       }
 
-      const output = result.stdout;
+      // Claude CLI with --output-format json returns a JSON envelope.
+      // Extract the actual "result" field which contains the agent's text output.
+      const output = extractAgentOutput(result.stdout);
+
+      // Validate the output looks like a valid agent prompt (YAML frontmatter)
+      if (!output.startsWith('---')) {
+        throw new Error('Factory output is not valid markdown frontmatter — refusing to write to prevent corruption');
+      }
 
       // Extract agent name from frontmatter
       const nameMatch = output.match(/^name:\s*(.+)$/m);

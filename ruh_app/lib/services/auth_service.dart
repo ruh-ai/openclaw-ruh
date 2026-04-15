@@ -26,6 +26,8 @@ abstract class AuthService {
     required String refreshToken,
   });
 
+  Future<AuthSession> updateProfile({String? displayName});
+
   Future<void> logout();
 
   Future<void> clearLocalSession();
@@ -169,6 +171,31 @@ class BackendAuthService implements AuthService {
       organizationId: membership.organizationId,
       refreshToken: refreshToken,
     );
+  }
+
+  @override
+  Future<AuthSession> updateProfile({String? displayName}) async {
+    try {
+      final response = await _client.patch<Map<String, dynamic>>(
+        '/api/auth/profile',
+        data: {
+          if (displayName != null) 'displayName': displayName,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const AuthException('Profile update failed');
+      }
+      final accessToken = await _client.getAccessToken();
+      final refreshToken = await _client.getRefreshToken();
+      return AuthSession.fromJson(
+        data,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+      );
+    } on DioException catch (error) {
+      throw _mapException(error, fallbackMessage: 'Profile update failed');
+    }
   }
 
   AuthException _mapException(

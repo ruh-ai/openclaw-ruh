@@ -45,10 +45,6 @@ const buttonVariants = cva(
           "border border-[var(--border-default)] bg-[var(--background)] shadow-sm hover:bg-[var(--background-muted)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--border-default)] focus-visible:ring-offset-2 disabled:bg-[var(--background)] disabled:text-[var(--disabled)] disabled:border-[var(--disabled)]",
 
         icon: "border border-[var(--border-default)] bg-transparent text-[var(--text-secondary)] shadow-sm hover:bg-[var(--user-bubble)] hover:text-[var(--text-primary)] disabled:bg-[var(--background)] disabled:text-[var(--disabled)] disabled:border-[var(--disabled)] disabled:pointer-events-auto disabled:cursor-not-allowed",
-
-        // Legacy variants for backward compatibility
-        default:
-          "bg-[var(--primary)] text-white shadow-sm hover:bg-[var(--primary-hover)] focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2 disabled:bg-[var(--disabled)] disabled:text-white",
       },
       size: {
         default: "h-10 px-3 py-[10px] has-[>svg]:px-3",

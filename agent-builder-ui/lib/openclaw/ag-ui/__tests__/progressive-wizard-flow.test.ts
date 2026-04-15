@@ -23,7 +23,7 @@ interface RecordedEvent {
 function collectEvents(response: unknown): Promise<RecordedEvent[]> {
   mockSendToArchitectStreaming.mockResolvedValue(response);
 
-  const agent = new BuilderAgent({ sessionId: "session-1", stageDelayMs: 10 });
+  const agent = new BuilderAgent({ sessionId: "session-1" });
   const events: RecordedEvent[] = [];
 
   return new Promise((resolve, reject) => {

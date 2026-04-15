@@ -38,6 +38,12 @@ dependencies:
   # Local notifications
   flutter_local_notifications: ^18.0.1
 
+  # System tray (desktop)
+  tray_manager: ^0.2.3
+
+  # Deep links
+  app_links: ^6.3.3
+
   # Offline SQLite cache
   drift: ^2.22.1
   sqlite3_flutter_libs: ^0.5.28
@@ -60,6 +66,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icon/
 
 # App icon generation — run: dart run flutter_launcher_icons
 flutter_launcher_icons:

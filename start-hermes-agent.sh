@@ -1,18 +1,28 @@
 #!/bin/bash
-# Launch Claude Code with the Hermes orchestrator agent
-# Runs in dangerously-skip-permissions mode (no tool approval prompts)
+# Launch Claude Code with the Hermes agent in remote control mode.
+#
+# Usage:
+#   ./start-hermes-agent.sh              # start hermes agent
+#   ./start-hermes-agent.sh --agent backend   # use a different agent
 
-set -e
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-AGENT_FILE="$SCRIPT_DIR/.claude/agents/hermes.md"
+cd "$(dirname "$0")"
 
-if [ ! -f "$AGENT_FILE" ]; then
-  echo "[hermes] Agent file not found: $AGENT_FILE"
-  exit 1
-fi
+AGENT="hermes"
 
-echo "[hermes] Starting Claude Code with Hermes agent (skip-permissions mode)..."
-cd "$SCRIPT_DIR"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent) AGENT="$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: ./start-hermes-agent.sh [--agent NAME]"
+      echo "  --agent NAME   Agent persona (default: hermes). See .claude/agents/"
+      exit 0
+      ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
 
-claude --agent .claude/agents/hermes.md --dangerously-skip-permissions --remote-control "$@"
+exec claude --agent ".claude/agents/${AGENT}.md" \
+  --dangerously-skip-permissions \
+  --remote-control

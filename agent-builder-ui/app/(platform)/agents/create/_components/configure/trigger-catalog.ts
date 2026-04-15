@@ -133,16 +133,11 @@ function buildSelectionFromCatalog(
   return selection;
 }
 
-function normalizeLegacySelection(existing: TriggerSelection): TriggerSelection {
-  if (existing.id === "chat-command" || existing.id.startsWith("webhook")) {
-    return {
-      ...existing,
-      kind: existing.id.startsWith("webhook") ? "webhook" : existing.kind,
-      status: "unsupported",
-    };
-  }
-
-  return existing;
+function markUnknownAsUnsupported(existing: TriggerSelection): TriggerSelection {
+  return {
+    ...existing,
+    status: "unsupported",
+  };
 }
 
 export function buildTriggerSelections(
@@ -173,7 +168,7 @@ export function buildTriggerSelections(
     }
     const existing = existingById.get(triggerId);
     if (existing) {
-      selections.push(normalizeLegacySelection(existing));
+      selections.push(markUnknownAsUnsupported(existing));
     }
   }
 

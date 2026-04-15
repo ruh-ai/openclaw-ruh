@@ -522,12 +522,25 @@ router.post(
     if (repoUrl) {
       const kebabName = installedAgent.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
       const streamId = uuidv4();
+
+      // For private repos: try to use the installing user's GitHub token
+      let githubToken: string | undefined;
+      try {
+        const { getAccessToken } = await import('./githubConnectionStore');
+        const userId = (req as unknown as { user?: { id?: string } }).user?.id;
+        if (userId) {
+          const conn = await getAccessToken(userId);
+          if (conn) githubToken = conn.token;
+        }
+      } catch { /* no token available — repo must be public */ }
+
       _streams.set(streamId, {
         status: "pending",
         request: {
           sandbox_name: `install-${kebabName}`,
           forge_agent_id: installedAgent.id,
           reproduce_repo_url: repoUrl,
+          reproduce_github_token: githubToken ?? '',
           run_agent_setup: true,
         },
       });

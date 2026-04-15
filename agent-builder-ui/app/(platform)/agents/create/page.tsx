@@ -148,7 +148,7 @@ function CreateAgentPageContent() {
   //
   //   Error at any point ──> reset to "init"
   //
-  const [forgePhase, setForgePhase] = useState<"init" | "provisioning" | "reveal" | null>(() =>
+  const [forgePhase, setForgePhase] = useState<"init" | "provisioning" | null>(() =>
     editingAgentId ? null : "init"
   );
   const [forgeLog, setForgeLog] = useState<string[]>([]);
@@ -245,11 +245,12 @@ function CreateAgentPageContent() {
       }
 
       setForgeLog((prev) => [...prev, "Agent workspace ready — preparing your digital employee..."]);
-      // Container is ready. Transition to reveal phase instead of hard navigation.
-      // The copilot layout will auto-send the first message to the Architect with
-      // devStage="reveal", which triggers the employee_reveal event.
-      setForgePhase("reveal");
+      // Container is ready. Go straight to copilot mode (forgePhase=null) so
+      // CoPilotLayout mounts and can send the first message to the Architect.
+      // The devStage starts at "reveal", so the Architect gets REVEAL_SYSTEM_INSTRUCTION.
+      // MeetYourEmployee renders inside the copilot section when revealData arrives.
       setCreatedAgentId(agent_id);
+      setForgePhase(null);
     } catch (err) {
       if ((err as Error).name === "AbortError") return; // User navigated away
       setForgeError(err instanceof Error ? err.message : "Failed to provision agent workspace");
@@ -1418,44 +1419,46 @@ function CreateAgentPageContent() {
     );
   }
 
-  // ── Reveal phase: employee profile brief-back ─────────────────────────────
-  if (forgePhase === "reveal" && coPilotStore.revealData) {
+  // ── Reveal stage (inside copilot mode) ──────────────────────────────────
+  // When devStage === "reveal", the CoPilotLayout mounts (hidden) so it can
+  // send the first message to the Architect. MeetYourEmployee overlays when
+  // revealData arrives. The loading state shows while waiting.
+  if (mode === "copilot" && coPilotStore.devStage === "reveal") {
+    if (coPilotStore.revealData) {
+      return (
+        <MeetYourEmployee
+          reveal={coPilotStore.revealData}
+          agentName={builderState.name ?? "Agent"}
+          attemptCount={revealAttemptCount}
+          isProvisioning={false}
+          onConfirm={(answer) => {
+            coPilotStore.setRevealAnswer(answer);
+            coPilotStore.setRevealStatus("approved");
+            coPilotStore.setDevStage("think");
+          }}
+          onRegenerate={() => {
+            setRevealAttemptCount((c) => c + 1);
+            coPilotStore.setRevealStatus("idle");
+            coPilotStore.setRevealData(null);
+          }}
+        />
+      );
+    }
+    // Reveal data not yet arrived — show loading with CoPilotLayout hidden underneath
     return (
-      <MeetYourEmployee
-        reveal={coPilotStore.revealData}
-        agentName={builderState.name ?? "Agent"}
-        attemptCount={revealAttemptCount}
-        isProvisioning={false}
-        onConfirm={(answer) => {
-          coPilotStore.setRevealAnswer(answer);
-          coPilotStore.setRevealStatus("approved");
-          coPilotStore.setDevStage("think");
-          setForgePhase(null);
-        }}
-        onRegenerate={() => {
-          setRevealAttemptCount((c) => c + 1);
-          coPilotStore.setRevealStatus("idle");
-          coPilotStore.setRevealData(null);
-          // The copilot layout will re-send the reveal message to the Architect
-        }}
-      />
-    );
-  }
-
-  // Reveal phase but data not yet arrived — show a loading state
-  if (forgePhase === "reveal" && !coPilotStore.revealData) {
-    return (
-      <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center px-6 py-12">
-        <div
-          className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
-          style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
-        >
-          <span className="text-2xl font-bold text-white">
-            {(builderState.name ?? "A").charAt(0).toUpperCase()}
-          </span>
+      <>
+        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center px-6 py-12">
+          <div
+            className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full"
+            style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
+          >
+            <span className="text-2xl font-bold text-white">
+              {(builderState.name ?? "A").charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <p className="text-sm text-text-secondary">Your digital employee is reviewing your brief...</p>
         </div>
-        <p className="text-sm text-text-secondary">Your digital employee is reviewing your brief...</p>
-      </div>
+      </>
     );
   }
 

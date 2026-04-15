@@ -47,6 +47,7 @@ export interface LearningJobData {
   filesChanged?: string[];
   description?: string;      // original task description for quality review
   goalId?: string;
+  worktreeBranch?: string;   // git branch created by worktree isolation
 }
 
 export interface EvolutionJobData {

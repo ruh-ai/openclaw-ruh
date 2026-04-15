@@ -18,7 +18,7 @@ export interface ArchitecturePlan {
   skills: ArchitecturePlanSkill[];
   workflow: { steps: Array<{ skillId: string; parallel?: boolean }> };
   integrations: Array<{ name: string; method: string }>;
-  triggers: Array<{ type: string; config?: Record<string, unknown> }>;
+  triggers: Array<{ type: string; name?: string; schedule?: string; every?: string; cron?: string; skillId?: string; message?: string; config?: Record<string, unknown> }>;
   channels: string[];
   envVars: ArchitecturePlanEnvVar[];
   subAgents: Array<{ id: string; name: string }>;
@@ -338,6 +338,17 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
       name: "dashboard-build",
       command: "cd dashboard && npx vite build --outDir dist 2>&1",
       condition: "file:dashboard/index.html",
+      optional: true,
+    });
+  }
+
+  // Install cron jobs from the plan's triggers
+  const hasTriggers = (plan.triggers?.length ?? 0) > 0;
+  if (hasTriggers) {
+    setup.push({
+      name: "install-cron-jobs",
+      command: "sh $HOME/.openclaw/workspace/.openclaw/install-crons.sh 2>&1",
+      condition: "file:.openclaw/install-crons.sh",
       optional: true,
     });
   }
@@ -899,6 +910,43 @@ export function authMiddleware(_req: Request, _res: Response, next: NextFunction
   return files;
 }
 
+// ─── Cron/trigger install script ─────────────────────────────────────────────
+// Generates a shell script that installs cron jobs via `openclaw cron add`.
+// Called during setup after services are running.
+
+function generateCronInstallScript(plan: ArchitecturePlan): ScaffoldFile | null {
+  const triggers = plan.triggers ?? [];
+  if (triggers.length === 0) return null;
+
+  const commands = triggers.map((t) => {
+    const trigger = t as { type?: string; name?: string; schedule?: string; skillId?: string; message?: string; every?: string; cron?: string };
+    if (trigger.type !== 'cron') return null;
+
+    const name = trigger.name ?? trigger.skillId ?? 'job';
+    const schedule = trigger.cron ?? trigger.schedule ?? trigger.every ?? '0 */1 * * *'; // default: every hour
+    const message = trigger.message ?? `Run ${trigger.skillId ?? name}`;
+
+    // Determine if it's a cron expression or an interval
+    const isCron = schedule.includes('*') || schedule.split(' ').length >= 5;
+    const scheduleFlag = isCron ? `--cron "${schedule}"` : `--every "${schedule}"`;
+
+    return `openclaw cron add --name "${name}" ${scheduleFlag} --message "${message.replace(/"/g, '\\"')}" --session isolated --json 2>/dev/null && echo "  ✅ ${name}" || echo "  ⚠️ ${name} (may already exist)"`;
+  }).filter(Boolean);
+
+  if (commands.length === 0) return null;
+
+  return {
+    path: ".openclaw/install-crons.sh",
+    content: `#!/bin/sh
+# Auto-generated cron job installer from architecture plan.
+# Run after the gateway is healthy.
+echo "Installing ${commands.length} scheduled job(s)..."
+${commands.join('\n')}
+echo "Done."
+`,
+  };
+}
+
 // ─── Master function ─────────────────────────────────────────────────────────
 
 /**
@@ -912,6 +960,7 @@ export function generateScaffoldFiles(
   // Normalize: fill missing fields to prevent crashes from architect omissions
   const plan = normalizePlan(rawPlan as unknown as Record<string, unknown>);
   const backendEntry = generateBackendEntryFile(plan);
+  const cronScript = generateCronInstallScript(plan);
   return [
     generatePackageJson(plan, agentName),
     generateDockerfile(),
@@ -924,5 +973,6 @@ export function generateScaffoldFiles(
     ...(backendEntry ? [backendEntry] : []),
     ...generatePlaceholderRoutes(plan),
     ...generateDashboardFiles(plan),
+    ...(cronScript ? [cronScript] : []),
   ];
 }

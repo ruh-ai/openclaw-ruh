@@ -10,6 +10,26 @@ import { query } from '../db';
 import { spawnAgentProcess } from './subprocess';
 
 /**
+ * Extract the agent's text output from Claude CLI JSON envelope.
+ * Claude CLI with --output-format json wraps the actual result in a JSON object.
+ * If the input is already plain text (not JSON), return it as-is.
+ */
+function extractAgentOutput(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed.result === 'string') {
+        return parsed.result.trim();
+      }
+    } catch {
+      // Not valid JSON — fall through to return raw
+    }
+  }
+  return trimmed;
+}
+
+/**
  * Query agent performance trends from PostgreSQL.
  */
 async function getAgentTrends(): Promise<Array<{
@@ -231,7 +251,15 @@ Be surgical — add the minimum instructions needed to prevent these specific fa
     return { refined: false, reason: result.stderr || 'Refinement subprocess failed' };
   }
 
-  const output = result.stdout;
+  // Claude CLI with --output-format json returns a JSON envelope.
+  // Extract the actual "result" field which contains the agent's text output.
+  const output = extractAgentOutput(result.stdout);
+
+  // Validate the output looks like a valid agent prompt (YAML frontmatter)
+  if (!output.startsWith('---')) {
+    console.error(`[hermes:evolution] Refinement output for ${agentName} is not valid markdown frontmatter — skipping write to prevent corruption`);
+    return { refined: false, reason: 'Refinement output failed validation — not a valid agent prompt' };
+  }
 
   // Backup and write the refined prompt
   const backupPath = `${agentPath}.bak`;

@@ -8,8 +8,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'config/routes.dart';
 import 'config/theme.dart';
 import 'providers/theme_provider.dart';
+import 'services/deep_link_service.dart';
 import 'services/logger.dart';
 import 'services/notification_service.dart';
+import 'services/system_tray_service.dart';
 import 'widgets/debug_overlay.dart';
 
 void main() {
@@ -55,6 +57,22 @@ void main() {
         Log.i('App', 'Notifications initialized');
       } catch (e) {
         Log.e('App', 'Notification init failed (non-critical)', e);
+      }
+
+      // Initialize system tray — non-critical, desktop only
+      try {
+        await SystemTrayService().init();
+        Log.i('App', 'System tray initialized');
+      } catch (e) {
+        Log.e('App', 'System tray init failed (non-critical)', e);
+      }
+
+      // Initialize deep link handling — non-critical
+      try {
+        DeepLinkService().init();
+        Log.i('App', 'Deep link service initialized');
+      } catch (e) {
+        Log.e('App', 'Deep link init failed (non-critical)', e);
       }
 
       runApp(

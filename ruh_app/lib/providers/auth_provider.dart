@@ -120,6 +120,24 @@ class AuthController extends Notifier<AuthState> {
     state = const AuthState.unauthenticated();
   }
 
+  Future<bool> updateProfile({String? displayName}) async {
+    try {
+      final updatedSession = await _service.updateProfile(
+        displayName: displayName,
+      );
+      if (!updatedSession.hasCustomerAccess) {
+        return false;
+      }
+      state = AuthState.authenticated(updatedSession);
+      return true;
+    } on AuthException {
+      return false;
+    } catch (error, stackTrace) {
+      Log.e('Auth', 'Failed profile update', error, stackTrace);
+      return false;
+    }
+  }
+
   Future<bool> switchOrganization(String organizationId) async {
     final session = state.session;
     final refreshToken = session?.refreshToken;

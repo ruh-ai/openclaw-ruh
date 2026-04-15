@@ -109,6 +109,7 @@ export async function spawnAgentProcess(opts: {
   prompt: string;
   timeout: number;
   dangerouslySkipPermissions?: boolean;
+  cwd?: string;  // worktree path override; defaults to config.projectRoot
 }): Promise<SubprocessResult> {
   const config = getConfig();
   const runner = getAgentRunnerHealth();
@@ -158,7 +159,7 @@ export async function spawnAgentProcess(opts: {
 
     cmd = buildCodexRunnerCommand({
       runnerPath: runner.path,
-      projectRoot: config.projectRoot,
+      projectRoot: opts.cwd ?? config.projectRoot,
       outputPath: outputPath!,
       dangerouslySkipPermissions: opts.dangerouslySkipPermissions,
     });
@@ -176,7 +177,7 @@ export async function spawnAgentProcess(opts: {
     stdin: stdin ?? 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    cwd: config.projectRoot,
+    cwd: opts.cwd ?? config.projectRoot,
     env: buildRunnerEnvironment({
       jobId: opts.jobId,
       runner: runner.selected,
