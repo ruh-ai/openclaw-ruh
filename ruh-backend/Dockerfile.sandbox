@@ -25,9 +25,10 @@ RUN echo '/** @type {import("next").NextConfig} */\nmodule.exports = { output: "
 # ── Stage 2: Main sandbox image ─────────────────────────────────────────────
 FROM node:22-bookworm
 
-# 2026.4.14 fixes dangerouslyDisableDeviceAuth not working for WS connect
-# (2026.3.24 rejected WS connections with "pairing required" despite the flag)
-ARG OPENCLAW_VERSION=2026.4.14
+# Pin to 2026.3.24 — the Codex OAuth token exchange works reliably with this version.
+# 2026.4.14 has gateway protocol changes (client ID/mode validation) that require
+# the backend proxy to use specific params, and intermittent LLM call failures.
+ARG OPENCLAW_VERSION=2026.3.24
 
 # ─── System packages ────────────────────────────────────────────────────────
 RUN apt-get update && \
