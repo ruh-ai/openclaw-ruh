@@ -109,17 +109,6 @@ services:
       backend:
         condition: service_healthy
 
-  website:
-    build:
-      context: ../codezero2pi-website
-      dockerfile: Dockerfile
-    environment:
-      NODE_ENV: production
-      PORT: "3004"
-    restart: unless-stopped
-    networks:
-      - internal
-
   nginx:
     build:
       context: ./nginx
@@ -144,7 +133,6 @@ services:
       - frontend
       - agent-builder-ui
       - admin-ui
-      - website
 
   # Certbot for automatic SSL renewal
   certbot:
