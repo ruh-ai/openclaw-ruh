@@ -1455,10 +1455,28 @@ function CreateAgentPageContent() {
         />
       );
     }
-    // Reveal data not yet arrived — show employee profile preview card
-    const meetName = builderState.name || workingAgent?.name || "Your New Employee";
+    // Reveal data not yet arrived — show employee profile card with persona
+    const meetAgentName = builderState.name || workingAgent?.name || "Your New Employee";
     const meetDescription = builderState.description || workingAgent?.description || "";
-    const meetInitials = meetName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+
+    // Generate a human persona from the agent name deterministically
+    const PERSONAS: Array<{ first: string; last: string; emoji: string; trait: string }> = [
+      { first: "Ava", last: "Chen", emoji: "🎯", trait: "Precise and data-driven" },
+      { first: "Marcus", last: "Rivera", emoji: "⚡", trait: "Fast and proactive" },
+      { first: "Priya", last: "Sharma", emoji: "🔍", trait: "Detail-oriented analyst" },
+      { first: "Noah", last: "Kim", emoji: "🤝", trait: "Collaborative communicator" },
+      { first: "Zara", last: "Osei", emoji: "📊", trait: "Metrics-obsessed optimizer" },
+      { first: "Leo", last: "Tanaka", emoji: "🛡️", trait: "Reliable and thorough" },
+      { first: "Maya", last: "Patel", emoji: "🚀", trait: "Initiative-taker" },
+      { first: "Ethan", last: "Nowak", emoji: "🧠", trait: "Strategic thinker" },
+    ];
+    const personaIdx = meetAgentName.split("").reduce((sum: number, ch: string) => sum + ch.charCodeAt(0), 0) % PERSONAS.length;
+    const persona = PERSONAS[personaIdx];
+    const personaName = `${persona.first} ${persona.last}`;
+    const personaInitials = `${persona.first[0]}${persona.last[0]}`;
+
+    // Derive a title from the agent name
+    const personaTitle = meetAgentName.replace(/agent|bot|assistant/gi, "").trim() + " Specialist";
 
     return (
       <>
@@ -1467,53 +1485,68 @@ function CreateAgentPageContent() {
             {/* Header badge */}
             <div className="mb-6 text-center">
               <span className="inline-block rounded-full border border-[var(--primary)]/20 bg-[var(--primary)]/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-                Meeting your new teammate
+                {persona.emoji} Meeting your new teammate
               </span>
             </div>
 
             {/* Profile card */}
-            <div
-              className="rounded-2xl border border-[var(--border-default)] bg-white p-8 shadow-sm"
-              style={{ animation: "soul-pulse 4s ease-in-out infinite" }}
-            >
-              {/* Avatar + Name */}
-              <div className="mb-6 flex items-center gap-4">
-                <div
-                  className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white"
-                  style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}
-                >
-                  {meetInitials}
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-lg font-bold text-[var(--text-primary)] truncate">{meetName}</h2>
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ae00d0] opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-[#ae00d0]" />
-                    </span>
-                    <span className="text-xs text-[var(--text-tertiary)]">Getting ready...</span>
+            <div className="rounded-2xl border border-[var(--border-default)] bg-white shadow-sm overflow-hidden">
+              {/* Banner */}
+              <div className="h-16" style={{ background: "linear-gradient(135deg, #ae00d0 0%, #7b5aff 50%, #ae00d0 100%)", backgroundSize: "200% 100%", animation: "gradient-drift 6s ease-in-out infinite" }} />
+
+              <div className="px-8 pb-8">
+                {/* Avatar overlapping banner */}
+                <div className="-mt-10 mb-4 flex items-end gap-4">
+                  <div
+                    className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl text-2xl font-bold text-white border-4 border-white shadow-md"
+                    style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}
+                  >
+                    {personaInitials}
+                  </div>
+                  <div className="min-w-0 pb-1">
+                    <h2 className="text-xl font-bold text-[var(--text-primary)] truncate">{personaName}</h2>
+                    <p className="text-sm text-[var(--text-secondary)]">{personaTitle}</p>
                   </div>
                 </div>
-              </div>
 
-              {/* Role description */}
-              {meetDescription && (
-                <div className="mb-6 rounded-xl bg-[var(--sidebar-bg,#fafafa)] p-4">
-                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
-                    Role
-                  </div>
-                  <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-                    {meetDescription}
-                  </p>
+                {/* Status badge */}
+                <div className="mb-5 flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#ae00d0] opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#ae00d0]" />
+                  </span>
+                  <span className="text-xs font-medium text-[var(--primary)]">Coming online</span>
+                  <span className="ml-auto text-xs text-[var(--text-tertiary)]">{persona.trait}</span>
                 </div>
-              )}
 
-              {/* Preparing status */}
-              <div className="flex items-center gap-3 rounded-xl border border-[var(--primary)]/10 bg-[var(--primary)]/[0.03] p-4">
-                <div className="h-8 w-8 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
-                <div>
-                  <p className="text-sm font-medium text-[var(--text-primary)]">Reviewing your brief</p>
-                  <p className="text-xs text-[var(--text-tertiary)]">Preparing a personalized introduction...</p>
+                {/* Personality traits */}
+                <div className="mb-5 grid grid-cols-3 gap-2">
+                  {["Autonomous", "Accurate", "Always-on"].map((trait) => (
+                    <div key={trait} className="rounded-lg bg-[var(--sidebar-bg,#fafafa)] px-3 py-2 text-center">
+                      <span className="text-xs font-medium text-[var(--text-secondary)]">{trait}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Mission brief */}
+                {meetDescription && (
+                  <div className="mb-5 rounded-xl border border-[var(--border-default)] p-4">
+                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                      Mission Brief
+                    </div>
+                    <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+                      &ldquo;{meetDescription}&rdquo;
+                    </p>
+                  </div>
+                )}
+
+                {/* Preparing status */}
+                <div className="flex items-center gap-3 rounded-xl bg-[var(--primary)]/[0.04] p-4">
+                  <div className="h-7 w-7 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
+                  <div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Reading your brief and preparing...</p>
+                    <p className="text-xs text-[var(--text-tertiary)]">Your employee will introduce themselves shortly</p>
+                  </div>
                 </div>
               </div>
             </div>
