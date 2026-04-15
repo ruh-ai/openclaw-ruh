@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" fill="none">
+  <!-- C0 -->
+  <text x="0" y="36" font-family="system-ui, sans-serif" font-weight="700" font-size="32" fill="#f8fafc">C</text>
+  <text x="22" y="36" font-family="system-ui, sans-serif" font-weight="700" font-size="32" fill="#0ea5e9">0</text>
+  <!-- Arrow -->
+  <line x1="46" y1="24" x2="62" y2="24" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
+  <polyline points="58,19 63,24 58,29" stroke="#6366f1" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Pi symbol -->
+  <text x="68" y="36" font-family="system-ui, sans-serif" font-weight="700" font-size="32" fill="#0ea5e9" font-style="italic">&#960;</text>
+</svg>
