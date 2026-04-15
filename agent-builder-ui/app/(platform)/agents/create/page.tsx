@@ -1455,144 +1455,127 @@ function CreateAgentPageContent() {
         />
       );
     }
-    // Reveal data not yet arrived — show employee resume card
+    // Reveal data not yet arrived — show compelling employee profile
     const meetAgentName = builderState.name || workingAgent?.name || "New Employee";
     const meetDescription = builderState.description || workingAgent?.description || "";
 
-    // Deterministic persona from agent name
+    // Deterministic persona
     const PERSONAS = [
-      { first: "Ava", last: "Chen", location: "San Francisco, CA", lang: "English, Mandarin" },
-      { first: "Marcus", last: "Rivera", location: "Austin, TX", lang: "English, Spanish" },
-      { first: "Priya", last: "Sharma", location: "London, UK", lang: "English, Hindi" },
-      { first: "Noah", last: "Kim", location: "Seoul, KR", lang: "English, Korean" },
-      { first: "Zara", last: "Osei", location: "Toronto, CA", lang: "English, French" },
-      { first: "Leo", last: "Tanaka", location: "Tokyo, JP", lang: "English, Japanese" },
-      { first: "Maya", last: "Patel", location: "Mumbai, IN", lang: "English, Gujarati" },
-      { first: "Ethan", last: "Nowak", location: "Berlin, DE", lang: "English, German" },
+      { first: "Ava", last: "Chen", gender: "f", skin: "#F5D0C5", hair: "#2C1810", pitch: "I turn chaos into clarity. Give me your messiest data and I'll hand you back decisions.", strength: "Pattern recognition across large datasets" },
+      { first: "Marcus", last: "Rivera", gender: "m", skin: "#C68642", hair: "#1A1A1A", pitch: "I don't wait for problems — I find them first. Your systems are my systems.", strength: "Proactive monitoring and rapid response" },
+      { first: "Priya", last: "Sharma", gender: "f", skin: "#D4A574", hair: "#1C1008", pitch: "Every number tells a story. I read between the metrics so you don't have to.", strength: "Deep analytical thinking under pressure" },
+      { first: "Noah", last: "Kim", gender: "m", skin: "#FFDBB4", hair: "#3D2B1F", pitch: "I connect the dots between teams, tools, and timelines. Nothing slips through.", strength: "Cross-functional coordination at scale" },
+      { first: "Zara", last: "Osei", gender: "f", skin: "#8D5524", hair: "#0A0A0A", pitch: "Optimization isn't a task, it's a mindset. I'll find the 20% that drives 80% of results.", strength: "Ruthless prioritization and ROI focus" },
+      { first: "Leo", last: "Tanaka", gender: "m", skin: "#FFDBB4", hair: "#2C1810", pitch: "I treat every process like code — if it can break, I'll find the edge case first.", strength: "Systematic quality assurance and testing" },
+      { first: "Maya", last: "Patel", gender: "f", skin: "#C68642", hair: "#1C1008", pitch: "I ship. While others are planning meetings about meetings, I'm already done.", strength: "Bias for action and fast execution" },
+      { first: "Ethan", last: "Nowak", gender: "m", skin: "#F5D0C5", hair: "#5C4033", pitch: "Strategy without execution is a dream. I do both, before you ask.", strength: "End-to-end ownership of complex projects" },
     ];
     const pIdx = meetAgentName.split("").reduce((s: number, c: string) => s + c.charCodeAt(0), 0) % PERSONAS.length;
     const p = PERSONAS[pIdx];
     const resumeName = `${p.first} ${p.last}`;
-    const resumeInitials = `${p.first[0]}${p.last[0]}`;
     const resumeTitle = meetAgentName.replace(/agent|bot|assistant/gi, "").trim() + " Specialist";
 
-    // Extract keywords from description for skills
-    const skillKeywords = meetDescription
-      .split(/[.,;]/)
-      .map((s: string) => s.trim())
-      .filter((s: string) => s.length > 5 && s.length < 50)
-      .slice(0, 4);
+    // SVG avatar generator
+    const avatarSvg = p.gender === "f"
+      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#ae00d0" opacity="0.08"/><ellipse cx="50" cy="42" rx="22" ry="24" fill="${p.skin}"/><ellipse cx="50" cy="85" rx="30" ry="22" fill="#ae00d0"/><ellipse cx="50" cy="30" rx="25" ry="20" fill="${p.hair}"/><path d="M28 35 Q30 18 50 15 Q70 18 72 35 Q72 28 50 25 Q28 28 28 35Z" fill="${p.hair}"/><ellipse cx="42" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><ellipse cx="58" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><path d="M44 52 Q50 56 56 52" stroke="#c97878" stroke-width="1.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="48" rx="1.5" ry="1" fill="${p.skin}" opacity="0.7"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#7b5aff" opacity="0.08"/><ellipse cx="50" cy="42" rx="21" ry="23" fill="${p.skin}"/><ellipse cx="50" cy="85" rx="30" ry="22" fill="#7b5aff"/><rect x="30" y="18" width="40" height="22" rx="3" fill="${p.hair}"/><rect x="28" y="28" width="44" height="8" rx="2" fill="${p.hair}"/><ellipse cx="42" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><ellipse cx="58" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><path d="M44 52 Q50 55 56 52" stroke="#c97878" stroke-width="1.5" fill="none" stroke-linecap="round"/><rect x="38" y="36" width="10" height="1" rx="0.5" fill="${p.hair}" opacity="0.3"/><rect x="52" y="36" width="10" height="1" rx="0.5" fill="${p.hair}" opacity="0.3"/></svg>`;
+    const avatarDataUri = `data:image/svg+xml,${encodeURIComponent(avatarSvg)}`;
 
     return (
       <>
-        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-start px-6 py-10">
-          <div className="w-full max-w-[600px]">
+        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-start px-6 py-8">
+          <div className="w-full max-w-[560px]">
 
-            {/* Resume document */}
-            <div className="rounded-xl border border-[var(--border-default)] bg-white shadow-lg overflow-hidden">
+            <div className="rounded-2xl border border-[var(--border-default)] bg-white shadow-lg overflow-hidden">
 
-              {/* Resume header — dark section */}
-              <div className="relative px-8 pt-8 pb-6" style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)" }}>
-                <div className="flex items-start gap-5">
-                  <div
-                    className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-xl text-2xl font-bold text-white shadow-lg"
-                    style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)", animation: "soul-pulse 3s ease-in-out infinite" }}
-                  >
-                    {resumeInitials}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h1 className="text-2xl font-bold text-white tracking-tight">{resumeName}</h1>
-                    <p className="text-sm text-white/70 mt-0.5">{resumeTitle}</p>
-                    <div className="flex items-center gap-4 mt-3">
-                      <span className="text-xs text-white/50">📍 {p.location}</span>
-                      <span className="text-xs text-white/50">🌐 {p.lang}</span>
+              {/* Header */}
+              <div className="relative px-8 pt-7 pb-5" style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)" }}>
+                <div className="flex items-center gap-5">
+                  {/* SVG Avatar */}
+                  <div className="shrink-0">
+                    <div className="h-[80px] w-[80px] rounded-full border-[3px] border-white/20 overflow-hidden shadow-xl" style={{ animation: "soul-pulse 3s ease-in-out infinite" }}>
+                      <img src={avatarDataUri} alt={resumeName} className="h-full w-full" />
                     </div>
                   </div>
-                </div>
-                {/* Status pill */}
-                <div className="absolute top-6 right-6 flex items-center gap-1.5 rounded-full bg-white/10 backdrop-blur-sm px-3 py-1">
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-                  </span>
-                  <span className="text-[11px] font-medium text-white/80">Available</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h1 className="text-[22px] font-bold text-white tracking-tight">{resumeName}</h1>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="text-[10px] font-semibold text-emerald-300">READY</span>
+                      </span>
+                    </div>
+                    <p className="text-[13px] text-white/60 mt-0.5">{resumeTitle}</p>
+                    <p className="text-[11px] text-white/40 mt-2 italic leading-snug">&ldquo;{p.pitch}&rdquo;</p>
+                  </div>
                 </div>
               </div>
 
-              {/* Resume body */}
-              <div className="px-8 py-6 space-y-5">
+              {/* Body */}
+              <div className="px-8 py-5 space-y-5">
 
-                {/* Summary / Objective */}
-                {meetDescription && (
-                  <div>
-                    <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
-                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                      <span>Professional Summary</span>
-                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                    </h3>
-                    <p className="text-[13px] leading-relaxed text-[var(--text-secondary)]">
-                      {meetDescription}
-                    </p>
+                {/* The pitch — what makes them special */}
+                <div className="rounded-xl border-l-[3px] border-[var(--primary)] bg-[var(--primary)]/[0.03] pl-4 pr-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--primary)] mb-1">Why hire me</div>
+                  <p className="text-[13px] leading-relaxed text-[var(--text-primary)]">
+                    {meetDescription || "I'm built to handle exactly what you need — autonomously, accurately, and around the clock."}
+                  </p>
+                </div>
+
+                {/* Key strength */}
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm" style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}>
+                    <span className="text-white">★</span>
                   </div>
-                )}
-
-                {/* Core Competencies */}
-                {skillKeywords.length > 0 && (
                   <div>
-                    <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
-                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                      <span>Core Competencies</span>
-                      <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                    </h3>
-                    <div className="flex flex-wrap gap-2">
-                      {skillKeywords.map((skill: string, i: number) => (
-                        <span key={i} className="rounded-md border border-[var(--border-default)] bg-[var(--sidebar-bg,#fafafa)] px-2.5 py-1 text-xs text-[var(--text-secondary)]">
-                          {skill}
-                        </span>
-                      ))}
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">Key Strength</div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">{p.strength}</p>
+                  </div>
+                </div>
+
+                {/* Stats row */}
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { val: "24/7", label: "Uptime" },
+                    { val: "<1s", label: "Response" },
+                    { val: "∞", label: "Patience" },
+                    { val: "0", label: "Sick days" },
+                  ].map(({ val, label }) => (
+                    <div key={label} className="text-center rounded-lg bg-[var(--sidebar-bg,#fafafa)] py-2.5">
+                      <div className="text-base font-bold text-[var(--primary)]">{val}</div>
+                      <div className="text-[9px] font-medium uppercase tracking-wide text-[var(--text-tertiary)] mt-0.5">{label}</div>
                     </div>
-                  </div>
-                )}
+                  ))}
+                </div>
 
-                {/* Work Style */}
+                {/* What you get */}
                 <div>
-                  <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--primary)] mb-2 flex items-center gap-1.5">
-                    <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                    <span>Work Style</span>
-                    <span className="h-px flex-1 bg-[var(--primary)]/20" />
-                  </h3>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2">What you get</div>
+                  <div className="space-y-1.5">
                     {[
-                      { label: "Availability", value: "24/7" },
-                      { label: "Response Time", value: "< 1 min" },
-                      { label: "Work Mode", value: "Autonomous" },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="text-center rounded-lg bg-[var(--sidebar-bg,#fafafa)] p-3">
-                        <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">{label}</div>
-                        <div className="text-sm font-bold text-[var(--text-primary)] mt-0.5">{value}</div>
+                      "Works while you sleep — handles tasks across time zones",
+                      "Never forgets context — persistent memory across every conversation",
+                      "Gets better over time — learns your preferences and patterns",
+                    ].map((item, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="mt-1 text-[var(--primary)] text-xs">✓</span>
+                        <span className="text-[12px] leading-snug text-[var(--text-secondary)]">{item}</span>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Onboarding status */}
-                <div className="flex items-center gap-3 rounded-lg border border-dashed border-[var(--primary)]/30 bg-[var(--primary)]/[0.02] p-4">
-                  <div className="h-6 w-6 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
-                  <div>
-                    <p className="text-xs font-semibold text-[var(--text-primary)]">Onboarding in progress</p>
-                    <p className="text-[11px] text-[var(--text-tertiary)]">Reviewing your brief and preparing a personalized introduction...</p>
-                  </div>
+                {/* Onboarding */}
+                <div className="flex items-center gap-3 rounded-xl bg-[var(--sidebar-bg,#fafafa)] p-3.5">
+                  <div className="h-5 w-5 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
+                  <p className="text-[11px] text-[var(--text-tertiary)]">
+                    <span className="font-semibold text-[var(--text-secondary)]">{p.first}</span> is reviewing your brief and preparing to start...
+                  </p>
                 </div>
-              </div>
-
-              {/* Resume footer */}
-              <div className="border-t border-[var(--border-default)] bg-[var(--sidebar-bg,#fafafa)] px-8 py-3 flex items-center justify-between">
-                <span className="text-[10px] text-[var(--text-tertiary)]">Powered by Ruh AI</span>
-                <span className="text-[10px] text-[var(--text-tertiary)]">Digital Employee Profile</span>
               </div>
             </div>
 
-            {/* Skip action */}
+            {/* Actions */}
             <div className="mt-4 text-center">
               <button
                 onClick={() => {
