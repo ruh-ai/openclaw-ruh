@@ -413,14 +413,11 @@ export async function POST(req: NextRequest) {
                   if (typeof content === "string" && content) {
                     send("delta", { text: content });
                     send("result", { text: content });
-                    const response = finalizeGatewayResponse(content, {
-                      agentId: typeof agent_id === "string" ? agent_id : "",
-                      runId: requestId,
-                    });
-                    return response;
                   }
-                  // Fallback: empty response
-                  return { type: "assistant", content: "", agent_metadata: {} };
+                  // Close the SSE stream so the client knows the response is complete
+                  clearInterval(keepaliveInterval);
+                  controller.close();
+                  return;
                 }
 
                 // The streaming reader below is unreachable with stream:false
