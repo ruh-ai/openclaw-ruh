@@ -1455,136 +1455,151 @@ function CreateAgentPageContent() {
         />
       );
     }
-    // Reveal data not yet arrived — show compelling employee profile
-    const meetAgentName = builderState.name || workingAgent?.name || "New Employee";
-    const meetDescription = builderState.description || workingAgent?.description || "";
+    // Reveal data not yet arrived — show employee profile
+    const agentLabel = builderState.name || workingAgent?.name || "New Employee";
+    const agentDesc = builderState.description || workingAgent?.description || "";
 
-    // Deterministic persona
+    // Parse description into specific tasks the employee will do
+    const tasks = agentDesc
+      .split(/[.,;!]+/)
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 10 && s.length < 80);
+
+    // Deterministic persona tied to agent name
     const PERSONAS = [
-      { first: "Ava", last: "Chen", gender: "f", skin: "#F5D0C5", hair: "#2C1810", pitch: "I turn chaos into clarity. Give me your messiest data and I'll hand you back decisions.", strength: "Pattern recognition across large datasets" },
-      { first: "Marcus", last: "Rivera", gender: "m", skin: "#C68642", hair: "#1A1A1A", pitch: "I don't wait for problems — I find them first. Your systems are my systems.", strength: "Proactive monitoring and rapid response" },
-      { first: "Priya", last: "Sharma", gender: "f", skin: "#D4A574", hair: "#1C1008", pitch: "Every number tells a story. I read between the metrics so you don't have to.", strength: "Deep analytical thinking under pressure" },
-      { first: "Noah", last: "Kim", gender: "m", skin: "#FFDBB4", hair: "#3D2B1F", pitch: "I connect the dots between teams, tools, and timelines. Nothing slips through.", strength: "Cross-functional coordination at scale" },
-      { first: "Zara", last: "Osei", gender: "f", skin: "#8D5524", hair: "#0A0A0A", pitch: "Optimization isn't a task, it's a mindset. I'll find the 20% that drives 80% of results.", strength: "Ruthless prioritization and ROI focus" },
-      { first: "Leo", last: "Tanaka", gender: "m", skin: "#FFDBB4", hair: "#2C1810", pitch: "I treat every process like code — if it can break, I'll find the edge case first.", strength: "Systematic quality assurance and testing" },
-      { first: "Maya", last: "Patel", gender: "f", skin: "#C68642", hair: "#1C1008", pitch: "I ship. While others are planning meetings about meetings, I'm already done.", strength: "Bias for action and fast execution" },
-      { first: "Ethan", last: "Nowak", gender: "m", skin: "#F5D0C5", hair: "#5C4033", pitch: "Strategy without execution is a dream. I do both, before you ask.", strength: "End-to-end ownership of complex projects" },
+      { first: "Ava", last: "Chen", gender: "f", skin: "#F5D0C5", hair: "#2C1810", shirt: "#ae00d0" },
+      { first: "Marcus", last: "Rivera", gender: "m", skin: "#C68642", hair: "#1A1A1A", shirt: "#7b5aff" },
+      { first: "Priya", last: "Sharma", gender: "f", skin: "#D4A574", hair: "#1C1008", shirt: "#ae00d0" },
+      { first: "Noah", last: "Kim", gender: "m", skin: "#FFDBB4", hair: "#3D2B1F", shirt: "#0f3460" },
+      { first: "Zara", last: "Osei", gender: "f", skin: "#8D5524", hair: "#0A0A0A", shirt: "#7b5aff" },
+      { first: "Leo", last: "Tanaka", gender: "m", skin: "#FFDBB4", hair: "#2C1810", shirt: "#16213e" },
+      { first: "Maya", last: "Patel", gender: "f", skin: "#C68642", hair: "#1C1008", shirt: "#ae00d0" },
+      { first: "Ethan", last: "Nowak", gender: "m", skin: "#F5D0C5", hair: "#5C4033", shirt: "#7b5aff" },
     ];
-    const pIdx = meetAgentName.split("").reduce((s: number, c: string) => s + c.charCodeAt(0), 0) % PERSONAS.length;
-    const p = PERSONAS[pIdx];
-    const resumeName = `${p.first} ${p.last}`;
-    const resumeTitle = meetAgentName.replace(/agent|bot|assistant/gi, "").trim() + " Specialist";
+    const pIdx = agentLabel.split("").reduce((s: number, c: string) => s + c.charCodeAt(0), 0) % PERSONAS.length;
+    const pe = PERSONAS[pIdx];
+    const fullName = `${pe.first} ${pe.last}`;
+    const roleTitle = agentLabel.replace(/agent|bot|assistant/gi, "Specialist").replace(/\s+/g, " ").trim();
 
-    // SVG avatar generator
-    const avatarSvg = p.gender === "f"
-      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#ae00d0" opacity="0.08"/><ellipse cx="50" cy="42" rx="22" ry="24" fill="${p.skin}"/><ellipse cx="50" cy="85" rx="30" ry="22" fill="#ae00d0"/><ellipse cx="50" cy="30" rx="25" ry="20" fill="${p.hair}"/><path d="M28 35 Q30 18 50 15 Q70 18 72 35 Q72 28 50 25 Q28 28 28 35Z" fill="${p.hair}"/><ellipse cx="42" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><ellipse cx="58" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><path d="M44 52 Q50 56 56 52" stroke="#c97878" stroke-width="1.5" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="48" rx="1.5" ry="1" fill="${p.skin}" opacity="0.7"/></svg>`
-      : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#7b5aff" opacity="0.08"/><ellipse cx="50" cy="42" rx="21" ry="23" fill="${p.skin}"/><ellipse cx="50" cy="85" rx="30" ry="22" fill="#7b5aff"/><rect x="30" y="18" width="40" height="22" rx="3" fill="${p.hair}"/><rect x="28" y="28" width="44" height="8" rx="2" fill="${p.hair}"/><ellipse cx="42" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><ellipse cx="58" cy="42" rx="2.5" ry="3" fill="#1a1a2e"/><path d="M44 52 Q50 55 56 52" stroke="#c97878" stroke-width="1.5" fill="none" stroke-linecap="round"/><rect x="38" y="36" width="10" height="1" rx="0.5" fill="${p.hair}" opacity="0.3"/><rect x="52" y="36" width="10" height="1" rx="0.5" fill="${p.hair}" opacity="0.3"/></svg>`;
-    const avatarDataUri = `data:image/svg+xml,${encodeURIComponent(avatarSvg)}`;
+    // Better SVG - bust portrait with shoulders, neck, detailed face
+    const svgFace = pe.gender === "f"
+      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f8f0ff"/><stop offset="100%" stop-color="#f0e8ff"/></linearGradient></defs><rect width="200" height="200" fill="url(#bg)"/><ellipse cx="100" cy="190" rx="70" ry="45" fill="${pe.shirt}"/><ellipse cx="100" cy="145" rx="12" ry="16" fill="${pe.skin}"/><ellipse cx="100" cy="105" rx="38" ry="42" fill="${pe.skin}"/><ellipse cx="100" cy="72" rx="42" ry="35" fill="${pe.hair}"/><path d="M62 85 Q65 55 100 48 Q135 55 138 85 Q135 70 100 65 Q65 70 62 85Z" fill="${pe.hair}"/><path d="M58 90 Q55 105 60 115" stroke="${pe.hair}" stroke-width="8" fill="none" stroke-linecap="round"/><path d="M142 90 Q145 105 140 115" stroke="${pe.hair}" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="85" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="115" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="86" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="116" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="87" cy="101" rx="1" ry="1" fill="white"/><ellipse cx="117" cy="101" rx="1" ry="1" fill="white"/><path d="M78 94 Q85 91 92 93" stroke="${pe.hair}" stroke-width="1.5" fill="none"/><path d="M108 93 Q115 91 122 94" stroke="${pe.hair}" stroke-width="1.5" fill="none"/><ellipse cx="100" cy="112" rx="3" ry="2" fill="${pe.skin}" opacity="0.6"/><path d="M90 120 Q100 126 110 120" stroke="#d4888a" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M95 120 Q100 123 105 120" fill="#e8a0a0" opacity="0.4"/><circle cx="75" cy="110" r="6" fill="#ffb5b5" opacity="0.15"/><circle cx="125" cy="110" r="6" fill="#ffb5b5" opacity="0.15"/><path d="M80 155 L100 165 L120 155" stroke="white" stroke-width="1.5" fill="none" opacity="0.6"/></svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0f0ff"/><stop offset="100%" stop-color="#e8e8ff"/></linearGradient></defs><rect width="200" height="200" fill="url(#bg)"/><ellipse cx="100" cy="190" rx="70" ry="45" fill="${pe.shirt}"/><ellipse cx="100" cy="145" rx="13" ry="17" fill="${pe.skin}"/><ellipse cx="100" cy="105" rx="36" ry="40" fill="${pe.skin}"/><rect x="62" y="68" width="76" height="30" rx="4" fill="${pe.hair}"/><rect x="58" y="82" width="84" height="14" rx="3" fill="${pe.hair}"/><ellipse cx="85" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="115" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="86" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="116" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="87" cy="101" rx="1" ry="1" fill="white"/><ellipse cx="117" cy="101" rx="1" ry="1" fill="white"/><rect x="78" y="94" width="14" height="2" rx="1" fill="${pe.hair}" opacity="0.4"/><rect x="108" y="94" width="14" height="2" rx="1" fill="${pe.hair}" opacity="0.4"/><ellipse cx="100" cy="112" rx="3.5" ry="2" fill="${pe.skin}" opacity="0.6"/><path d="M92 120 Q100 125 108 120" stroke="#c9888a" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M80 155 Q100 148 120 155" stroke="white" stroke-width="1.5" fill="none" opacity="0.5"/><rect x="88" y="152" width="24" height="3" rx="1.5" fill="${pe.shirt}" opacity="0.8"/></svg>`;
+    const avatarUri = `data:image/svg+xml,${encodeURIComponent(svgFace)}`;
 
     return (
       <>
         <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-start px-6 py-8">
-          <div className="w-full max-w-[560px]">
+          <div className="w-full max-w-[580px]">
 
-            <div className="rounded-2xl border border-[var(--border-default)] bg-white shadow-lg overflow-hidden">
+            <div className="rounded-2xl bg-white shadow-[0_4px_40px_rgba(0,0,0,0.06)] overflow-hidden border border-black/[0.04]">
 
-              {/* Header */}
-              <div className="relative px-8 pt-7 pb-5" style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)" }}>
-                <div className="flex items-center gap-5">
-                  {/* SVG Avatar */}
+              {/* Top section — person + identity */}
+              <div className="px-8 pt-8 pb-0">
+                <div className="flex gap-6">
+                  {/* Portrait */}
                   <div className="shrink-0">
-                    <div className="h-[80px] w-[80px] rounded-full border-[3px] border-white/20 overflow-hidden shadow-xl" style={{ animation: "soul-pulse 3s ease-in-out infinite" }}>
-                      <img src={avatarDataUri} alt={resumeName} className="h-full w-full" />
+                    <div className="w-[110px] h-[110px] rounded-2xl overflow-hidden shadow-md ring-1 ring-black/5">
+                      <img src={avatarUri} alt={fullName} className="w-full h-full object-cover" />
                     </div>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h1 className="text-[22px] font-bold text-white tracking-tight">{resumeName}</h1>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="text-[10px] font-semibold text-emerald-300">READY</span>
+                  {/* Identity */}
+                  <div className="min-w-0 flex-1 py-1">
+                    <h1 className="text-[26px] font-bold text-[#1a1a2e] tracking-tight leading-tight">{fullName}</h1>
+                    <p className="text-[14px] text-[var(--text-secondary)] mt-1">{roleTitle}</p>
+                    <div className="flex items-center gap-2 mt-3">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5">
+                        <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" /><span className="relative h-2 w-2 rounded-full bg-emerald-500" /></span>
+                        <span className="text-[11px] font-semibold text-emerald-700">Ready to start</span>
                       </span>
                     </div>
-                    <p className="text-[13px] text-white/60 mt-0.5">{resumeTitle}</p>
-                    <p className="text-[11px] text-white/40 mt-2 italic leading-snug">&ldquo;{p.pitch}&rdquo;</p>
                   </div>
                 </div>
               </div>
 
-              {/* Body */}
-              <div className="px-8 py-5 space-y-5">
+              {/* Divider */}
+              <div className="mx-8 my-5 h-px bg-gradient-to-r from-transparent via-black/10 to-transparent" />
 
-                {/* The pitch — what makes them special */}
-                <div className="rounded-xl border-l-[3px] border-[var(--primary)] bg-[var(--primary)]/[0.03] pl-4 pr-4 py-3">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--primary)] mb-1">Why hire me</div>
-                  <p className="text-[13px] leading-relaxed text-[var(--text-primary)]">
-                    {meetDescription || "I'm built to handle exactly what you need — autonomously, accurately, and around the clock."}
-                  </p>
+              {/* Body */}
+              <div className="px-8 pb-7 space-y-6">
+
+                {/* What I'll do for you — specific to THIS agent */}
+                {tasks.length > 0 && (
+                  <div>
+                    <h3 className="text-[12px] font-bold text-[#1a1a2e] uppercase tracking-wide mb-3">What I&apos;ll handle for you</h3>
+                    <div className="space-y-2">
+                      {tasks.map((task: string, i: number) => (
+                        <div key={i} className="flex items-start gap-2.5">
+                          <div className="mt-[3px] h-[18px] w-[18px] shrink-0 rounded-md flex items-center justify-center text-[10px] font-bold text-white" style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}>
+                            {i + 1}
+                          </div>
+                          <p className="text-[13px] leading-snug text-[var(--text-primary)]">{task}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* If no tasks could be parsed, show description as quote */}
+                {tasks.length === 0 && agentDesc && (
+                  <div className="rounded-xl bg-[#fafafe] border border-[var(--primary)]/10 p-4">
+                    <p className="text-[13px] leading-relaxed text-[var(--text-primary)] italic">&ldquo;{agentDesc}&rdquo;</p>
+                  </div>
+                )}
+
+                {/* How I work — not generic, tied to what this agent does */}
+                <div>
+                  <h3 className="text-[12px] font-bold text-[#1a1a2e] uppercase tracking-wide mb-3">How I work</h3>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-xl bg-[#fafafe] p-3.5">
+                      <div className="text-[18px] mb-1">🎯</div>
+                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Autonomous execution</div>
+                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">I don&apos;t wait for instructions. I see what needs doing and I do it.</div>
+                    </div>
+                    <div className="rounded-xl bg-[#fafafe] p-3.5">
+                      <div className="text-[18px] mb-1">🧠</div>
+                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Context that sticks</div>
+                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">I remember every past decision, metric, and conversation. You never repeat yourself.</div>
+                    </div>
+                    <div className="rounded-xl bg-[#fafafe] p-3.5">
+                      <div className="text-[18px] mb-1">📊</div>
+                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Proactive reporting</div>
+                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">You get updates before you ask. Anomalies flagged the moment they happen.</div>
+                    </div>
+                    <div className="rounded-xl bg-[#fafafe] p-3.5">
+                      <div className="text-[18px] mb-1">⚡</div>
+                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Always improving</div>
+                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Every correction makes me sharper. I adapt to your style and preferences.</div>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Key strength */}
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm" style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}>
-                    <span className="text-white">★</span>
+                {/* Currently doing */}
+                <div className="flex items-center gap-3 rounded-xl bg-[var(--primary)]/[0.04] border border-[var(--primary)]/10 p-4">
+                  <div className="relative shrink-0">
+                    <div className="h-9 w-9 rounded-full border-[2.5px] border-[var(--primary)]/30 border-t-[var(--primary)] animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="h-3 w-3 rounded-full bg-[var(--primary)]/20" />
+                    </div>
                   </div>
                   <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">Key Strength</div>
-                    <p className="text-sm font-medium text-[var(--text-primary)]">{p.strength}</p>
+                    <p className="text-[13px] font-semibold text-[var(--text-primary)]">{pe.first} is reading your brief right now</p>
+                    <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Preparing a detailed introduction and first action plan...</p>
                   </div>
-                </div>
-
-                {/* Stats row */}
-                <div className="grid grid-cols-4 gap-2">
-                  {[
-                    { val: "24/7", label: "Uptime" },
-                    { val: "<1s", label: "Response" },
-                    { val: "∞", label: "Patience" },
-                    { val: "0", label: "Sick days" },
-                  ].map(({ val, label }) => (
-                    <div key={label} className="text-center rounded-lg bg-[var(--sidebar-bg,#fafafa)] py-2.5">
-                      <div className="text-base font-bold text-[var(--primary)]">{val}</div>
-                      <div className="text-[9px] font-medium uppercase tracking-wide text-[var(--text-tertiary)] mt-0.5">{label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* What you get */}
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2">What you get</div>
-                  <div className="space-y-1.5">
-                    {[
-                      "Works while you sleep — handles tasks across time zones",
-                      "Never forgets context — persistent memory across every conversation",
-                      "Gets better over time — learns your preferences and patterns",
-                    ].map((item, i) => (
-                      <div key={i} className="flex items-start gap-2">
-                        <span className="mt-1 text-[var(--primary)] text-xs">✓</span>
-                        <span className="text-[12px] leading-snug text-[var(--text-secondary)]">{item}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Onboarding */}
-                <div className="flex items-center gap-3 rounded-xl bg-[var(--sidebar-bg,#fafafa)] p-3.5">
-                  <div className="h-5 w-5 shrink-0 rounded-full border-2 border-[var(--primary)] border-t-transparent animate-spin" />
-                  <p className="text-[11px] text-[var(--text-tertiary)]">
-                    <span className="font-semibold text-[var(--text-secondary)]">{p.first}</span> is reviewing your brief and preparing to start...
-                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Actions */}
-            <div className="mt-4 text-center">
+            {/* Skip */}
+            <div className="mt-5 text-center">
               <button
                 onClick={() => {
                   coPilotStore.setRevealStatus("failed");
                   coPilotStore.setDevStage("think");
                 }}
-                className="px-4 py-2 text-xs font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+                className="px-4 py-2 text-[11px] text-[var(--text-tertiary)] hover:text-[var(--primary)] transition-colors"
               >
-                Skip introduction &rarr;
+                Skip and start building &rarr;
               </button>
             </div>
           </div>
