@@ -326,8 +326,8 @@ export function CoPilotLayout({
     if (currentDevStage !== "reveal" || revealTriggeredRef.current) return;
 
     const forgeSandboxId = activeSandbox?.sandbox_id;
-    const agentDescription = description || builderState.description || "";
-    const agentName = name || builderState.name || "";
+    const agentDescription = description || builderState.description || existingAgent?.description || "";
+    const agentName = name || builderState.name || existingAgent?.name || "";
     if (!forgeSandboxId || !agentDescription.trim()) return;
 
     revealTriggeredRef.current = true;
