@@ -128,12 +128,22 @@ interface GatewayCredentials {
 }
 
 /**
- * Resolve gateway credentials for a forge sandbox by querying the backend.
- * Converts HTTP URL to WebSocket URL for the gateway connection.
+ * Resolve gateway credentials for a forge sandbox.
+ *
+ * Routes through the backend's WebSocket proxy at /ws/gateway/{sandboxId}
+ * instead of connecting directly to the container gateway. The backend proxy
+ * handles auth (gateway_token) server-side and supports the full OpenClaw
+ * gateway protocol including tool execution, file writes, and lifecycle events.
+ *
+ * Direct WS to the container fails with token_mismatch because the DB stores
+ * the config auth token while the gateway's WS connect method expects the
+ * device operator token. The backend proxy resolves this internally.
  */
 async function resolveForgeGateway(
-  forgeSandboxId: string
+  forgeSandboxId: string,
+  cookieHeader?: string,
 ): Promise<GatewayCredentials> {
+  // Verify the sandbox exists and has a gateway
   const res = await fetch(`${BACKEND_URL}/api/sandboxes/${forgeSandboxId}`);
   if (!res.ok) {
     throw new Error(
@@ -149,62 +159,34 @@ async function resolveForgeGateway(
   }
 
   // Health-check: verify the gateway is reachable before returning.
-  // If the container is running but the gateway process crashed, attempt
-  // to restart it via the backend before giving up.
   try {
     const probe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
     if (!probe.ok) throw new Error(`probe status ${probe.status}`);
-  } catch (probeErr) {
-    console.warn(
-      `[Gateway] Forge sandbox ${forgeSandboxId} gateway at ${httpUrl} is unreachable, attempting restart...`,
-    );
-    // Ask the backend to restart the gateway inside the sandbox container.
-    // POST /api/sandboxes/:id/gateway/restart is the standard restart endpoint.
+  } catch {
+    // Try restart
     try {
       const restartRes = await fetch(
         `${BACKEND_URL}/api/sandboxes/${forgeSandboxId}/gateway/restart`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(20000),
-        },
+        { method: "POST", signal: AbortSignal.timeout(20000) },
       );
       if (restartRes.ok) {
-        // Wait a few seconds for the gateway to come up, then re-probe
         await new Promise((r) => setTimeout(r, 5000));
-        const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-        if (!reProbe.ok) {
-          throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
-        }
-      } else {
-        throw new Error(`Restart endpoint returned ${restartRes.status}`);
       }
-    } catch (restartErr) {
-      throw new Error(
-        `Forge sandbox ${forgeSandboxId} gateway is unreachable at ${httpUrl} and restart failed: ${
-          restartErr instanceof Error ? restartErr.message : String(restartErr)
-        }`
-      );
-    }
+    } catch { /* ignore restart failure */ }
   }
 
-  // Convert HTTP URL to WebSocket URL
-  const wsUrl = httpUrl
-    .replace(/^https:/, "wss:")
-    .replace(/^http:/, "ws:");
-  // Derive an origin the forge sandbox will accept.
-  // Docker host IPs (172.x.x.x) aren't in the gateway's allowedOrigins — use
-  // http://localhost instead since the connection is local and localhost is
-  // always allowed.
-  const parsedUrl = new URL(httpUrl);
-  const isDockerInternal = /^172\.\d+\.\d+\.\d+$/.test(parsedUrl.hostname);
-  const forgeOrigin = isDockerInternal
-    ? "http://localhost"
-    : `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+  // Route through the backend WebSocket proxy instead of direct connection.
+  // The proxy at /ws/gateway/{sandboxId} handles gateway auth server-side
+  // using the stored gateway_token — no token mismatch issues.
+  const backendWsUrl = BACKEND_URL.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const proxyUrl = `${backendWsUrl}/ws/gateway/${forgeSandboxId}`;
+
   return {
-    url: wsUrl,
-    token: record.gateway_token || "",
-    origin: forgeOrigin,
+    url: proxyUrl,
+    // The backend proxy authenticates via the accessToken cookie, not
+    // a bearer token. Pass empty token — the cookie header handles auth.
+    token: "",
+    origin: "http://localhost",
   };
 }
 
@@ -329,7 +311,7 @@ export async function POST(req: NextRequest) {
                 if (!shouldSkipForgeWs(forge_sandbox_id)) {
                   let forgeGateway: GatewayCredentials | null = null;
                   try {
-                    forgeGateway = await resolveForgeGateway(forge_sandbox_id);
+                    forgeGateway = await resolveForgeGateway(forge_sandbox_id, req.headers.get("cookie") ?? undefined);
                   } catch {
                     // Sandbox unreachable — fall through to HTTP
                   }
@@ -354,6 +336,7 @@ export async function POST(req: NextRequest) {
                         forgeGateway.origin,
                         forgeTimeout,
                         trace,
+                        req.headers.get("cookie") ?? undefined,
                       );
                       return wsResponse;
                     } catch (wsErr) {
@@ -742,16 +725,18 @@ async function forwardToGateway(
   gatewayToken?: string,
   origin?: string,
   perAttemptTimeoutMs?: number,
-  trace?: BridgeTraceHandle
+  trace?: BridgeTraceHandle,
+  cookieHeader?: string,
 ): Promise<object> {
   const effectiveTimeout = perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
   const token = gatewayToken ?? "";
   return new Promise((resolve, reject) => {
-    const ws = origin
-      ? new WebSocket(gatewayUrl, {
-          headers: { Origin: origin },
-        })
-      : new WebSocket(gatewayUrl);
+    const wsHeaders: Record<string, string> = {};
+    if (origin) wsHeaders["Origin"] = origin;
+    if (cookieHeader) wsHeaders["Cookie"] = cookieHeader;
+    const ws = new WebSocket(gatewayUrl, {
+      headers: Object.keys(wsHeaders).length > 0 ? wsHeaders : undefined,
+    });
     let chatAccepted = false;
     const timeout = setTimeout(() => {
       rejectOnce(
