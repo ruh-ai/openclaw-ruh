@@ -1299,6 +1299,16 @@ export async function* createOpenclawSandbox(
       label: 'native command skills',
       command: 'openclaw config set commands.nativeSkills true',
     },
+    {
+      id: 'tools.elevated.enabled',
+      label: 'elevated tool enabled',
+      command: 'openclaw config set tools.elevated.enabled true',
+    },
+    {
+      id: 'tools.elevated.allowFrom.webchat',
+      label: 'elevated tool allowed from webchat',
+      command: `openclaw config set tools.elevated.allowFrom.webchat '${JSON.stringify(['*'])}'`,
+    },
   ];
 
   // Inject OTEL diagnostics config so the gateway exports traces
@@ -1469,6 +1479,8 @@ export async function* createOpenclawSandbox(
     { path: 'tools.profile', expected: 'full' },
     { path: 'commands.native', expected: true },
     { path: 'commands.nativeSkills', expected: true },
+    { path: 'tools.elevated.enabled', expected: true },
+    { path: 'tools.elevated.allowFrom.webchat', expected: ['*'] },
   ]);
   if (!verification.ok) {
     yield await failCreate(`Required bootstrap verification failed: ${verification.detail}`);

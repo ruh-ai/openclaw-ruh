@@ -61,6 +61,125 @@ export interface BuildOptions {
   signal?: AbortSignal;
 }
 
+interface VerificationCheck {
+  id: string;
+  command: string;
+  successCondition: string;
+  maxAttempts: number;
+  setup?: string;
+}
+
+interface VerificationPlan {
+  generatedAt: string;
+  agentName: string;
+  checks: VerificationCheck[];
+}
+
+// ─── Verification plan generator ───────────────────────────────────────────
+// Ported from agent-builder-ui/lib/openclaw/build-harness.ts so the server-side
+// pipeline writes a verification-plan.json before invoking the verify
+// specialist. Without this, the verify specialist reports a spurious
+// "verification-plan was not present" fail even when every real check passes.
+
+const WS = '$HOME/.openclaw/workspace';
+
+function generateVerificationPlan(plan: ArchitecturePlan, agentName: string): VerificationPlan {
+  const checks: VerificationCheck[] = [];
+
+  checks.push({
+    id: 'deps',
+    command: `cd ${WS} && npm install 2>&1`,
+    successCondition: 'exitCode === 0',
+    maxAttempts: 3,
+  });
+
+  checks.push({
+    id: 'compile',
+    command: `cd ${WS} && npx tsc --noEmit 2>&1`,
+    successCondition: 'exitCode === 0',
+    maxAttempts: 5,
+  });
+
+  if (plan.dashboardPages?.length) {
+    checks.push({
+      id: 'dashboard_build',
+      command: `cd ${WS}/dashboard && npx vite build --outDir dist 2>&1`,
+      successCondition: 'exitCode === 0 and dashboard/dist/index.html exists',
+      maxAttempts: 3,
+    });
+  }
+
+  if (plan.dataSchema?.tables?.length) {
+    const tableNames = plan.dataSchema.tables.map((t) => t.name).join(', ');
+    checks.push({
+      id: 'database',
+      command: `cd ${WS} && npm run db:migrate 2>&1`,
+      successCondition: `exitCode === 0 and tables exist: ${tableNames}`,
+      maxAttempts: 3,
+    });
+  }
+
+  if (plan.apiEndpoints?.length) {
+    checks.push({
+      id: 'service_backend',
+      command: `sleep 3 && curl -sf http://localhost:3100/health 2>&1`,
+      successCondition: 'HTTP 200 response',
+      maxAttempts: 3,
+      setup: [
+        `cd ${WS}`,
+        `if [ -f ${WS}/.openclaw/.env ]; then set -a; . ${WS}/.openclaw/.env 2>/dev/null; set +a; fi`,
+        `kill $(cat /tmp/agent-backend.pid 2>/dev/null) 2>/dev/null; fuser -k 3100/tcp 2>/dev/null; sleep 1`,
+        `PORT=3100 nohup npx tsx backend/index.ts > /tmp/agent-backend.log 2>&1 & echo $! > /tmp/agent-backend.pid`,
+      ].join(' && '),
+    });
+  }
+
+  if (plan.dashboardPages?.length) {
+    checks.push({
+      id: 'service_dashboard',
+      command: `curl -sf http://localhost:3200/ 2>&1`,
+      successCondition: 'HTTP 200 response',
+      maxAttempts: 2,
+      setup: [
+        `kill $(cat /tmp/agent-dashboard.pid 2>/dev/null) 2>/dev/null; fuser -k 3200/tcp 2>/dev/null; sleep 1`,
+        `cd ${WS} && nohup npx serve dashboard/dist -l 3200 -s --no-clipboard > /tmp/agent-dashboard.log 2>&1 & echo $! > /tmp/agent-dashboard.pid`,
+        `sleep 2`,
+      ].join(' && '),
+    });
+  }
+
+  const getEndpoints = plan.apiEndpoints?.filter((e) => e.method === 'GET') ?? [];
+  for (const ep of getEndpoints) {
+    const testPath = ep.path.split('?')[0].replace(/:[a-zA-Z]+/g, 'test');
+    checks.push({
+      id: `endpoint_${ep.method}_${ep.path}`,
+      command: `curl -sf --max-time 5 http://localhost:3100${testPath} 2>&1`,
+      successCondition: 'valid JSON response',
+      maxAttempts: 3,
+    });
+  }
+
+  return { generatedAt: new Date().toISOString(), agentName, checks };
+}
+
+async function writeVerificationPlan(
+  sandboxId: string,
+  plan: ArchitecturePlan,
+  agentName: string,
+): Promise<VerificationPlan> {
+  const verificationPlan = generateVerificationPlan(plan, agentName);
+  const content = JSON.stringify(verificationPlan, null, 2);
+  const containerName = getContainerName(sandboxId);
+
+  await dockerExec(
+    containerName,
+    `mkdir -p $HOME/.openclaw/workspace/.openclaw/build && cat > $HOME/.openclaw/workspace/.openclaw/build/verification-plan.json << 'ENDPLAN'\n${content}\nENDPLAN`,
+    10_000,
+  );
+
+  return verificationPlan;
+}
+
 // ─── Utilities ─────────────────────────────────────────────────────────────
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -556,8 +675,8 @@ export async function* runAgentBuild(
       yield { type: 'status', message: 'Running verification specialist...' };
 
       try {
-        const containerName = getContainerName(sandboxId);
-        await dockerExec(containerName, `mkdir -p $HOME/.openclaw/workspace/.openclaw/build`, 5000);
+        const verificationPlan = await writeVerificationPlan(sandboxId, plan, agentName);
+        yield { type: 'status', message: `Verification plan: ${verificationPlan.checks.length} checks` };
 
         const verifyPrompt = getSpecialistPrompt('verify' as SpecialistType, plan, agentName);
         if (verifyPrompt) {
