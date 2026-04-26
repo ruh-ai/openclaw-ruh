@@ -111,6 +111,8 @@ Do not implement any feature that routes builder chat to a shared container — 
 
 **Full spec:** `docs/plans/agent-creation-architecture-v2.md`
 
+**Meta-skill for authoring agents:** `.claude/skills/agent-builder/SKILL.md` (`/agent-builder`). This is the canonical playbook for the 7-stage pipeline — PRD/TRD structure, `architecture.json` shape, SKILL.md authoring patterns adapted from Claude Code (progressive disclosure, description-first matching, tight tool scopes), and the common failure modes we've hit in production. The same file is seeded into every sandbox at bootstrap via `sandboxManager.ts` (mirror at `ruh-backend/skills/agent-builder/SKILL.md`) so the Architect reads it at runtime. **Use it when building new agents, improving the Architect itself, or reviewing an architecture.json / SKILL.md.**
+
 ### Brand & Design
 
 **Reference `DESIGN.md` before any UI changes.** It defines colors (primary `#ae00d0`, secondary `#7b5aff`), typography (Satoshi, Sora, Jost), and the "Alive Additions" — subtle animations that make agent creation feel like bringing a colleague to life.
@@ -349,6 +351,68 @@ Pre-commit hooks (Husky): typecheck on commit, unit tests on push.
 
 ---
 
+## Logs & Telemetry (Local Dev)
+
+**Full reference:** `.claude/skills/openclaw-logs/SKILL.md` — triage decision tree, canonical commands, safety rules. Use `/openclaw-logs` to invoke.
+
+You have direct access to every log source in this stack — don't ask the user to paste logs, go read them. Start with the cheapest source that answers the question; escalate to richer tools only when structured fields are needed.
+
+### Quick reference — log sources
+
+| Source | Location | Access | What's in it |
+|---|---|---|---|
+| **Backend (ruh-backend)** | `/tmp/backend.log` (host) | `tail -N /tmp/backend.log` | HTTP requests, gateway-proxy lines (`[gateway-proxy] Upgrade request: …`, `Auth OK: …`, `Connected to sandbox …`), SSE stream events, errors. Written because `./start.sh` redirects bun stdout here. Verify with `lsof -p <bun-pid>` if location changes. |
+| **Agent Builder (Next.js)** | stderr of `next dev -p 3000` | `ps aux \| grep "next dev"` → check if redirected; otherwise attach to process output or wait for next request to see compile/route logs | API route compile errors, `console.warn` from `/api/openclaw/route.ts`, Langfuse trace spans |
+| **Sandbox gateway (per container)** | `/tmp/openclaw-gateway.log` (inside container) | `docker exec openclaw-<id> tail -N /tmp/openclaw-gateway.log` | WS connect/disconnect (`[ws] webchat connected conn=… client=… reason=…`), `[tools]` failures, `[agent/embedded] embedded run agent end`, `[agents/auth-profiles]` events |
+| **OpenClaw subsystem (structured JSON)** | `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (inside container) | `docker exec openclaw-<id> tail -N /tmp/openclaw/openclaw-$(date -u +%Y-%m-%d).log` | Pino-style JSON per event: `_meta.name` = subsystem, `1.event` = event name, `_meta.logLevelName` = level. Use when the human-readable gateway log isn't enough and you need tool arguments, run IDs, error hashes, etc. |
+| **Postgres** | container `pg` | `docker exec pg psql -U openclaw -d openclaw -c "…"` | Sandbox records (`sandboxes`), agents (`agents`), conversations, messages, `system_events` audit ledger |
+| **OpenClaw config** | `/root/.openclaw/openclaw.json` (inside container) | `docker exec openclaw-<id> cat /root/.openclaw/openclaw.json` | Gateway port, auth token, allowed origins, default model, agent paths, OTEL endpoint |
+
+### Useful queries
+
+```bash
+# Tail backend gateway-proxy activity (drop the -f to just snapshot)
+tail -f /tmp/backend.log | grep --line-buffered -E "gateway-proxy|ws/gateway|openclaw.bridge|Gateway"
+
+# Sandbox gateway log — last N lines from a specific container
+docker exec openclaw-<id> tail -60 /tmp/openclaw-gateway.log
+
+# OpenClaw structured log — all events in a time window for one agent/run
+docker exec openclaw-<id> bash -c "grep '\"2026-04-16T21:3' /tmp/openclaw/openclaw-2026-04-16.log" | python3 -m json.tool
+
+# What sandboxes are running + DB token
+docker ps --filter 'name=openclaw-' --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+docker exec pg psql -U openclaw -d openclaw -c "select sandbox_id, sandbox_name, gateway_port, approved from sandboxes order by created_at desc limit 10;"
+
+# Probe the WS handshake against a live gateway (bypasses the backend proxy — useful to isolate where a bug is)
+# See the investigation in docs/knowledge-base — the shape of CONNECT_REQUEST is in ruh-backend/src/gatewayProxy.ts
+```
+
+### Richer telemetry (when raw logs aren't enough)
+
+Each of these is *emitting* telemetry already; whether it's captured depends on local setup:
+
+| System | Emitted by | Where to read | When to use |
+|---|---|---|---|
+| **OTEL traces** | Sandbox gateway → `http://host.docker.internal:4318/v1/traces` (configured in each sandbox's `openclaw.json` under `diagnostics.otel`) | Wherever your OTEL collector forwards (Jaeger, Tempo, Langfuse's OTLP ingestor, file exporter). If no collector is wired, traces are dropped. Check `docker ps \| grep -i otel` | Gateway-side latency, tool execution spans, LLM call spans |
+| **Langfuse** | `ruh-backend` + `agent-builder-ui` via `withLangfuseBridgeTrace(…)` wrapping every architect turn | `langfuse-web` container — expose port and open the UI. Each turn appears as a trace with tool calls, token usage, generation latency, errors, and full message history | Best single-pane-of-glass view of an architect turn. Use before grepping logs when debugging "why did the agent respond like that" |
+| **GlitchTip** (Sentry-compatible) | Container `deploy-glitchtip-postgres-1` is running | GlitchTip web UI — check `docker ps \| grep glitchtip` for the web container + port | Uncaught exceptions, unhandled promise rejections. Not all services are instrumented yet — check before relying on this |
+
+### When to reach for each
+
+- **First check `/tmp/backend.log`** when a browser request looks stuck or errors. Covers 80% of backend-side issues.
+- **Then `docker exec … tail … /tmp/openclaw-gateway.log`** when the backend reached the sandbox but the agent didn't respond. Shows tool failures, WS lifecycle, LLM provider errors.
+- **Fall back to `/tmp/openclaw/openclaw-YYYY-MM-DD.log`** when the human-readable gateway log doesn't have enough detail (e.g., need the full tool call args, the runId to trace, the error hash to group).
+- **Postgres** to understand the *stored* state vs what the gateway thinks is running (drift is real — see `SPEC-sandbox-runtime-reconciliation`).
+- **Langfuse** when the user says "the agent said something weird" — replay the turn in the UI instead of reconstructing from logs.
+- **Browser devtools** via `mcp__Claude_in_Chrome__read_console_messages` / `read_network_requests` when the problem is on the client side (cookies not sent, fetch failing, React state wedged).
+
+### Production logs (GCP VM)
+
+For prod (`ruh-demo` VM), none of the local paths apply. Use `gcloud compute ssh` + `docker compose logs` — see **Production (GCP) → Server Management** above. The `.claude/skills/gcp-server/SKILL.md` has the full command reference and safety rules.
+
+---
+
 ## Knowledge Base
 
 The project has an Obsidian-style knowledge base that maps all services, APIs, data models, and flows. **This is how you understand the project** — read it before working, update it when you change things.
@@ -394,6 +458,8 @@ If you're unsure whether a change warrants a KB update, it probably does. A one-
 
 - **Read the KB before working.** `docs/knowledge-base/000-INDEX.md` is the entry point. Don't guess at architecture — it's documented.
 - **Update the KB with every PR to `dev`.** Documentation stays accurate because it ships with the code, not after.
+- **Read the logs directly.** You have `tail` on `/tmp/backend.log` and `docker exec` into every sandbox (`/tmp/openclaw-gateway.log`, `/tmp/openclaw/openclaw-YYYY-MM-DD.log`) and `psql` into the `pg` container. Don't ask the user to paste logs — go read them. Full reference in **Logs & Telemetry (Local Dev)** above.
+- **Use `/agent-builder` when authoring or reviewing agents.** `.claude/skills/agent-builder/SKILL.md` encodes the 7-stage pipeline, the strict shapes `skill_graph`/`workflow`/`discovery_documents` expect, the SKILL.md authoring format, and the failure modes we've already debugged. The same file is seeded into every sandbox so the Architect follows the same rules at runtime.
 - **Every agent gets its own container.** Never route builder chat to a shared sandbox.
 - **Check `DESIGN.md` before any UI change.** Brand, colors, typography, and alive animations are defined there.
 - **Check `docs/project-focus.md` for current priorities.** The Google Ads agent is the proving case — all features validate against it.

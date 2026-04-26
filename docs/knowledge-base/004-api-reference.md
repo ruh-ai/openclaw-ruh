@@ -832,11 +832,17 @@ Get forge sandbox info for an agent.
 **Response:** `{ "status": "ready" | "stopped" | "none" | "missing", "forge_sandbox_id", "sandbox" }`
 
 ### `PATCH /api/agents/:id/forge/stage`
-Update the agent's forge lifecycle stage. Called by the frontend on each creation-lifecycle stage transition.
+Update the agent's forge lifecycle stage after the frontend's local stage gate is satisfied. This endpoint is the committed lifecycle authority; direct stepper inspection in the UI should not call it.
 
-**Body:** `{ "stage": "think" | "plan" | "build" | "review" | "test" | "ship" | "complete" }`
+**Body:** `{ "stage": "reveal" | "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect", "testOverride"?: true }`
 
-When `stage` reaches `"complete"`, the agent's status is also promoted to `"active"`. At stage transitions, the backend auto-commits and pushes the workspace for Agent-as-Code repos.
+Backend guards:
+- `review` requires `.openclaw/build/build-report.json` with readiness `test-ready` or `ship-ready`
+- `test` requires the same non-blocked build report readiness
+- `ship` requires a passing eval result, or explicit `testOverride: true` outside production
+- `complete` is rejected here; successful `POST /api/agents/:id/ship` owns marking `forge_stage=complete` and promoting the agent to `active`
+
+At accepted stage transitions, the backend auto-commits and pushes the workspace for Agent-as-Code repos.
 
 ### `DELETE /api/agents/:id/forge`
 Full discard: stops and removes the Docker container, cleans up sandbox records, and deletes the agent record. Emits an `agent.forge_delete` audit event.
@@ -1102,6 +1108,23 @@ Start the server-side build pipeline for an agent. Reads the architecture plan f
 ### `GET /api/agents/:id/build/stream/:stream_id`
 SSE stream for build progress. Emits structured build events. Requires auth.
 
+Event types include `task_start`, `task_complete`, `task_failed`, `file_written`, `progress`, `status`, `setup_progress`, `build_report`, `build_complete`, and `error`. The `build_report` event carries the backend-authored readiness object:
+
+```json
+{
+  "type": "build_report",
+  "report": {
+    "generatedAt": "2026-04-26T00:00:00.000Z",
+    "readiness": "blocked | test-ready | ship-ready",
+    "blockers": [],
+    "warnings": [],
+    "checks": []
+  }
+}
+```
+
+The same report is persisted to `.openclaw/build/build-report.json` in both the copilot and main workspaces.
+
 ### `POST /api/agents/:id/ship`
 Ship an agent to GitHub: pushes the workspace, creates the repo if needed, and updates the agent record with repo metadata. Requires auth. Uses the stored GitHub OAuth token or a token from the request body.
 
@@ -1214,7 +1237,7 @@ Content-Type: application/json
 **Body:**
 ```json
 {
-  "model": "openai-codex/gpt-5.4"
+  "model": "openai-codex/gpt-5.5"
 }
 ```
 
@@ -1226,7 +1249,7 @@ Content-Type: application/json
   "ok": true,
   "sandboxId": "<sandbox_id>",
   "containerName": "openclaw-<sandbox_id>",
-  "model": "openai-codex/gpt-5.4",
+  "model": "openai-codex/gpt-5.5",
   "homeDir": "/root",
   "authSource": "Codex CLI auth",
   "logs": ["Shared auth ready", "Default model set", "Gateway restarted"]

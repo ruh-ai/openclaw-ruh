@@ -70,6 +70,117 @@ Two sandbox types exist during creation:
 
 ---
 
+## Collaborative Checkpoints (2026-04-22)
+
+The architect is a collaborator, not a silent worker. At defined checkpoints it **emits questions and ends its turn**, waiting for the user to answer before continuing. This replaces the earlier behavior where the architect would plow through Think/Plan in one shot and often produce the wrong agent.
+
+### Checkpoint map
+
+| Stage | ID | When it fires | Cap |
+|---|---|---|---|
+| Think | C0 — Scope | First turn, before any research | 3–5 questions |
+| Think | C1 — Pre-PRD | After research brief, if ambiguity remains | up to 3 |
+| Think | C2 — Pre-TRD | After PRD, for stack/auth/storage decisions | up to 3 |
+| Plan | P0 — Skill boundaries | If skill split not obvious from TRD | up to 3 |
+
+Checkpoint turns contain ONLY: brief framing, prose questions as a numbered list, `<ask_user>` markers, a one-line summary. No tool calls, no `<think_*>`/`<plan_*>` markers, no file writes.
+
+### `<ask_user>` marker
+
+Emitted in the architect's streamed text; parsed by `extractAskUserMarkers` in `lib/openclaw/ag-ui/builder-agent.ts`. Four types:
+
+```
+<ask_user id="q1" type="text" question="..."/>
+<ask_user id="q2" type="select" question="..." options='["a","b","c"]'/>
+<ask_user id="q3" type="multiselect" question="..." options='["a","b","c"]'/>
+<ask_user id="q4" type="boolean" question="..."/>
+```
+
+Markers become `CustomEventName.ASK_USER` events (see `lib/openclaw/ag-ui/types.ts`) → consumed by `consumeAskUser` → push onto `coPilotStore.pendingQuestions`.
+
+### PendingQuestionsPanel
+
+Renders above the chat input in `TabChat` whenever `pendingQuestions.length > 0`. Each question shows as a labeled input: text field, yes/no buttons, pills (select), or toggle pills (multiselect). "Send answers" is disabled until all are answered; on submit the answers are composed into one user message and sent via the normal chat pipeline.
+
+Clearing: `pendingQuestions` is cleared automatically by `use-agent-chat.ts` every time the user sends any message (architect's next turn either adds new questions or proceeds with work).
+
+Component: `app/(platform)/agents/create/_components/copilot/PendingQuestionsPanel.tsx`
+
+### Prompt source of truth
+
+The runtime system prompts (`THINK_SYSTEM_INSTRUCTION`, `PLAN_SYSTEM_INSTRUCTION`, `REFINE_SYSTEM_INSTRUCTION` in `builder-agent.ts`) encode the checkpoint protocol. Mirror lives in `ruh-backend/skills/agent-builder/SKILL.md` — the architect reads both at runtime. Keep them in sync on any edit.
+
+---
+
+## Artifact-Targeted Revisions (2026-04-23)
+
+Beyond inline document edits and regenerate-from-scratch, the user can ask the architect to **surgically revise a specific artifact** via a chat message:
+
+```
+[target: PRD#user-flows]
+I'd like you to revise this. Add a step for Google Ads account linking.
+```
+
+### Supported targets
+
+| Target prefix | File to edit |
+|---|---|
+| `PRD` / `PRD#<section>` | `.openclaw/discovery/PRD.md` |
+| `TRD` / `TRD#<section>` | `.openclaw/discovery/TRD.md` |
+| `Plan` / `Plan#<section>` | `.openclaw/plan/architecture.json` + `PLAN.md` |
+
+### UI surface
+
+`RequestChangesButton` (at `_components/copilot/RequestChangesButton.tsx`) — reusable ghost button that opens an inline textarea. Rendered in:
+- `StepDiscovery` — one per PRD/TRD doc + one per section (section-targeted via `PRD#<heading>`)
+- `StagePlan` — one "Ask architect to revise plan" next to "Approve & Start Build"
+
+### Prop flow
+
+The chat's `sendChatMessage` lives in `TabChat`, so the callback flows top-down:
+
+```
+TabChat (owns sendChatMessage)
+  → ComputerView (prop: onRequestArtifactChange)
+    → LifecycleStepRenderer
+      → StageThinkPlaceholder → StepDiscovery → RequestChangesButton
+      → StagePlan → RequestChangesButton
+```
+
+On submit, `TabChat` composes `[target: …]\n\nI'd like you to revise this. <note>` and pushes through the existing chat pipeline. Architect receives it in REFINE mode, reads the target file, edits surgically, writes back, and replies with a 1–3 sentence summary. Plan targets also re-emit `<plan_*>` markers so the UI re-renders.
+
+---
+
+## Pause / Redirect — Deferred (cross-repo)
+
+Not implemented. Design captured here for future work.
+
+### Desired behavior
+
+Mid-stream, the user wants to interrupt the architect and redirect. Example: architect is researching Google Ads budget APIs when the user realizes they actually need Meta Ads first. Today the user has to wait for the turn to finish, then chat "actually do Meta instead" — by which point a lot of irrelevant research has been written.
+
+### What's missing
+
+1. **Gateway-side** (`openclaw` repo): `chat.pause` / `chat.resume` RPCs. The gateway would interrupt the in-flight LLM call, save partial state, and wait for either a `resume` or a replacement `chat.send`.
+2. **Backend-side** (`ruh-backend`): new SSE events `paused` / `resumed` forwarded from gateway → bridge.
+3. **Frontend-side** (`agent-builder-ui`): a Pause button in the chat toolbar that fires a pause RPC; the user's next message while paused becomes a redirect.
+
+### Frontend gap today
+
+`use-agent-chat.ts` has no `AbortController` wired for the main architect stream — the only `cancel()` calls (lines 397, 414) target the autosave controller, not the run. A real pause requires either:
+- Gateway support (preferred — preserves partial state), or
+- A client-side abort that tears down the SSE connection and discards the in-flight turn (crude, loses partial output).
+
+### Implementation order (when picked up)
+
+1. Gateway: add `chat.pause` / `chat.resume` RPC. Define partial-state preservation contract.
+2. Backend: forward new events through `gatewayProxy.ts`.
+3. Frontend: wire Pause button in `TabChat` chat toolbar, handle `paused`/`resumed` events in `use-agent-chat.ts`, show a "paused — type to redirect" state above the input.
+
+Until Phase 5 lands, the `PendingQuestionsPanel` gives the user a natural redirect point at each checkpoint — which covers the most common case without needing mid-stream interruption.
+
+---
+
 ## Stage 1: Think
 
 **Purpose:** Research the problem domain and produce foundational documents.

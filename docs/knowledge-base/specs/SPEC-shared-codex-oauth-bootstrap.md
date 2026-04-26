@@ -8,7 +8,7 @@ implemented
 
 ## Summary
 
-New OpenClaw sandboxes should prefer a shared Codex/OpenClaw OAuth identity instead of per-sandbox API-key onboarding. The repo uses the unsafe shortcut the user requested: seed host OAuth state into each new sandbox, skip interactive provider setup, switch the default model to `openai-codex/gpt-5.4`, and live-probe the provider before declaring the sandbox ready.
+New OpenClaw sandboxes should prefer a shared Codex/OpenClaw OAuth identity instead of per-sandbox API-key onboarding. The repo uses the unsafe shortcut the user requested: seed host OAuth state into each new sandbox, skip interactive provider setup, switch the default model to `openai-codex/gpt-5.5`, and live-probe the provider before declaring the sandbox ready.
 
 ## Related Notes
 
@@ -34,7 +34,7 @@ For sandboxes using shared Codex auth:
 
 1. Copy the selected host auth file into the container.
 2. Run `openclaw onboard --non-interactive ... --auth-choice skip`.
-3. Set `agents.defaults.model.primary` to `openai-codex/gpt-5.4` unless overridden.
+3. Set `agents.defaults.model.primary` to `openai-codex/gpt-5.5` unless overridden.
 4. Run `openclaw models status --probe --probe-provider openai-codex --json`.
 5. Fail sandbox creation if the live probe does not succeed.
 
@@ -52,4 +52,4 @@ The `agent-builder-ui` route keeps using OpenClaw gateway bearer auth. This spec
 
 - `cd ruh-backend && bun test ./tests/unit/sandboxManager.test.ts`
 - `cd ruh-backend && bun x tsc --noEmit`
-- Disposable Docker smoke test: copy host Codex auth into a temporary sandbox, run non-interactive onboarding with `--auth-choice skip`, set the default model to `openai-codex/gpt-5.4`, and verify `openclaw models status --probe --probe-provider openai-codex --json` succeeds.
+- Disposable Docker smoke test: copy host Codex auth into a temporary sandbox, run non-interactive onboarding with `--auth-choice skip`, set the default model to `openai-codex/gpt-5.5`, and verify `openclaw models status --probe --probe-provider openai-codex --json` succeeds.

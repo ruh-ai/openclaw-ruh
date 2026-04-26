@@ -73,11 +73,13 @@ Located at: `ruh-backend/src/sandboxManager.ts`
 10. Build onboard command:
    shared auth → `--auth-choice skip`
    otherwise OpenRouter > OpenAI > Anthropic > Gemini > Ollama
-11. docker exec: openclaw onboard --non-interactive ...
-12. [if shared auth] docker exec: `openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4` (or override); if an explicit `architect` agent exists, rewrite its `model` override to the same shared Codex model; then run `openclaw models status --probe --probe-provider openai-codex --json`
+11. docker exec: openclaw onboard --non-interactive ... (timeout 600s because OpenClaw 2026.4.x may install embedded provider/runtime packages during first onboarding)
+12. [if shared auth] docker exec: `openclaw config set agents.defaults.model.primary openai-codex/gpt-5.5` (or override); if explicit builder agents exist, rewrite stale model overrides to the same shared Codex model; then run `openclaw models status --probe --probe-provider openai-codex --json` with a 180s timeout because the probe can trigger first-run plugin runtime installs
 13. [otherwise] docker exec: node -e "..." → write auth-profiles.json
 14. [if Gemini and no shared auth] patch openclaw.json: set compat.supportsStore=false
 15. docker exec: required bootstrap apply sequence
+   - create both `~/.openclaw/workspace-architect/.openclaw` and `~/.openclaw/workspace/.openclaw` before the first architect turn so OpenClaw can write `workspace-state.json` without a first-run ENOENT
+   - `agents.list` explicitly registers `main` at `~/.openclaw/workspace` plus `architect`, `copilot`, `test`, and `reveal` at `~/.openclaw/workspace-architect`; OpenClaw 2026.4.x rejects named session keys unless these roles are present
    - shared gateway config (`gateway.bind`, allowed origins, trusted proxies, control-UI auth override, chat completions endpoint); allowed origins now also include any values from the `ALLOWED_ORIGINS` env var so production domains (e.g. `https://builder.codezero2pi.com`) can reach the sandbox gateway
    - browser execution mode flags (`browser.noSandbox`, `browser.headless`)
    - tool/command profile flags (`tools.profile`, `commands.native`, `commands.nativeSkills`)
@@ -102,7 +104,7 @@ When shared auth is available, sandbox creation now uses it before any API-key p
 1. Prefer OpenClaw OAuth state from `OPENCLAW_SHARED_OAUTH_JSON_PATH` or `$HOME/.openclaw/credentials/oauth.json`.
 2. Otherwise fall back to Codex CLI auth from `CODEX_AUTH_JSON_PATH` or `$HOME/.codex/auth.json`.
 3. Run non-interactive onboarding with `--auth-choice skip`.
-4. Set the default model to `OPENCLAW_SHARED_CODEX_MODEL` or `openai-codex/gpt-5.4`.
+4. Set the default model to `OPENCLAW_SHARED_CODEX_MODEL` or `openai-codex/gpt-5.5`.
 5. Fail fast if `openclaw models status --probe --probe-provider openai-codex --json` does not succeed.
 
 If no shared auth exists, sandbox creation keeps the legacy API-key/Ollama bootstrap behavior.
@@ -114,7 +116,7 @@ Existing DB-tracked sandboxes can now be retrofitted in place to the same shared
 1. `POST /api/admin/sandboxes/:sandbox_id/retrofit-shared-codex` requires `Authorization: Bearer <OPENCLAW_ADMIN_TOKEN>`.
 2. `retrofitSandboxToSharedCodex()` resolves the same shared auth seed as sandbox creation.
 3. The helper detects the container home directory, seeds auth into that home, refreshes onboarding, and when the source is Codex CLI auth it also syncs `~/.codex/auth.json` into `~/.openclaw/agents/main/agent/auth-profiles.json` as `openai-codex:default`.
-4. The helper then sets `agents.defaults.model.primary`, aligns any explicit `architect` agent override to that same model, probes `openai-codex` for both the default target and the architect target when present, restarts the gateway, and waits for health.
+4. The helper then sets `agents.defaults.model.primary`, aligns stale explicit builder-agent model overrides to that same model, probes `openai-codex` for both the default target and the architect target when present, restarts the gateway, and waits for health.
 5. The sandbox record is then marked with `shared_codex_enabled=true` and `shared_codex_model=<model>`.
 
 The helper keeps legacy provider config files in place; it only changes the active default path and shared-Codex metadata.

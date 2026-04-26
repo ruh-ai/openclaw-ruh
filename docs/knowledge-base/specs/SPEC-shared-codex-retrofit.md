@@ -26,7 +26,7 @@ Existing running OpenClaw sandboxes and the standalone builder gateway can be re
 
 - Add `POST /api/admin/sandboxes/:sandbox_id/retrofit-shared-codex`.
 - Require `Authorization: Bearer <OPENCLAW_ADMIN_TOKEN>`.
-- Accept only an optional `model` string; default to `OPENCLAW_SHARED_CODEX_MODEL` or `openai-codex/gpt-5.4`.
+- Accept only an optional `model` string; default to `OPENCLAW_SHARED_CODEX_MODEL` or `openai-codex/gpt-5.5`.
 - Reuse the same shared-auth seed resolution as sandbox creation:
   1. `OPENCLAW_SHARED_OAUTH_JSON_PATH`
   2. `$HOME/.openclaw/credentials/oauth.json`
@@ -92,6 +92,6 @@ These fields must be returned from sandbox list/detail endpoints, persisted for 
 - Manual operator verification:
   - run `bun run scripts/retrofit-shared-codex.ts`
   - verify each DB sandbox is marked `shared_codex_enabled=true`
-  - verify `openclaw models status --json` on a retrofitted sandbox reports `defaultModel` and `resolvedDefault` as `openai-codex/gpt-5.4`
-  - verify `openclaw models status --agent architect --json` on the standalone builder gateway reports `defaultModel` and `resolvedDefault` as `openai-codex/gpt-5.4` with no `missingProvidersInUse`
+  - verify `openclaw models status --json` on a retrofitted sandbox reports `defaultModel` and `resolvedDefault` as `openai-codex/gpt-5.5`
+  - verify `openclaw models status --agent architect --json` on the standalone builder gateway reports `defaultModel` and `resolvedDefault` as `openai-codex/gpt-5.5` with no `missingProvidersInUse`
   - verify the builder gateway still uses `OPENCLAW_GATEWAY_TOKEN` for bridge auth while using shared Codex auth for model access
