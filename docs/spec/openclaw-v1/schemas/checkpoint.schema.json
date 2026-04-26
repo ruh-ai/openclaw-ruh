@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/checkpoint.schema.json",
+  "title": "OpenClaw Checkpoint",
+  "description": "Typed snapshot of an in-flight pipeline run for resume after interruption. See spec/openclaw-v1/012-checkpoint.md.",
+  "type": "object",
+  "required": [
+    "id", "spec_version", "pipeline_id", "agent_id", "session_id",
+    "dev_stage", "created_at", "expires_at",
+    "copilot_state", "build_manifest", "conversation_summary",
+    "conversation_tokens_estimate",
+    "files_written", "files_pending", "workspace_checksum",
+    "sub_agents", "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-Z]{26}$",
+      "description": "ULID."
+    },
+    "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+    "pipeline_id": { "type": "string", "minLength": 1 },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "parent_checkpoint_id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" },
+    "dev_stage": {
+      "enum": ["drafted", "validated", "tested", "shipped", "running", "paused", "archived"]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "copilot_state": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Serialized partial CoPilotStore (essential fields). Pipeline-specific shape; the runtime does not validate beyond it being an object."
+    },
+    "build_manifest": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "specialist", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "specialist": { "type": "string", "minLength": 1 },
+          "status": {
+            "enum": ["pending", "running", "completed", "failed", "skipped"]
+          },
+          "started_at": { "type": "string", "format": "date-time" },
+          "completed_at": { "type": "string", "format": "date-time" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "conversation_summary": {
+      "type": "string",
+      "description": "Compacted history (≤ ~2k tokens). Full conversation history is reconstructable from gateway log."
+    },
+    "conversation_tokens_estimate": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "active_skill_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "active_tool_execution_id": {
+      "type": "string"
+    },
+    "files_written": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Workspace-relative paths produced this session."
+    },
+    "files_pending": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "workspace_checksum": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "sub_agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "specialist", "status", "workspace_scope"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "specialist": { "type": "string" },
+          "status": {
+            "enum": ["pending", "running", "completed", "failed", "stopped"]
+          },
+          "sub_session_id": { "type": "string" },
+          "workspace_scope": { "type": "string" }
+        }
+      }
+    },
+    "verification_progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "checks_passed": { "type": "array", "items": { "type": "string" } },
+        "checks_failed": { "type": "array", "items": { "type": "string" } },
+        "iteration": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "eval_loop_progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "iteration": { "type": "integer", "minimum": 1 },
+        "pass_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "avg_score": { "type": "number" }
+      }
+    },
+    "reason": {
+      "enum": [
+        "scheduled_interval",
+        "rate_limit_imminent",
+        "before_destructive_op",
+        "sub_agent_handoff",
+        "session_pause",
+        "manual",
+        "stage_transition"
+      ]
+    }
+  }
+}

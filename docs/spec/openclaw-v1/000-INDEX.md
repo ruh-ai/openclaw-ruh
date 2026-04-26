@@ -50,11 +50,11 @@ Out of scope for v1 (deferred to later versions):
 
 | Section | Title | Status |
 |---|---|---|
-| [004](004-memory-model.md) | Memory model — tier/lane-aware, role-attested writes | 📝 pending |
-| [005](005-decision-log.md) | Decision log — typed events, audit trail | 📝 pending |
-| [009](009-config-substrate.md) | Configuration substrate — multi-dimensional, versioned, hot-swappable | 📝 pending |
-| [012](012-checkpoint.md) | Checkpoint + resume — state snapshots, rate-limit recovery | 📝 pending |
-| [013](013-hooks.md) | Lifecycle hooks — extensibility points | 📝 pending |
+| [004](004-memory-model.md) | Memory model — tier/lane-aware, role-attested writes | ✅ done |
+| [005](005-decision-log.md) | Decision log — typed events, audit trail | ✅ done |
+| [009](009-config-substrate.md) | Configuration substrate — multi-dimensional, versioned, hot-swappable | ✅ done |
+| [012](012-checkpoint.md) | Checkpoint + resume — state snapshots, rate-limit recovery | ✅ done |
+| [013](013-hooks.md) | Lifecycle hooks — extensibility points | ✅ done |
 
 ### Part C — Composition (multi-agent fleets)
 
@@ -96,7 +96,7 @@ Out of scope for v1 (deferred to later versions):
 
 **Phase 1 — Building blocks (✅ complete):** 002 (agent manifest), 003 (tool contract), 014 (errors), 015 (output validator). The primitives every agent uses. ~70% extracted from `worktree-feat+architect-tool-harness` into formal contracts.
 
-**Phase 2 — State and memory:** 004 (memory), 005 (decision log), 009 (config), 012 (checkpoint), 013 (hooks). What agents persist and observe.
+**Phase 2 — State and memory (✅ complete):** 004 (memory), 005 (decision log), 009 (config), 012 (checkpoint), 013 (hooks). What agents persist and observe.
 
 **Phase 3 — Composition:** 006 (orchestrator), 007 (sub-agent), 008 (eval task), 011 (pipeline manifest). How fleets work.
 

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/config-substrate.schema.json",
+  "title": "OpenClaw Configuration Substrate",
+  "description": "Multi-dimensional, versioned, hot-swappable operational data. See spec/openclaw-v1/009-config-substrate.md.",
+  "type": "object",
+  "$defs": {
+    "TopLevelManifest": {
+      "description": ".openclaw/config/manifest.json — top-level index of all config docs.",
+      "type": "object",
+      "required": ["spec_version", "docs"],
+      "additionalProperties": false,
+      "properties": {
+        "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "docs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DocIndexEntry" }
+        }
+      }
+    },
+    "DocIndexEntry": {
+      "type": "object",
+      "required": ["id", "path", "owner", "review_lane"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "path": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*/$",
+          "description": "Path to the doc directory, relative to .openclaw/config/."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity authorized to commit changes (email or import:// URI)."
+        },
+        "review_lane": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Memory lane to which review actions for this doc are routed."
+        }
+      }
+    },
+    "DocManifest": {
+      "description": ".openclaw/config/<doc-id>/manifest.json — per-doc metadata.",
+      "type": "object",
+      "required": [
+        "id", "spec_version", "name", "description",
+        "schema_path", "current_version", "current_path",
+        "dimensions", "version_history_path", "owner",
+        "last_updated_at", "last_updated_by"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "schema_path": { "type": "string", "const": "schema.json" },
+        "current_version": { "type": "integer", "minimum": 1 },
+        "current_path": { "type": "string", "const": "current.json" },
+        "dimensions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Dimension" },
+          "minItems": 1
+        },
+        "lookup_function": {
+          "type": "string",
+          "description": "Canonical lookup signature exposed to skills, e.g., rate_by(region, trade, wage_type)."
+        },
+        "version_history_path": { "type": "string", "const": "versions/" },
+        "owner": { "type": "string", "minLength": 1 },
+        "last_updated_at": { "type": "string", "format": "date-time" },
+        "last_updated_by": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Dimension": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "type": { "enum": ["enum", "string", "integer", "boolean"] },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For type=enum, the allowed values."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "For type=string, an optional regex constraint."
+        }
+      }
+    },
+    "VersionEnvelope": {
+      "description": ".openclaw/config/<doc-id>/versions/vNNNN.json — immutable historical snapshot.",
+      "type": "object",
+      "required": [
+        "version", "spec_version", "committed_at", "committed_by",
+        "summary", "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "committed_at": { "type": "string", "format": "date-time" },
+        "committed_by": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "supersedes_version": { "type": ["integer", "null"], "minimum": 1 },
+        "data": {
+          "description": "Validated against the doc's schema.json before commit. Shape depends on the doc.",
+          "anyOf": [
+            { "type": "array" },
+            { "type": "object" }
+          ]
+        }
+      }
+    },
+    "ImportJob": {
+      "description": "Pipeline-manifest-declared scheduled import.",
+      "type": "object",
+      "required": ["doc_id", "schedule", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "schedule": {
+          "type": "string",
+          "description": "Cron expression, e.g., '0 3 * * *'."
+        },
+        "source": {
+          "type": "string",
+          "format": "uri",
+          "description": "External URL or named connector."
+        },
+        "transformer": {
+          "type": "string",
+          "description": "Path to a transformer module that normalizes external data to the doc's schema."
+        }
+      }
+    }
+  }
+}
