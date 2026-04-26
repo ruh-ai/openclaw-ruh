@@ -86,7 +86,7 @@ Every type has a fixed schema for `metadata`. The runtime validates `metadata` o
 | Type | When | Metadata shape |
 |---|---|---|
 | `memory_read` | Agent loaded a memory entry | `{ entry_id, tier, lane, status, source_identity }` |
-| `memory_write_proposed` | A write was attempted | `{ entry_id, declared_tier, declared_lane, source_identity, source_channel, status_assigned }` |
+| `memory_write_proposed` | A write was attempted | `{ entry_id, requested_tier, effective_tier, lane, source_identity, source_channel, status_assigned, downgrade_reason? }` |
 | `memory_write_routed` | Tier-2/3 write surfaced for review | `{ entry_id, routed_to: string[], channel }` |
 | `memory_write_confirmed` | Tier-1 reviewer approved | `{ entry_id, reviewer_identity, latency_to_confirmation_ms }` |
 | `memory_write_rejected` | Reviewer rejected | `{ entry_id, reviewer_identity, reason }` |
@@ -118,12 +118,43 @@ Every type has a fixed schema for `metadata`. The runtime validates `metadata` o
 | `eval_task_run` | An eval task executed | `{ task_id, status: "pass" \| "fail" \| "manual", confidence, deltas }` |
 | `eval_iteration` | Reinforcement loop iteration completed | `{ iteration, max_iterations, pass_rate, avg_score, mutations_count, status }` |
 
+### Milestones (since [016](016-milestone-tracking.md))
+
+| Type | When | Metadata shape |
+|---|---|---|
+| `milestone_classification` | An estimate session was classified routine/edge | `{ session_id, estimate_kind, classification_reason }` |
+| `milestone_reclassification` | An estimate's kind was changed post-hoc | `{ session_id, from, to, reason, reviewer_identity }` |
+| `milestone_autonomy_evaluated` | Rework function ran on a session | `{ session_id, autonomous_status, rework_summary }` |
+| `milestone_evaluated` | Periodic milestone evaluation produced a verdict | `MilestoneEvidence` shape (see [016](016-milestone-tracking.md)) |
+| `milestone_missed` | A previously-passing milestone now misses, or first miss at trigger time | `{ milestone_id, prior_status, current_value, target }` |
+| `milestone_signoff_recorded` | Lead estimator signed off on an autonomous estimate | `{ session_id, signoff_identity, signoff_at }` |
+| `milestone_exit_ramp_triggered` | Customer triggered exit; runtime computed refund | `{ milestone_id, refund_usd, computation_trace }` |
+
 ### Hooks and custom
 
 | Type | When | Metadata shape |
 |---|---|---|
 | `hook_fired` | A lifecycle hook fired | `{ hook_name, handler_count, all_succeeded }` |
 | `custom` | Pipeline-specific event | `{ namespace, event, payload }` — payload schema defined by pipeline |
+
+## Pipeline-bound metadata schemas
+
+Per [011 pipeline-manifest](011-pipeline-manifest.md), pipelines may declare per-type metadata JSON Schemas via the `decision_metadata_schemas[]` field. When present, the runtime validates each decision's `metadata` against the bound schema at write time. Without a binding, `metadata` is accepted as any object.
+
+**Recommended for production pipelines.** Without bindings, two runtimes may emit decisions of the same type with incompatible metadata shapes — making cross-pipeline tooling and dashboard panels brittle. The binding pattern:
+
+```json
+{
+  "decision_metadata_schemas": [
+    { "type": "tool_execution_end", "schema_ref": "openclaw-v1:ToolExecutionEndMetadata" },
+    { "type": "memory_write_proposed", "schema_ref": "openclaw-v1:MemoryWriteProposedMetadata" },
+    { "type": "milestone_evaluated", "schema_ref": "milestone.schema.json#/$defs/MilestoneEvidence" },
+    { "type": "custom", "schema_ref": "schemas/ecc-custom-decision-metadata.schema.json" }
+  ]
+}
+```
+
+ECC's pipeline declares bindings for every decision type it emits. The conformance suite ([101](101-conformance.md)) checks for missing bindings on canonical types and warns when production pipelines ship without typed metadata for `tool_execution_end`, `memory_write_proposed`, `milestone_evaluated`, and any custom types declared.
 
 ## Metrics
 

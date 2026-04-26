@@ -112,6 +112,57 @@ Original content preserved verbatim below.
 
 The runtime continues to honor deprecated sections until the next major version. Pipelines targeting the version where the section was deprecated see a warning at load; pipelines targeting earlier versions see no change.
 
+## Cross-schema `$ref` resolution
+
+Many spec sections reference shapes defined in other schemas (`pipeline-manifest.schema.json` references `orchestrator.schema.json`, etc.). The runtime resolves these references via a fixed protocol. Without these rules, two implementations could resolve the same `$ref` to different objects — silently breaking composition.
+
+### Reference URI grammar
+
+```
+<ref> ::= <local-ref> | <relative-ref> | <canonical-ref>
+
+<local-ref>      ::= "#/$defs/" <name>                  -- within the same schema file
+<relative-ref>   ::= <filename> "#/$defs/" <name>       -- e.g., "memory.schema.json#/$defs/MemoryAuthority"
+<canonical-ref>  ::= "openclaw-v1:" <schema-id>          -- e.g., "openclaw-v1:RevealSchema"
+```
+
+`<local-ref>` and `<relative-ref>` are always permitted. `<canonical-ref>` requires the spec version it targets to be supported by the runtime (per [supported-version-range](#strict-mode)).
+
+### Resolution order
+
+When the runtime sees a `$ref`, it resolves in this order, stopping at first hit:
+
+1. **Local lookup** — if the ref starts with `#/`, resolve within the current schema's `$defs`. Fails immediately if not found.
+2. **Pipeline-local schemas** — if the ref is a relative filename (e.g., `schemas/takeoff-reading.schema.json`), look in the pipeline's own `schemas/` directory.
+3. **Canonical platform schemas** — if the ref is a relative filename matching a platform schema name (`memory.schema.json`, `orchestrator.schema.json`, etc.), or a `<canonical-ref>`, resolve against the runtime's bundled spec version.
+4. **Registry lookup** — for `<canonical-ref>` only: the runtime maintains a registry mapping schema-ids to canonical schema objects. Future versions may serve this from a CDN; v1 ships the registry as a compiled artifact.
+
+The runtime **never** fetches `$ref`s over HTTP at runtime. All schemas resolve against bundled or pipeline-local files. This prevents supply-chain attacks via mutated remote schemas.
+
+### Version pinning
+
+Every cross-schema `$ref` is pinned to a single spec version. Resolution rules:
+
+- A pipeline targeting `spec_version: "1.0.0"` resolves all canonical refs against the v1.0.0 schema bundle.
+- Pipelines targeting an older version against a newer runtime use the runtime's *backward-compatibility schema bundle* — the runtime keeps every minor version's bundle accessible.
+- Mixing canonical refs across spec versions in a single pipeline is forbidden. The conformance suite (see [101](101-conformance.md)) checks for cross-version refs and fails them.
+
+### Cache invalidation
+
+Schemas are immutable per `(spec_version, schema-id)`. Once `1.0.0:memory.schema.json#/$defs/MemoryAuthority` resolves to a particular shape, that shape never changes. Patches that modify `1.0.0:memory.schema.json` would violate the immutability rule and trigger a major version bump per [versioning](#what's-covered-by-the-version).
+
+Pipeline-local schemas (in the pipeline's own `schemas/` directory) follow pipeline versioning, not spec versioning. They may evolve freely as long as the pipeline's `version` field bumps.
+
+### Conformance check
+
+The conformance suite ([101](101-conformance.md)) walks every `$ref` in the manifest and supporting schemas, asserting:
+
+- Every ref resolves
+- No ref crosses spec version boundaries
+- No ref points outside the pipeline workspace + bundled platform schemas (no HTTP, no `~/`, no absolute filesystem paths)
+
+Failures here are `manifest_invalid` per [014](014-error-taxonomy.md) — the pipeline does not load.
+
 ## Schema evolution
 
 JSON Schema files in `schemas/` evolve with the spec. Rules:

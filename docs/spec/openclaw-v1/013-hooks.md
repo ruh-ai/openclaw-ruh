@@ -94,6 +94,15 @@ The runtime fires hooks at these named moments. The list is closed in v1 — add
 | `checkpoint_resumed` | A session resumed from a checkpoint | `{ checkpoint_id, session_id }` |
 | `checkpoint_drift_detected` | Resume found workspace drift | `{ checkpoint_id, divergent_files }` |
 
+### Milestones (since [016](016-milestone-tracking.md))
+
+| Hook name | Fired when | Payload |
+|---|---|---|
+| `milestone_evaluated` | A periodic milestone evaluation produced a verdict | `MilestoneEvidence` shape — milestone_id, metric_value, target, passed, denominator + numerator breakdowns |
+| `milestone_missed` | First miss at trigger time, OR a previously-passing milestone now fails | `{ milestone_id, prior_status, current_value, target }` |
+| `milestone_signoff_required` | A routine estimate completed; awaiting lead-estimator sign-off | `{ session_id, milestone_id, deliverables_count }` |
+| `milestone_exit_ramp_triggered` | Customer-initiated exit; runtime computed refund | `{ milestone_id, refund_usd, computation_trace }` |
+
 ### Custom
 
 | Hook name | Fired when | Payload |
@@ -113,10 +122,93 @@ interface HookContext {
   session_id?: string;
   fire_mode: "sync" | "fire_and_forget";
   decision_log: DecisionLogHandle;  // for emitting structured events
+  capabilities: HookCapability[];   // explicitly granted capabilities (see below)
   // Note: NO workspace handle, NO memory handle, NO config write API.
   // Handlers observe and integrate; they do not mutate runtime state.
 }
 ```
+
+## Capability model — what handlers can actually do
+
+The "handlers don't mutate state" rule used to live as a convention. As of v1, it's a **runtime-enforced object capability model**. Handlers receive only the capabilities they declare, and the runtime constructs a `HookContext` whose surface is precisely the union of those capabilities.
+
+### Capability kinds
+
+```ts
+type HookCapability =
+  | { kind: "decision_log_emit" }                              // emit structured events
+  | { kind: "egress_http", allowed_hosts: string[] }            // HTTP fetch to allowlisted hosts
+  | { kind: "send_email", from: string, to_pattern: string }    // SMTP/SES via runtime; not raw socket
+  | { kind: "send_teams_card", channel: string }                // Teams adaptive card
+  | { kind: "publish_metric", namespace: string }                // emit a metric to telemetry
+  | { kind: "external_approval_gate", request_id_prefix: string } // veto hooks: open external approval
+  | { kind: "read_decision_log", scope: "session" | "pipeline" }; // query own log; never raw SQL
+```
+
+Capabilities the runtime **never grants**:
+
+- `workspace_write`, `workspace_read`, `memory_write`, `memory_read_full`, `config_write` — handlers don't touch runtime state directly. If they need data, they receive it in the payload or query the decision log.
+- `arbitrary_subprocess`, `raw_socket`, `disk_full_access` — escape hatches reserved for the runtime itself.
+
+### Declaration in pipeline manifest
+
+```json
+{
+  "hooks": [
+    {
+      "name": "memory_write_review_required",
+      "handler": "hooks/route-via-email.ts",
+      "fire_mode": "sync",
+      "capabilities": [
+        { "kind": "send_email", "from": "estimator@ecc.com", "to_pattern": "darrow@ecc.com" },
+        { "kind": "decision_log_emit" }
+      ]
+    },
+    {
+      "name": "eval_iteration_complete",
+      "handler": "hooks/post-to-datadog.ts",
+      "fire_mode": "fire_and_forget",
+      "capabilities": [
+        { "kind": "egress_http", "allowed_hosts": ["api.datadoghq.com"] }
+      ]
+    }
+  ]
+}
+```
+
+### Enforcement
+
+At handler invocation time, the runtime constructs a `HookContext` with **only** the declared capabilities resolved to function references. A handler attempting to use an undeclared capability gets a runtime error (`hook_capability_violation` decision-log entry, handler marked failed for that fire).
+
+The conformance suite ([101](101-conformance.md)) includes a **handler purity fuzzer** that:
+
+- Snapshots workspace + memory + config state before each handler fires
+- Diffs after each fire — any mutation = failure
+- Attempts undeclared capability use via type-erased references — runtime rejection = pass
+
+### Per-hook default capability sets
+
+Some hooks have an obvious default capability profile. The runtime auto-applies these if the manifest omits explicit capabilities (loose mode); strict pipelines disable defaults and require explicit declarations:
+
+| Hook | Default capabilities |
+|---|---|
+| `error_classified`, `retry_decided`, `recovery_applied` | `decision_log_emit`, `publish_metric` |
+| `tool_approval_required`, `memory_write_review_required` | `send_email`, `send_teams_card`, `external_approval_gate` |
+| `eval_iteration_complete`, `milestone_evaluated` | `egress_http` (telemetry export), `publish_metric` |
+| `output_validation_failed` | `decision_log_emit`, `publish_metric` |
+| `*` (all others) | `decision_log_emit` only |
+
+Pipelines toggle strict mode in `pipeline-manifest.json`:
+
+```json
+{
+  "hook_capability_mode": "strict"   // or "loose" (default)
+}
+```
+
+Strict mode is recommended for production; loose mode is convenient for early development.
+
+
 
 ### Sync vs fire-and-forget
 

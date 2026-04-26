@@ -70,6 +70,7 @@ Pipelines with milestone obligations declare them in `pipeline-manifest.json`:
         "trigger": { "kind": "after_go_live", "duration": "P6M" },
         "metric": {
           "kind": "pass_rate",
+          "comparison_window": { "kind": "rolling", "duration": "P30D" },
           "denominator": {
             "kind": "filtered_estimates",
             "filter": { "estimate_kind": "routine" }

@@ -95,6 +95,12 @@ interface PipelineManifest {
   eval_suite_ref: string;                  // path to eval suite (per 008)
   convergence_loop?: ConvergenceLoopConfig; // when training-mode applies
 
+  // ── Performance milestones (per 016) ───────────────
+  milestones?: MilestonesConfig;           // contractual milestones (M2/M4/M6/M12 etc.)
+
+  // ── Audit & typed observability ────────────────────
+  decision_metadata_schemas?: DecisionMetadataSchemaBinding[];  // typed metadata per decision type
+
   // ── Extensibility ──────────────────────────────────
   hooks: HookHandlerRegistration[];        // pipeline-scoped hooks (per 013)
   custom_hooks: CustomHookDeclaration[];   // custom hook namespace declarations
@@ -313,6 +319,41 @@ Per [010 dashboard panels](010-dashboard-panels.md) (Phase 4 — manifest field 
 ```
 
 Phase 4 fills in the rest. v1 reserves the field shape so manifests are forward-compatible.
+
+## `milestones` — contractual performance KPIs
+
+Optional. Required for pipelines whose customer contracts include performance milestones (ECC's MSA: M2, M4, M6, M12 with refund clause). See [016 milestone tracking](016-milestone-tracking.md):
+
+```json
+{
+  "milestones": {
+    "go_live_at": "2026-06-15T00:00:00Z",
+    "definitions": [
+      { "id": "M2", "name": "Autonomous packages", "trigger": { "kind": "after_go_live", "duration": "P2M" }, "metric": { "kind": "absolute_count", "target": 5, "comparison": ">=" } },
+      { "id": "M6", "name": "75% routine autonomous", "trigger": { "kind": "after_go_live", "duration": "P6M" }, "metric": { "kind": "pass_rate", "target": 0.75, "comparison": ">=", "comparison_window": { "kind": "rolling", "duration": "P30D" }, "denominator": { "kind": "filtered_estimates", "filter": { "estimate_kind": "routine" } }, "numerator": { "kind": "autonomous_count", "definition": { "rework_threshold": "lead_estimator_signoff_only" } } }, "exit_ramp": { "kind": "pro_rated_refund", "formula": "build_fee * (target_months - months_elapsed) / 12", "build_fee_usd": 30000, "target_months": 6, "cap_fraction": 0.5 } }
+    ],
+    "classification_function": "milestones/classify-estimate-kind.ts",
+    "rework_function": "milestones/detect-rework.ts"
+  }
+}
+```
+
+## `decision_metadata_schemas` — typed observability
+
+Optional but **strongly recommended for production pipelines**. Without bindings, runtimes can produce decisions of the same type with incompatible metadata shapes — breaking dashboards, audit exports, and cross-pipeline tooling. See [005 decision log](005-decision-log.md):
+
+```json
+{
+  "decision_metadata_schemas": [
+    { "type": "tool_execution_end", "schema_ref": "openclaw-v1:ToolExecutionEndMetadata" },
+    { "type": "memory_write_proposed", "schema_ref": "openclaw-v1:MemoryWriteProposedMetadata" },
+    { "type": "milestone_evaluated", "schema_ref": "milestone.schema.json#/$defs/MilestoneEvidence" },
+    { "type": "milestone_exit_ramp_triggered", "schema_ref": "milestone.schema.json#/$defs/ExitRampTriggeredMetadata" }
+  ]
+}
+```
+
+The runtime validates `metadata` against the bound schema at write time; mismatches fail loudly.
 
 ## `eval_suite_ref` — verification
 

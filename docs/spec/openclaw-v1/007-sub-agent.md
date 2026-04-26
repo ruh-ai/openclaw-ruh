@@ -105,13 +105,53 @@ State transitions emit `sub_agent_spawn` and `sub_agent_complete` decision-log e
 
 ## Workspace scope enforcement
 
-`workspace_scope` is a workspace-relative path. The runtime enforces:
+`workspace_scope` is a workspace-relative path. Scope enforcement is **the** load-bearing security boundary in OpenClaw — without it, a single misbehaving specialist breaks every isolation guarantee. The runtime enforces a formal path-safety contract (below); the conformance suite ([101](101-conformance.md)) validates implementations.
 
-- **Reads**: the specialist may read anywhere within `workspace_scope` and from a small set of pipeline-shared paths (architecture.json, MEMORY.md, config docs)
-- **Writes**: the specialist may write only within `workspace_scope`
-- **Path traversal**: the runtime resolves all paths and rejects anything that escapes scope (`../..`, symlinks pointing outside, absolute paths)
+### Allowed-read surface
 
-Scope examples for ECC:
+A specialist may read:
+
+- **Within its own `workspace_scope`** — full read access to any file under the resolved scope path (post-normalization).
+- **Pipeline-shared paths (read-only)** — exactly:
+  - `pipeline-manifest.json` (just to know the pipeline shape; not the secret store)
+  - `agents/<agent_id>/.openclaw/architecture.json` for any agent (the public manifest, never private memory)
+  - `agents/<this_agent>/.openclaw/MEMORY.md` (only the index, only filtered to `confirmed`+`permanent` entries)
+  - `config/<doc_id>/current.json` for any pipeline-declared config doc (read via `ctx.config`, not raw fs)
+  - The eval suite reference (read-only)
+
+Everything else fails the read with `permission_denied`.
+
+### Allowed-write surface
+
+A specialist may write only within its own `workspace_scope`. **No exceptions** in v1.
+
+### Path-safety rules (mandatory for every read AND write)
+
+The runtime applies these rules at every filesystem operation. Any rule violation → `permission_denied`:
+
+1. **Reject absolute paths.** A path starting with `/` (POSIX) or `C:\` / `\\?\` (Windows-style) is rejected outright.
+2. **Reject scheme-prefixed paths.** Paths like `file://`, `http://`, etc. are rejected.
+3. **Lexical normalization.** `path.normalize()` resolves `.` and `..` segments and collapses redundant separators. After normalization, any `..` remaining (i.e., the path resolves above the workspace root) is rejected.
+4. **Realpath resolution.** The runtime calls `realpath()` on the resolved path with **`O_NOFOLLOW`** semantics — symlinks anywhere in the path **fail the operation**. Pipelines that need symlink resolution must declare it explicitly per scope (rare; most don't).
+5. **Scope containment check.** After realpath, the resolved path's prefix MUST equal the realpath of the workspace_scope. String prefix comparison is on the canonical path (no normalization differences).
+6. **No-cross-device check.** The resolved path's filesystem device MUST match the workspace's device. Bind-mounts pointing outside the tenant boundary are rejected.
+7. **Race-free write.** Writes use atomic-rename (`O_TMPFILE` + `linkat`, or write-then-rename) so concurrent reads see either the old or the new file, never a partial. Append operations use `O_APPEND` exclusively.
+8. **Write-during-merge lock.** While the orchestrator merges sub-agent results, all writes within the affected scope acquire a write lock. Concurrent writes from the same scope are serialized. Writes from outside the scope are unaffected.
+
+### Conformance fuzzer (mandatory test, see [101](101-conformance.md))
+
+The platform ships a fuzzer that hammers each specialist with adversarial path inputs:
+
+- `../../etc/passwd`, `../../../`, `..%2F..%2Fetc%2Fpasswd` (URL-encoded traversal)
+- Symlinks: a workspace symlink pointing at `/etc/passwd`; the runtime must reject the read
+- Absolute paths, UNC paths, scheme paths
+- Long paths (>4096 chars) and path-component overflow
+- Race: spawn 100 concurrent writes to the same path while a sub-agent merge is in progress
+- Cross-device: a workspace volume bind-mounted from outside the tenant — fuzzer asserts reads are blocked
+
+A specialist that passes any of these reads fails conformance.
+
+### Scope examples for ECC
 
 | Specialist | workspace_scope |
 |---|---|

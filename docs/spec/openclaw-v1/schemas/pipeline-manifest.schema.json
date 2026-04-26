@@ -67,6 +67,7 @@
       "type": "array",
       "items": { "$ref": "hooks.schema.json#/$defs/HookHandlerRegistration" }
     },
+    "hook_capability_mode": { "$ref": "hooks.schema.json#/$defs/HookCapabilityMode" },
     "custom_hooks": {
       "type": "array",
       "items": { "$ref": "hooks.schema.json#/$defs/CustomHookDeclaration" }

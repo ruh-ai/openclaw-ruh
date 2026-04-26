@@ -125,11 +125,12 @@
             "kind": { "const": "autonomous_count" },
             "definition": {
               "type": "object",
+              "required": ["rework_threshold"],
               "additionalProperties": false,
               "properties": {
                 "rework_threshold": {
                   "enum": ["lead_estimator_signoff_only", "no_human_intervention", "minor_corrections_allowed", "custom"],
-                  "description": "Defines what counts as 'autonomous'. 'lead_estimator_signoff_only' means only the lead-estimator approval action is allowed; any other human edit disqualifies."
+                  "description": "REQUIRED. Defines what counts as 'autonomous'. 'lead_estimator_signoff_only' means only the lead-estimator approval action is allowed; any other human edit disqualifies. 'custom' requires the custom_function field."
                 },
                 "human_intervention_disqualifies": {
                   "type": "boolean",
@@ -139,7 +140,9 @@
                   "type": "string",
                   "description": "Required when rework_threshold is 'custom'."
                 }
-              }
+              },
+              "if": { "properties": { "rework_threshold": { "const": "custom" } } },
+              "then": { "required": ["rework_threshold", "custom_function"] }
             }
           }
         },
@@ -209,6 +212,7 @@
       ]
     },
     "ExitRamp": {
+      "description": "Refund / service-credit / termination contract attached to a milestone. The runtime computes the obligation; payment lives outside the spec.",
       "type": "object",
       "required": ["kind"],
       "additionalProperties": false,
@@ -218,18 +222,65 @@
         },
         "formula": {
           "type": "string",
-          "description": "Refund computation expression. Variables: build_fee, target_months, months_elapsed, months_overrun. e.g., 'build_fee * (target_months - months_elapsed) / 12'."
+          "description": "Refund computation expression. Variables: build_fee, target_months, months_elapsed, months_overrun. e.g., 'build_fee * (target_months - months_elapsed) / 12'. Required for kind=pro_rated_refund."
         },
-        "build_fee_usd": { "type": "number", "minimum": 0 },
-        "target_months": { "type": "integer", "minimum": 1 },
-        "cap_fraction": { "type": "number", "minimum": 0, "maximum": 1 },
-        "cap_usd": { "type": "number", "minimum": 0 },
+        "build_fee_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The build fee that scales the formula. Required for kind=pro_rated_refund and kind=fixed_refund."
+        },
+        "target_months": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Months from go-live where the milestone is targeted. Required for kind=pro_rated_refund."
+        },
+        "fixed_amount_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Required for kind=fixed_refund."
+        },
+        "cap_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Maximum refund as a fraction of build_fee_usd."
+        },
+        "cap_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Alternative absolute cap. cap_fraction and cap_usd are mutually exclusive."
+        },
+        "service_credit_terms": {
+          "type": "string",
+          "description": "Required for kind=service_credit. Free-form description of the service credit (e.g., 'one month of platform license')."
+        },
         "authorized_triggers": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "description": "Identities authorized to trigger the exit ramp on the customer side. Defaults to the pipeline manifest's primary contact."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "pro_rated_refund" } } },
+          "then": { "required": ["kind", "formula", "build_fee_usd", "target_months"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "fixed_refund" } } },
+          "then": { "required": ["kind", "fixed_amount_usd"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "service_credit" } } },
+          "then": { "required": ["kind", "service_credit_terms"] }
+        },
+        {
+          "description": "cap_fraction and cap_usd are mutually exclusive.",
+          "not": {
+            "type": "object",
+            "required": ["cap_fraction", "cap_usd"]
+          }
+        }
+      ]
     },
     "MilestoneEvidence": {
       "description": "Produced by every milestone evaluation; persisted server-side and exportable for customer audit.",

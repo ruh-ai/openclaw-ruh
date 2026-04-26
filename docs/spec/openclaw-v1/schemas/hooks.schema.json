@@ -72,8 +72,94 @@
         "fire_mode": {
           "enum": ["sync", "fire_and_forget"],
           "default": "sync"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/HookCapability" },
+          "description": "Object capabilities granted to the handler. The runtime constructs HookContext to expose only these. Undeclared capability use produces hook_capability_violation. Omitted = use the per-hook default profile (see 013)."
         }
       }
+    },
+    "HookCapability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "decision_log_emit" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "allowed_hosts"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "egress_http" },
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "description": "Allowlisted hosts for outbound HTTP. Wildcards permitted (e.g., '*.datadoghq.com')."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "from", "to_pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "send_email" },
+            "from": { "type": "string", "format": "email" },
+            "to_pattern": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Allowed recipient pattern. Specific address or wildcard like '*@ecc.com'."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "channel"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "send_teams_card" },
+            "channel": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "namespace"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "publish_metric" },
+            "namespace": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "request_id_prefix"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "external_approval_gate" },
+            "request_id_prefix": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "scope"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "read_decision_log" },
+            "scope": { "enum": ["session", "pipeline"] }
+          }
+        }
+      ]
+    },
+    "HookCapabilityMode": {
+      "enum": ["strict", "loose"],
+      "default": "loose",
+      "description": "Pipeline-level mode for hook capability resolution. strict = handlers MUST declare capabilities explicitly; per-hook defaults disabled. loose (default) = per-hook default capability profile applies when capabilities is omitted."
     },
     "CustomHookDeclaration": {
       "description": "Pipeline-manifest entry under custom_hooks[]. Required for any custom hook the pipeline fires.",

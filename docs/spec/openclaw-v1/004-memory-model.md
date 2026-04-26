@@ -331,19 +331,41 @@ memory.write({
 
 The runtime rejects this. Identity must be derived from the inbound channel; never client-supplied.
 
-**Cross-lane writes:**
+**Cross-lane writes (auto-downgrade in action):**
 
 ```ts
 // Matt (Tier-1 business) writes a memory about estimating mechanics
 memory.write({
   tier: 1,
-  lane: "estimating",          // ❌ Matt is Tier-1 only on business, not estimating
-  source_identity: "matt@ecc.com",
+  lane: "estimating",          // declared tier=1; Matt has no Tier-1 estimating authority
+  // (no source_identity here — runtime attests it from the channel)
   ...
 });
 ```
 
-The runtime checks the manifest's `memory_authority` and rejects: Matt isn't a Tier-1 writer for `estimating`. The runtime instead routes this as a **Tier-2 write** in `estimating`, which surfaces to Darrow for confirmation. **Cross-lane Tier-1 attempts auto-downgrade to Tier-2.**
+The runtime resolves the effective tier per the rules above:
+
+1. **Match at declared tier?** Manifest's `memory_authority` for `(tier=1, lane=estimating)` lists `darrow@ecc.com` only. Matt is not there.
+2. **Match at a lower tier in the same lane?** Yes — Matt is listed at `(tier=2, lane=estimating)`. **Auto-downgrade applies.**
+3. **Effective tier = 2.** Status: `flagged`. Routed to Darrow for confirmation per Tier-2 policy.
+
+The decision log records `memory_write_proposed { requested_tier: 1, effective_tier: 2, source_identity: "matt@ecc.com", reason: "no_match_at_requested_tier;match_at_lower_tier" }`.
+
+**Now contrast — a write with no path at any tier:**
+
+```ts
+// Random regional estimator who isn't yet authorized in this lane
+memory.write({
+  tier: 3,
+  lane: "estimating",
+  ...
+});
+// authenticated source: newhire@ecc.com (not yet listed in any tier of estimating)
+```
+
+Manifest has no entry for `newhire@ecc.com` at any tier of `estimating`. Result: **rejected** with `category: permission_denied`. Decision log records `memory_write_rejected { requested_tier: 3, source_identity: "newhire@ecc.com", reason: "no_authority_in_lane" }`.
+
+The contrast: rejection happens only when there's no path at any tier in the lane. Auto-downgrade preserves the writer's intent without granting unearned authority.
 
 **Agent reading flagged entries:**
 
