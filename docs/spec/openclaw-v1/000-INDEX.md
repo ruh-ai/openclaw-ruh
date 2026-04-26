@@ -1,6 +1,6 @@
 # OpenClaw Spec v1 — Index
 
-> **Status:** `draft` — foundation landing now, sections being written iteratively
+> **Status:** `draft` — all sections written; pending validation pass + GPT-5.5 second opinion
 > **Spec version:** `1.0.0-alpha.1`
 > **Last updated:** 2026-04-27
 > **Audience:** humans authoring conformant pipelines, **and coding agents (Claude Opus 4.7+, GPT 5.5+) building them**
@@ -69,14 +69,14 @@ Out of scope for v1 (deferred to later versions):
 
 | Section | Title | Status |
 |---|---|---|
-| [010](010-dashboard-panels.md) | Dashboard panel registration — data sources, actions, role visibility | 📝 pending |
+| [010](010-dashboard-panels.md) | Dashboard panel registration — data sources, actions, role visibility | ✅ done |
 
 ### Part E — Meta
 
 | Section | Title | Status |
 |---|---|---|
-| [100](100-versioning.md) | Spec versioning — how this document evolves without breaking pipelines | 📝 pending |
-| [101](101-conformance.md) | Conformance — how to verify a pipeline conforms | 📝 pending |
+| [100](100-versioning.md) | Spec versioning — how this document evolves without breaking pipelines | ✅ done |
+| [101](101-conformance.md) | Conformance — how to verify a pipeline conforms | ✅ done |
 
 ### Schemas (machine-readable)
 
@@ -100,7 +100,7 @@ Out of scope for v1 (deferred to later versions):
 
 **Phase 3 — Composition (✅ complete):** 006 (orchestrator), 007 (sub-agent), 008 (eval task), 011 (pipeline manifest). How fleets work.
 
-**Phase 4 — Surfaces and meta:** 010 (dashboards), 100 (versioning), 101 (conformance). How users interact and how the spec evolves.
+**Phase 4 — Surfaces and meta (✅ complete):** 010 (dashboards), 100 (versioning), 101 (conformance). How users interact and how the spec evolves.
 
 Each phase is a separate PR. Phase 1 is the load-bearing one — once 002, 003, 014, 015 land, the spec is concrete enough that a coding agent could begin producing conformant agents (not yet pipelines).
 
