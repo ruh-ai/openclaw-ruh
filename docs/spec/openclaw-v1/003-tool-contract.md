@@ -23,7 +23,9 @@ The runtime executes tools through a fixed pipeline (validate → check stage �
 
 ## The contract
 
-Every tool implements this interface (TypeScript shown for clarity; the spec is language-agnostic):
+Every tool has TWO faces:
+
+1. **The runtime interface** — what the tool's code implements (TypeScript shown for clarity; the spec is language-agnostic):
 
 ```ts
 interface OpenClawTool<Input, Output> {
@@ -41,16 +43,33 @@ interface OpenClawTool<Input, Output> {
   readonly availableStages: AgentDevStage[] | null;  // null = all stages
   readonly availableModes: ExecutionMode[] | null;   // null = all modes
 
-  // ── Permission flags ───────────────────────────────
-  readonly isReadOnly: boolean;
-  readonly isDestructive: boolean;
-  readonly isConcurrencySafe: boolean;
+  // ── Permission flags (methods, NOT data fields) ────
+  isReadOnly(): boolean;
+  isDestructive(): boolean;
+  isConcurrencySafe(): boolean;
 
   // ── Execution ──────────────────────────────────────
   call(input: Input, ctx: ToolContext): Promise<ToolResult<Output>>;
   checkPermissions(input: Input, ctx: ToolContext): PermissionDecision;
 }
 ```
+
+2. **The declaration file** — `tools/<tool-id>.json` in the agent workspace. Validated against [`schemas/tool.schema.json`](schemas/tool.schema.json). The flags appear under a `permissions` object:
+
+```json
+{
+  "id": "workspace-write",
+  "tool_kind": "workspace-write",
+  "permissions": {
+    "read_only": false,
+    "destructive": false,
+    "concurrency_safe": false,
+    "requires_approval": false
+  }
+}
+```
+
+The runtime cross-checks the declaration against the implementation: a tool whose `permissions.read_only` is `true` in `tools/<id>.json` MUST have `isReadOnly() === true` in code. Mismatch is a defect caught by the conformance fuzzer (see [101](101-conformance.md)).
 
 These flags drive runtime behavior:
 

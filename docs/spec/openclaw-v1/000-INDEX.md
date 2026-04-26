@@ -70,6 +70,7 @@ Out of scope for v1 (deferred to later versions):
 | Section | Title | Status |
 |---|---|---|
 | [010](010-dashboard-panels.md) | Dashboard panel registration — data sources, actions, role visibility | ✅ done |
+| [016](016-milestone-tracking.md) | Milestone tracking — performance KPIs, exit ramps, refund formulas | ✅ done |
 
 ### Part E — Meta
 

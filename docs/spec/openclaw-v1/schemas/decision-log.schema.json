@@ -54,6 +54,9 @@
         "config_commit",
         "hook_fired", "hook_failed",
         "checkpoint_created", "checkpoint_resumed", "checkpoint_drift_detected",
+        "milestone_classification", "milestone_reclassification",
+        "milestone_autonomy_evaluated", "milestone_evaluated", "milestone_missed",
+        "milestone_signoff_recorded", "milestone_exit_ramp_triggered",
         "custom"
       ]
     },
@@ -101,6 +104,25 @@
         "parent_id": { "type": "string" },
         "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100 },
         "cursor": { "type": "string" }
+      }
+    },
+    "DecisionMetadataSchemaBinding": {
+      "description": "Pipeline-declared mapping from a DecisionType to a JSON Schema validating that type's metadata. Goes in pipeline-manifest.json under decision_metadata_schemas[]. Without these bindings, two runtimes can produce decisions of the same type with incompatible metadata shapes; with them, the runtime validates metadata at write time and rejects malformed entries.",
+      "type": "object",
+      "required": ["type", "schema_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/DecisionType" },
+        "schema_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path or URI to the JSON Schema defining the metadata shape for this decision type. Canonical types may reference the spec's published schema (e.g., 'openclaw-v1:tool_execution_end'); custom types must reference a pipeline-local schema in schemas/."
+        },
+        "spec_version_min": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$",
+          "description": "Minimum spec version where this binding applies. Used during versioning transitions."
+        }
       }
     }
   }

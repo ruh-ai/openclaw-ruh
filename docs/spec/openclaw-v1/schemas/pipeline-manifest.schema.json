@@ -58,6 +58,11 @@
     "eval_suite_ref": { "type": "string", "minLength": 1 },
     "convergence_loop": { "$ref": "eval-task.schema.json#/$defs/ConvergenceLoopConfig" },
 
+    "milestones": {
+      "$ref": "milestone.schema.json#/$defs/MilestonesConfig",
+      "description": "Optional. Required for pipelines with contractual performance milestones (e.g., ECC's M2/M4/M6/M12). See spec/openclaw-v1/016-milestone-tracking.md."
+    },
+
     "hooks": {
       "type": "array",
       "items": { "$ref": "hooks.schema.json#/$defs/HookHandlerRegistration" }
@@ -69,6 +74,12 @@
     "custom_tool_kinds": {
       "type": "array",
       "items": { "$ref": "#/$defs/CustomToolKind" }
+    },
+
+    "decision_metadata_schemas": {
+      "type": "array",
+      "items": { "$ref": "decision-log.schema.json#/$defs/DecisionMetadataSchemaBinding" },
+      "description": "Optional. Pipeline-declared bindings from DecisionType to metadata JSON Schemas. The runtime validates decision metadata against these at write time. Without bindings, decisions of the same type may carry incompatible metadata shapes across pipelines."
     },
 
     "retry_overrides": { "$ref": "error.schema.json#/$defs/PipelineRetryOverrides" },
@@ -126,13 +137,67 @@
       }
     },
     "CustomToolKind": {
+      "description": "Pipeline-registered tool kind beyond the canonical set (workspace-read, workspace-write, sandbox-exec, research, plan-validate). MUST go through security review per 101 conformance — schema enforces evidence of review.",
       "type": "object",
-      "required": ["kind", "implementation_path"],
+      "required": [
+        "kind",
+        "implementation_path",
+        "default_permissions",
+        "security_reviewed_at",
+        "security_reviewed_by",
+        "threat_model_path"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-        "implementation_path": { "type": "string", "minLength": 1 },
-        "schema_ref": { "type": "string" }
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "implementation_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative path to the tool's implementation module."
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Path to JSON Schema for the tool's input/output shape."
+        },
+        "default_permissions": {
+          "$ref": "tool.schema.json#/$defs/PermissionConfig",
+          "description": "Default permission flags for instances of this tool kind. Concrete tool refs in tools/<id>.json may override but cannot loosen (e.g., a destructive default cannot be marked non-destructive at the instance)."
+        },
+        "egress_scope": {
+          "type": "object",
+          "description": "Network egress this tool kind may use. Required when the kind is non-trivial.",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "rate_limit_per_minute": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "subprocess_allowed": {
+          "type": "boolean",
+          "default": false,
+          "description": "True if this tool kind invokes subprocesses (sandbox-exec-like). Triggers stricter conformance checks."
+        },
+        "security_reviewed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the security review that approved registration. Stale reviews (>180 days) trigger re-review warnings."
+        },
+        "security_reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity (email or team URI) of the reviewer who approved."
+        },
+        "threat_model_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to a threat-model document describing what damage a malicious input could cause and what mitigations are in place. Required by 101 conformance."
+        }
       }
     },
     "RuntimeRequirements": {

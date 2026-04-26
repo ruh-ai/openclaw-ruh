@@ -78,15 +78,44 @@
         }
       }
     },
-    "MemoryWriteRequest": {
-      "description": "A pending write before the runtime applies tier policy.",
+    "ClientMemoryWriteSubmission": {
+      "description": "What a client (browser, email handler, MCP integration, etc.) sends to the runtime. Crucially, this shape does NOT carry source_identity — the runtime derives it from the inbound channel's authenticated session and is the sole authority on attestation. Clients that submit a source_identity field have it stripped at the API boundary. ECC's MSA evidence trail depends on this: any decision-log entry referencing a memory write must show runtime-attested identity, never client-asserted.",
+      "type": "object",
+      "required": ["tier", "lane", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "type": "integer",
+          "enum": [1, 2, 3],
+          "description": "Tier the client believes its write should land at. The runtime validates against memory_authority — if the client's attested identity is not authorized at the declared tier+lane, the write either auto-downgrades to a lower tier (preserving the proposal) or is rejected (when no valid downgrade applies)."
+        },
+        "lane": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "content": {
+          "type": "object",
+          "required": ["type", "title", "body"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "enum": ["project", "user", "feedback", "reference"] },
+            "title": { "type": "string", "minLength": 1 },
+            "description": { "type": "string", "maxLength": 200 },
+            "body": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "AttestedMemoryWriteRequest": {
+      "description": "What the runtime constructs INTERNALLY after attaching attested identity to a ClientMemoryWriteSubmission. Pipeline integrations, hooks, and tools see this shape — never the client form. source_identity here is always runtime-attested via the inbound channel's authentication; clients cannot construct or forge this object.",
       "type": "object",
       "required": ["tier", "lane", "source_identity", "source_channel", "content"],
       "additionalProperties": false,
       "properties": {
         "tier": { "type": "integer", "enum": [1, 2, 3] },
         "lane": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-        "source_identity": { "type": "string", "minLength": 1 },
+        "source_identity": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runtime-attested identity. Derived from authenticated channel; never client-supplied. Email-from-address (verified), dashboard session principal, agent URI, or import-source URI."
+        },
         "source_channel": {
           "enum": ["email", "dashboard", "agent", "import", "teams", "webhook", "other"]
         },

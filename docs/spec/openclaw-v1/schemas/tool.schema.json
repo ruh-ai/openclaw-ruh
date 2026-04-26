@@ -59,7 +59,7 @@
   "$defs": {
     "PermissionConfig": {
       "type": "object",
-      "required": ["destructive", "concurrency_safe"],
+      "required": ["read_only", "destructive", "concurrency_safe"],
       "additionalProperties": false,
       "properties": {
         "stages": {
@@ -78,19 +78,30 @@
           "uniqueItems": true,
           "description": "Execution modes where this tool may be invoked. Omit or null = all modes."
         },
+        "read_only": {
+          "type": "boolean",
+          "description": "True if this tool only reads state and produces no side effects on workspace, memory, config, network egress, subprocess, or external services. Maps to the runtime's isReadOnly() method. Auto-allowed in build mode without human approval. Tools that lie about this fail the conformance fuzzer (see 101)."
+        },
         "destructive": {
           "type": "boolean",
-          "description": "True if this tool can cause irreversible changes (delete files, send messages, deploy)."
+          "description": "True if this tool can cause irreversible changes (delete files, send messages, deploy). Maps to the runtime's isDestructive() method. Always requires human approval unless availableModes excludes destructive contexts. Mutually exclusive with read_only=true."
         },
         "concurrency_safe": {
           "type": "boolean",
-          "description": "True if multiple invocations may run in parallel. Tools with side effects on shared state are not concurrency-safe."
+          "description": "True if multiple invocations may run in parallel without observable interference. Maps to isConcurrencySafe(). Tools with shared mutable state are not concurrency-safe."
         },
         "requires_approval": {
           "type": "boolean",
-          "description": "If true, every invocation pauses for human approval. Defaults to whatever the destructive flag implies, unless explicitly set."
+          "description": "If true, every invocation pauses for human approval regardless of mode. Defaults to whatever the destructive flag implies, unless explicitly set."
         }
-      }
+      },
+      "allOf": [
+        {
+          "description": "A read-only tool cannot also be destructive.",
+          "if": { "properties": { "read_only": { "const": true } } },
+          "then": { "properties": { "destructive": { "const": false } } }
+        }
+      ]
     },
     "CredentialRef": {
       "type": "object",

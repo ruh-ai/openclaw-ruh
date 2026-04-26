@@ -49,14 +49,19 @@ The same person can be Tier-1 in one lane and Tier-2 in another. ECC's Scott (VP
 
 ### Source identity — who attested
 
-Every memory write carries the writer's identity, attested by the runtime (not self-claimed):
+Every memory write carries the writer's identity, **attested by the runtime, never client-supplied**:
 
-- For email-driven writes: the verified `From:` address
-- For dashboard-driven writes: the authenticated user's session identity
+- For email-driven writes: the verified `From:` address (DKIM/SPF-checked, not the spoofable `From:` header alone)
+- For dashboard-driven writes: the authenticated user's session principal
 - For agent self-writes during runs: `agent://<pipeline-id>/agents/<agent-id>@<version>`
-- For automated imports: the import source URI
+- For automated imports: the import source URI from the registered import job
 
-The runtime never trusts a client-supplied source identity — it derives it from the inbound channel's authentication. A memory entry whose declared source doesn't match the inbound channel is rejected.
+The schema enforces this via two distinct shapes (see [`schemas/memory.schema.json`](schemas/memory.schema.json)):
+
+- **`ClientMemoryWriteSubmission`** — what clients send to the runtime. Carries `{tier, lane, content}` only. **Does not carry `source_identity`.**
+- **`AttestedMemoryWriteRequest`** — what the runtime constructs internally after attaching attested identity. Carries `{tier, lane, source_identity, source_channel, content}`. **Pipeline integrations, hooks, tools, and decision-log entries see this shape — never the client form.**
+
+A client that includes a `source_identity` field has it stripped at the API boundary. Identity attestation cannot be bypassed by sending the right JSON.
 
 ### Status — lifecycle of an entry
 
@@ -211,12 +216,17 @@ A pipeline manifest declares writers per `(tier, lane)`:
 When a memory write arrives:
 
 1. **Resolve identity** — the runtime authenticates the inbound channel, derives the source identity
-2. **Check authority** — match `(declared_tier, declared_lane)` against the manifest's `memory_authority`
-3. **Apply tier policy:**
+2. **Check authority** — match `source_identity` against `memory_authority[]` for the declared `(tier, lane)`
+3. **Resolve effective tier:**
+   - **Match at declared tier** → use it
+   - **No match at declared tier, but match at a lower tier in the same lane** → **auto-downgrade** to the highest matching tier, status set per that tier's policy. The original declared tier is preserved on the entry as `requested_tier` for audit.
+   - **No match in the lane at any tier** → reject with `category: permission_denied` (see [014](014-error-taxonomy.md))
+4. **Apply tier policy** based on effective tier:
    - Tier 1 → status: `confirmed`, written immediately
    - Tier 2 → status: `flagged`, surfaced to the lane's Tier-1 writer for confirmation
    - Tier 3 → status: `proposed`, the orchestrator routes a question to the lane's authority
-4. **Reject** — if the source isn't in the manifest's authority list for the declared `(tier, lane)`, the write is rejected with `category: permission_denied` (see [014](014-error-taxonomy.md))
+
+Auto-downgrade preserves the writer's intent without granting unearned authority. Rejection only fires when there's no valid path to land the write at any tier in the lane. **Both behaviors are deterministic and logged**: every effective-tier decision emits a `memory_write_proposed` decision-log entry with `requested_tier` and `effective_tier` fields so the audit trail captures the reasoning.
 
 ### Routing for Tier-2 and Tier-3 writes
 
