@@ -45,18 +45,24 @@ mock.module("@/lib/openclaw/copilot-state", () => ({
   }),
 }));
 
+// Mirror every export from lib/openclaw/copilot-flow.ts so module-graph
+// resolution succeeds even for transitive importers.
 mock.module("@/lib/openclaw/copilot-flow", () => ({
-  resolveCoPilotCompletionKind: () => null,
-  buildCoPilotReviewAgentSnapshot: () => ({}),
-  buildCoPilotReviewData: () => ({}),
-  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
   hasPurposeMetadata: () => false,
+  planHasInlineContent: () => false,
+  resolveCoPilotToolResearchUseCase: () => undefined,
   getSelectedUnresolvedSkillIds: () => [],
   countSkillAvailability: () => ({ available: 0, total: 0 }),
-  resolveCoPilotToolResearchUseCase: () => "",
-  createCoPilotSeedFromAgent: () => ({}),
+  resolveEvalReviewState: () => ({ canDeploy: false, blockerMessage: null }),
+  approveManualEvalTasks: (tasks: unknown[]) => tasks,
+  buildReviewStateFromArchitecturePlan: () => ({ canDeploy: false, blockerMessage: null }),
+  resolveReviewSkillNodes: () => [],
+  buildCoPilotReviewData: () => ({}),
+  buildCoPilotReviewAgentSnapshot: () => ({}),
+  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
   canPersistReviewOrLaterForgeStage: () => false,
-  planHasInlineContent: () => false,
+  createCoPilotSeedFromAgent: () => ({}),
+  resolveCoPilotCompletionKind: () => null,
 }));
 
 mock.module("@/hooks/use-architect-sandbox", () => ({
@@ -80,11 +86,15 @@ mock.module("@/lib/openclaw/copilot-lifecycle-cache", () => ({
 }));
 
 mock.module("@/lib/openclaw/create-session-cache", () => ({
-  buildResumedBuilderState: () => null,
-  buildResumedCoPilotSeed: () => null,
-  clearCreateSessionCache: mock(() => {}),
-  loadCreateSessionFromCache: () => null,
   saveCreateSessionToCache: mock(() => {}),
+  loadCreateSessionFromCache: () => null,
+  clearCreateSessionCache: mock(() => {}),
+  shouldWaitForRouteAgentBeforeCacheRestore: () => false,
+  shouldReconcileToPersistedForgeStage: () => false,
+  shouldSuppressRevealTriggerForResume: () => false,
+  resolveRouteAgentForRestore: () => null,
+  buildResumedCoPilotSeed: () => null,
+  buildResumedBuilderState: () => null,
 }));
 
 mock.module("@/lib/auth/backend-fetch", () => ({

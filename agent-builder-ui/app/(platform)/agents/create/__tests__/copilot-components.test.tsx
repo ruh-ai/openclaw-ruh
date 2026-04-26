@@ -30,18 +30,25 @@ mock.module("@/lib/openclaw/copilot-state", () => ({
   PHASE_ORDER: ["think", "plan", "build", "review", "test", "ship", "reflect"],
 }));
 
+// Mirror every export from lib/openclaw/copilot-flow.ts so module-graph
+// resolution succeeds even for transitive importers (LifecycleStepRenderer,
+// page.tsx, review components).
 mock.module("@/lib/openclaw/copilot-flow", () => ({
-  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
   hasPurposeMetadata: () => false,
-  getSelectedUnresolvedSkillIds: () => [],
-  buildCoPilotReviewAgentSnapshot: () => ({}),
-  buildCoPilotReviewData: () => ({}),
-  countSkillAvailability: () => ({ available: 0, total: 0 }),
-  resolveCoPilotToolResearchUseCase: () => "",
-  resolveCoPilotCompletionKind: () => null,
-  createCoPilotSeedFromAgent: () => ({}),
-  canPersistReviewOrLaterForgeStage: () => false,
   planHasInlineContent: () => false,
+  resolveCoPilotToolResearchUseCase: () => undefined,
+  getSelectedUnresolvedSkillIds: () => [],
+  countSkillAvailability: () => ({ available: 0, total: 0 }),
+  resolveEvalReviewState: () => ({ canDeploy: false, blockerMessage: null }),
+  approveManualEvalTasks: (tasks: unknown[]) => tasks,
+  buildReviewStateFromArchitecturePlan: () => ({ canDeploy: false, blockerMessage: null }),
+  resolveReviewSkillNodes: () => [],
+  buildCoPilotReviewData: () => ({}),
+  buildCoPilotReviewAgentSnapshot: () => ({}),
+  evaluateCoPilotDeployReadiness: () => ({ ready: false, blockers: [] }),
+  canPersistReviewOrLaterForgeStage: () => false,
+  createCoPilotSeedFromAgent: () => ({}),
+  resolveCoPilotCompletionKind: () => null,
 }));
 
 mock.module("@/lib/openclaw/builder-state", () => ({
