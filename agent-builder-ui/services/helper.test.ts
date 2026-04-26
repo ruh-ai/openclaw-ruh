@@ -11,14 +11,13 @@ mock.module("@/hooks/use-user", () => ({
   },
 }));
 
-mock.module("./authCookies", () => ({
-  // Provide all exports from authCookies.ts so the module registry stays
-  // consistent regardless of which mock.module call ran most recently.
+mock.module("./authCookies.client", () => ({
+  // helper.ts imports from authCookies.client (the browser-only path).
+  // Mock that exact module so the registry resolves to the spy.
   clearAuthCookies: mockClearAuthCookies,
-  getAccessToken: async () => null,
-  getRefreshToken: async () => null,
-  checkAccessToken: async () => false,
-  setAuthCookies: async () => {},
+  getAccessToken: () => null,
+  getRefreshToken: () => null,
+  setAuthCookies: () => {},
 }));
 
 mock.module("@/shared/routes", () => ({
