@@ -48,7 +48,8 @@
       }
     },
     "SubAgentStatus": {
-      "enum": ["pending", "running", "completed", "failed", "stopped"]
+      "enum": ["pending", "running", "completed", "failed", "stopped", "skipped"],
+      "description": "Lifecycle states of a sub-agent. 'stopped' = orchestrator killed it mid-run; 'skipped' = orchestrator decided not to run it (per failure_policy or routing). Both terminal."
     },
     "SubAgentResult": {
       "type": "object",

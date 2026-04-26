@@ -44,7 +44,8 @@
           "id": { "type": "string", "minLength": 1 },
           "specialist": { "type": "string", "minLength": 1 },
           "status": {
-            "enum": ["pending", "running", "completed", "failed", "skipped"]
+            "enum": ["pending", "running", "completed", "failed", "stopped", "skipped"],
+            "description": "Build-manifest task status. Aligned with SubAgentStatus from sub-agent.schema.json#/$defs/SubAgentStatus."
           },
           "started_at": { "type": "string", "format": "date-time" },
           "completed_at": { "type": "string", "format": "date-time" },

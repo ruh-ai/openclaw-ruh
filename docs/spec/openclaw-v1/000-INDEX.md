@@ -104,6 +104,25 @@ Out of scope for v1 (deferred to later versions):
 
 Each phase is a separate PR. Phase 1 is the load-bearing one — once 002, 003, 014, 015 land, the spec is concrete enough that a coding agent could begin producing conformant agents (not yet pipelines).
 
+## Glossary
+
+Terms used across the spec with overlapping meanings — pinned here to prevent drift:
+
+| Term | Meaning |
+|---|---|
+| **Pipeline** | The unit of delivery: agents + orchestrator + shared memory + shared config + dashboard + eval suite, declared in `pipeline-manifest.json`. The whole thing. |
+| **Fleet** | Conversational synonym for "multi-agent pipeline" (a pipeline with `len(agents) > 1`). |
+| **Agent** | A single member of the cast: SOUL, skills, tools, triggers, memory. Conforms to [002](002-agent-manifest.md). |
+| **Specialist** | An agent that's not the orchestrator — i.e., owns a domain (intake, takeoff, pricing). The orchestrator routes to specialists. |
+| **Sub-agent** | The runtime concept of a specialist invocation: a scoped session, identity, and lifecycle. See [007](007-sub-agent.md). One specialist can be spawned as many sub-agents (e.g., parallel fan-out). |
+| **Sandbox** | A Docker container running the OpenClaw runtime + an agent's workspace. Synonymous with "container" in this spec. |
+| **Tenant** | The customer's environment — the boundary within which one or more sandboxes run. A tenant contains pipelines; pipelines do not span tenants in v1. |
+| **Lane** | A named domain of authority in the memory model: estimating, business, operations, etc. |
+| **Tier** | A level of authority within a lane: 1 (authoritative), 2 (trusted), 3 (proposing). See [004](004-memory-model.md). |
+| **AG-UI** | The event protocol streaming agent-side state to the dashboard. `AgUiEvent` shape: `{ type, name?, value? }`. See [003](003-tool-contract.md). |
+| **Architect** | The coding agent that produces conformant pipelines from requirements. May be Claude Opus, GPT 5.5+, or a successor. |
+| **Workspace** | The filesystem location of an agent's or pipeline's artifacts (SOUL.md, skills/, etc.). Workspace-relative paths are always relative to the **agent or pipeline workspace root**. |
+
 ## Conventions
 
 - **Markdown for human-readable contracts.** Every section opens with the contract in prose, followed by examples, followed by the formal JSON Schema reference.

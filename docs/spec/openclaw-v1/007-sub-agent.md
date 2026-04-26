@@ -72,12 +72,15 @@ The `agent_uri` ensures stable identity across runs — the same `(pipeline, spe
 ## Lifecycle states
 
 ```
-   spawn
+   spawn (or skip)
      │
      ▼
   pending ──┐
-     │      │ (timeout or orchestrator stop)
-     ▼      │
+     │      │ (orchestrator decides not to run)
+     │      └─→ skipped
+     │      
+     │      (timeout or orchestrator stop)
+     ▼      
   running ──┴─→ stopped
      │
      ▼
@@ -93,7 +96,10 @@ The `agent_uri` ensures stable identity across runs — the same `(pipeline, spe
 | `running` | Actively executing skill code |
 | `completed` | Finished cleanly; result is populated (success may be true or false) |
 | `failed` | Synonym for `completed` with `success: false`; runtime emits both for clarity |
-| `stopped` | Orchestrator (or runtime) terminated the sub-agent before completion |
+| `stopped` | Orchestrator (or runtime) terminated the sub-agent **mid-run** before completion |
+| `skipped` | Orchestrator decided **not to run** this sub-agent (per `failure_policy: skip` or routing decision); never transitions to `running` |
+
+`stopped` and `skipped` are both terminal but distinct: `stopped` = work was started and aborted; `skipped` = work never started. The decision log distinguishes them so reviewers can audit *why* each terminal state was reached.
 
 State transitions emit `sub_agent_spawn` and `sub_agent_complete` decision-log entries.
 

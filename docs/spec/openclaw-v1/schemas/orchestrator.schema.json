@@ -102,7 +102,7 @@
     },
     "FanOutSpec": {
       "type": "object",
-      "required": ["specialist", "split_input", "max_parallelism"],
+      "required": ["specialist", "split_input"],
       "additionalProperties": false,
       "properties": {
         "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
@@ -113,7 +113,8 @@
         "max_parallelism": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 32
+          "maximum": 32,
+          "description": "Concurrency cap for this fan-out. If omitted, the runtime falls back to RoutingRules.fan_out_default_max_parallelism (default 4)."
         }
       }
     },

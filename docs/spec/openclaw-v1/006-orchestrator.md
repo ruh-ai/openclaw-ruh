@@ -368,14 +368,14 @@ if (looks_like_takeoff_data) await spawn_specialist("takeoff");
 
 Specialists report results; the orchestrator routes. Specialists that spawn other specialists fragment the call tree and break the audit log.
 
-**Implicit fan-out without max_parallelism:**
+**Implicit fan-out without explicit cap and no pipeline default:**
 
 ```json
 { "fan_out": { "specialist": "vision-manifest", "split_input": "..." } }
-// ❌ no max_parallelism; runtime defaults to "as many as possible" and hammers Anthropic
+// (no max_parallelism here AND no RoutingRules.fan_out_default_max_parallelism)
 ```
 
-The schema requires `max_parallelism` when `fan_out` is declared. Default cap (if omitted) is 4.
+If neither this fan-out's `max_parallelism` nor the pipeline-wide `RoutingRules.fan_out_default_max_parallelism` is set, the runtime defaults to **4** (conservative; protects against unbounded Anthropic concurrency). Either declare it inline (preferred when this fan-out has different concurrency needs than the rest of the pipeline) or set the pipeline-wide default in `RoutingRules`.
 
 ## Cross-references
 

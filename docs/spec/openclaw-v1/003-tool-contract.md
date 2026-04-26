@@ -99,6 +99,8 @@ interface ToolResult<Output> {
 
 `events` are AG-UI custom events that the runtime forwards to the dashboard and decision log. Standard events (start, end, error, progress) are emitted by the pipeline automatically; tools emit additional events for surface-relevant signals (e.g., `FILE_WRITTEN` when a workspace tool succeeds).
 
+> **AG-UI** (Agent-UI Protocol) is the streaming event protocol the runtime uses to push agent-side state changes to the dashboard. An `AgUiEvent` has shape `{ type: EventType, name?: string, value?: unknown }` where `EventType` is one of the canonical kinds (`CUSTOM`, `MESSAGE_DELTA`, `TOOL_EXECUTION_START`, etc.) defined by the AG-UI client library. Custom events use `type: "CUSTOM"` and a pipeline-defined `name` from the marker registry (see [015](015-output-validator.md)). The dashboard subscribes via SSE; the decision log records every emitted event. Tools producing custom events should use the `name` constants from `CustomEventName` in the runtime, not arbitrary strings, so dashboards can route events to typed panels.
+
 ## Permission decisions
 
 ```ts

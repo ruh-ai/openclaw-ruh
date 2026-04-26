@@ -58,6 +58,8 @@ A pipeline workspace looks like:
 
 The manifest references every directory above by relative path.
 
+> **Path convention note.** Inside `pipeline-manifest.json` and other artifacts in the *pipeline workspace*, `schemas/X.schema.json` refers to **the pipeline's own** `schemas/` directory at the workspace root — for custom marker schemas, custom-hook payload schemas, custom config doc schemas, etc. Inside *spec markdown* (the documents you're reading), `schemas/X.schema.json` references the **spec's** `schemas/` directory (the canonical platform schemas). When a section quotes JSON manifest fragments, treat `schemas/...` paths as pipeline-local; when it quotes section text or cross-refs, treat them as spec-local. Custom marker / hook / config schemas referenced in pipeline manifests (e.g., `schemas/takeoff-reading.schema.json`, `schemas/rfq-shipped-payload.schema.json`, `schemas/deliverable.schema.json`) are pipeline-local and are not shipped as platform schemas.
+
 ## Top-level shape
 
 ```ts
@@ -434,6 +436,9 @@ A pipeline transitions:
 | `shipped` | Deployed to a tenant; the runtime is loading it |
 
 Stage transitions live alongside agent stages from [002](002-agent-manifest.md). A pipeline in `tested` requires every agent to be at least `tested`; promotion to `shipped` requires every agent to be at `shipped`.
+
+> **Note — pipeline `dev_stage` is a strict 4-value subset of agent `dev_stage`.**
+> Agent-level dev_stage adds three runtime states (`running`, `paused`, `archived`) that don't apply at the pipeline level. A pipeline doesn't transition to `running` — it stays at `shipped` and the *agents inside it* enter `running` when responding to triggers. Both fields use the same name `dev_stage` for symmetry, but the schema (`pipeline-manifest.schema.json`) constrains the pipeline-level enum to the 4-value set. See [002 lifecycle states](002-agent-manifest.md#lifecycle-states) for the full agent-level enum.
 
 ## Identity and addressing
 
