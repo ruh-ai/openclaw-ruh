@@ -41,10 +41,10 @@ Out of scope for v1 (deferred to later versions):
 | Section | Title | Status |
 |---|---|---|
 | [001](001-overview.md) | Overview — vision, principles, the role of the spec | ✅ done |
-| [002](002-agent-manifest.md) | Agent manifest — SOUL.md, skills/, tools/, triggers/, .openclaw/ | 📝 pending |
-| [003](003-tool-contract.md) | Tool contract — schema, permissions, concurrency, observability | 📝 pending |
-| [014](014-error-taxonomy.md) | Error taxonomy + retry strategy | 📝 pending |
-| [015](015-output-validator.md) | Structured output validation (Zod schemas, marker tokenizer) | 📝 pending |
+| [002](002-agent-manifest.md) | Agent manifest — SOUL.md, skills/, tools/, triggers/, .openclaw/ | ✅ done |
+| [003](003-tool-contract.md) | Tool contract — schema, permissions, concurrency, observability | ✅ done |
+| [014](014-error-taxonomy.md) | Error taxonomy + retry strategy | ✅ done |
+| [015](015-output-validator.md) | Structured output validation (Zod schemas, marker tokenizer) | ✅ done |
 
 ### Part B — Memory, observability, state
 
@@ -92,9 +92,9 @@ Out of scope for v1 (deferred to later versions):
 
 ## Roadmap
 
-**Phase 0 — Foundation (this session):** 000-INDEX, 001-overview. Sets vision and structure.
+**Phase 0 — Foundation (✅ complete):** 000-INDEX, 001-overview. Sets vision and structure.
 
-**Phase 1 — Building blocks:** 002 (agent manifest), 003 (tool contract), 014 (errors), 015 (output validator). The primitives every agent uses. ~70% of this is already implemented in `worktree-feat+architect-tool-harness` and just needs extracting into formal contracts.
+**Phase 1 — Building blocks (✅ complete):** 002 (agent manifest), 003 (tool contract), 014 (errors), 015 (output validator). The primitives every agent uses. ~70% extracted from `worktree-feat+architect-tool-harness` into formal contracts.
 
 **Phase 2 — State and memory:** 004 (memory), 005 (decision log), 009 (config), 012 (checkpoint), 013 (hooks). What agents persist and observe.
 

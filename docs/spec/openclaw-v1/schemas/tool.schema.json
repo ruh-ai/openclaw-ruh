@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/tool.schema.json",
+  "title": "OpenClaw Tool Reference",
+  "description": "Each tools/<tool-id>.json file in an agent workspace conforms to this schema. See spec/openclaw-v1/003-tool-contract.md.",
+  "type": "object",
+  "required": ["id", "spec_version", "name", "description", "tool_kind", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Kebab-case unique id within this agent."
+    },
+    "spec_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line summary, used in the architect's tool listings."
+    },
+    "tool_kind": {
+      "type": "string",
+      "description": "Either a built-in kind (workspace-read, workspace-write, sandbox-exec, research, plan-validate) or a custom kebab-case id registered with the runtime.",
+      "anyOf": [
+        {
+          "enum": [
+            "workspace-read",
+            "workspace-write",
+            "sandbox-exec",
+            "research",
+            "plan-validate"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        }
+      ]
+    },
+    "permissions": {
+      "$ref": "#/$defs/PermissionConfig"
+    },
+    "credentials": {
+      "$ref": "#/$defs/CredentialRef"
+    },
+    "config": {
+      "type": "object",
+      "description": "Tool-specific configuration. Validated against the tool's own schema by the runtime.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "PermissionConfig": {
+      "type": "object",
+      "required": ["destructive", "concurrency_safe"],
+      "additionalProperties": false,
+      "properties": {
+        "stages": {
+          "type": "array",
+          "items": {
+            "enum": ["drafted", "validated", "tested", "shipped", "running", "plan", "build", "review", "test", "ship", "reflect"]
+          },
+          "uniqueItems": true,
+          "description": "Lifecycle stages where this tool may be invoked. Omit or null = all stages."
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "enum": ["agent", "copilot", "build", "test", "ship"]
+          },
+          "uniqueItems": true,
+          "description": "Execution modes where this tool may be invoked. Omit or null = all modes."
+        },
+        "destructive": {
+          "type": "boolean",
+          "description": "True if this tool can cause irreversible changes (delete files, send messages, deploy)."
+        },
+        "concurrency_safe": {
+          "type": "boolean",
+          "description": "True if multiple invocations may run in parallel. Tools with side effects on shared state are not concurrency-safe."
+        },
+        "requires_approval": {
+          "type": "boolean",
+          "description": "If true, every invocation pauses for human approval. Defaults to whatever the destructive flag implies, unless explicitly set."
+        }
+      }
+    },
+    "CredentialRef": {
+      "type": "object",
+      "required": ["ref"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key into the credential store. The runtime resolves this to actual secrets at execution time."
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Path to JSON Schema describing the resolved credential shape."
+        }
+      }
+    }
+  }
+}

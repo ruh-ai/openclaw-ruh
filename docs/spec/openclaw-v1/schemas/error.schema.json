@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/error.schema.json",
+  "title": "OpenClaw Classified Error",
+  "description": "Every error in OpenClaw classifies into one of these categories with a known retry policy and recovery action. See spec/openclaw-v1/014-error-taxonomy.md.",
+  "type": "object",
+  "required": ["category", "retryable", "originalMessage", "userMessage"],
+  "additionalProperties": false,
+  "properties": {
+    "category": { "$ref": "#/$defs/ErrorCategory" },
+    "retryable": { "type": "boolean" },
+    "originalMessage": {
+      "type": "string",
+      "description": "Raw error message, kept for debugging. May contain credentials/internal paths — never surface to end users."
+    },
+    "userMessage": {
+      "type": "string",
+      "description": "Sanitized, human-readable message safe for the dashboard and the agent's self-correction context."
+    },
+    "toolName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Populated when classification was via classifyToolError."
+    },
+    "recovery": { "$ref": "#/$defs/RecoveryAction" }
+  },
+  "$defs": {
+    "ErrorCategory": {
+      "enum": [
+        "context_too_long",
+        "rate_limit",
+        "auth_error",
+        "gateway_timeout",
+        "malformed_response",
+        "tool_execution_failure",
+        "sandbox_unavailable",
+        "model_refusal",
+        "network_error",
+        "manifest_invalid",
+        "permission_denied",
+        "eval_failure",
+        "unknown"
+      ]
+    },
+    "RetryConfig": {
+      "type": "object",
+      "required": ["maxAttempts", "baseDelayMs", "maxDelayMs", "backoffFactor"],
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "baseDelayMs": { "type": "integer", "minimum": 0 },
+        "maxDelayMs": { "type": "integer", "minimum": 0 },
+        "backoffFactor": { "type": "number", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "RetryDecision": {
+      "type": "object",
+      "required": ["shouldRetry", "delayMs", "attempt", "maxAttempts"],
+      "additionalProperties": false,
+      "properties": {
+        "shouldRetry": { "type": "boolean" },
+        "delayMs": { "type": "integer", "minimum": 0 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "maxAttempts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "RecoveryAction": {
+      "type": "object",
+      "required": ["type", "description", "modifications"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "compact_context",
+            "simplify_prompt",
+            "extend_timeout",
+            "wait_and_retry",
+            "provide_error_context",
+            "none"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable explanation surfaced in the dashboard."
+        },
+        "modifications": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxPromptTokens": {
+              "type": "integer",
+              "minimum": 1000,
+              "description": "For compact_context — target prompt-tokens after compaction."
+            },
+            "timeoutMultiplier": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10,
+              "description": "For extend_timeout — multiply current timeout by this factor."
+            },
+            "appendToPrompt": {
+              "type": "string",
+              "description": "For provide_error_context — text appended to the next prompt."
+            },
+            "simplifyInstruction": {
+              "type": "boolean",
+              "description": "For simplify_prompt — replace system instruction with a simpler version on next attempt."
+            }
+          }
+        }
+      }
+    },
+    "PipelineRetryOverrides": {
+      "description": "Per-pipeline overrides allowed in pipeline-manifest.json's retry_overrides field.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(context_too_long|rate_limit|auth_error|gateway_timeout|malformed_response|tool_execution_failure|sandbox_unavailable|model_refusal|network_error|manifest_invalid|permission_denied|eval_failure|unknown)$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "baseDelayMs": { "type": "integer", "minimum": 0 },
+            "maxDelayMs": { "type": "integer", "minimum": 0 },
+            "backoffFactor": { "type": "number", "minimum": 1, "maximum": 10 }
+          }
+        }
+      }
+    }
+  }
+}
