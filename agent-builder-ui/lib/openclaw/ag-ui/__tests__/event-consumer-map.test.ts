@@ -12,6 +12,7 @@ import {
 import { CustomEventName } from "../types";
 import { tracer } from "../event-tracer";
 import { createEmptyBrowserWorkspaceState } from "../../browser-workspace";
+import { normalizePlan } from "../../plan-formatter";
 
 function createMockDeps(overrides?: Partial<ConsumerDeps>): ConsumerDeps {
   return {
@@ -161,7 +162,7 @@ describe("consumeSkillGraphReady", () => {
     expect(deps.readyForReviewFiredRef.current).toBe(true);
   });
 
-  test("advances build stage to review when devStage is build", () => {
+  test("marks build done without advancing to review when devStage is build", () => {
     const store = {
       setDiscoveryDocuments: mock(() => {}),
       setThinkStatus: mock(() => {}),
@@ -180,7 +181,7 @@ describe("consumeSkillGraphReady", () => {
     );
 
     expect(store.setBuildStatus).toHaveBeenCalledWith("done");
-    expect(store.setDevStage).toHaveBeenCalledWith("review");
+    expect(store.setDevStage).not.toHaveBeenCalled();
   });
 
   test("does not advance before build has actually started", () => {
@@ -277,7 +278,7 @@ describe("consumeArchitecturePlanReady", () => {
 
     consumeArchitecturePlanReady({ plan: fakePlan, systemName: "test", content: "Plan ready" }, deps);
 
-    expect(deps.coPilotStore!.setArchitecturePlan).toHaveBeenCalledWith(fakePlan);
+    expect(deps.coPilotStore!.setArchitecturePlan).toHaveBeenCalledWith(normalizePlan(fakePlan));
     expect(deps.coPilotStore!.setPlanStatus).toHaveBeenCalledWith("ready");
     expect(deps.coPilotStore!.setDevStage).toHaveBeenCalledWith("plan");
   });

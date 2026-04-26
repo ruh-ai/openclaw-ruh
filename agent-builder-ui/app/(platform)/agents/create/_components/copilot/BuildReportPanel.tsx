@@ -1,0 +1,230 @@
+"use client";
+
+import type { ReactNode } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  FileSearch,
+  RotateCcw,
+  Server,
+  ShieldCheck,
+  Wrench,
+  XCircle,
+} from "lucide-react";
+import type { BuildReport, BuildReportCheck } from "@/lib/openclaw/types";
+import type { ArtifactTarget } from "@/lib/openclaw/stage-context";
+
+interface BuildReportPanelProps {
+  report: BuildReport | null;
+  onRetryFailedStep: () => void;
+  onSelectArtifact: (target: ArtifactTarget) => void;
+}
+
+function readinessLabel(readiness: BuildReport["readiness"]): string {
+  switch (readiness) {
+    case "blocked":
+      return "Blocked";
+    case "test-ready":
+      return "Ready for Test";
+    case "ship-ready":
+      return "Ready to Ship";
+    default:
+      return "Pending";
+  }
+}
+
+function readinessClass(readiness: BuildReport["readiness"]): string {
+  switch (readiness) {
+    case "blocked":
+      return "border-red-500/20 bg-red-500/10 text-red-600";
+    case "test-ready":
+      return "border-[var(--info)]/20 bg-[var(--info)]/10 text-[var(--info)]";
+    case "ship-ready":
+      return "border-[var(--success)]/20 bg-[var(--success)]/10 text-[var(--success)]";
+    default:
+      return "border-[var(--border-default)] bg-[var(--background)] text-[var(--text-tertiary)]";
+  }
+}
+
+function checkIcon(status: BuildReportCheck["status"]) {
+  if (status === "pass") return <CheckCircle2 className="h-3.5 w-3.5 text-[var(--success)]" />;
+  if (status === "warning") return <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />;
+  return <XCircle className="h-3.5 w-3.5 text-[var(--error)]" />;
+}
+
+function labelFromCheckName(name: string): string {
+  return name.replace(/^[^:]+:/, "").replace(/[-_]/g, " ");
+}
+
+function checksFor(checks: BuildReportCheck[], prefix: string): BuildReportCheck[] {
+  return checks.filter((check) => check.name.startsWith(`${prefix}:`));
+}
+
+function CheckGroup({
+  title,
+  icon,
+  checks,
+  emptyLabel,
+}: {
+  title: string;
+  icon: ReactNode;
+  checks: BuildReportCheck[];
+  emptyLabel: string;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--border-default)] bg-[var(--card-color)]">
+      <div className="flex items-center gap-2 border-b border-[var(--border-default)] px-3 py-2">
+        {icon}
+        <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">{title}</p>
+        <span className="ml-auto text-[10px] font-satoshi-medium text-[var(--text-tertiary)]">
+          {checks.length}
+        </span>
+      </div>
+      <div className="divide-y divide-[var(--border-muted)]">
+        {checks.length === 0 ? (
+          <p className="px-3 py-2 text-[11px] font-satoshi-regular text-[var(--text-tertiary)]">
+            {emptyLabel}
+          </p>
+        ) : (
+          checks.map((check) => (
+            <div key={`${check.name}-${check.status}`} className="flex items-start gap-2 px-3 py-2">
+              <div className="mt-0.5">{checkIcon(check.status)}</div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-satoshi-medium capitalize text-[var(--text-secondary)]">
+                  {labelFromCheckName(check.name)}
+                </p>
+                {check.detail && (
+                  <p className="mt-0.5 line-clamp-2 text-[10px] font-satoshi-regular text-[var(--text-tertiary)]">
+                    {check.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function BuildReportPanel({
+  report,
+  onRetryFailedStep,
+  onSelectArtifact,
+}: BuildReportPanelProps) {
+  if (!report) {
+    return (
+      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--background)] px-4 py-3">
+        <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Build report pending</p>
+        <p className="mt-1 text-[11px] font-satoshi-regular text-[var(--text-tertiary)]">
+          The backend will attach readiness details after setup and verification run.
+        </p>
+      </div>
+    );
+  }
+
+  const checks = report.checks ?? [];
+  const blockers = report.blockers ?? [];
+  const warnings = report.warnings ?? [];
+  const failedChecks = checks.filter((check) => check.status === "fail");
+  const retryEnabled = blockers.length > 0 || failedChecks.length > 0;
+
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--border-default)] bg-[var(--background)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">Build Report</p>
+          <p className="mt-1 text-[11px] font-satoshi-regular text-[var(--text-tertiary)]">
+            {report.generatedAt ? `Generated ${new Date(report.generatedAt).toLocaleString()}` : "Generated by backend"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-satoshi-bold ${readinessClass(report.readiness)}`}>
+            <ShieldCheck className="h-3 w-3" />
+            {readinessLabel(report.readiness)}
+          </span>
+          <button
+            type="button"
+            onClick={() => onSelectArtifact({ kind: "build_report", path: ".openclaw/build/build-report.json" })}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-default)] bg-[var(--card-color)] px-2.5 text-[11px] font-satoshi-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--primary)]/30 hover:text-[var(--primary)]"
+          >
+            <FileSearch className="h-3.5 w-3.5" />
+            Inspect
+          </button>
+        </div>
+      </div>
+
+      {blockers.length > 0 && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+            <p className="text-xs font-satoshi-bold text-red-600">Blockers</p>
+          </div>
+          <ul className="mt-2 space-y-1">
+            {blockers.map((blocker) => (
+              <li key={blocker} className="text-[11px] font-satoshi-regular text-red-600/90">
+                {blocker}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="rounded-lg border border-[var(--warning)]/20 bg-[var(--warning)]/5 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning)]" />
+            <p className="text-xs font-satoshi-bold text-[var(--warning)]">Warnings</p>
+          </div>
+          <ul className="mt-2 space-y-1">
+            {warnings.map((warning) => (
+              <li key={warning} className="text-[11px] font-satoshi-regular text-[var(--text-secondary)]">
+                {warning}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <CheckGroup
+          title="Build tasks"
+          icon={<Wrench className="h-3.5 w-3.5 text-[var(--primary)]" />}
+          checks={checksFor(checks, "build")}
+          emptyLabel="No build task checks reported."
+        />
+        <CheckGroup
+          title="Setup steps"
+          icon={<Clock3 className="h-3.5 w-3.5 text-[var(--primary)]" />}
+          checks={checksFor(checks, "setup")}
+          emptyLabel="No setup checks reported."
+        />
+        <CheckGroup
+          title="Service health"
+          icon={<Server className="h-3.5 w-3.5 text-[var(--primary)]" />}
+          checks={checksFor(checks, "service")}
+          emptyLabel="No service checks reported."
+        />
+        <CheckGroup
+          title="Verification"
+          icon={<ShieldCheck className="h-3.5 w-3.5 text-[var(--primary)]" />}
+          checks={checks.filter((check) => !/^(build|setup|service):/.test(check.name))}
+          emptyLabel={report.readiness === "ship-ready" ? "Verification completed." : "Verification has not reported detailed checks yet."}
+        />
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onRetryFailedStep}
+          disabled={!retryEnabled}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--primary)] px-3 text-[11px] font-satoshi-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Retry failed step
+        </button>
+      </div>
+    </div>
+  );
+}

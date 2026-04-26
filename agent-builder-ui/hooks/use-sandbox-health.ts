@@ -10,13 +10,21 @@ export type SandboxHealth = "running" | "stopped" | "unreachable" | "loading";
 export interface SandboxStatusResponse {
   status?: string;
   container_running?: boolean;
+  gateway_reachable?: boolean;
+  ok?: boolean;
+  drift_state?: string;
 }
 
 type FetchLike = typeof fetch;
 
 export function classifySandboxHealth(status: SandboxStatusResponse): SandboxHealth {
   const normalized = String(status.status ?? "").trim().toLowerCase();
-  const gatewayHealthy = ["running", "ok", "healthy", "ready", "started"].includes(normalized);
+  const normalizedDrift = String(status.drift_state ?? "").trim().toLowerCase();
+  const gatewayHealthy =
+    status.gateway_reachable === true ||
+    status.ok === true ||
+    normalizedDrift === "healthy" ||
+    ["running", "ok", "healthy", "ready", "started", "live"].includes(normalized);
 
   if (status.container_running === false) {
     return "stopped";

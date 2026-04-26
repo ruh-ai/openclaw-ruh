@@ -17,6 +17,7 @@ const AGENT_SELECT_COLUMNS = `
   status,
   sandbox_ids,
   forge_sandbox_id,
+  forge_stage,
   skill_graph,
   workflow,
   agent_rules,
@@ -142,7 +143,7 @@ export interface AgentCredentialSummary {
 }
 
 export type AgentStatus = 'active' | 'draft' | 'forging';
-export type AgentForgeStage = 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'complete';
+export type AgentForgeStage = 'reveal' | 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'reflect' | 'complete';
 
 export interface PaperclipWorkerRecord {
   worker_id: string;

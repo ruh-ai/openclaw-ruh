@@ -480,6 +480,11 @@ describe('agentStore.getAgent', () => {
     await agentStore.getAgent('look-me-up');
     expect(mockQuery.mock.calls[0][1]).toContain('look-me-up');
   });
+
+  test('selects forge_stage for lifecycle resume', async () => {
+    await agentStore.getAgent('look-me-up');
+    expect(mockQuery.mock.calls[0][0] as string).toContain('forge_stage');
+  });
 });
 
 // ── updateAgent ───────────────────────────────────────────────────────────────

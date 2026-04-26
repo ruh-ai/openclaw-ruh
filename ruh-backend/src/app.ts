@@ -3465,7 +3465,82 @@ app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, re
  * stage transition so the backend always knows where the creation process is.
  * This is the source of truth for resuming interrupted builds.
  */
-const VALID_FORGE_STAGES = ['think', 'plan', 'build', 'review', 'test', 'ship', 'complete'];
+const VALID_FORGE_STAGES = ['reveal', 'think', 'plan', 'build', 'review', 'test', 'ship', 'reflect', 'complete'];
+type ForgeBuildReadiness = 'blocked' | 'test-ready' | 'ship-ready';
+
+function isForgeBuildReadiness(value: unknown): value is ForgeBuildReadiness {
+  return value === 'blocked' || value === 'test-ready' || value === 'ship-ready';
+}
+
+async function readForgeBuildReport(agent: agentStore.AgentRecord): Promise<{
+  readiness: ForgeBuildReadiness;
+  blockers: string[];
+} | null> {
+  if (!agent.forge_sandbox_id) return null;
+  const raw = await readWorkspaceCopilotFile(agent.forge_sandbox_id, '.openclaw/build/build-report.json');
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const readiness = parsed.readiness;
+    if (!isForgeBuildReadiness(readiness)) return null;
+    return {
+      readiness,
+      blockers: Array.isArray(parsed.blockers)
+        ? parsed.blockers.filter((item): item is string => typeof item === 'string')
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function requireForgeBuildReadiness(agent: agentStore.AgentRecord, allowed: ForgeBuildReadiness[]) {
+  const report = await readForgeBuildReport(agent);
+  if (!report) {
+    throw httpError(409, 'Cannot advance lifecycle: build report is missing.');
+  }
+  if (!allowed.includes(report.readiness)) {
+    const blocker = report.blockers[0] ? ` ${report.blockers[0]}` : '';
+    throw httpError(409, `Cannot advance lifecycle: build report is ${report.readiness}.${blocker}`);
+  }
+  return report;
+}
+
+async function hasPassingEvalResult(agentId: string): Promise<boolean> {
+  const results = await evalResultStore.listEvalResults(agentId, { limit: 10, offset: 0 });
+  return results.items.some((result) =>
+    result.total_tasks > 0
+    && result.failed_tasks === 0
+    && result.passed_tasks >= result.total_tasks
+  );
+}
+
+async function enforceForgeStageGuard(
+  agent: agentStore.AgentRecord,
+  stage: agentStore.AgentForgeStage,
+  body: Record<string, unknown>,
+) {
+  if (stage === 'review') {
+    await requireForgeBuildReadiness(agent, ['test-ready', 'ship-ready']);
+    return;
+  }
+  if (stage === 'test') {
+    await requireForgeBuildReadiness(agent, ['test-ready', 'ship-ready']);
+    return;
+  }
+  if (stage === 'ship') {
+    const passingEval = await hasPassingEvalResult(agent.id);
+    const devOverride = body.testOverride === true && process.env.NODE_ENV !== 'production';
+    if (!passingEval && !devOverride) {
+      throw httpError(409, 'Cannot advance lifecycle: ship requires a passing test report.');
+    }
+    return;
+  }
+  if (stage === 'complete') {
+    throw httpError(409, 'Cannot mark lifecycle complete through stage updates. Use the Ship endpoint.');
+  }
+}
+
 app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, res) => {
   const agent = await getOwnedAgentRecord(req, req.params.id);
   const { stage } = req.body;
@@ -3474,9 +3549,26 @@ app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, r
     throw httpError(400, `Invalid stage: ${stage}. Must be one of: ${VALID_FORGE_STAGES.join(', ')}`);
   }
 
+  await enforceForgeStageGuard(agent, stage as agentStore.AgentForgeStage, req.body ?? {});
+
   // When stage reaches "complete", also promote status to "active"
   const statusUpdate = stage === 'complete' ? { status: 'active' as const, forge_stage: stage as agentStore.AgentForgeStage } : { forge_stage: stage as agentStore.AgentForgeStage };
   await agentStore.updateAgent(req.params.id, statusUpdate);
+
+  // When entering or leaving plan stage, sync architecture.json + discovery docs
+  // from the container workspace back into the agent's DB columns so the UI
+  // can render them. Best-effort — missing files are ok, a broken sync should
+  // never block a stage advance.
+  if (stage === 'plan' || stage === 'build') {
+    try {
+      const syncResult = await syncPlanFromWorkspace(req.params.id, agent);
+      if (syncResult.synced) {
+        console.info(`[forge/stage→${stage}] sync-plan: arch=${syncResult.architecture} prd=${syncResult.prd} trd=${syncResult.trd} skills=${syncResult.skills}`);
+      }
+    } catch (err) {
+      console.warn(`[forge/stage→${stage}] sync-plan failed (non-blocking): ${(err as Error).message}`);
+    }
+  }
 
   // Auto-commit at stage transitions (Agent-as-Code)
   const STAGE_COMMITS: Record<string, string> = {
@@ -3724,6 +3816,178 @@ app.post('/api/agents/:id/forge/sync-workspace', asyncHandler(async (req, res) =
 
   console.info(`[sync-workspace] Agent ${req.params.id}: synced ${nodes.length} skills from forge sandbox`);
   res.json({ synced: nodes.length, skills: skillNames });
+}));
+
+/**
+ * Parse a markdown document into { title, sections: [{heading, content}] }.
+ * The title comes from the first H1 (`# `), sections are split on H2 (`## `).
+ * Used to map PRD.md / TRD.md into the `discovery_documents` JSONB shape.
+ */
+function parseMarkdownToDiscoveryDoc(
+  md: string,
+  fallbackTitle: string,
+): { title: string; sections: { heading: string; content: string }[] } | null {
+  if (!md.trim()) return null;
+  const lines = md.split('\n');
+  const h1Idx = lines.findIndex((l) => l.startsWith('# '));
+  const title = h1Idx >= 0
+    ? (lines[h1Idx].slice(2).trim().slice(0, 160) || fallbackTitle)
+    : fallbackTitle;
+  const body = h1Idx >= 0 ? lines.slice(h1Idx + 1).join('\n') : md;
+
+  const sections: { heading: string; content: string }[] = [];
+  const parts = body.split(/^##\s+/m);
+  if (parts.length <= 1) {
+    if (body.trim()) sections.push({ heading: 'Overview', content: body.trim().slice(0, 32000) });
+  } else {
+    const intro = parts[0].trim();
+    if (intro) sections.push({ heading: 'Introduction', content: intro.slice(0, 32000) });
+    for (let i = 1; i < parts.length; i++) {
+      const seg = parts[i];
+      const nl = seg.indexOf('\n');
+      const heading = (nl > 0 ? seg.slice(0, nl) : seg).trim().slice(0, 160);
+      const content = (nl > 0 ? seg.slice(nl + 1) : '').trim().slice(0, 32000);
+      if (heading) sections.push({ heading, content: content || '(empty)' });
+    }
+  }
+  if (sections.length === 0) return null;
+  return { title, sections };
+}
+
+/**
+ * Read the architect's workspace outputs (plan/architecture.json + discovery/*.md)
+ * from a forge sandbox and write them into the agent's DB columns.
+ *
+ * This is the plan-stage counterpart to forge/sync-workspace (which handles the
+ * build stage's SKILL.md files). The architect writes these files as tool calls
+ * during the Think/Plan conversation; this helper pulls the DB back in sync.
+ *
+ * Returns a summary of what was synced. Missing files are skipped, not an error
+ * (early stages may not have produced every artifact yet).
+ */
+async function syncPlanFromWorkspace(agentId: string, agent: agentStore.AgentRecord) {
+  const sandboxId = agent.forge_sandbox_id;
+  if (!sandboxId) {
+    return { synced: false, reason: 'no_forge_sandbox' as const };
+  }
+
+  const tryRead = async (relPath: string): Promise<string> => {
+    // Prefer the copilot workspace (used during active plan/build) and fall
+    // back to the main workspace (written to after stage promotion).
+    for (const ws of ['workspace-copilot', 'workspace']) {
+      const [ok, out] = await sandboxExec(
+        sandboxId,
+        `cat $HOME/.openclaw/${ws}/${relPath} 2>/dev/null`,
+        10,
+      );
+      if (ok === 0 && out.trim()) return out;
+    }
+    return '';
+  };
+
+  const archRaw = await tryRead('.openclaw/plan/architecture.json');
+  const prdMd = await tryRead('.openclaw/discovery/PRD.md');
+  const trdMd = await tryRead('.openclaw/discovery/TRD.md');
+
+  let architecture: Record<string, unknown> | null = null;
+  if (archRaw) {
+    try { architecture = JSON.parse(archRaw) as Record<string, unknown>; }
+    catch { architecture = null; }
+  }
+
+  const prdDoc = parseMarkdownToDiscoveryDoc(prdMd, `${agent.name} — PRD`);
+  const trdDoc = parseMarkdownToDiscoveryDoc(trdMd, `${agent.name} — TRD`);
+
+  // The frontend expects skill_graph to be a SkillGraphNode[] array (not the
+  // raw architecture object). Map each architect-authored skill into that shape.
+  // See agent-builder-ui/lib/openclaw/types.ts :: SkillGraphNode.
+  let skillGraphNodes: Array<Record<string, unknown>> | null = null;
+  if (architecture && Array.isArray(architecture.skills)) {
+    skillGraphNodes = (architecture.skills as Array<Record<string, unknown>>)
+      .filter((s): s is Record<string, unknown> => s !== null && typeof s === 'object')
+      .map((s) => {
+        const rawId = typeof s.id === 'string' ? s.id : (typeof s.skill_id === 'string' ? s.skill_id : '');
+        const name = typeof s.name === 'string' ? s.name : rawId;
+        const skillId = rawId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'skill';
+        const dependsOn = Array.isArray(s.dependencies)
+          ? (s.dependencies as unknown[]).filter((d): d is string => typeof d === 'string')
+          : (Array.isArray(s.depends_on)
+            ? (s.depends_on as unknown[]).filter((d): d is string => typeof d === 'string')
+            : []);
+        const envVars = Array.isArray(s.envVars)
+          ? (s.envVars as unknown[]).filter((v): v is string => typeof v === 'string')
+          : (Array.isArray(s.requires_env)
+            ? (s.requires_env as unknown[]).filter((v): v is string => typeof v === 'string')
+            : []);
+        return {
+          skill_id: skillId,
+          name,
+          source: 'custom',
+          status: 'found',
+          depends_on: dependsOn,
+          ...(typeof s.description === 'string' ? { description: s.description } : {}),
+          ...(envVars.length > 0 ? { requires_env: envVars } : {}),
+          ...(typeof s.toolType === 'string' ? { tool_type: s.toolType } : {}),
+        };
+      });
+  }
+
+  const configUpdate: Parameters<typeof agentStore.updateAgentConfig>[1] = {};
+  if (skillGraphNodes && skillGraphNodes.length > 0) {
+    configUpdate.skillGraph = skillGraphNodes;
+  }
+  if (architecture && architecture.workflow !== undefined) {
+    configUpdate.workflow = architecture.workflow;
+  }
+  // discovery_documents has a strict shape requiring BOTH prd and trd; only
+  // write when we successfully parsed both, otherwise leave it for a later sync.
+  if (prdDoc && trdDoc) {
+    configUpdate.discoveryDocuments = { prd: prdDoc, trd: trdDoc };
+  }
+
+  const agentUpdate: Parameters<typeof agentStore.updateAgent>[1] = {};
+  if (skillGraphNodes && skillGraphNodes.length > 0) {
+    const skillNames = skillGraphNodes
+      .map((n) => (typeof n.name === 'string' ? n.name : ''))
+      .filter((n): n is string => n.length > 0);
+    if (skillNames.length > 0) agentUpdate.skills = skillNames;
+  }
+
+  if (Object.keys(configUpdate).length > 0) {
+    await agentStore.updateAgentConfig(agentId, configUpdate);
+  }
+  if (Object.keys(agentUpdate).length > 0) {
+    await agentStore.updateAgent(agentId, agentUpdate);
+  }
+
+  return {
+    synced: true as const,
+    architecture: architecture !== null,
+    workflow: configUpdate.workflow !== undefined,
+    prd: prdDoc !== null,
+    trd: trdDoc !== null,
+    skills: (agentUpdate.skills as string[] | undefined)?.length ?? 0,
+  };
+}
+
+/**
+ * Sync plan-stage workspace outputs (architecture.json + PRD/TRD markdown)
+ * into the agent's DB columns. Safe to call repeatedly — missing files are
+ * skipped rather than erroring.
+ *
+ * Can be called by the Architect from inside the container via:
+ *   curl -s -X POST $RUH_BACKEND_URL/api/agents/$RUH_AGENT_ID/forge/sync-plan
+ *
+ * Also wired into PATCH /forge/stage on plan→build transitions (see below).
+ */
+app.post('/api/agents/:id/forge/sync-plan', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const result = await syncPlanFromWorkspace(req.params.id, agent);
+  if (!result.synced) {
+    throw httpError(400, 'Agent has no forge sandbox');
+  }
+  console.info(`[sync-plan] Agent ${req.params.id}: arch=${result.architecture} workflow=${result.workflow} prd=${result.prd} trd=${result.trd} skills=${result.skills}`);
+  res.json({ id: req.params.id, ...result });
 }));
 
 /**
@@ -6968,7 +7232,7 @@ app.get('/api/agents/:id/build/stream/:stream_id', requireAuth, asyncHandler(asy
   }
 
   // If build already finished, close immediately after replay
-  if (entry.status === 'done' || entry.status === 'error') {
+  if (entry.status === 'done' || entry.status === 'error' || entry.status === 'cancelled') {
     sendEvent('done', { stream_id });
     stream.close();
     return;
@@ -6980,7 +7244,7 @@ app.get('/api/agents/:id/build/stream/:stream_id', requireAuth, asyncHandler(asy
       sendEvent(events[cursor].type, events[cursor].data);
       cursor++;
     }
-    if (entry.status === 'done' || entry.status === 'error') {
+    if (entry.status === 'done' || entry.status === 'error' || entry.status === 'cancelled') {
       sendEvent('done', { stream_id });
       stream.close();
       clearInterval(interval);
@@ -7002,7 +7266,14 @@ app.post('/api/agents/:id/build/cancel/:stream_id', requireAuth, asyncHandler(as
   if (!controller) throw httpError(400, 'Build cannot be cancelled — no controller found');
 
   controller.abort();
-  entry.status = 'cancelled';
+  entry.status = 'error';
+  entry.error = 'Build cancelled by user';
+  entry.events ??= [];
+  entry.events.push({
+    type: 'error',
+    data: { type: 'error', message: 'Build cancelled by user' },
+    timestamp: Date.now(),
+  });
   res.json({ cancelled: true, stream_id });
 }));
 
@@ -7030,6 +7301,9 @@ app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {
     commitMessage: typeof commitMessage === 'string' ? commitMessage : undefined,
     onLog: (msg) => console.log(`[ship:${req.params.id.slice(0,8)}] ${msg}`),
   });
+  if (result.ok) {
+    await agentStore.updateAgent(req.params.id, { forge_stage: 'complete', status: 'active' });
+  }
   res.json(result);
 }));
 

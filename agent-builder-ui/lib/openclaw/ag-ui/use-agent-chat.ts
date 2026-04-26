@@ -567,6 +567,9 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
     if (shouldAppendUserMessageToTranscript(runSurface, Boolean(opts?.silent))) {
       setMessages(prev => [...prev, { id: newId(), role: "user", content: trimmed }]);
     }
+    // User replying clears any pending architect questions — the next turn starts
+    // fresh, and the architect's subsequent response will populate new ones if needed.
+    coPilotStore?.clearPendingQuestions?.();
     setActiveRunSurface(runSurface);
     setIsLoading(true);
     liveStepsRef.current = [];

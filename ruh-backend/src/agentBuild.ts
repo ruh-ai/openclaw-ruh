@@ -13,19 +13,20 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { generateScaffoldFiles, type ArchitecturePlan } from './scaffoldTemplates';
+import { generateScaffoldFiles, normalizePlan, staleScaffoldFilesForPlan, type ArchitecturePlan } from './scaffoldTemplates';
 import { getSpecialistPrompt, getRequiredSpecialists, type SpecialistType } from './specialistPrompts';
-import { writeWorkspaceFile, writeWorkspaceFiles } from './workspaceWriter';
-import { dockerExec, getContainerName } from './docker';
+import { mergeWorkspaceCopilotToMain, writeWorkspaceFile, writeWorkspaceFiles } from './workspaceWriter';
+import { buildHomeFileWriteCommand, dockerExec, getContainerName, shellQuote } from './docker';
 import { gatewayUrlAndHeaders } from './utils';
 import * as store from './store';
+import { summarizeBuildReport, type BuildReport } from './buildReport';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface BuildEvent {
   type: "task_start" | "task_complete" | "task_failed" | "file_written"
     | "progress" | "status" | "build_complete" | "error"
-    | "setup_progress";
+    | "setup_progress" | "build_report";
   specialist?: string;
   files?: string[];
   error?: string;
@@ -34,6 +35,7 @@ export interface BuildEvent {
   total?: number;
   message?: string;
   manifest?: BuildManifest;
+  report?: BuildReport;
   setupPhase?: string;
 }
 
@@ -190,6 +192,26 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
   return chunks;
 }
 
+export function isMeaningfulSpecialistSsePayload(data: string): boolean {
+  const trimmed = data.trim();
+  if (!trimmed) return false;
+  if (trimmed === '[DONE]') return true;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed.error || parsed.type === 'error') return true;
+    if (typeof parsed.choices?.[0]?.delta?.content === 'string' && parsed.choices[0].delta.content.length > 0) {
+      return true;
+    }
+    if (parsed.type === 'file_written' || parsed.event === 'file_written') return true;
+    if (parsed.type === 'specialist_done' || parsed.specialist_done) return true;
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 /** Simple async iterable queue for bridging callbacks to async generators. */
 function createAsyncQueue<T>() {
   const buffer: T[] = [];
@@ -281,14 +303,14 @@ async function callSpecialist(
   // 2 minutes allows for the agent's initial tool calls (reading workspace,
   // checking files) which produce no delta content before text starts flowing.
   // Also hard-cap at 10 minutes total.
-  let lastDataAt = Date.now();
+  let lastMeaningfulDataAt = Date.now();
   const INACTIVITY_MS = 120_000;
   const HARD_TIMEOUT_MS = 10 * 60 * 1000;
   const startedAt = Date.now();
 
   const inactivityCheck = setInterval(() => {
     const now = Date.now();
-    if (now - lastDataAt > INACTIVITY_MS || now - startedAt > HARD_TIMEOUT_MS) {
+    if (now - lastMeaningfulDataAt > INACTIVITY_MS || now - startedAt > HARD_TIMEOUT_MS) {
       try { reader.cancel(); } catch { /* ignore */ }
       clearInterval(inactivityCheck);
     }
@@ -297,7 +319,6 @@ async function callSpecialist(
   try {
     while (!streamDone) {
       const { done, value } = await reader.read();
-      lastDataAt = Date.now();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -309,12 +330,26 @@ async function callSpecialist(
 
         // [DONE] means the gateway finished — break immediately
         if (data === '[DONE]') {
+          lastMeaningfulDataAt = Date.now();
           streamDone = true;
           break;
         }
 
         try {
+          if (isMeaningfulSpecialistSsePayload(data)) {
+            lastMeaningfulDataAt = Date.now();
+          }
+
           const parsed = JSON.parse(data);
+          if (parsed.error) {
+            const message = typeof parsed.error?.message === 'string'
+              ? parsed.error.message
+              : JSON.stringify(parsed.error);
+            throw new Error(message);
+          }
+          if (parsed.type === 'error') {
+            throw new Error(String(parsed.message ?? parsed.error ?? 'Specialist stream error'));
+          }
           // OpenAI-format streaming: choices[0].delta.content
           const delta = parsed.choices?.[0]?.delta?.content;
           if (typeof delta === 'string') {
@@ -369,7 +404,13 @@ async function callSpecialist(
             streamDone = true;
             break;
           }
-        } catch { /* non-JSON SSE line, skip */ }
+        } catch (err) {
+          if (err instanceof SyntaxError) {
+            // Non-JSON SSE line, skip.
+            continue;
+          }
+          throw err;
+        }
       }
     }
   } finally {
@@ -397,7 +438,15 @@ async function callSpecialist(
 
 async function persistManifest(sandboxId: string, manifest: BuildManifest): Promise<BuildEvent | null> {
   try {
-    await writeWorkspaceFile(sandboxId, '.openclaw/plan/build-manifest.json', JSON.stringify(manifest, null, 2));
+    const content = JSON.stringify(manifest, null, 2);
+    await writeWorkspaceFile(sandboxId, '.openclaw/plan/build-manifest.json', content);
+    const containerName = getContainerName(sandboxId);
+    const writeMainManifest = buildHomeFileWriteCommand(
+      '.openclaw/workspace/.openclaw/plan/build-manifest.json',
+      content,
+    );
+    const [ok, output] = await dockerExec(containerName, writeMainManifest, 10_000);
+    if (!ok) throw new Error(output || 'Failed to write manifest to main workspace');
     return null;
   } catch (err) {
     const message = `Warning: manifest save failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -406,7 +455,106 @@ async function persistManifest(sandboxId: string, manifest: BuildManifest): Prom
   }
 }
 
+async function persistBuildReport(sandboxId: string, report: BuildReport): Promise<BuildEvent | null> {
+  try {
+    const content = JSON.stringify(report, null, 2);
+    await writeWorkspaceFile(sandboxId, '.openclaw/build/build-report.json', content);
+    const containerName = getContainerName(sandboxId);
+    const writeMainReport = buildHomeFileWriteCommand(
+      '.openclaw/workspace/.openclaw/build/build-report.json',
+      content,
+    );
+    const [ok, output] = await dockerExec(containerName, writeMainReport, 10_000);
+    if (!ok) throw new Error(output || 'Failed to write build report to main workspace');
+    return null;
+  } catch (err) {
+    const message = `Warning: build report save failed: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[agentBuild] ${message}`);
+    return { type: 'status', message };
+  }
+}
+
+async function pruneStaleScaffoldFiles(sandboxId: string, plan: ArchitecturePlan): Promise<BuildEvent | null> {
+  const stalePaths = staleScaffoldFilesForPlan(plan);
+  if (stalePaths.length === 0) return null;
+
+  try {
+    const containerName = getContainerName(sandboxId);
+    const quotedPaths = stalePaths.map(shellQuote).join(' ');
+    const command = [
+      'for p in',
+      quotedPaths,
+      '; do',
+      'rm -f "$HOME/.openclaw/workspace-copilot/$p" "$HOME/.openclaw/workspace/$p"',
+      '; done',
+    ].join(' ');
+    const [ok, output] = await dockerExec(containerName, command, 10_000);
+    if (!ok) throw new Error(output || 'Failed to prune stale scaffold files');
+    return null;
+  } catch (err) {
+    const message = `Warning: stale scaffold cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[agentBuild] ${message}`);
+    return { type: 'status', message };
+  }
+}
+
 // ─── Execute a single specialist (returns collected events) ────────────────
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function routeGroupsForPlan(plan: ArchitecturePlan): string[] {
+  return uniqueStrings((plan.apiEndpoints ?? []).map((endpoint) => {
+    const parts = endpoint.path.replace(/^\/api\//, '').split('/').filter((part) => part && !part.startsWith(':'));
+    return parts[0] ?? 'main';
+  }));
+}
+
+function expectedFilesForSpecialist(specialist: string, plan: ArchitecturePlan): string[] {
+  switch (specialist) {
+    case 'identity':
+      return ['SOUL.md', 'AGENTS.md', 'IDENTITY.md'];
+    case 'database':
+      return plan.dataSchema?.tables?.length
+        ? ['db/migrations/001_initial.sql', 'db/types.ts', 'db/seed.ts', 'db/migrate.ts']
+        : [];
+    case 'backend':
+      return routeGroupsForPlan(plan).map((group) => `backend/routes/${group}.ts`);
+    case 'skills':
+      return plan.skills.map((skill) => `skills/${skill.id}/SKILL.md`);
+    default:
+      return [];
+  }
+}
+
+async function existingWorkspaceFiles(sandboxId: string, paths: string[]): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const containerName = getContainerName(sandboxId);
+  const command = [
+    'for p in',
+    paths.map(shellQuote).join(' '),
+    '; do',
+    'if [ -f "$HOME/.openclaw/workspace/$p" ]; then printf "%s\\n" "$p"; fi',
+    'done',
+  ].join(' ');
+  const [ok, output] = await dockerExec(containerName, command, 10_000);
+  if (!ok) return [];
+  return output.split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+async function reconcileSpecialistFiles(
+  sandboxId: string,
+  specialist: string,
+  plan: ArchitecturePlan,
+  reportedFiles: string[],
+): Promise<{ files: string[]; missing: string[] }> {
+  const expected = expectedFilesForSpecialist(specialist, plan);
+  const existing = await existingWorkspaceFiles(sandboxId, expected);
+  const files = uniqueStrings([...reportedFiles, ...existing]);
+  const missing = expected.filter((path) => !existing.includes(path));
+  return { files, missing };
+}
 
 interface SpecialistResult {
   events: BuildEvent[];
@@ -444,6 +592,16 @@ async function executeSpecialist(
     return { events, files: [] };
   }
 
+  const preexisting = await reconcileSpecialistFiles(sandboxId, specialist, plan, []);
+  if (preexisting.missing.length === 0 && preexisting.files.length > 0) {
+    task.files = preexisting.files;
+    task.status = 'done';
+    task.completedAt = new Date().toISOString();
+    events.push({ type: 'status', message: `${specialist} files already exist; skipping specialist call.` });
+    events.push({ type: 'task_complete', specialist, files: preexisting.files });
+    return { events, files: preexisting.files };
+  }
+
   // Fix 2: Chunk skills if > 3 to avoid single-point timeout
   if (specialist === 'skills' && plan.skills.length > 3) {
     return executeChunkedSkills(sandboxId, plan, agentName, task, signal);
@@ -451,13 +609,26 @@ async function executeSpecialist(
 
   try {
     const result = await callSpecialist(sandboxId, prompt, undefined, signal);
-    task.files = result.files;
+    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, result.files);
+    if (reconciled.missing.length > 0) {
+      throw new Error(`${specialist} did not produce expected file(s): ${reconciled.missing.join(', ')}`);
+    }
+    task.files = reconciled.files;
     task.status = 'done';
     task.completedAt = new Date().toISOString();
-    events.push({ type: 'task_complete', specialist, files: result.files });
-    return { events, files: result.files };
+    events.push({ type: 'task_complete', specialist, files: reconciled.files });
+    return { events, files: reconciled.files };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, []);
+    if (reconciled.missing.length === 0 && reconciled.files.length > 0) {
+      task.files = reconciled.files;
+      task.status = 'done';
+      task.completedAt = new Date().toISOString();
+      events.push({ type: 'status', message: `${specialist} specialist failed, but expected files already exist: ${errorMsg}` });
+      events.push({ type: 'task_complete', specialist, files: reconciled.files });
+      return { events, files: reconciled.files };
+    }
     task.status = 'failed';
     task.error = errorMsg;
     task.completedAt = new Date().toISOString();
@@ -479,6 +650,16 @@ async function executeChunkedSkills(
   const CHUNK_SIZE = 3;
   const chunks = chunkArray(plan.skills, CHUNK_SIZE);
   const allFiles: string[] = [];
+
+  const preexisting = await reconcileSpecialistFiles(sandboxId, 'skills', plan, []);
+  if (preexisting.missing.length === 0 && preexisting.files.length > 0) {
+    task.files = preexisting.files;
+    task.status = 'done';
+    task.completedAt = new Date().toISOString();
+    events.push({ type: 'status', message: 'Skill files already exist; skipping skill specialist calls.' });
+    events.push({ type: 'task_complete', specialist: 'skills', files: preexisting.files });
+    return { events, files: preexisting.files };
+  }
 
   events.push({ type: 'status', message: `Building ${plan.skills.length} skills in ${chunks.length} chunks...` });
 
@@ -507,16 +688,19 @@ async function executeChunkedSkills(
     }
   }
 
-  task.files = allFiles;
-  task.status = allFiles.length > 0 ? 'done' : 'failed';
+  const reconciled = await reconcileSpecialistFiles(sandboxId, 'skills', plan, allFiles);
+  task.files = reconciled.files;
+  task.status = reconciled.missing.length === 0 ? 'done' : 'failed';
   task.completedAt = new Date().toISOString();
   if (task.status === 'done') {
-    events.push({ type: 'task_complete', specialist: 'skills', files: allFiles });
+    events.push({ type: 'task_complete', specialist: 'skills', files: reconciled.files });
   } else {
-    task.error = 'All skill chunks failed';
+    task.error = reconciled.files.length > 0
+      ? `Missing skill file(s): ${reconciled.missing.join(', ')}`
+      : 'All skill chunks failed';
     events.push({ type: 'task_failed', specialist: 'skills', error: task.error });
   }
-  return { events, files: allFiles, error: task.status === 'failed' ? task.error : undefined };
+  return { events, files: reconciled.files, error: task.status === 'failed' ? task.error : undefined };
 }
 
 // ─── Main build pipeline (async generator) ──────────────────────────────────
@@ -528,6 +712,7 @@ export async function* runAgentBuild(
   agentName: string,
   options?: BuildOptions,
 ): AsyncGenerator<BuildEvent> {
+  plan = normalizePlan(plan as unknown as Record<string, unknown>);
   const signal = options?.signal;
 
   // Fix 5: cancellation check helper
@@ -550,6 +735,8 @@ export async function* runAgentBuild(
 
   const findTask = (s: string) => manifest.tasks.find((t) => t.specialist === s);
   let completed = 0;
+  const setupStepsForReport: Array<{ name: string; ok: boolean; optional?: boolean; output?: string; skipped?: boolean }> = [];
+  const servicesForReport: Array<{ name: string; healthy: boolean; optional?: boolean; port?: number }> = [];
 
   try {
     // ── Phase 1: Scaffold (deterministic) ───────────────────────────────────
@@ -561,6 +748,9 @@ export async function* runAgentBuild(
     yield { type: 'task_start', specialist: 'scaffold' };
 
     try {
+      const pruneErr = await pruneStaleScaffoldFiles(sandboxId, plan);
+      if (pruneErr) yield pruneErr;
+
       const files = generateScaffoldFiles(plan, agentName);
       const results = await writeWorkspaceFiles(sandboxId, files.map((f) => ({ path: f.path, content: f.content })));
 
@@ -584,18 +774,30 @@ export async function* runAgentBuild(
       yield { type: 'task_failed', specialist: 'scaffold', error: scaffoldTask.error };
     }
 
-    // ── Pre-phase 2: Ensure architecture.json is in the main workspace ─────
-    // The plan lives in workspace-copilot/ after the Think/Plan stages, but
-    // specialist prompts tell the architect to read from workspace/. Copy it
-    // so specialists can find it without falling back to directory search.
+    // ── Pre-phase 2: Ensure scaffold + architecture are in main workspace ──
+    // Specialists read and write $HOME/.openclaw/workspace. The deterministic
+    // scaffold is generated in workspace-copilot first so the UI can inspect it;
+    // copy it into main before asking specialists to extend it.
     try {
+      await mergeWorkspaceCopilotToMain(sandboxId);
       const containerName = getContainerName(sandboxId);
-      await dockerExec(containerName,
+      const writePlanCommand = buildHomeFileWriteCommand(
+        '.openclaw/workspace/.openclaw/plan/architecture.json',
+        JSON.stringify(plan, null, 2),
+      );
+      const [ok, output] = await dockerExec(containerName, writePlanCommand, 10_000);
+      if (!ok) throw new Error(output || 'Failed to write architecture plan to main workspace');
+    } catch (err) {
+      yield { type: 'status', message: `Main workspace sync warning: ${err instanceof Error ? err.message : String(err)}` };
+      const containerName = getContainerName(sandboxId);
+      await dockerExec(
+        containerName,
         'mkdir -p $HOME/.openclaw/workspace/.openclaw/plan && ' +
-        'cp $HOME/.openclaw/workspace-copilot/.openclaw/plan/architecture.json ' +
-        '$HOME/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null || true',
-        10000);
-    } catch { /* non-fatal — specialists may still find it via fallback */ }
+          'cp $HOME/.openclaw/workspace-copilot/.openclaw/plan/architecture.json ' +
+          '$HOME/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null || true',
+        10000,
+      );
+    }
 
     // ── Phase 2: Specialists (LLM via gateway) ──────────────────────────────
     checkCancelled();
@@ -608,9 +810,13 @@ export async function* runAgentBuild(
       checkCancelled();
 
       const task = findTask(specialist)!;
+      yield { type: 'task_start', specialist };
+      yield { type: 'status', message: `Running ${specialist} specialist...` };
       const result = await executeSpecialist(sandboxId, specialist, plan, agentName, task, signal);
 
       for (const evt of result.events) {
+        if (evt.type === 'task_start') continue;
+        if (evt.type === 'status' && evt.message === `Running ${specialist} specialist...`) continue;
         yield evt;
       }
 
@@ -650,8 +856,17 @@ export async function* runAgentBuild(
       }
 
       const setupResult = await setupPromise;
+      setupStepsForReport.push(...setupResult.infrastructure);
+      if (setupResult.install) setupStepsForReport.push(setupResult.install);
+      setupStepsForReport.push(...setupResult.setup);
 
       for (const svc of setupResult.services ?? []) {
+        servicesForReport.push({
+          name: svc.name,
+          healthy: svc.healthy,
+          optional: svc.optional,
+          port: svc.port,
+        });
         yield { type: 'setup_progress', message: `Service ${svc.name}: ${svc.healthy ? 'healthy' : 'unhealthy'} (port ${svc.port})`, setupPhase: 'services' };
       }
 
@@ -662,7 +877,9 @@ export async function* runAgentBuild(
         await updateAgentConfig(agentId, { servicePorts: ports });
       }
     } catch (err) {
-      yield { type: 'setup_progress', message: `Setup warning: ${err instanceof Error ? err.message : String(err)}`, setupPhase: 'error' };
+      const message = err instanceof Error ? err.message : String(err);
+      setupStepsForReport.push({ name: 'setup', ok: false, output: message });
+      yield { type: 'setup_progress', message: `Setup warning: ${message}`, setupPhase: 'error' };
     }
 
     // ── Phase 5: Verification specialist ────────────────────────────────────
@@ -700,6 +917,15 @@ export async function* runAgentBuild(
 
     // ── Complete ────────────────────────────────────────────────────────────
     manifest.completedAt = new Date().toISOString();
+    const buildReport = summarizeBuildReport({
+      manifestTasks: manifest.tasks,
+      setup: setupStepsForReport,
+      services: servicesForReport,
+      verification: { status: verifyTask?.status === 'done' ? 'done' : verifyTask?.status ?? 'pending', checks: [] },
+    });
+    const reportErr = await persistBuildReport(sandboxId, buildReport);
+    if (reportErr) yield reportErr;
+    yield { type: 'build_report', report: buildReport };
     const finalErr = await persistManifest(sandboxId, manifest);
     if (finalErr) yield finalErr;
     yield { type: 'build_complete', manifest };

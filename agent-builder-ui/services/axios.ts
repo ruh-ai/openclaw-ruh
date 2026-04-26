@@ -3,7 +3,7 @@ import {
   getAccessToken,
   getRefreshToken,
   clearAuthCookies,
-} from "./authCookies";
+} from "./authCookies.client";
 import { getAccessTokenRoute } from "@/shared/routes";
 import { clearUserStore, clearUserStoreAndLogout, getAuthApi } from "./helper";
 
@@ -13,8 +13,8 @@ const api = axios.create({
 
 // Request interceptor to add authorization header
 api.interceptors.request.use(
-  async (config) => {
-    const token = await getAccessToken();
+  (config) => {
+    const token = getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -54,10 +54,10 @@ api.interceptors.response.use(
 
       try {
         // Get the refresh token
-        const refreshToken = await getRefreshToken();
+        const refreshToken = getRefreshToken();
 
         if (!refreshToken) {
-          await clearAuthCookies();
+          clearAuthCookies();
           clearUserStore();
           return Promise.reject(new Error("No refresh token available"));
         }
@@ -80,17 +80,17 @@ api.interceptors.response.use(
           }
         } catch (tokenError: unknown) {
           console.error("Token refresh failed:", tokenError);
-          await clearAuthCookies();
+          clearAuthCookies();
           clearUserStore();
           return Promise.reject(tokenError);
         }
 
-        await clearAuthCookies();
+        clearAuthCookies();
         clearUserStore();
         return Promise.reject(new Error("Token refresh failed"));
       } catch (refreshError) {
         console.error("Error during refresh token process:", refreshError);
-        await clearAuthCookies();
+        clearAuthCookies();
         clearUserStore();
         return Promise.reject(refreshError);
       }

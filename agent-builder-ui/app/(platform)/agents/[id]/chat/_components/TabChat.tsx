@@ -23,11 +23,14 @@ import TaskPlanPanel from "./TaskPlanPanel";
 import TaskProgressHeader from "./TaskProgressHeader";
 import TaskProgressFooter from "./TaskProgressFooter";
 import CodeEditorPanel from "./CodeEditorPanel";
+import { ChatModeControl } from "./ChatModeControl";
+import { ChatStageContextBar } from "./ChatStageContextBar";
 import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
 import { WizardStepRenderer } from "@/app/(platform)/agents/create/_components/copilot/WizardStepRenderer";
 import { LifecycleStepRenderer, getStageInputPlaceholder } from "@/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer";
+import { PendingQuestionsPanel } from "@/app/(platform)/agents/create/_components/copilot/PendingQuestionsPanel";
 import { hasPurposeMetadata } from "@/lib/openclaw/copilot-flow";
 import { AnimatedRuhLogo } from "@/app/(platform)/agents/create/_components/AnimatedRuhLogo";
 import {
@@ -37,6 +40,12 @@ import {
   type CoPilotState,
 } from "@/lib/openclaw/copilot-state";
 import { buildBuilderChatSuggestions } from "@/lib/openclaw/builder-chat-suggestions";
+import {
+  resolveStageContext,
+  type ArtifactTarget,
+  type ChatMode as StageChatMode,
+  type StageContext,
+} from "@/lib/openclaw/stage-context";
 
 // ─── DashboardIframe — loads agent dashboard preview ────────────────────────
 // In local dev, embeds the dashboard via direct Docker host port for speed.
@@ -99,6 +108,20 @@ function DashboardIframe({ sandboxId, containerPort, backendPort }: {
       title="Agent Dashboard"
     />
   );
+}
+
+function getAllowedChatModes(context: StageContext): StageChatMode[] {
+  const modes = new Set<StageChatMode>(["ask"]);
+  if (context.allowedActions.some((action) => action === "request_changes" || action === "regenerate" || action === "compare")) {
+    modes.add("revise");
+  }
+  if (context.allowedActions.some((action) => action === "debug" || action === "retry_build" || action === "run_test")) {
+    modes.add("debug");
+  }
+  if (context.allowedActions.some((action) => action === "approve" || action === "ship")) {
+    modes.add("approve");
+  }
+  return Array.from(modes);
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -561,6 +584,7 @@ function ComputerView({
   onRetryBuild,
   onCancelBuild,
   onDone,
+  onRequestArtifactChange,
 }: {
   liveSteps:        AgentStep[];
   messages:         ChatMessage[];
@@ -606,6 +630,11 @@ function ComputerView({
   onCancelBuild?: () => void;
   /** Called when user clicks Done on reflect stage */
   onDone?: () => void;
+  /**
+   * Called when the user clicks "Request changes" on a specific artifact.
+   * Implementations should select this target and switch chat into Revise mode.
+   */
+  onRequestArtifactChange?: (target: ArtifactTarget) => void;
 }) {
   const isBuilderMode = mode === "builder";
   const [activeTab, setActiveTab] = useState<ComputerViewTab>(
@@ -932,6 +961,7 @@ function ComputerView({
             onRetryBuild={onRetryBuild}
             onCancelBuild={onCancelBuild}
             onDone={onDone}
+            onRequestArtifactChange={onRequestArtifactChange}
           />
         </div>
       )}
@@ -964,11 +994,36 @@ export function TabChat({
   const builderSuggestionDescription = coPilotStore?.description || builderState?.description || agent.description || "";
   const featureCtx = coPilotStore?.featureContext ?? null;
   const isFeatureMode = Boolean(featureCtx);
+  const resolvedStageContext = isBuilderMode && coPilotStore
+    ? resolveStageContext({
+        devStage: coPilotStore.devStage,
+        thinkStatus: coPilotStore.thinkStatus,
+        planStatus: coPilotStore.planStatus,
+        buildStatus: coPilotStore.buildStatus,
+        deployStatus: coPilotStore.deployStatus,
+        discoveryDocuments: coPilotStore.discoveryDocuments,
+        architecturePlan: coPilotStore.architecturePlan,
+        buildManifest: coPilotStore.buildManifest,
+        buildReport: coPilotStore.buildReport as { readiness?: "blocked" | "test-ready" | "ship-ready"; checks?: unknown[] } | null,
+        selectedArtifact: coPilotStore.selectedArtifactTarget,
+      })
+    : null;
+  const allowedChatModes = resolvedStageContext ? getAllowedChatModes(resolvedStageContext) : ["ask" as StageChatMode];
+  const activeStageChatMode = coPilotStore && allowedChatModes.includes(coPilotStore.chatMode)
+    ? coPilotStore.chatMode
+    : resolvedStageContext?.mode ?? "ask";
+  const stageContext = resolvedStageContext
+    ? { ...resolvedStageContext, mode: activeStageChatMode }
+    : null;
   const builderSuggestions = isBuilderMode
     ? buildBuilderChatSuggestions({
-        devStage: coPilotStore?.devStage,
-        name: builderSuggestionName,
-        description: builderSuggestionDescription,
+        ...(stageContext
+          ? { stageContext, agentName: builderSuggestionName }
+          : {
+              devStage: coPilotStore?.devStage,
+              name: builderSuggestionName,
+              description: builderSuggestionDescription,
+            }),
         featureContext: featureCtx,
       })
     : [];
@@ -1075,44 +1130,49 @@ export function TabChat({
         coPilotStore?.markThinkRunDispatched?.(thinkRunId);
         coPilotStore?.setUserTriggeredThink?.(false);
         const thinkPrompt = `Create the PRD and TRD for ${name} based on this mission: ${desc}`;
-        sendChatMessage(thinkPrompt, { silent: true })
-          .then(async () => {
-            // Think completed — read PRD/TRD from workspace and populate store
-            if (!coPilotStore?.discoveryDocuments) {
-              const sandboxId = coPilotStore?.agentSandboxId;
-              if (sandboxId) {
-                try {
-                  const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
-                  const [prdContent, trdContent] = await Promise.all([
-                    readWorkspaceFile(sandboxId, ".openclaw/discovery/PRD.md"),
-                    readWorkspaceFile(sandboxId, ".openclaw/discovery/TRD.md"),
-                  ]);
-                  if (prdContent && trdContent) {
-                    const parse = (md: string) => {
-                      const lines = md.split("\n");
-                      const title = lines[0]?.replace(/^#\s+/, "") ?? "Document";
-                      const sections: Array<{ heading: string; content: string }> = [];
-                      let heading = "", content: string[] = [];
-                      for (const line of lines.slice(1)) {
-                        if (line.startsWith("## ")) {
-                          if (heading) sections.push({ heading, content: content.join("\n").trim() });
-                          heading = line.replace(/^##\s+/, ""); content = [];
-                        } else content.push(line);
-                      }
-                      if (heading) sections.push({ heading, content: content.join("\n").trim() });
-                      return { title, sections };
-                    };
-                    coPilotStore?.setDiscoveryDocuments?.({ prd: parse(prdContent), trd: parse(trdContent) });
-                    coPilotStore?.setThinkStatus?.("ready");
-                  }
-                } catch (err) {
-                  console.warn("[Think] Failed to read docs from workspace:", err);
+        const recoverThinkDocuments = async (): Promise<boolean> => {
+          if (coPilotStore?.discoveryDocuments) return true;
+          const sandboxId = coPilotStore?.agentSandboxId;
+          if (!sandboxId) return false;
+          try {
+            const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+            const [prdContent, trdContent] = await Promise.all([
+              readWorkspaceFile(sandboxId, ".openclaw/discovery/PRD.md"),
+              readWorkspaceFile(sandboxId, ".openclaw/discovery/TRD.md"),
+            ]);
+            if (!prdContent || !trdContent) return false;
+            const parse = (md: string) => {
+              const lines = md.split("\n");
+              const title = lines[0]?.replace(/^#\s+/, "") ?? "Document";
+              const sections: Array<{ heading: string; content: string }> = [];
+              let heading = "";
+              let content: string[] = [];
+              for (const line of lines.slice(1)) {
+                if (line.startsWith("## ")) {
+                  if (heading) sections.push({ heading, content: content.join("\n").trim() });
+                  heading = line.replace(/^##\s+/, "");
+                  content = [];
+                } else {
+                  content.push(line);
                 }
               }
-            }
-          })
-          .catch(() => {
-            coPilotStore?.setThinkStatus?.("failed");
+              if (heading) sections.push({ heading, content: content.join("\n").trim() });
+              return { title, sections };
+            };
+            coPilotStore?.setDiscoveryDocuments?.({ prd: parse(prdContent), trd: parse(trdContent) });
+            coPilotStore?.setThinkStatus?.("ready");
+            coPilotStore?.setUserTriggeredThink?.(false);
+            return true;
+          } catch (err) {
+            console.warn("[Think] Failed to read docs from workspace:", err);
+            return false;
+          }
+        };
+        sendChatMessage(thinkPrompt, { silent: true })
+          .then(() => recoverThinkDocuments())
+          .catch(async () => {
+            const recovered = await recoverThinkDocuments();
+            if (!recovered) coPilotStore?.setThinkStatus?.("failed");
           });
       }
     }
@@ -1299,6 +1359,10 @@ export function TabChat({
           </div>
         )}
 
+        {isBuilderMode && stageContext && (
+          <ChatStageContextBar context={stageContext} />
+        )}
+
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-0">
           <div className="max-w-2xl mx-auto md:ml-8 py-6 space-y-6">
@@ -1340,14 +1404,22 @@ export function TabChat({
                             </p>
                             {builderSuggestions.map((example) => (
                               <button
-                                key={example.slice(0, 30)}
+                                key={`${example.label}-${example.prompt.slice(0, 30)}`}
                                 onClick={() => {
-                                  setInput(example);
+                                  if (example.mode) {
+                                    coPilotStore?.setChatMode(example.mode);
+                                  }
+                                  setInput(example.prompt);
                                   setTimeout(() => textareaRef.current?.focus(), 50);
                                 }}
                                 className="block w-full text-left px-3 py-2.5 rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] text-xs font-satoshi-regular text-[var(--text-secondary)] hover:border-[var(--primary)]/30 hover:bg-[var(--primary)]/5 transition-colors leading-relaxed"
                               >
-                                {example}
+                                <span className="block text-[11px] font-satoshi-bold text-[var(--text-primary)]">
+                                  {example.label}
+                                </span>
+                                <span className="mt-1 block text-[var(--text-secondary)]">
+                                  {example.prompt}
+                                </span>
                               </button>
                             ))}
                           </div>
@@ -1481,9 +1553,41 @@ export function TabChat({
           }}
         />
 
+        {/* Pending architect questions (Think/Plan checkpoints) */}
+        {isBuilderMode && coPilotStore && coPilotStore.pendingQuestions && coPilotStore.pendingQuestions.length > 0 && (
+          <div className="shrink-0 pt-3">
+            <PendingQuestionsPanel
+              questions={coPilotStore.pendingQuestions}
+              disabled={isLoading}
+              onSubmit={(composed) => sendChatMessage(composed)}
+            />
+          </div>
+        )}
+
         {/* Input bar */}
         <div className="shrink-0 px-4 md:px-0 pb-6 pt-3">
           <div className="max-w-2xl mx-auto md:ml-8">
+            {isBuilderMode && coPilotStore && stageContext && (
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <ChatModeControl
+                  value={stageContext.mode}
+                  allowed={allowedChatModes}
+                  onChange={(mode) => coPilotStore.setChatMode(mode)}
+                />
+                {stageContext.primaryArtifact ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      coPilotStore.setSelectedArtifactTarget(null);
+                      coPilotStore.setChatMode("ask");
+                    }}
+                    className="text-[11px] font-satoshi-bold text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  >
+                    Clear target
+                  </button>
+                ) : null}
+              </div>
+            )}
             <div className="relative flex items-end gap-2 border border-[var(--border-default)] rounded-2xl bg-white px-4 py-3 shadow-sm focus-within:border-[var(--primary)]/40 transition-colors">
               <AnimatedRuhLogo mode="idle" size={20} className="shrink-0 mb-1 opacity-30" />
               <textarea
@@ -1572,6 +1676,12 @@ export function TabChat({
               onRetryBuild={onRetryBuild}
               onCancelBuild={onCancelBuild}
               onDone={onDone}
+              onRequestArtifactChange={(target) => {
+                coPilotStore?.setSelectedArtifactTarget(target);
+                coPilotStore?.setChatMode("revise");
+                setShowComputer(false);
+                setTimeout(() => textareaRef.current?.focus(), 50);
+              }}
             />
         </div>
       )}

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 
 import {
+  buildReviewStateFromArchitecturePlan,
   buildCoPilotReviewData,
   buildCoPilotReviewAgentSnapshot,
   evaluateCoPilotDeployReadiness,
@@ -11,7 +12,11 @@ import {
   hasPurposeMetadata,
   resolveCoPilotToolResearchUseCase,
   resolveCoPilotCompletionKind,
+  resolveReviewSkillNodes,
+  resolveEvalReviewState,
+  approveManualEvalTasks,
 } from "./copilot-flow";
+import type { ArchitecturePlan, EvalTask } from "./types";
 
 describe("hasPurposeMetadata", () => {
   test("requires both name and description", () => {
@@ -145,6 +150,180 @@ describe("buildCoPilotReviewData", () => {
         readinessLabel: "Action needed before deploy",
       },
     });
+  });
+});
+
+describe("buildReviewStateFromArchitecturePlan", () => {
+  test("derives generated skill graph, workflow, and built skill ids from build manifest", () => {
+    const plan: ArchitecturePlan = {
+      skills: [
+        {
+          id: "local-ui-inspector",
+          name: "Local UI Inspector",
+          description: "Capture local builder UI state.",
+          dependencies: [],
+          toolType: "mcp",
+          envVars: ["FLOW_QA_TARGET_URL"],
+        },
+        {
+          id: "stage-readiness-checker",
+          name: "Stage Readiness Checker",
+          description: "Compare visible state to readiness rules.",
+          dependencies: ["local-ui-inspector"],
+          toolType: "api",
+          envVars: [],
+        },
+      ],
+      workflow: {
+        steps: [
+          { skillId: "local-ui-inspector", parallel: false },
+          { skillId: "stage-readiness-checker", parallel: false },
+        ],
+      },
+      integrations: [],
+      triggers: [],
+      channels: [],
+      envVars: [],
+      subAgents: [],
+      missionControl: null,
+    };
+
+    const reviewState = buildReviewStateFromArchitecturePlan({
+      plan,
+      agentName: "Flow QA Sentinel",
+      manifest: {
+        tasks: [
+          {
+            specialist: "skills",
+            status: "done",
+            files: [
+              "skills/local-ui-inspector/SKILL.md",
+              "skills/stage-readiness-checker/SKILL.md",
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(reviewState.builtSkillIds).toEqual(["local-ui-inspector", "stage-readiness-checker"]);
+    expect(reviewState.nodes).toEqual([
+      {
+        skill_id: "local-ui-inspector",
+        name: "Local UI Inspector",
+        description: "Capture local builder UI state.",
+        status: "generated",
+        source: "custom",
+        depends_on: [],
+        requires_env: ["FLOW_QA_TARGET_URL"],
+        skill_md: "",
+      },
+      {
+        skill_id: "stage-readiness-checker",
+        name: "Stage Readiness Checker",
+        description: "Compare visible state to readiness rules.",
+        status: "generated",
+        source: "custom",
+        depends_on: ["local-ui-inspector"],
+        requires_env: [],
+        skill_md: "",
+      },
+    ]);
+    expect(reviewState.workflow?.steps).toEqual([
+      { id: "step-0", action: "execute", skill: "local-ui-inspector", wait_for: [] },
+      { id: "step-1", action: "execute", skill: "stage-readiness-checker", wait_for: ["local-ui-inspector"] },
+    ]);
+  });
+});
+
+describe("resolveReviewSkillNodes", () => {
+  test("falls back to plan skills when persisted skill graph is an empty array", () => {
+    const nodes = resolveReviewSkillNodes(
+      {
+        skills: [
+          {
+            id: "local-ui-inspector",
+            name: "Local UI Inspector",
+            description: "Capture local builder UI state.",
+            dependencies: [],
+            toolType: "mcp",
+            envVars: ["FLOW_QA_TARGET_URL"],
+          },
+        ],
+        workflow: { steps: [] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+      },
+      [],
+    );
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      skill_id: "local-ui-inspector",
+      name: "Local UI Inspector",
+      source: "custom",
+      status: "generated",
+    });
+  });
+});
+
+describe("resolveEvalReviewState", () => {
+  test("does not summarize manual evaluation results as all tests passed", () => {
+    const state = resolveEvalReviewState({
+      totalCount: 2,
+      pendingCount: 0,
+      runningCount: 0,
+      failCount: 0,
+      manualCount: 2,
+      hasRealContainer: true,
+      runMode: "single",
+      loopIterations: 0,
+    });
+
+    expect(state.allDone).toBe(true);
+    expect(state.canApprove).toBe(false);
+    expect(state.canRerunManual).toBe(true);
+    expect(state.canApproveManual).toBe(true);
+    expect(state.buttonLabel).toBe("Approve Manual Results");
+    expect(state.message).toBe("2 tests need manual review. Check the low-confidence results before deployment.");
+  });
+});
+
+describe("approveManualEvalTasks", () => {
+  test("marks manual results as passing while preserving non-manual results", () => {
+    const tasks: EvalTask[] = [
+      {
+        id: "manual",
+        title: "Manual",
+        input: "input",
+        expectedBehavior: "expected",
+        status: "manual",
+        confidence: 0.3,
+        reasons: ["Low confidence"],
+      },
+      {
+        id: "pass",
+        title: "Pass",
+        input: "input",
+        expectedBehavior: "expected",
+        status: "pass",
+        confidence: 0.9,
+      },
+    ];
+
+    const approved = approveManualEvalTasks(tasks);
+
+    expect(approved[0]).toMatchObject({
+      id: "manual",
+      status: "pass",
+      confidence: 0.7,
+      reasons: ["Low confidence", "Manually accepted after review."],
+    });
+    expect(approved[1]).toBe(tasks[1]);
+    expect(tasks[0].status).toBe("manual");
   });
 });
 
@@ -536,6 +715,72 @@ describe("createCoPilotSeedFromAgent", () => {
     expect(seed.thinkStatus).toBeUndefined();
     expect(seed.planStatus).toBeUndefined();
     expect(seed.buildStatus).toBeUndefined();
+  });
+
+  test("fails closed to think when forge_stage claims plan but PRD/TRD are missing", () => {
+    const agent = {
+      id: "agent-empty-plan",
+      name: "Setup Defaults Probe",
+      avatar: "🤖",
+      description: "Inspect a local builder page.",
+      skills: [],
+      triggerLabel: "Manual",
+      status: "forging",
+      forgeStage: "plan",
+      forgeSandboxId: "forge-sandbox-1",
+      createdAt: "2026-03-26T00:00:00.000Z",
+      sandboxIds: [],
+      skillGraph: [],
+      workflow: null,
+      agentRules: [],
+      toolConnections: [],
+      triggers: [],
+      improvements: [],
+      discoveryDocuments: null,
+    } satisfies SavedAgent;
+
+    const seed = createCoPilotSeedFromAgent(agent);
+    expect(seed.devStage).toBe("think");
+    expect(seed.thinkStatus).toBeUndefined();
+    expect(seed.discoveryDocuments).toBeNull();
+  });
+
+  test("restores lifecycle from legacy snake_case persisted agent fields", () => {
+    const agent = {
+      id: "agent-legacy-snake",
+      name: "Legacy QA",
+      avatar: "🤖",
+      description: "Recover legacy persisted agent shape",
+      skills: [],
+      triggerLabel: "Manual",
+      status: "forging",
+      forgeStage: null,
+      forgeSandboxId: null,
+      createdAt: "2026-03-26T00:00:00.000Z",
+      sandboxIds: [],
+      skillGraph: undefined,
+      workflow: null,
+      agentRules: [],
+      toolConnections: [],
+      triggers: [],
+      improvements: [],
+      forge_stage: "test",
+      forge_sandbox_id: "forge-sandbox-1",
+      skill_graph: [
+        {
+          skill_id: "qa",
+          name: "QA",
+          source: "custom",
+          status: "generated",
+          depends_on: [],
+        },
+      ],
+    } as unknown as SavedAgent;
+
+    const seed = createCoPilotSeedFromAgent(agent);
+    expect(seed.devStage).toBe("test");
+    expect(seed.agentSandboxId).toBe("forge-sandbox-1");
+    expect(seed.skillGraph).toHaveLength(1);
   });
 });
 

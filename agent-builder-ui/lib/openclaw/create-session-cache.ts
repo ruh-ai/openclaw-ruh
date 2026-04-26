@@ -131,7 +131,83 @@ export function clearCreateSessionCache(agentId: string): void {
   }
 }
 
+export function shouldWaitForRouteAgentBeforeCacheRestore({
+  editingAgentId,
+  hasAgentRecord,
+  isRouteAgentHydrated,
+}: {
+  editingAgentId: string | null;
+  hasAgentRecord: boolean;
+  isRouteAgentHydrated: boolean;
+}): boolean {
+  return Boolean(editingAgentId && !hasAgentRecord && !isRouteAgentHydrated);
+}
+
 const DEV_STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+
+function resolvePersistedForgeStage(agent: SavedAgent | null): AgentDevStage | null {
+  if (!agent) return null;
+  const legacyAgent = agent as SavedAgent & { forge_stage?: string | null };
+  const rawStage = agent.forgeStage ?? legacyAgent.forge_stage;
+  if (!rawStage) return null;
+  return DEV_STAGE_ORDER.includes(rawStage as AgentDevStage) ? rawStage as AgentDevStage : null;
+}
+
+function restorePersistedLifecycle(
+  merged: Partial<CoPilotState>,
+  seed: Partial<CoPilotState>,
+): void {
+  merged.devStage = seed.devStage;
+  merged.maxUnlockedDevStage = seed.devStage;
+  merged.thinkStatus = seed.thinkStatus ?? "idle";
+  merged.planStatus = seed.planStatus ?? "idle";
+  merged.buildStatus = seed.buildStatus ?? "idle";
+  merged.userTriggeredThink = false;
+  merged.userTriggeredPlan = false;
+  merged.userTriggeredBuild = false;
+  merged.thinkRunId = null;
+  merged.planRunId = null;
+  merged.buildRunId = null;
+}
+
+export function shouldReconcileToPersistedForgeStage({
+  currentStage,
+  persistedStage,
+}: {
+  currentStage: AgentDevStage;
+  persistedStage: AgentDevStage | null | undefined;
+}): boolean {
+  if (!persistedStage) return false;
+  return DEV_STAGE_ORDER.indexOf(persistedStage) > DEV_STAGE_ORDER.indexOf(currentStage);
+}
+
+export function shouldSuppressRevealTriggerForResume({
+  hasRestoredSession,
+  currentStage,
+  persistedStage,
+}: {
+  hasRestoredSession: boolean;
+  currentStage: AgentDevStage;
+  persistedStage: AgentDevStage | null | undefined;
+}): boolean {
+  if (!hasRestoredSession) return true;
+  return shouldReconcileToPersistedForgeStage({ currentStage, persistedStage });
+}
+
+export function resolveRouteAgentForRestore<T extends { id: string }>({
+  editingAgentId,
+  storeAgent,
+  routeFetchedAgent,
+}: {
+  editingAgentId: string | null;
+  storeAgent: T | null;
+  routeFetchedAgent: T | null;
+}): T | null {
+  if (editingAgentId && routeFetchedAgent?.id === editingAgentId) {
+    return routeFetchedAgent;
+  }
+  return storeAgent;
+}
 
 export function buildResumedCoPilotSeed(
   agent: SavedAgent | null,
@@ -164,13 +240,41 @@ export function buildResumedCoPilotSeed(
   const persistedStageIdx = DEV_STAGE_ORDER.indexOf(seed.devStage as AgentDevStage);
   const mergedStageIdx = DEV_STAGE_ORDER.indexOf(merged.devStage as AgentDevStage);
   if (persistedStageIdx > mergedStageIdx) {
-    merged.devStage = seed.devStage;
-    // Also carry forward the stage statuses from the persisted seed since
-    // they were derived from forge_stage and are more authoritative than
-    // whatever the stale cache had.
-    if (seed.thinkStatus) merged.thinkStatus = seed.thinkStatus;
-    if (seed.planStatus) merged.planStatus = seed.planStatus;
-    if (seed.buildStatus) merged.buildStatus = seed.buildStatus;
+    restorePersistedLifecycle(merged, seed);
+  }
+
+  // Also block the opposite stale-cache failure mode: a cached devStage cannot
+  // move forward when the persisted forge_stage was intentionally failed closed
+  // by createCoPilotSeedFromAgent because required artifacts are missing.
+  const forgeStage = resolvePersistedForgeStage(agent);
+  const forgeStageIdx = forgeStage ? DEV_STAGE_ORDER.indexOf(forgeStage) : -1;
+  if (forgeStageIdx > persistedStageIdx && mergedStageIdx > persistedStageIdx) {
+    restorePersistedLifecycle(merged, seed);
+  }
+
+  const effectiveStage = (merged.devStage ?? seed.devStage) as AgentDevStage | undefined;
+  const effectiveStageIdx = effectiveStage ? DEV_STAGE_ORDER.indexOf(effectiveStage) : -1;
+  if (
+    effectiveStageIdx >= DEV_STAGE_ORDER.indexOf("review")
+    && Array.isArray(seed.skillGraph)
+    && seed.skillGraph.length > 0
+    && (!Array.isArray(merged.skillGraph) || merged.skillGraph.length === 0)
+  ) {
+    merged.skillGraph = seed.skillGraph;
+    if (seed.workflow) merged.workflow = seed.workflow;
+  }
+  if (
+    effectiveStageIdx >= DEV_STAGE_ORDER.indexOf("review")
+    && Array.isArray(cachedCoPilot.selectedSkillIds)
+    && cachedCoPilot.selectedSkillIds.length === 0
+    && Array.isArray(seed.selectedSkillIds)
+    && seed.selectedSkillIds.length > 0
+  ) {
+    merged.selectedSkillIds = seed.selectedSkillIds;
+  }
+
+  if (agent?.forgeSandboxId) {
+    merged.agentSandboxId = agent.forgeSandboxId;
   }
 
   return merged;

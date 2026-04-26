@@ -278,5 +278,22 @@ export function stripPlanTags(text: string): string {
   let result = text.replace(/<plan>[\s\S]*?<\/plan>/g, "");
   // Remove <task_update .../> tags
   result = result.replace(/<task_update\s+[^>]*\/>/g, "");
+  // Remove copilot lifecycle markers — these are consumed by the event
+  // extractor in builder-agent.ts and rendered as structured UI elsewhere.
+  // Leaving them in the chat text shows raw XML-looking attributes to the user.
+  result = result.replace(/<ask_user\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<think_step\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<think_research_finding\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<think_document_ready\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_skills\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_workflow\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_data_schema\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_api_endpoints\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_dashboard_pages\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_env_vars\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_complete\s*\/>/g, "");
+  result = result.replace(/<reveal_field\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<reveal_done\s*\/>/g, "");
+  result = result.replace(/<employee_reveal\b[\s\S]*?\/>/g, "");
   return result;
 }

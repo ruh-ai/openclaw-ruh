@@ -506,7 +506,15 @@ export interface EvalTask {
   iteration?: number;
 }
 
-// ── Build Report (Reflect stage) ────────────────────────────────────────────
+// ── Build Report (backend-authoritative build readiness + Reflect summary) ──
+
+export type BuildReadiness = "blocked" | "test-ready" | "ship-ready";
+
+export interface BuildReportCheck {
+  name: string;
+  status: "pass" | "fail" | "warning";
+  detail?: string;
+}
 
 export interface BuildReportStage {
   stage: AgentDevStage;
@@ -517,14 +525,19 @@ export interface BuildReportStage {
 }
 
 export interface BuildReport {
-  agentName: string;
-  createdAt: string;
-  stages: BuildReportStage[];
-  skillCount: number;
-  subAgentCount: number;
-  integrationCount: number;
-  triggerCount: number;
-  notes: string;
+  generatedAt?: string;
+  readiness?: BuildReadiness;
+  blockers?: string[];
+  warnings?: string[];
+  checks?: BuildReportCheck[];
+  agentName?: string;
+  createdAt?: string;
+  stages?: BuildReportStage[];
+  skillCount?: number;
+  subAgentCount?: number;
+  integrationCount?: number;
+  triggerCount?: number;
+  notes?: string;
 }
 
 // ── Agent Backend (Artifact + Run) ──────────────────────────────────────────

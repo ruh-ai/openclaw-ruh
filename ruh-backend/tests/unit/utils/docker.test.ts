@@ -105,6 +105,28 @@ describe('dockerSpawn', () => {
 
     await expect(dockerSpawn(['ps', '-a'])).resolves.toEqual([0, 'stdout line\nstderr line']);
   });
+
+  test('returns exit code 124 when the docker command times out', async () => {
+    const killSignals: string[] = [];
+    Bun.spawn = mock(() => ({
+      stdout: streamFromText('partial output\n'),
+      stderr: streamFromText(''),
+      exited: new Promise(() => {}),
+      exitCode: null,
+      kill: (signal: string) => {
+        killSignals.push(signal);
+        return true;
+      },
+    })) as typeof Bun.spawn;
+
+    const [exitCode, output] = await dockerSpawn(['ps'], 1);
+
+    expect(exitCode).toBe(124);
+    expect(output).toContain('partial output');
+    expect(output).toContain('Command timed out after 1ms');
+    expect(killSignals).toContain('SIGTERM');
+    expect(killSignals).toContain('SIGKILL');
+  });
 });
 
 describe('dockerExec', () => {

@@ -42,7 +42,7 @@ interface ConfigParseOptions {
 const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:3000';
 const DEFAULT_OLLAMA_BASE_URL = 'http://host.docker.internal:11434/v1';
 const DEFAULT_OLLAMA_MODEL = 'qwen3-coder:30b';
-const DEFAULT_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
+const DEFAULT_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.5';
 const DEV_JWT_ACCESS_SECRET = `dev-access-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const DEV_JWT_REFRESH_SECRET = `dev-refresh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 

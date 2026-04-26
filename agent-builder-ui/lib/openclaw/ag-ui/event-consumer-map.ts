@@ -13,6 +13,7 @@ import type { BrowserWorkspaceEvent } from "../browser-workspace";
 import type { AgentDevStage, ArchitecturePlan, DiscoveryDocument, StageStatus } from "../types";
 import type {
   AgentStep,
+  AskUserPayload,
   ChatMessage,
   SkillGraphReadyPayload,
   EditorFileChangedPayload,
@@ -67,6 +68,8 @@ interface CoPilotStoreLike {
   // Think v4 sub-step tracking
   setThinkStep: (step: string) => void;
   pushResearchFinding: (finding: { title: string; summary: string; source?: string }) => void;
+  pushPendingQuestion: (question: AskUserPayload) => void;
+  clearPendingQuestions: () => void;
   setResearchBriefPath: (path: string | null) => void;
   setPrdPath: (path: string | null) => void;
   setTrdPath: (path: string | null) => void;
@@ -75,6 +78,10 @@ interface CoPilotStoreLike {
   pushPlanActivity: (item: { type: string; label: string; count: number }) => void;
   updateArchitecturePlanSection: (section: string, data: unknown) => void;
   devStage: AgentDevStage;
+  // Sandbox reference — used by plan_complete to recover the plan from disk
+  // when the architect skipped the structured markers.
+  agentSandboxId: string | null;
+  architecturePlan: ArchitecturePlan | null;
 }
 
 // ─── Drop warning helper ───────────────────────────────────────────────────
@@ -122,15 +129,13 @@ export function consumeSkillGraphReady(value: unknown, deps: ConsumerDeps): void
   ]);
   deps.setLiveResponse("");
   deps.readyForReviewFiredRef.current = true;
-  // Advance to review only when the active lifecycle is already in Build.
-  // Existing agents can emit or hydrate skill graphs before a fresh improvement
-  // build has actually run; treating those as a completed build short-circuits
-  // the real build trigger.
+  // Mark the local Build gate as satisfied, but do not move to Review here.
+  // Stage advancement must be committed through PATCH /forge/stage so missing
+  // or blocked build reports cannot be bypassed by an architect event alone.
   if (deps.coPilotStore) {
     const stage = deps.coPilotStore.devStage;
     if (stage === "build") {
       deps.coPilotStore.setBuildStatus("done");
-      deps.coPilotStore.setDevStage("review");
     }
   }
   deps.onReadyForReview?.();
@@ -381,6 +386,19 @@ function consumeThinkResearchFinding(value: unknown, deps: ConsumerDeps): void {
   });
 }
 
+function consumeAskUser(value: unknown, deps: ConsumerDeps): void {
+  tracer.apply("copilot-store", "CUSTOM", CustomEventName.ASK_USER);
+  if (!deps.coPilotStore) return;
+  const payload = value as Partial<AskUserPayload>;
+  if (!payload.id || !payload.question || !payload.type) return;
+  deps.coPilotStore.pushPendingQuestion({
+    id: payload.id,
+    question: payload.question,
+    type: payload.type,
+    options: payload.options,
+  });
+}
+
 function consumeThinkDocumentReady(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", CustomEventName.THINK_DOCUMENT_READY);
   if (!deps.coPilotStore) return;
@@ -475,24 +493,53 @@ function consumePlanEnvVars(value: unknown, deps: ConsumerDeps): void {
 function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE);
   if (!deps.coPilotStore) return;
-  deps.coPilotStore.setPlanStep("complete");
-  deps.coPilotStore.setPlanStatus("ready" as StageStatus);
-  deps.coPilotStore.pushPlanActivity({
+  const store = deps.coPilotStore;
+  store.setPlanStep("complete");
+  store.setPlanStatus("ready" as StageStatus);
+  store.pushPlanActivity({
     type: "complete",
     label: "Architecture plan complete",
     count: 0,
   });
 
-  // If the architect finished the plan response but no structured plan markers
-  // were extracted, synthesize a minimal architecturePlan so the "Approve & Start Build"
-  // button appears. Without this, the UI shows "Generate Plan" forever because
-  // architecturePlan is null even though planStatus is "ready".
-  const store = deps.coPilotStore as unknown as { architecturePlan: unknown };
-  if (!store.architecturePlan) {
-    const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
-    deps.coPilotStore.setArchitecturePlan(normalizePlan({}));
+  const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
+  const hasUsablePlan = (plan: ArchitecturePlan | null | undefined): boolean =>
+    Boolean(plan && ((plan.skills?.length ?? 0) > 0 || (plan.workflow?.steps?.length ?? 0) > 0));
+
+  // If a real plan is already in the store (e.g. from architecture_plan_ready
+  // or complete incremental markers), leave it alone. A partial object with no
+  // skills/workflow is not usable for Build and should still recover from disk.
+  if (hasUsablePlan(store.architecturePlan)) return;
+
+  const sandboxId = store.agentSandboxId;
+  if (!sandboxId) {
+    store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
     tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+    return;
   }
+
+  void (async () => {
+    try {
+      const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+      const planJson = await readWorkspaceFile(sandboxId, ".openclaw/plan/architecture.json");
+      if (!planJson) {
+        if (!hasUsablePlan(store.architecturePlan)) {
+          store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
+          tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+        }
+        return;
+      }
+      if (hasUsablePlan(store.architecturePlan)) return;
+      const parsed = JSON.parse(planJson) as Record<string, unknown>;
+      store.setArchitecturePlan(normalizePlan(parsed));
+      tracer.apply("copilot-store", "CUSTOM", "plan_complete:recovered_from_disk");
+    } catch {
+      if (!hasUsablePlan(store.architecturePlan)) {
+        store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
+        tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+      }
+    }
+  })();
 }
 
 // ─── Consumer registry ──────────────────────────────────────────────────────
@@ -517,6 +564,7 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.THINK_STEP]: consumeThinkStep,
   [CustomEventName.THINK_RESEARCH_FINDING]: consumeThinkResearchFinding,
   [CustomEventName.THINK_DOCUMENT_READY]: consumeThinkDocumentReady,
+  [CustomEventName.ASK_USER]: consumeAskUser,
   [CustomEventName.PLAN_SKILLS]: consumePlanSkills,
   [CustomEventName.PLAN_WORKFLOW]: consumePlanWorkflow,
   [CustomEventName.PLAN_DATA_SCHEMA]: consumePlanDataSchema,

@@ -19,7 +19,7 @@ import {
 import type { SkillAvailability } from "@/lib/skills/skill-registry";
 import { applyAcceptedImprovementsToConfig } from "@/app/(platform)/agents/create/create-session-config";
 import type { CoPilotPhase, SkillGenerationStatus } from "./copilot-state";
-import type { AgentDevStage, ArchitecturePlan, DiscoveryDocuments, SkillGraphNode, StageStatus, WorkflowDefinition } from "./types";
+import type { AgentDevStage, ArchitecturePlan, DiscoveryDocuments, EvalTask, SkillGraphNode, StageStatus, WorkflowDefinition } from "./types";
 
 export function hasPurposeMetadata(name: string, description: string): boolean {
   return name.trim().length > 0 && description.trim().length > 0;
@@ -107,6 +107,148 @@ interface EvaluateCoPilotDeployReadinessInput {
 interface CoPilotDeployReadiness {
   canDeploy: boolean;
   blockerMessage: string | null;
+}
+
+export function resolveEvalReviewState({
+  totalCount,
+  pendingCount,
+  runningCount,
+  failCount,
+  manualCount,
+  hasRealContainer,
+  runMode,
+  loopIterations,
+}: {
+  totalCount: number;
+  pendingCount: number;
+  runningCount: number;
+  failCount: number;
+  manualCount: number;
+  hasRealContainer: boolean;
+  runMode: "single" | "auto-improve";
+  loopIterations: number;
+}): {
+  allDone: boolean;
+  hasFailures: boolean;
+  hasManualReview: boolean;
+  canApprove: boolean;
+  canRerunManual: boolean;
+  canApproveManual: boolean;
+  message: string;
+  buttonLabel: string;
+} {
+  const allDone = totalCount > 0 && pendingCount === 0 && runningCount === 0;
+  const hasFailures = failCount > 0;
+  const hasManualReview = manualCount > 0;
+  const canApprove = totalCount === 0 || (allDone && !hasFailures && !hasManualReview);
+  const canRerunManual = allDone && hasManualReview && hasRealContainer;
+  const canApproveManual = allDone && hasManualReview && !hasFailures;
+  const pluralFailed = failCount !== 1 ? "s" : "";
+  const pluralManual = manualCount !== 1 ? "s" : "";
+
+  let message = "";
+  if (hasFailures) {
+    message = `${failCount} test${pluralFailed} failed. ${
+      hasRealContainer && runMode === "single"
+        ? "Try Auto-Improve to iteratively fix skills."
+        : "Review the results above."
+    }`;
+  } else if (hasManualReview) {
+    message = `${manualCount} test${pluralManual} need manual review. Check the low-confidence results before deployment.`;
+  } else if (loopIterations > 0) {
+    message = `All tests passed after ${loopIterations} iteration(s). Skills have been optimized.`;
+  } else {
+    message = "All tests passed. Approve to proceed to deployment.";
+  }
+
+  return {
+    allDone,
+    hasFailures,
+    hasManualReview,
+    canApprove,
+    canRerunManual,
+    canApproveManual,
+    message,
+    buttonLabel: hasFailures
+      ? "Approve with Failures"
+      : hasManualReview
+        ? "Approve Manual Results"
+        : "Approve Tests",
+  };
+}
+
+export function approveManualEvalTasks(tasks: EvalTask[]): EvalTask[] {
+  return tasks.map((task) => {
+    if (task.status !== "manual") return task;
+    return {
+      ...task,
+      status: "pass",
+      confidence: Math.max(task.confidence ?? 0, 0.7),
+      reasons: [...(task.reasons ?? []), "Manually accepted after review."],
+    };
+  });
+}
+
+export function buildReviewStateFromArchitecturePlan({
+  plan,
+  manifest,
+  agentName,
+}: {
+  plan: ArchitecturePlan;
+  manifest: { tasks?: Array<{ specialist?: string; files?: string[] }> } | null | undefined;
+  agentName: string;
+}): {
+  nodes: SkillGraphNode[];
+  workflow: WorkflowDefinition | null;
+  builtSkillIds: string[];
+} {
+  const skillFiles = manifest?.tasks?.find((task) => task.specialist === "skills")?.files ?? [];
+  const builtSkillIds = skillFiles
+    .map((file) => /^skills\/([^/]+)\/SKILL\.md$/.exec(file)?.[1])
+    .filter((skillId): skillId is string => Boolean(skillId));
+
+  const nodes = plan.skills.map((skill) => ({
+    skill_id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    status: "generated" as const,
+    source: "custom" as const,
+    depends_on: skill.dependencies,
+    requires_env: skill.envVars,
+    skill_md: skill.skillMd ?? "",
+  }));
+
+  const workflow = plan.workflow
+    ? {
+        name: "main-workflow",
+        description: `${agentName} workflow`,
+        steps: plan.workflow.steps.map((step, i) => ({
+          id: `step-${i}`,
+          action: "execute" as const,
+          skill: step.skillId,
+          wait_for: i > 0 ? [plan.workflow.steps[i - 1].skillId] : [],
+        })),
+      }
+    : null;
+
+  return { nodes, workflow, builtSkillIds };
+}
+
+export function resolveReviewSkillNodes(
+  plan: ArchitecturePlan | null | undefined,
+  skillGraph: SkillGraphNode[] | null | undefined,
+): SkillGraphNode[] {
+  if (skillGraph && skillGraph.length > 0) return skillGraph;
+  return (plan?.skills ?? []).map((skill) => ({
+    skill_id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    status: "generated" as const,
+    source: "custom" as const,
+    depends_on: skill.dependencies,
+    requires_env: skill.envVars,
+    skill_md: skill.skillMd ?? "",
+  }));
 }
 
 export function buildCoPilotReviewData({
@@ -268,6 +410,7 @@ interface CoPilotAgentSeed {
   thinkStatus?: StageStatus;
   planStatus?: StageStatus;
   buildStatus?: StageStatus;
+  agentSandboxId?: string | null;
 }
 
 const STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
@@ -292,7 +435,14 @@ export function canPersistReviewOrLaterForgeStage(
 }
 
 export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed {
-  const skillGraph = agent.skillGraph ?? [];
+  const legacyAgent = agent as SavedAgent & {
+    forge_stage?: string | null;
+    forge_sandbox_id?: string | null;
+    skill_graph?: SkillGraphNode[] | null;
+  };
+  const skillGraph = agent.skillGraph ?? legacyAgent.skill_graph ?? [];
+  const forgeSandboxId = agent.forgeSandboxId ?? legacyAgent.forge_sandbox_id ?? null;
+  const agentSkills = agent.skills ?? [];
   const projected = applyAcceptedImprovementsToConfig({
     toolConnections: agent.toolConnections ?? [],
     improvements: agent.improvements,
@@ -304,7 +454,7 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     normalizedSkillIds.set((node.name || node.skill_id).toLowerCase(), node.skill_id);
   }
 
-  const selectedSkillIds = (agent.skills.length > 0 ? agent.skills : skillGraph.map((node) => node.skill_id))
+  const selectedSkillIds = (agentSkills.length > 0 ? agentSkills : skillGraph.map((node) => node.skill_id))
     .map((skill) => {
       const normalizedSkill = skill.trim();
       return normalizedSkillIds.get(normalizedSkill.toLowerCase()) ?? normalizedSkill;
@@ -313,10 +463,20 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
 
   // When an agent has a skill graph and is past the build stage, mark skills as built
   // so a page refresh doesn't regress the deploy-readiness check to "unresolved".
-  const forgeStage = normalizeForgeStage(agent.forgeStage as string | null | undefined);
+  const forgeStage = normalizeForgeStage(
+    (agent.forgeStage as string | null | undefined) ?? legacyAgent.forge_stage,
+  );
   const forgeStageIdx = forgeStage ? STAGE_ORDER.indexOf(forgeStage) : -1;
   const pastBuild = forgeStageIdx >= STAGE_ORDER.indexOf("review");
   const hasSkills = skillGraph.length > 0;
+  const hasDiscoveryDocuments = Boolean(agent.discoveryDocuments?.prd && agent.discoveryDocuments?.trd);
+  const hasArtifactBackedStage =
+    forgeStageIdx <= STAGE_ORDER.indexOf("think")
+    || hasDiscoveryDocuments
+    || hasSkills;
+  const canTrustPersistedStage =
+    !forgeStage
+    || hasArtifactBackedStage;
 
   const builtSkillIds = (pastBuild || agent.status === "active") && hasSkills
     ? skillGraph.map((node) => node.skill_id)
@@ -327,7 +487,7 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
   // statuses to "idle" even though the backend knows the agent has progressed,
   // causing the UI to show incomplete/stuck states.
   const lifecycleOverrides: Partial<CoPilotAgentSeed> = {};
-  if (forgeStage && canPersistReviewOrLaterForgeStage(forgeStage, skillGraph.length)) {
+  if (forgeStage && canTrustPersistedStage && canPersistReviewOrLaterForgeStage(forgeStage, skillGraph.length)) {
     lifecycleOverrides.devStage = forgeStage;
     // Derive completion statuses for all stages the agent has already passed.
     // This ensures the stage pills show as done rather than idle on reload.
@@ -348,12 +508,16 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     // operator can inspect current config, but we intentionally do not infer
     // earlier stage completion from "active" alone.
     lifecycleOverrides.devStage = "review";
-  } else if (agent.status === "forging" && agent.forgeSandboxId && forgeStage) {
+  } else if (agent.status === "forging" && forgeSandboxId && forgeStage && canTrustPersistedStage) {
     // Forging agents with a forge_stage set have progressed past reveal.
     // Use the forge_stage as devStage so the page resumes at the right point.
     // Without the forgeStage guard, brand-new agents (forge_stage=null) would
     // skip the Meet/Reveal stage and jump straight to Think.
     lifecycleOverrides.devStage = forgeStage;
+  } else if (agent.status === "forging" && forgeSandboxId && forgeStage && !canTrustPersistedStage) {
+    // If the backend stage outran the saved artifacts, reopen at Think so the
+    // operator can regenerate/approve PRD+TRD instead of seeing a hollow Plan.
+    lifecycleOverrides.devStage = "think";
   }
 
   return {
@@ -376,7 +540,7 @@ export function createCoPilotSeedFromAgent(agent: SavedAgent): CoPilotAgentSeed 
     systemName: agent.name,
     phase: skillGraph.length > 0 ? "review" : "purpose",
     // Wire forge sandbox ID so the eval system can route to the real agent container
-    ...(agent.forgeSandboxId ? { agentSandboxId: agent.forgeSandboxId } : {}),
+    ...(forgeSandboxId ? { agentSandboxId: forgeSandboxId } : {}),
     ...lifecycleOverrides,
   };
 }

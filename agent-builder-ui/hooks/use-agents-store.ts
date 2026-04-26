@@ -13,6 +13,11 @@ import { normalizeWorkspaceMemory, type WorkspaceMemory } from "@/lib/openclaw/w
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function noStoreUrl(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}_=${Date.now()}`;
+}
+
 export interface SavedAgent {
   id: string;
   name: string;
@@ -173,7 +178,7 @@ export const useAgentsStore = create<AgentsStoreState>()(
       fetchAgents: async () => {
         set({ isLoading: true });
         try {
-          const res = await fetchBackendWithAuth(`${API_BASE}/api/agents`);
+          const res = await fetchBackendWithAuth(`${API_BASE}/api/agents`, { cache: "no-store" });
           if (!res.ok) throw new Error("Failed to fetch agents");
           const data = await res.json();
           // Preserve client-only fields (e.g. model) that are not synced to the backend
@@ -195,20 +200,20 @@ export const useAgentsStore = create<AgentsStoreState>()(
 
       fetchAgent: async (id: string) => {
         try {
-          const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${id}`);
+          const res = await fetchBackendWithAuth(noStoreUrl(`${API_BASE}/api/agents/${id}`), { cache: "no-store" });
           if (!res.ok) return null;
           const data = await res.json();
+          const existing = get().agents.find((a) => a.id === id);
+          const agent = { ...fromBackend(data), model: existing?.model };
           // Preserve client-only fields when merging backend response
           set((state) => {
-            const existing = state.agents.find((a) => a.id === id);
-            const agent = { ...fromBackend(data), model: existing?.model };
             const exists = state.agents.some((a) => a.id === id);
             if (exists) {
               return { agents: state.agents.map((a) => (a.id === id ? agent : a)) };
             }
             return { agents: [agent, ...state.agents] };
           });
-          return get().agents.find((a) => a.id === id) ?? null;
+          return agent;
         } catch {
           return null;
         }

@@ -18,7 +18,7 @@ type SpawnResult = [number, string];
 type ExecResult  = [boolean, string];
 
 const spawnCalls: string[][] = [];
-const execCalls:  Array<[string, string]> = [];
+const execCalls:  Array<[string, string, number | undefined]> = [];
 const spawnQueue: SpawnResult[] = [];
 const execQueue:  ExecResult[]  = [];
 let defaultSpawn: SpawnResult = [0, ''];
@@ -39,12 +39,12 @@ mock.module('../../../src/docker', () => ({
     return [...defaultSpawn] as SpawnResult;
   },
 
-  dockerExec: async (containerName: string, cmd: string): Promise<ExecResult> => {
-    execCalls.push([containerName, cmd]);
+  dockerExec: async (containerName: string, cmd: string, timeoutMs?: number): Promise<ExecResult> => {
+    execCalls.push([containerName, cmd, timeoutMs]);
     if (execQueue.length)                   return execQueue.shift()!;
     // Command-aware defaults for common openclaw commands
     if (cmd.includes('gateway.auth.token')) return [true, 'tok-gateway-123'];
-    if (cmd.includes("agent.id!=='architect'")) {
+    if (cmd.includes("builderIds=new Set(['architect','copilot','test','reveal'])")) {
       return [true, containerName === 'openclaw-openclaw-gateway-1' ? 'updated' : 'absent'];
     }
     if (
@@ -53,8 +53,8 @@ mock.module('../../../src/docker', () => ({
       cmd.includes('--probe-provider openai-codex')
     ) {
       return [true, JSON.stringify({
-        defaultModel: 'openai-codex/gpt-5.4',
-        resolvedDefault: 'openai-codex/gpt-5.4',
+        defaultModel: 'openai-codex/gpt-5.5',
+        resolvedDefault: 'openai-codex/gpt-5.5',
         auth: {
           missingProvidersInUse: [],
           probes: {
@@ -69,8 +69,8 @@ mock.module('../../../src/docker', () => ({
     }
     if (cmd.includes('openclaw models status --json')) {
       return [true, JSON.stringify({
-        defaultModel: 'openai-codex/gpt-5.4',
-        resolvedDefault: 'openai-codex/gpt-5.4',
+        defaultModel: 'openai-codex/gpt-5.5',
+        resolvedDefault: 'openai-codex/gpt-5.5',
         auth: {
           probes: {
             totalTargets: 1,
@@ -135,7 +135,7 @@ beforeEach(() => {
   defaultExec  = [true, ''];
   process.env.OPENCLAW_SHARED_OAUTH_JSON_PATH = join(tmpdir(), 'missing-openclaw-oauth.json');
   process.env.CODEX_AUTH_JSON_PATH = join(tmpdir(), 'missing-codex-auth.json');
-  process.env.OPENCLAW_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.4';
+  process.env.OPENCLAW_SHARED_CODEX_MODEL = 'openai-codex/gpt-5.5';
 });
 
 // ── getContainerName ──────────────────────────────────────────────────────────
@@ -300,6 +300,30 @@ describe('createOpenclawSandbox', () => {
     expect(String(errors[0][1])).toContain('Onboarding failed');
   });
 
+  test('allows slow first-run onboarding more than five minutes', async () => {
+    await collectEvents(BASE_OPTS);
+
+    const onboardCall = execCalls.find(([, cmd]) =>
+      cmd.includes('openclaw onboard --non-interactive'),
+    );
+
+    expect(onboardCall).toBeDefined();
+    expect(onboardCall?.[2]).toBeGreaterThanOrEqual(600_000);
+  });
+
+  test('creates workspace state directories before the first architect turn', async () => {
+    await collectEvents(BASE_OPTS);
+
+    const mkdirCallIndex = execCalls.findIndex(([, cmd]) =>
+      cmd.includes('workspace-architect/.openclaw') && cmd.includes('workspace/.openclaw'),
+    );
+    const prePairIndex = execCalls.findIndex(([, cmd]) => cmd.includes('openclaw chat --message'));
+
+    expect(mkdirCallIndex).toBeGreaterThanOrEqual(0);
+    expect(prePairIndex).toBeGreaterThanOrEqual(0);
+    expect(mkdirCallIndex).toBeLessThan(prePairIndex);
+  });
+
   test('fails closed when a required bootstrap config step fails', async () => {
     // Pre-built path exec sequence:
     // 1. openclaw --version
@@ -308,21 +332,21 @@ describe('createOpenclawSandbox', () => {
     // 4. openclaw onboard (onboarding)
     // 5. auth-profiles.json node script
     // 6. batched bootstrap config → FAIL (triggers individual step retry)
-    // 7. first individual step (gateway.bind) → FAIL → error
+    // 7. first individual step (agents.list) → FAIL → error
     execQueue.push([true, '']);            // openclaw --version
     execQueue.push([true, '']);            // sandbox-vnc-start
     execQueue.push([true, '']);            // sandbox-agent-runtime
     execQueue.push([true, 'onboarded']);   // openclaw onboard
     execQueue.push([true, '']);            // auth-profiles.json
     execQueue.push([false, 'batch failed']); // batched config fails → individual retry
-    execQueue.push([false, 'permission denied']); // gateway.bind step fails
+    execQueue.push([false, 'permission denied']); // agents.list step fails
 
     const events = await collectEvents(BASE_OPTS);
 
     expect(events.some(([type]) => type === 'result')).toBe(false);
     const errors = events.filter(([type]) => type === 'error');
     expect(errors.length).toBe(1);
-    expect(String(errors[0][1])).toContain('gateway.bind');
+    expect(String(errors[0][1])).toContain('agents.list');
     expect(spawnCalls.some((args) => args[0] === 'rm' && args[1] === '-f')).toBe(true);
   });
 
@@ -419,7 +443,7 @@ describe('createOpenclawSandbox', () => {
       expect(execCalls.some(([, cmd]) => cmd.includes('--auth-choice skip'))).toBe(true);
       expect(
         execCalls.some(([, cmd]) =>
-          cmd.includes('openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4'),
+          cmd.includes('openclaw config set agents.defaults.model.primary openai-codex/gpt-5.5'),
         ),
       ).toBe(true);
       expect(
@@ -486,13 +510,13 @@ describe('retrofitContainerToSharedCodex', () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.model).toBe('openai-codex/gpt-5.4');
+      expect(result.model).toBe('openai-codex/gpt-5.5');
       expect(result.homeDir).toBe('/root');
       expect(execCalls.some(([, cmd]) => cmd.includes('/root/.codex/auth.json'))).toBe(true);
       expect(execCalls.some(([, cmd]) => cmd.includes("openai-codex:default"))).toBe(true);
       expect(
         execCalls.some(([, cmd]) =>
-          cmd.includes('openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4'),
+          cmd.includes('openclaw config set agents.defaults.model.primary openai-codex/gpt-5.5'),
         ),
       ).toBe(true);
     } finally {
@@ -568,10 +592,11 @@ describe('retrofitContainerToSharedCodex', () => {
       execQueue.push([true, '']);
       execQueue.push([true, 'absent']);
       execQueue.push([true, JSON.stringify({
-        defaultModel: 'openai-codex/gpt-5.4',
-        resolvedDefault: 'openai-codex/gpt-5.4',
+        defaultModel: 'openai-codex/gpt-5.5',
+        resolvedDefault: 'openai-codex/gpt-5.5',
         auth: { probes: { totalTargets: 1, results: [{ status: 'ok' }] } },
       })]);
+      execQueue.push([true, '']);
       execQueue.push([true, '']);
       execQueue.push([true, '']);
       execQueue.push([true, '']);
@@ -605,8 +630,8 @@ describe('retrofitContainerToSharedCodex', () => {
       execQueue.push([true, '']);
       execQueue.push([true, 'updated']);
       execQueue.push([true, JSON.stringify({
-        defaultModel: 'openai-codex/gpt-5.4',
-        resolvedDefault: 'openai-codex/gpt-5.4',
+        defaultModel: 'openai-codex/gpt-5.5',
+        resolvedDefault: 'openai-codex/gpt-5.5',
         auth: { probes: { totalTargets: 0, results: [] } },
       })]);
 
@@ -699,6 +724,7 @@ describe('reconfigureSandboxLlm', () => {
 
   test('throws when gateway does not become healthy after reconfiguration', async () => {
     execQueue.push([true, 'Config updated']);
+    execQueue.push([true, '']);
     execQueue.push([true, '']);
     execQueue.push([true, '']);
     execQueue.push([true, '']);

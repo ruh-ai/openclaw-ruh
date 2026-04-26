@@ -5,6 +5,10 @@ import { useAgentsStore, type SavedAgent } from "./use-agents-store";
 const originalFetch = globalThis.fetch;
 const originalLocalStorage = globalThis.localStorage;
 
+function pathEndsWith(input: RequestInfo | URL, suffix: string): boolean {
+  return new URL(String(input)).pathname.endsWith(suffix);
+}
+
 const baseAgent: SavedAgent = {
   id: "agent-1",
   name: "Existing Agent",
@@ -236,7 +240,7 @@ describe("useAgentsStore", () => {
     const fetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
 
-      if (url.endsWith("/api/agents/agent-1")) {
+      if (pathEndsWith(input, "/api/agents/agent-1")) {
         return new Response(
           JSON.stringify({
             id: "agent-1",
@@ -296,6 +300,44 @@ describe("useAgentsStore", () => {
         }),
       }),
     ]);
+  });
+
+  test("fetchAgent bypasses browser cache so lifecycle restore gets a JSON body", async () => {
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (pathEndsWith(input, "/api/agents/agent-1")) {
+        expect(init?.cache).toBe("no-store");
+        return new Response(
+          JSON.stringify({
+            id: "agent-1",
+            name: "Existing Agent",
+            avatar: "🤖",
+            description: "Fresh from backend",
+            skills: ["Planner"],
+            trigger_label: "Manual trigger",
+            status: "forging",
+            sandbox_ids: ["sb-1"],
+            forge_stage: "test",
+            forge_sandbox_id: "forge-sb-1",
+            skill_graph: [{ skill_id: "planner", name: "Planner" }],
+            runtime_inputs: [],
+            tool_connections: [],
+            triggers: [],
+            created_at: "2026-03-25T00:00:00.000Z",
+          }),
+          { status: 200 },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const agent = await useAgentsStore.getState().fetchAgent("agent-1");
+
+    expect(agent?.forgeStage).toBe("test");
   });
 
   test("saveAgentDraft creates a draft agent from safe metadata only", async () => {
@@ -708,7 +750,7 @@ describe("useAgentsStore", () => {
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
-      if (url.endsWith("/api/agents/agent-1") && !init?.method) {
+      if (pathEndsWith(input, "/api/agents/agent-1") && !init?.method) {
         return new Response(
           JSON.stringify({
             id: "agent-1",

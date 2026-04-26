@@ -11,7 +11,7 @@ describe('parseBackendConfig', () => {
     expect(config.allowedOrigins).toEqual(['http://localhost:3000']);
     expect(config.ollamaBaseUrl).toBe('http://host.docker.internal:11434/v1');
     expect(config.ollamaModel).toBe('qwen3-coder:30b');
-    expect(config.openclawSharedCodexModel).toBe('openai-codex/gpt-5.4');
+    expect(config.openclawSharedCodexModel).toBe('openai-codex/gpt-5.5');
     expect(config.openclawSharedOauthJsonPath).toContain('.openclaw/credentials/oauth.json');
     expect(config.codexAuthJsonPath).toContain('.codex/auth.json');
     expect(config.openaiApiKey).toBeNull();

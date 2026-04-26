@@ -136,6 +136,20 @@ describe("copilot-state", () => {
     expect(useCoPilotStore.getState().lastDispatchedThinkRunId).toBeNull();
     expect(useCoPilotStore.getState().lastDispatchedPlanRunId).toBeNull();
   });
+
+  test("tracks selected artifact target and chat mode", () => {
+    const store = useCoPilotStore.getState();
+    store.reset();
+
+    store.setSelectedArtifactTarget({ kind: "plan", path: ".openclaw/plan/architecture.json" });
+    store.setChatMode("revise");
+
+    expect(useCoPilotStore.getState().selectedArtifactTarget).toEqual({
+      kind: "plan",
+      path: ".openclaw/plan/architecture.json",
+    });
+    expect(useCoPilotStore.getState().chatMode).toBe("revise");
+  });
 });
 
 // ── Batch 1 UX fixes ────────────────────────────────────────────────────────
@@ -210,22 +224,42 @@ describe("advanceDevStage", () => {
     useCoPilotStore.getState().reset();
   });
 
-  test("sets evalStatus to done when skipping tests", () => {
+  test("blocks advance from test when there is no passing eval report", () => {
     const store = useCoPilotStore;
     store.setState({ devStage: "test", maxUnlockedDevStage: "test", evalStatus: "idle" });
     store.getState().advanceDevStage();
-    expect(store.getState().devStage).toBe("ship");
-    expect(store.getState().maxUnlockedDevStage).toBe("ship");
-    expect(store.getState().evalStatus).toBe("done");
+    expect(store.getState().devStage).toBe("test");
+    expect(store.getState().maxUnlockedDevStage).toBe("test");
+    expect(store.getState().evalStatus).toBe("idle");
   });
 
-  test("sets evalStatus to done when running tests are skipped", () => {
+  test("blocks advance from test when eval results require manual review", () => {
     const store = useCoPilotStore;
-    store.setState({ devStage: "test", maxUnlockedDevStage: "test", evalStatus: "running" });
+    store.setState({
+      devStage: "test",
+      maxUnlockedDevStage: "test",
+      evalStatus: "done",
+      evalTasks: [
+        { id: "manual", title: "Manual", input: "input", expectedBehavior: "expected", status: "manual", confidence: 0.3 },
+      ],
+    });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("test");
+  });
+
+  test("advances from test only after all eval tasks pass", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "test",
+      maxUnlockedDevStage: "test",
+      evalStatus: "done",
+      evalTasks: [
+        { id: "pass", title: "Pass", input: "input", expectedBehavior: "expected", status: "pass", confidence: 0.9 },
+      ],
+    });
     store.getState().advanceDevStage();
     expect(store.getState().devStage).toBe("ship");
     expect(store.getState().maxUnlockedDevStage).toBe("ship");
-    expect(store.getState().evalStatus).toBe("done");
   });
 
   test("does not touch evalStatus when advancing from plan to build", () => {
@@ -235,6 +269,50 @@ describe("advanceDevStage", () => {
     expect(store.getState().devStage).toBe("build");
     expect(store.getState().maxUnlockedDevStage).toBe("build");
     expect(store.getState().evalStatus).toBe("idle");
+  });
+
+  test("waits for backend confirmation before changing stages", async () => {
+    const store = useCoPilotStore;
+    let confirm!: (value: { stage: "review" }) => void;
+    const confirmed = new Promise<{ stage: "review" }>((resolve) => {
+      confirm = resolve;
+    });
+    store.setState({ devStage: "build", maxUnlockedDevStage: "build", buildStatus: "done" });
+
+    const advance = store.getState().advanceDevStage({
+      confirmStage: async (nextStage) => {
+        expect(nextStage).toBe("review");
+        return confirmed;
+      },
+    });
+
+    expect(store.getState().devStage).toBe("build");
+    expect(store.getState().lifecycleAdvanceStatus).toBe("saving");
+
+    confirm({ stage: "review" });
+    await advance;
+
+    expect(store.getState().devStage).toBe("review");
+    expect(store.getState().maxUnlockedDevStage).toBe("review");
+    expect(store.getState().lifecycleAdvanceStatus).toBe("idle");
+    expect(store.getState().lifecycleAdvanceError).toBeNull();
+  });
+
+  test("keeps the current stage when backend confirmation rejects", async () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "build", maxUnlockedDevStage: "build", buildStatus: "done" });
+
+    const advanced = await store.getState().advanceDevStage({
+      confirmStage: async () => {
+        throw new Error("Build report is blocked.");
+      },
+    });
+
+    expect(advanced).toBe(false);
+    expect(store.getState().devStage).toBe("build");
+    expect(store.getState().maxUnlockedDevStage).toBe("build");
+    expect(store.getState().lifecycleAdvanceStatus).toBe("failed");
+    expect(store.getState().lifecycleAdvanceError).toBe("Build report is blocked.");
   });
 
   test("does nothing at reflect stage (no overflow)", () => {
@@ -257,6 +335,30 @@ describe("advanceDevStage", () => {
     store.setState({ devStage: "think", maxUnlockedDevStage: "think", thinkStatus: "generating" });
     store.getState().advanceDevStage();
     expect(store.getState().devStage).toBe("think");
+  });
+
+  test("blocks advance from think when PRD/TRD documents are missing", () => {
+    const store = useCoPilotStore;
+    store.setState({ devStage: "think", maxUnlockedDevStage: "think", thinkStatus: "approved", discoveryDocuments: null });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("think");
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+  });
+
+  test("advances from think after approval and PRD/TRD documents exist", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "think",
+      maxUnlockedDevStage: "think",
+      thinkStatus: "approved",
+      discoveryDocuments: {
+        prd: { title: "PRD", sections: [{ heading: "Goal", content: "Define the product." }] },
+        trd: { title: "TRD", sections: [{ heading: "System", content: "Define the system." }] },
+      },
+    });
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("plan");
+    expect(store.getState().maxUnlockedDevStage).toBe("plan");
   });
 
   test("blocks advance from build when buildStatus is not done", () => {

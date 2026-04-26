@@ -108,4 +108,13 @@ describe("setup page", () => {
     expect(mod.default).toBeDefined();
     expect(typeof mod.default).toBe("function");
   });
+
+  test("blocks save while required user inputs are missing", async () => {
+    const mod = await import("../setup/page");
+    expect(mod.getSetupSaveState({ missingRequiredCount: 2, saving: false })).toEqual({
+      disabled: true,
+      label: "2 required inputs remaining",
+      ready: false,
+    });
+  });
 });

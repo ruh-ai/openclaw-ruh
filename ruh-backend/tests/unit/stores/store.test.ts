@@ -57,7 +57,7 @@ describe('store.saveSandbox', () => {
       gateway_port: 18789,
       ssh_command: 'daytona ssh sb-shared',
       shared_codex_enabled: true,
-      shared_codex_model: 'openai-codex/gpt-5.4',
+      shared_codex_model: 'openai-codex/gpt-5.5',
     };
 
     await store.saveSandbox(result);
@@ -77,7 +77,7 @@ describe('store.saveSandbox', () => {
       null,
       'daytona ssh sb-shared',
       true,
-      'openai-codex/gpt-5.4',
+      'openai-codex/gpt-5.5',
     ]);
   });
 });
@@ -94,7 +94,7 @@ describe('store.markApproved', () => {
 
 describe('store.updateSandboxSharedCodex', () => {
   test('updates shared-Codex metadata and normalizes empty sandbox_state to running', async () => {
-    await store.updateSandboxSharedCodex('sb-001', true, 'openai-codex/gpt-5.4');
+    await store.updateSandboxSharedCodex('sb-001', true, 'openai-codex/gpt-5.5');
 
     const updateCall = mockQuery.mock.calls.find((c) =>
       (c[0] as string).includes('UPDATE sandboxes'),
@@ -106,7 +106,7 @@ describe('store.updateSandboxSharedCodex', () => {
     expect(updateCall![0]).toContain(
       "sandbox_state = COALESCE(NULLIF(sandbox_state, ''), 'running')",
     );
-    expect(updateCall![1]).toEqual(['sb-001', true, 'openai-codex/gpt-5.4']);
+    expect(updateCall![1]).toEqual(['sb-001', true, 'openai-codex/gpt-5.5']);
   });
 });
 

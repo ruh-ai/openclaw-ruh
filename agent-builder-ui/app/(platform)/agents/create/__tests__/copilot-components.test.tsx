@@ -1,4 +1,5 @@
 import { describe, expect, test, mock } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
 
 // --- Mocks ---
 
@@ -134,5 +135,94 @@ describe("LifecycleStepRenderer", () => {
     const component = mod.LifecycleStepRenderer || mod.default;
     expect(component).toBeDefined();
     expect(typeof component).toBe("function");
+  });
+});
+
+describe("BuildReportPanel", () => {
+  test("shows blockers and retry action", async () => {
+    const { BuildReportPanel } = await import("../_components/copilot/BuildReportPanel");
+
+    const html = renderToStaticMarkup(
+      <BuildReportPanel
+        report={{
+          readiness: "blocked",
+          blockers: ["Required setup failed: dashboard-build"],
+          warnings: [],
+          checks: [],
+          generatedAt: "2026-04-26T00:00:00.000Z",
+        }}
+        onRetryFailedStep={mock(() => {})}
+        onSelectArtifact={mock(() => {})}
+      />,
+    );
+
+    expect(html).toContain("Required setup failed: dashboard-build");
+    expect(html).toContain("Retry failed step");
+    expect(html).not.toContain("disabled=\"\"");
+  });
+});
+
+describe("ArtifactActionBar", () => {
+  test("renders artifact controls and disables approve when blocked", async () => {
+    const { ArtifactActionBar } = await import("../_components/copilot/ArtifactActionBar");
+
+    const html = renderToStaticMarkup(
+      <ArtifactActionBar
+        target={{ kind: "plan", path: ".openclaw/plan/architecture.json" }}
+        canApprove={false}
+        canRegenerate
+        onApprove={mock(() => {})}
+        onRequestChanges={mock(() => {})}
+        onRegenerate={mock(() => {})}
+        onCompare={mock(() => {})}
+        onExplain={mock(() => {})}
+        onOpenFiles={mock(() => {})}
+      />,
+    );
+
+    expect(html).toContain("Approve");
+    expect(html).toContain("Request Changes");
+    expect(html).toContain("Regenerate");
+    expect(html).toContain("Compare Changes");
+    expect(html).toContain("Explain");
+    expect(html).toContain("Open Files");
+    expect(html).toContain("disabled=\"\"");
+  });
+});
+
+describe("StepDiscovery", () => {
+  test("renders PRD/TRD artifact action bar when artifact actions are available", async () => {
+    const { StepDiscovery } = await import("../_components/configure/StepDiscovery");
+
+    const artifactActions = {
+      requestChanges: mock(() => {}),
+      regenerate: mock(() => {}),
+      compare: mock(() => {}),
+      explain: mock(() => {}),
+      openFiles: mock(() => {}),
+    };
+
+    const html = renderToStaticMarkup(
+      <StepDiscovery
+        questions={null}
+        answers={{}}
+        documents={{
+          prd: { title: "PRD", sections: [{ heading: "Goals", content: "Launch cleanly" }] },
+          trd: { title: "TRD", sections: [{ heading: "Architecture", content: "Use the sandbox" }] },
+        }}
+        status="ready"
+        onAnswer={mock(() => {})}
+        onDocSectionEdit={mock(() => {})}
+        onContinue={mock(() => {})}
+        onSkip={mock(() => {})}
+        onRequestArtifactChange={mock(() => {})}
+        artifactActions={artifactActions}
+      />,
+    );
+
+    expect(html).toContain("prd actions");
+    expect(html).toContain("Request Changes");
+    expect(html).toContain("Compare Changes");
+    expect(html).toContain("Open Files");
   });
 });

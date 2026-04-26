@@ -1,5 +1,5 @@
 import { useUserStore } from "@/hooks/use-user";
-import { clearAuthCookies } from "./authCookies";
+import { clearAuthCookies } from "./authCookies.client";
 import { loginRoute } from "@/shared/routes";
 
 /**
@@ -8,7 +8,7 @@ import { loginRoute } from "@/shared/routes";
  */
 export const clearUserStoreAndLogout = async () => {
   useUserStore.getState().clearUser("helper clearUserStoreAndLogout");
-  await clearAuthCookies();
+  clearAuthCookies();
   // Redirect to login page (client-side only)
   if (typeof window !== "undefined") {
     // Prevent redirect loop if already on login page

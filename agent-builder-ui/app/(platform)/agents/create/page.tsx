@@ -28,7 +28,6 @@ import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { CreationProgressCard, deriveCreationPhase } from "./_components/CreationProgressCard";
 import { AnimatedRuhLogo } from "./_components/AnimatedRuhLogo";
 import { OnboardingSequence } from "./_components/OnboardingSequence";
-import { MeetYourEmployee } from "./_components/MeetYourEmployee";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { AgentTriggerDefinition } from "@/lib/agents/types";
 import {
@@ -41,7 +40,6 @@ import {
   type CreateSessionConfigState,
 } from "./create-session-config";
 import {
-  canPersistReviewOrLaterForgeStage,
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
@@ -59,7 +57,11 @@ import {
   buildResumedCoPilotSeed,
   clearCreateSessionCache,
   loadCreateSessionFromCache,
+  resolveRouteAgentForRestore,
   saveCreateSessionToCache,
+  shouldReconcileToPersistedForgeStage,
+  shouldSuppressRevealTriggerForResume,
+  shouldWaitForRouteAgentBeforeCacheRestore,
 } from "@/lib/openclaw/create-session-cache";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -115,10 +117,19 @@ function CreateAgentPageContent() {
   const [reviewOutput, setReviewOutput] = useState<ReviewAgentOutput | null>(null);
 
   const { agents, saveAgent, persistAgentEdits, updateAgentConfig, deleteForge, fetchAgent } = useAgentsStore();
-  const existingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
+  const [routeFetchedAgent, setRouteFetchedAgent] = useState<SavedAgent | null>(null);
+  const storeExistingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
+  const existingAgent = editingAgentId
+    ? resolveRouteAgentForRestore({
+      editingAgentId,
+      storeAgent: storeExistingAgent,
+      routeFetchedAgent,
+    })
+    : null;
 
   const { builderState, updateBuilderState, resetBuilderState, initializeFromAgent } = useBuilderState();
   const { sandbox: architectSandbox } = useArchitectSandbox();
+  const coPilotStore = useCoPilotStore();
 
   // ── v2: per-agent forge sandbox ──────────────────────────────────────────
   // Each new agent gets its own container. forgePhase tracks creation lifecycle.
@@ -165,12 +176,24 @@ function CreateAgentPageContent() {
   const [hasRestoredSession, setHasRestoredSession] = useState(() => !editingAgentId);
 
   // Track reveal regeneration attempts (max 3 total views)
-  const [revealAttemptCount, setRevealAttemptCount] = useState(1);
   const sseAbortRef = useRef<AbortController | null>(null);
 
   const revealFiredRef = useRef(false);
 
   const handleInitSubmit = useCallback(async (name: string, description: string) => {
+    revealFiredRef.current = false;
+    resetBuilderState();
+    coPilotStore.reset();
+    setCreatedAgentId(null);
+    setNameOverride(null);
+    setRulesOverride(null);
+    setReviewOutput(null);
+    updateBuilderState({
+      name,
+      description,
+      systemName: name,
+      forgeSandboxStatus: "provisioning",
+    });
     setForgePhase("provisioning");
     setForgeLog(["Creating your agent..."]);
     setForgeError(null);
@@ -186,6 +209,16 @@ function CreateAgentPageContent() {
 
       // Update URL immediately so the agent ID is visible and the page is refreshable
       window.history.replaceState(null, "", `/agents/create?agentId=${agent_id}`);
+      setCreatedAgentId(agent_id);
+      clearCreateSessionCache(agent_id);
+      clearCoPilotLifecycleCache(agent_id);
+      updateBuilderState({
+        draftAgentId: agent_id,
+        name,
+        description,
+        systemName: name,
+        forgeSandboxStatus: "provisioning",
+      });
       setForgeLog((prev) => [...prev, "Starting container..."]);
 
       const abortController = new AbortController();
@@ -249,8 +282,21 @@ function CreateAgentPageContent() {
       setForgeLog((prev) => [...prev, "Agent workspace ready — preparing your digital employee..."]);
       // Container is ready. Go straight to copilot mode (forgePhase=null) so
       // CoPilotLayout mounts and can send the first message to the Architect.
-      // The devStage starts at "reveal", so the Architect gets REVEAL_SYSTEM_INSTRUCTION.
+      // The devStage starts at "reveal"; the Architect receives a [PHASE: reveal]-prefixed message
+      // and its lifecycle-aware SOUL.md emits the <reveal_field/> sequence.
       // MeetYourEmployee renders inside the copilot section when revealData arrives.
+
+      const refreshedAgent = await fetchAgent(agent_id).catch(() => null);
+      const forgeSandboxId = refreshedAgent?.forgeSandboxId ?? null;
+
+      updateBuilderState({
+        draftAgentId: agent_id,
+        name,
+        description,
+        systemName: name,
+        forgeSandboxId,
+        forgeSandboxStatus: forgeSandboxId ? "ready" : "idle",
+      });
 
       // Seed the copilot store with name/description from the form BEFORE
       // CoPilotLayout mounts, so the reveal auto-trigger has the description
@@ -260,18 +306,16 @@ function CreateAgentPageContent() {
         name,
         description,
         devStage: "reveal" as const,
+        agentSandboxId: forgeSandboxId,
       });
 
-      setCreatedAgentId(agent_id);
       setForgePhase(null);
     } catch (err) {
       if ((err as Error).name === "AbortError") return; // User navigated away
       setForgeError(err instanceof Error ? err.message : "Failed to provision agent workspace");
       setForgePhase("init");
     }
-  }, []);
-
-  const coPilotStore = useCoPilotStore();
+  }, [coPilotStore, fetchAgent, resetBuilderState, updateBuilderState]);
 
   // Feature session: load and hydrate copilot for feature branch mode
   const featureSession = useFeatureSession(isFeatureBranchMode ? editingAgentId : null, isFeatureBranchMode ? featureBranch : null);
@@ -302,9 +346,15 @@ function CreateAgentPageContent() {
 
     setIsRouteAgentHydrated(false);
     setHasRestoredSession(false);
+    setRouteFetchedAgent(null);
 
     void fetchAgent(editingAgentId)
       .catch(() => null)
+      .then((agent) => {
+        if (!cancelled) {
+          setRouteFetchedAgent(agent);
+        }
+      })
       .finally(() => {
         if (!cancelled) {
           setIsRouteAgentHydrated(true);
@@ -343,9 +393,33 @@ function CreateAgentPageContent() {
   // The reveal waiting screen in the render block returns BEFORE CoPilotLayout
   // mounts, so CoPilotLayout's internal reveal useEffect never runs. This
   // effect fires the architect call from page.tsx directly.
+  //
+  // Recovery path: if a prior reveal attempt failed (e.g., transient gateway
+  // error) the effect fell back to setDevStage("think") and persisted
+  // forge_stage="think" to the backend. On resume we land at "think" with no
+  // revealData — a dead empty screen until the user types. Detect that stuck
+  // state and retry the reveal from scratch. `revealFiredRef` guarantees we
+  // only do this once per mount.
   useEffect(() => {
-    if (coPilotStore.devStage !== "reveal" || revealFiredRef.current) return;
+    if (forgePhase === "provisioning") return;
+    if (revealFiredRef.current) return;
     if (coPilotStore.revealData) return;
+
+    const persistedSeed = workingAgent ? buildResumedCoPilotSeed(workingAgent, null) : {};
+    if (shouldSuppressRevealTriggerForResume({
+      hasRestoredSession,
+      currentStage: coPilotStore.devStage,
+      persistedStage: persistedSeed.devStage,
+    })) {
+      return;
+    }
+
+    const isRevealStage = coPilotStore.devStage === "reveal";
+    const isStuckAtThink =
+      coPilotStore.devStage === "think"
+      && !coPilotStore.userTriggeredThink
+      && coPilotStore.thinkStatus === "idle";
+    if (!isRevealStage && !isStuckAtThink) return;
 
     const sandboxId = effectiveSandbox?.sandbox_id;
     const desc = builderState.description || workingAgent?.description || "";
@@ -353,6 +427,10 @@ function CreateAgentPageContent() {
     if (!sandboxId || !desc.trim()) return;
 
     revealFiredRef.current = true;
+    if (isStuckAtThink) {
+      console.log("[Reveal] RECOVERY — agent stuck at think with no reveal data, restarting reveal");
+      coPilotStore.setDevStage("reveal");
+    }
     coPilotStore.setRevealStatus("generating");
 
     console.log("[Reveal] FIRING from page.tsx:", { sandboxId, name: agName.slice(0, 30) });
@@ -360,10 +438,33 @@ function CreateAgentPageContent() {
     Promise.all([
       import("@/lib/openclaw/api"),
       import("@/lib/openclaw/ag-ui/builder-agent"),
-    ]).then(([{ sendToArchitectStreaming }, { REVEAL_SYSTEM_INSTRUCTION }]) => {
-      const prompt = `Agent name: ${agName}\n\nAgent description: ${desc}`;
+    ]).then(([{ sendToArchitectStreaming }, { stripRevealMarkers }]) => {
+      // The sandbox's SOUL.md is lifecycle-aware: the [PHASE: reveal] header
+      // tells the architect to emit <reveal_field/> markers instead of
+      // conversing. See ruh-backend/src/sandboxManager.ts for the SOUL contract.
+      const prompt = `[PHASE: reveal]\n\nAgent name: ${agName}\n\nAgent description: ${desc}`;
       let accumulated = "";
-      const RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/;
+
+      // Progressive markers (primary): <reveal_field k="..." v='JSON'/> + <reveal_done/>
+      // Legacy fallback: <employee_reveal data='{...}'/>
+      const REVEAL_FIELD_RE = /<reveal_field\s+k="([^"]+)"\s+v='([\s\S]*?)'\s*\/>/g;
+      const REVEAL_DONE_RE = /<reveal_done\s*\/>/;
+      const REVEAL_BLOB_RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/;
+
+      const VALID_KEYS = new Set<"name" | "title" | "opening" | "what_i_heard" | "what_i_will_own" | "what_i_wont_do" | "first_move" | "clarifying_question">([
+        "name",
+        "title",
+        "opening",
+        "what_i_heard",
+        "what_i_will_own",
+        "what_i_wont_do",
+        "first_move",
+        "clarifying_question",
+      ]);
+      const seenFields = new Set<string>();
+      let fieldOffset = 0;
+      let tickerOffset = 0;
+      let doneSeen = false;
 
       sendToArchitectStreaming(
         `agent:main:${sandboxId}`,
@@ -371,30 +472,76 @@ function CreateAgentPageContent() {
         {
           onDelta: (delta: string) => {
             accumulated += delta;
-            const m = RE.exec(accumulated);
-            if (m && coPilotStore.revealStatus !== "ready") {
-              try {
-                const d = JSON.parse(m[1]);
-                coPilotStore.setRevealData({
-                  name: d.name ?? agName, title: d.title ?? "",
-                  opening: d.opening ?? "",
-                  what_i_heard: d.what_i_heard ?? [],
-                  what_i_will_own: d.what_i_will_own ?? [],
-                  what_i_wont_do: d.what_i_wont_do ?? [],
-                  first_move: d.first_move ?? "",
-                  clarifying_question: d.clarifying_question ?? "",
-                });
-                coPilotStore.setRevealStatus("ready");
-                console.log("[Reveal] SUCCESS — profile received");
-              } catch (e) { console.warn("[Reveal] Parse failed:", e); }
+
+            // 1. Progressive <reveal_field> markers.
+            REVEAL_FIELD_RE.lastIndex = fieldOffset;
+            let m: RegExpExecArray | null;
+            while ((m = REVEAL_FIELD_RE.exec(accumulated)) !== null) {
+              const key = m[1] as "name" | "title" | "opening" | "what_i_heard" | "what_i_will_own" | "what_i_wont_do" | "first_move" | "clarifying_question";
+              if (VALID_KEYS.has(key) && !seenFields.has(key)) {
+                try {
+                  const value = JSON.parse(m[2]);
+                  seenFields.add(key);
+                  coPilotStore.setRevealFieldPartial(key, value);
+                } catch (e) {
+                  console.warn("[Reveal] malformed reveal_field JSON for key", key, e);
+                }
+              }
+              fieldOffset = REVEAL_FIELD_RE.lastIndex;
+            }
+
+            // 2. Terminal <reveal_done/>.
+            if (!doneSeen && REVEAL_DONE_RE.test(accumulated)) {
+              doneSeen = true;
+              coPilotStore.setRevealStatus("ready");
+              console.log("[Reveal] SUCCESS — reveal_done received");
+            }
+
+            // 3. Legacy blob fallback.
+            if (!doneSeen) {
+              const blob = REVEAL_BLOB_RE.exec(accumulated);
+              if (blob) {
+                try {
+                  const d = JSON.parse(blob[1]);
+                  coPilotStore.setRevealData({
+                    name: d.name ?? agName,
+                    title: d.title ?? "",
+                    opening: d.opening ?? "",
+                    what_i_heard: d.what_i_heard ?? [],
+                    what_i_will_own: d.what_i_will_own ?? [],
+                    what_i_wont_do: d.what_i_wont_do ?? [],
+                    first_move: d.first_move ?? "",
+                    clarifying_question: d.clarifying_question ?? "",
+                  });
+                  coPilotStore.setRevealStatus("ready");
+                  doneSeen = true;
+                  console.log("[Reveal] SUCCESS — legacy blob received");
+                } catch (e) {
+                  console.warn("[Reveal] legacy blob parse failed:", e);
+                }
+              }
+            }
+
+            // 4. Feed the live thought ticker with marker-stripped prose.
+            const newChunk = accumulated.slice(tickerOffset);
+            tickerOffset = accumulated.length;
+            const cleanChunk = stripRevealMarkers(newChunk);
+            if (cleanChunk.trim().length > 0) {
+              coPilotStore.appendRevealThought(cleanChunk);
             }
           },
           onStatus: () => {},
         },
-        { forgeSandboxId: sandboxId, agentId: workingAgent?.id ?? undefined, soulOverride: REVEAL_SYSTEM_INSTRUCTION },
-      ).then(() => {
-        if (coPilotStore.revealStatus !== "ready") {
-          console.warn("[Reveal] No marker — skipping to think");
+        { forgeSandboxId: sandboxId, agentId: workingAgent?.id ?? undefined },
+      ).then((result) => {
+        console.log("[Reveal] Stream complete.", {
+          chars: accumulated.length,
+          doneSeen,
+          revealStatus: coPilotStore.revealStatus,
+          resultType: (result as { type?: string } | null)?.type,
+        });
+        if (!doneSeen && coPilotStore.revealStatus !== "ready") {
+          console.warn("[Reveal] No marker in response — skipping to think");
           coPilotStore.setRevealStatus("failed");
           coPilotStore.setDevStage("think");
         }
@@ -404,8 +551,12 @@ function CreateAgentPageContent() {
         coPilotStore.setDevStage("think");
       });
     });
+
+    return () => {
+      console.log("[Reveal] effect cleanup (component unmount or deps changed)");
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveSandbox?.sandbox_id, builderState.description, builderState.name, workingAgent?.description, workingAgent?.name, coPilotStore.devStage]);
+  }, [effectiveSandbox?.sandbox_id, builderState.description, builderState.name, workingAgent, workingAgent?.description, workingAgent?.name, coPilotStore.devStage, coPilotStore.thinkStatus, coPilotStore.userTriggeredThink, forgePhase, hasRestoredSession]);
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
@@ -478,6 +629,14 @@ function CreateAgentPageContent() {
     const cachedLifecycle = restoreId ? loadCoPilotLifecycleFromCache(restoreId) : null;
     let cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
     let cachedBuilder = cachedSession?.builder ?? null;
+
+    if (shouldWaitForRouteAgentBeforeCacheRestore({
+      editingAgentId,
+      hasAgentRecord: Boolean(workingAgent),
+      isRouteAgentHydrated,
+    })) {
+      return;
+    }
 
     // Discard stale caches in two cases:
     // 1. Agent is active with skills but cache is stuck at an early stage
@@ -615,7 +774,7 @@ function CreateAgentPageContent() {
     }
 
     if (cachedCoPilot || cachedBuilder) {
-      applyRecoveredSession(null);
+      applyRecoveredSession(workingAgent ?? null);
       return;
     }
 
@@ -653,7 +812,20 @@ function CreateAgentPageContent() {
     coPilotStore.reset();
     setHasRestoredSession(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingAgentId, reflectStage, existingAgent, isRouteAgentHydrated]);
+  }, [editingAgentId, reflectStage, existingAgent, workingAgent, isRouteAgentHydrated]);
+
+  useEffect(() => {
+    if (!workingAgent) return;
+    const persistedSeed = buildResumedCoPilotSeed(workingAgent, null);
+    const persistedStage = persistedSeed.devStage;
+    if (!shouldReconcileToPersistedForgeStage({
+      currentStage: coPilotStore.devStage,
+      persistedStage,
+    })) {
+      return;
+    }
+    coPilotStore.hydrateFromSeed(persistedSeed);
+  }, [coPilotStore, coPilotStore.devStage, workingAgent]);
 
   useEffect(() => {
     setCreateSessionConfig(createInitialCreateSessionConfig(workingAgent));
@@ -816,41 +988,6 @@ function CreateAgentPageContent() {
 
     return () => window.clearTimeout(timeout);
   });
-
-  // Persist forge_stage to backend immediately on every stage transition.
-  // This is the source of truth for where the creation process is — used by
-  // reconciliation and new-tab restore. Not debounced because stage transitions
-  // are infrequent and critical to persist.
-  const lastSavedForgeStageRef = useRef<string | null>(null);
-  useEffect(() => {
-    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
-    if (!agentId || !hasRestoredSession) return;
-
-    const currentStage = coPilotStore.devStage;
-    const skillGraphCount =
-      builderState.skillGraph?.length
-      ?? workingAgent?.skillGraph?.length
-      ?? 0;
-    if (!canPersistReviewOrLaterForgeStage(currentStage, skillGraphCount)) {
-      return;
-    }
-    if (lastSavedForgeStageRef.current === currentStage) return;
-    lastSavedForgeStageRef.current = currentStage;
-
-    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage: currentStage }),
-    }).catch(() => { /* best-effort — creationSession is the backup */ });
-  }, [
-    coPilotStore.devStage,
-    editingAgentId,
-    effectiveAgentId,
-    builderState.draftAgentId,
-    builderState.skillGraph,
-    workingAgent?.skillGraph,
-    hasRestoredSession,
-  ]);
 
   const syntheticAgent: SavedAgent = useMemo(() => {
     const effectiveImprovements = builderState.improvements.length > 0 ? builderState.improvements : (workingAgent?.improvements ?? []);
@@ -1223,17 +1360,9 @@ function CreateAgentPageContent() {
     }
   }, []);
 
-  // Mark the creation lifecycle as complete and publish to marketplace.
+  // Publish to marketplace after a successful Ship action.
   // Called at every successful Ship completion path.
   const finalizeShipCompletion = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
-    // Mark forge_stage as "complete" — this is the source of truth for reconciliation.
-    // The endpoint also promotes agent status to "active".
-    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage: "complete" }),
-    }).catch(() => { /* best-effort */ });
-
     void autoPublishToMarketplace(agentId, agentName, agentDescription);
   }, [autoPublishToMarketplace]);
 
@@ -1500,183 +1629,9 @@ function CreateAgentPageContent() {
     );
   }
 
-  // ── Reveal stage (inside copilot mode) ──────────────────────────────────
-  // When devStage === "reveal", the CoPilotLayout mounts (hidden) so it can
-  // send the first message to the Architect. MeetYourEmployee overlays when
-  // revealData arrives. The loading state shows while waiting.
-  if (mode === "copilot" && coPilotStore.devStage === "reveal") {
-    if (coPilotStore.revealData) {
-      return (
-        <MeetYourEmployee
-          reveal={coPilotStore.revealData}
-          agentName={builderState.name ?? "Agent"}
-          attemptCount={revealAttemptCount}
-          isProvisioning={false}
-          onConfirm={(answer) => {
-            coPilotStore.setRevealAnswer(answer);
-            coPilotStore.setRevealStatus("approved");
-            coPilotStore.setDevStage("think");
-          }}
-          onRegenerate={() => {
-            setRevealAttemptCount((c) => c + 1);
-            coPilotStore.setRevealStatus("idle");
-            coPilotStore.setRevealData(null);
-          }}
-        />
-      );
-    }
-    // Reveal data not yet arrived — show employee profile
-    const agentLabel = builderState.name || workingAgent?.name || "New Employee";
-    const agentDesc = builderState.description || workingAgent?.description || "";
-
-    // Parse description into specific tasks the employee will do
-    const tasks = agentDesc
-      .split(/[.,;!]+/)
-      .map((s: string) => s.trim())
-      .filter((s: string) => s.length > 10 && s.length < 80);
-
-    // Deterministic persona tied to agent name
-    const PERSONAS = [
-      { first: "Ava", last: "Chen", gender: "f", skin: "#F5D0C5", hair: "#2C1810", shirt: "#ae00d0" },
-      { first: "Marcus", last: "Rivera", gender: "m", skin: "#C68642", hair: "#1A1A1A", shirt: "#7b5aff" },
-      { first: "Priya", last: "Sharma", gender: "f", skin: "#D4A574", hair: "#1C1008", shirt: "#ae00d0" },
-      { first: "Noah", last: "Kim", gender: "m", skin: "#FFDBB4", hair: "#3D2B1F", shirt: "#0f3460" },
-      { first: "Zara", last: "Osei", gender: "f", skin: "#8D5524", hair: "#0A0A0A", shirt: "#7b5aff" },
-      { first: "Leo", last: "Tanaka", gender: "m", skin: "#FFDBB4", hair: "#2C1810", shirt: "#16213e" },
-      { first: "Maya", last: "Patel", gender: "f", skin: "#C68642", hair: "#1C1008", shirt: "#ae00d0" },
-      { first: "Ethan", last: "Nowak", gender: "m", skin: "#F5D0C5", hair: "#5C4033", shirt: "#7b5aff" },
-    ];
-    const pIdx = agentLabel.split("").reduce((s: number, c: string) => s + c.charCodeAt(0), 0) % PERSONAS.length;
-    const pe = PERSONAS[pIdx];
-    const fullName = `${pe.first} ${pe.last}`;
-    const roleTitle = agentLabel.replace(/agent|bot|assistant/gi, "Specialist").replace(/\s+/g, " ").trim();
-
-    // Better SVG - bust portrait with shoulders, neck, detailed face
-    const svgFace = pe.gender === "f"
-      ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f8f0ff"/><stop offset="100%" stop-color="#f0e8ff"/></linearGradient></defs><rect width="200" height="200" fill="url(#bg)"/><ellipse cx="100" cy="190" rx="70" ry="45" fill="${pe.shirt}"/><ellipse cx="100" cy="145" rx="12" ry="16" fill="${pe.skin}"/><ellipse cx="100" cy="105" rx="38" ry="42" fill="${pe.skin}"/><ellipse cx="100" cy="72" rx="42" ry="35" fill="${pe.hair}"/><path d="M62 85 Q65 55 100 48 Q135 55 138 85 Q135 70 100 65 Q65 70 62 85Z" fill="${pe.hair}"/><path d="M58 90 Q55 105 60 115" stroke="${pe.hair}" stroke-width="8" fill="none" stroke-linecap="round"/><path d="M142 90 Q145 105 140 115" stroke="${pe.hair}" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="85" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="115" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="86" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="116" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="87" cy="101" rx="1" ry="1" fill="white"/><ellipse cx="117" cy="101" rx="1" ry="1" fill="white"/><path d="M78 94 Q85 91 92 93" stroke="${pe.hair}" stroke-width="1.5" fill="none"/><path d="M108 93 Q115 91 122 94" stroke="${pe.hair}" stroke-width="1.5" fill="none"/><ellipse cx="100" cy="112" rx="3" ry="2" fill="${pe.skin}" opacity="0.6"/><path d="M90 120 Q100 126 110 120" stroke="#d4888a" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M95 120 Q100 123 105 120" fill="#e8a0a0" opacity="0.4"/><circle cx="75" cy="110" r="6" fill="#ffb5b5" opacity="0.15"/><circle cx="125" cy="110" r="6" fill="#ffb5b5" opacity="0.15"/><path d="M80 155 L100 165 L120 155" stroke="white" stroke-width="1.5" fill="none" opacity="0.6"/></svg>`
-      : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0f0ff"/><stop offset="100%" stop-color="#e8e8ff"/></linearGradient></defs><rect width="200" height="200" fill="url(#bg)"/><ellipse cx="100" cy="190" rx="70" ry="45" fill="${pe.shirt}"/><ellipse cx="100" cy="145" rx="13" ry="17" fill="${pe.skin}"/><ellipse cx="100" cy="105" rx="36" ry="40" fill="${pe.skin}"/><rect x="62" y="68" width="76" height="30" rx="4" fill="${pe.hair}"/><rect x="58" y="82" width="84" height="14" rx="3" fill="${pe.hair}"/><ellipse cx="85" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="115" cy="102" rx="5" ry="5.5" fill="white"/><ellipse cx="86" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="116" cy="102" rx="2.8" ry="3" fill="#2C1810"/><ellipse cx="87" cy="101" rx="1" ry="1" fill="white"/><ellipse cx="117" cy="101" rx="1" ry="1" fill="white"/><rect x="78" y="94" width="14" height="2" rx="1" fill="${pe.hair}" opacity="0.4"/><rect x="108" y="94" width="14" height="2" rx="1" fill="${pe.hair}" opacity="0.4"/><ellipse cx="100" cy="112" rx="3.5" ry="2" fill="${pe.skin}" opacity="0.6"/><path d="M92 120 Q100 125 108 120" stroke="#c9888a" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M80 155 Q100 148 120 155" stroke="white" stroke-width="1.5" fill="none" opacity="0.5"/><rect x="88" y="152" width="24" height="3" rx="1.5" fill="${pe.shirt}" opacity="0.8"/></svg>`;
-    const avatarUri = `data:image/svg+xml,${encodeURIComponent(svgFace)}`;
-
-    return (
-      <>
-        <div className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-start px-6 py-8">
-          <div className="w-full max-w-[580px]">
-
-            <div className="rounded-2xl bg-white shadow-[0_4px_40px_rgba(0,0,0,0.06)] overflow-hidden border border-black/[0.04]">
-
-              {/* Top section — person + identity */}
-              <div className="px-8 pt-8 pb-0">
-                <div className="flex gap-6">
-                  {/* Portrait */}
-                  <div className="shrink-0">
-                    <div className="w-[110px] h-[110px] rounded-2xl overflow-hidden shadow-md ring-1 ring-black/5">
-                      <img src={avatarUri} alt={fullName} className="w-full h-full object-cover" />
-                    </div>
-                  </div>
-                  {/* Identity */}
-                  <div className="min-w-0 flex-1 py-1">
-                    <h1 className="text-[26px] font-bold text-[#1a1a2e] tracking-tight leading-tight">{fullName}</h1>
-                    <p className="text-[14px] text-[var(--text-secondary)] mt-1">{roleTitle}</p>
-                    <div className="flex items-center gap-2 mt-3">
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5">
-                        <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" /><span className="relative h-2 w-2 rounded-full bg-emerald-500" /></span>
-                        <span className="text-[11px] font-semibold text-emerald-700">Ready to start</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Divider */}
-              <div className="mx-8 my-5 h-px bg-gradient-to-r from-transparent via-black/10 to-transparent" />
-
-              {/* Body */}
-              <div className="px-8 pb-7 space-y-6">
-
-                {/* What I'll do for you — specific to THIS agent */}
-                {tasks.length > 0 && (
-                  <div>
-                    <h3 className="text-[12px] font-bold text-[#1a1a2e] uppercase tracking-wide mb-3">What I&apos;ll handle for you</h3>
-                    <div className="space-y-2">
-                      {tasks.map((task: string, i: number) => (
-                        <div key={i} className="flex items-start gap-2.5">
-                          <div className="mt-[3px] h-[18px] w-[18px] shrink-0 rounded-md flex items-center justify-center text-[10px] font-bold text-white" style={{ background: "linear-gradient(135deg, #ae00d0, #7b5aff)" }}>
-                            {i + 1}
-                          </div>
-                          <p className="text-[13px] leading-snug text-[var(--text-primary)]">{task}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* If no tasks could be parsed, show description as quote */}
-                {tasks.length === 0 && agentDesc && (
-                  <div className="rounded-xl bg-[#fafafe] border border-[var(--primary)]/10 p-4">
-                    <p className="text-[13px] leading-relaxed text-[var(--text-primary)] italic">&ldquo;{agentDesc}&rdquo;</p>
-                  </div>
-                )}
-
-                {/* How I work — not generic, tied to what this agent does */}
-                <div>
-                  <h3 className="text-[12px] font-bold text-[#1a1a2e] uppercase tracking-wide mb-3">How I work</h3>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="rounded-xl bg-[#fafafe] p-3.5">
-                      <div className="text-[18px] mb-1">🎯</div>
-                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Autonomous execution</div>
-                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">I don&apos;t wait for instructions. I see what needs doing and I do it.</div>
-                    </div>
-                    <div className="rounded-xl bg-[#fafafe] p-3.5">
-                      <div className="text-[18px] mb-1">🧠</div>
-                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Context that sticks</div>
-                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">I remember every past decision, metric, and conversation. You never repeat yourself.</div>
-                    </div>
-                    <div className="rounded-xl bg-[#fafafe] p-3.5">
-                      <div className="text-[18px] mb-1">📊</div>
-                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Proactive reporting</div>
-                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">You get updates before you ask. Anomalies flagged the moment they happen.</div>
-                    </div>
-                    <div className="rounded-xl bg-[#fafafe] p-3.5">
-                      <div className="text-[18px] mb-1">⚡</div>
-                      <div className="text-[12px] font-semibold text-[var(--text-primary)]">Always improving</div>
-                      <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Every correction makes me sharper. I adapt to your style and preferences.</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Currently doing */}
-                <div className="flex items-center gap-3 rounded-xl bg-[var(--primary)]/[0.04] border border-[var(--primary)]/10 p-4">
-                  <div className="relative shrink-0">
-                    <div className="h-9 w-9 rounded-full border-[2.5px] border-[var(--primary)]/30 border-t-[var(--primary)] animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="h-3 w-3 rounded-full bg-[var(--primary)]/20" />
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-[13px] font-semibold text-[var(--text-primary)]">{pe.first} is reading your brief right now</p>
-                    <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Preparing a detailed introduction and first action plan...</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Skip */}
-            <div className="mt-5 text-center">
-              <button
-                onClick={() => {
-                  coPilotStore.setRevealStatus("failed");
-                  coPilotStore.setDevStage("think");
-                }}
-                className="px-4 py-2 text-[11px] text-[var(--text-tertiary)] hover:text-[var(--primary)] transition-colors"
-              >
-                Skip and start building &rarr;
-              </button>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
+  // Reveal is no longer a dedicated full-page screen — it renders inline inside
+  // the Co-Pilot workspace (see StageReveal in LifecycleStepRenderer) so the
+  // chat and the employee card live on the same view.
 
   if (mode === "copilot") {
     return (

@@ -117,31 +117,80 @@ export function buildCronRunCommand(jobId: string): string {
   return `${joinShellArgs(['openclaw', 'cron', 'run', jobId])} 2>&1`;
 }
 
-export async function dockerSpawn(args: string[], _timeoutMs = 60_000): Promise<[number, string]> {
-  const proc = Bun.spawn(['docker', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+async function readStreamText(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (!stream) return '';
+  return new Response(stream).text();
+}
+
+async function withFallbackTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => fallback),
+      new Promise<T>((resolve) => {
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function runDockerProcess(args: string[], timeoutMs: number): Promise<[number, string]> {
+  const proc = Bun.spawn(args, {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const stdoutPromise = readStreamText(proc.stdout);
+  const stderrPromise = readStreamText(proc.stderr);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const status = await Promise.race([
+    proc.exited.then(() => 'exited' as const).catch(() => 'exited' as const),
+    new Promise<'timed-out'>((resolve) => {
+      timeout = setTimeout(() => resolve('timed-out'), timeoutMs);
+    }),
   ]);
-  await proc.exited;
+  if (timeout) clearTimeout(timeout);
+
+  if (status === 'timed-out') {
+    try { proc.kill?.('SIGTERM'); } catch { /* ignore */ }
+    const exitedAfterTerm = await withFallbackTimeout(
+      proc.exited.then(() => true).catch(() => true),
+      250,
+      false,
+    );
+    if (!exitedAfterTerm) {
+      try { proc.kill?.('SIGKILL'); } catch { /* ignore */ }
+    }
+    const [stdout, stderr] = await Promise.all([
+      withFallbackTimeout(stdoutPromise, 250, ''),
+      withFallbackTimeout(stderrPromise, 250, ''),
+    ]);
+    const output = (stdout + stderr).trim();
+    const timeoutMessage = `Command timed out after ${timeoutMs}ms`;
+    return [124, output ? `${output}\n${timeoutMessage}` : timeoutMessage];
+  }
+
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
   return [proc.exitCode ?? 1, (stdout + stderr).trim()];
+}
+
+export async function dockerSpawn(args: string[], timeoutMs = 60_000): Promise<[number, string]> {
+  return runDockerProcess(['docker', ...args], timeoutMs);
 }
 
 export async function dockerExec(
   containerName: string,
   cmd: string,
-  _timeoutMs = 60_000,
+  timeoutMs = 60_000,
 ): Promise<[boolean, string]> {
-  const proc = Bun.spawn(['docker', 'exec', containerName, 'bash', '-c', cmd], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-  return [proc.exitCode === 0, (stdout + stderr).trim()];
+  const [exitCode, output] = await runDockerProcess(
+    ['docker', 'exec', containerName, 'bash', '-c', cmd],
+    timeoutMs,
+  );
+  return [exitCode === 0, output];
 }
 
 export async function dockerContainerRunning(

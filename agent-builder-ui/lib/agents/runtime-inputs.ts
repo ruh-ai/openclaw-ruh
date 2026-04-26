@@ -36,7 +36,12 @@ export function extractRuntimeInputKeys({
 }): string[] {
   const keys = new Set<string>();
 
-  for (const rule of agentRules ?? []) {
+  // Defensive: DB data or cached-session data may contain non-array values for
+  // fields that the type system says are arrays. Don't let a shape mismatch
+  // crash the whole create page — skip the bad input and keep rendering.
+  const safeAgentRules = Array.isArray(agentRules) ? agentRules : [];
+  for (const rule of safeAgentRules) {
+    if (typeof rule !== "string") continue;
     if (!rule.toLowerCase().startsWith("requires env")) {
       continue;
     }
@@ -46,8 +51,14 @@ export function extractRuntimeInputKeys({
     }
   }
 
-  for (const node of skillGraph ?? []) {
-    for (const key of node.requires_env ?? []) {
+  const safeSkillGraph = Array.isArray(skillGraph) ? skillGraph : [];
+  for (const node of safeSkillGraph) {
+    if (!node || typeof node !== "object") continue;
+    const envList = Array.isArray((node as { requires_env?: unknown }).requires_env)
+      ? ((node as { requires_env: unknown[] }).requires_env)
+      : [];
+    for (const key of envList) {
+      if (typeof key !== "string") continue;
       const trimmed = key.trim();
       if (trimmed) {
         keys.add(trimmed.toUpperCase());

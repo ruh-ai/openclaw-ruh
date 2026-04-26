@@ -232,4 +232,31 @@ describe("stripPlanTags", () => {
   test("returns unchanged text if no plan tags", () => {
     expect(stripPlanTags("no tags here")).toBe("no tags here");
   });
+
+  test("strips copilot lifecycle markers so they don't render as raw XML in chat", () => {
+    const text =
+      'Before I start:\n' +
+      '<ask_user id="q1" type="text" question="Who?"/>\n' +
+      '<ask_user id="q2" type="select" question="Which?" options=\'["a","b"]\'/>\n' +
+      '<ask_user id="q3" type="multiselect" question="Which surfaces?" options=\'["Backend lifecycle APIs/logs","Database/state checks"]\'/>\n' +
+      '<think_step step="research" status="started"/>\n' +
+      '<think_research_finding title="Docs" summary="Local logs" source="https://docs.openclaw.ai/tools/browser"/>\n' +
+      '<think_document_ready docType="prd" path="PRD.md"/>\n' +
+      '<plan_skills skills=\'[{"id":"x"}]\'/>\n' +
+      '<plan_data_schema dataSchema=\'{"artifactRoot":".openclaw/flow-qa/evidence/<run_id>/"}\'/>\n' +
+      '<plan_complete/>\n' +
+      '<reveal_done/>\n' +
+      'After.';
+    const stripped = stripPlanTags(text);
+    expect(stripped).not.toContain("<ask_user");
+    expect(stripped).not.toContain("<think_step");
+    expect(stripped).not.toContain("<think_research_finding");
+    expect(stripped).not.toContain("<think_document_ready");
+    expect(stripped).not.toContain("<plan_skills");
+    expect(stripped).not.toContain("<plan_data_schema");
+    expect(stripped).not.toContain("<plan_complete");
+    expect(stripped).not.toContain("<reveal_done");
+    expect(stripped).toContain("Before I start:");
+    expect(stripped).toContain("After.");
+  });
 });

@@ -13,12 +13,14 @@ import { sendToArchitectStreaming } from "@/lib/openclaw/api";
 import type { IntermediateUpdate } from "../intermediate-updates";
 import type { OpenClawRequestMode } from "../test-mode";
 import type {
+  AgentDevStage,
   ArchitectResponse,
   ClarificationQuestion,
   SkillGraphNode,
   WorkflowDefinition,
   WorkflowStep,
 } from "../types";
+import type { ArtifactTarget, ChatMode as StageChatMode } from "../stage-context";
 import { CustomEventName } from "./types";
 import type { SkillGraphReadyPayload } from "./types";
 import { parseWizardDirectives, buildWizardStateContext } from "../wizard-directive-parser";
@@ -28,58 +30,66 @@ import { tracer } from "./event-tracer";
 
 // ─── System instruction for conversational builder ──────────────────────────
 
-// ─── Reveal-stage system instruction ────────────────────────────────────────
-// FIRST output from the Architect. Generates a structured employee profile
-// brief-back so the user "meets" their digital employee before building begins.
-
-export const REVEAL_SYSTEM_INSTRUCTION = `[INSTRUCTION]
-You are the architect agent in REVEAL mode. The user just described what they want their digital employee to do. Your job is to demonstrate you UNDERSTAND their problem by generating a structured employee profile.
-
-Do NOT research, do NOT build, do NOT ask follow-up questions in chat. ONLY emit the structured reveal marker below.
-
-Read the user's description carefully. Then emit EXACTLY ONE marker:
-
-\`<employee_reveal data='JSON_OBJECT'/>\`
-
-The JSON_OBJECT must have this exact shape:
-{
-  "name": "Short functional title (e.g. 'Google Ads Specialist')",
-  "title": "One-line role description derived from their problem",
-  "opening": "1-2 sentences in first person showing you understood their situation",
-  "what_i_heard": ["Point 1 from their description", "Point 2", "Point 3"],
-  "what_i_will_own": ["Specific task I will handle", "Another task", "Third task"],
-  "what_i_wont_do": ["Boundary I respect", "Another boundary"],
-  "first_move": "One specific action I would take first to deliver immediate value",
-  "clarifying_question": "One sharp question that proves domain expertise and personalizes my approach"
-}
-
-Rules:
-- The name should be functional and professional, not whimsical (e.g. "Campaign Optimization Specialist" not "AdBot 3000")
-- what_i_heard must reflect the user's ACTUAL words and intent, not generic filler
-- what_i_will_own must be specific, actionable tasks — not vague capabilities
-- what_i_wont_do must show self-awareness of boundaries — builds trust through limitation
-- first_move must be concrete and demonstrate initiative
-- clarifying_question must be domain-specific and show you've been thinking about their problem
-- Write in first person. Professional tone. No emoji. No hype.
-- The JSON must be valid. Escape quotes properly. Keep values concise (under 120 chars each).
-
-After emitting the marker, do NOT continue. Wait for the user's next message.
-[/INSTRUCTION]`;
+// ─── Reveal phase ───────────────────────────────────────────────────────────
+// Reveal behaviour is now defined in the sandbox's lifecycle-aware SOUL.md
+// (see ruh-backend/src/sandboxManager.ts). Callers prepend "[PHASE: reveal]"
+// to the user message; the architect's SOUL reads that header and follows
+// the REVEAL contract natively — no system-instruction override needed.
 
 // ─── Think-stage system instruction ─────────────────────────────────────────
 // ONLY produces PRD + TRD. Does NOT build anything.
 
 export const THINK_SYSTEM_INSTRUCTION = `[INSTRUCTION]
-You are the architect agent in THINK mode. Your job is to research the problem domain and produce three documents:
+You are the architect agent in THINK mode. You work in COLLABORATION with the user — this is a two-way conversation, not a silent build. Your job is to research the problem domain and produce three documents:
 1. A Research Brief (domain knowledge, API findings, best practices)
 2. A Product Requirements Document (PRD)
 3. A Technical Requirements Document (TRD)
 
 You must NOT build anything. No skills, no SOUL.md, no config files, no code. ONLY research and produce documents.
 
-## Three-Step Process
+## CRITICAL RULE: Ask Before You Act
 
-### Step 1: Research
+You will PAUSE and ask the user clarifying questions at three checkpoints below. At each checkpoint:
+- Emit \`<ask_user>\` markers (see format below) for each question
+- After the last question, WRITE A BRIEF SUMMARY of what you're going to do once answered
+- END YOUR TURN. Do NOT continue to the next step. Do NOT write documents yet.
+- The user's next message will contain their answers. Only then do you proceed.
+
+Skipping a checkpoint produces broken agents. The user knows their domain; you don't. When in doubt, ask.
+
+### How to ask questions
+
+For each question, do BOTH of these in your response:
+
+1. Write the question as a numbered bullet in prose — so it reads naturally:
+   > Before I start, I want to lock down a few things:
+   > 1. Who are the primary users of this agent, and what's their daily workflow?
+   > 2. Which ad platforms should we focus on first?
+   > 3. Does your team already have a Google Ads MCC + developer token?
+
+2. After the prose, emit one \`<ask_user>\` marker per question on its own line (for structured input capture):
+
+- Free-text: \`<ask_user id="q1" type="text" question="Who are the primary users of this agent?"/>\`
+- Choose one: \`<ask_user id="q2" type="select" question="Which ad platforms should we focus on first?" options='["Google Ads","Meta Ads","LinkedIn Ads","All three"]'/>\`
+- Choose many: \`<ask_user id="q3" type="multiselect" question="Which data sources does the agent need?" options='["Google Ads API","Analytics","BigQuery","CRM"]'/>\`
+- Yes/no: \`<ask_user id="q4" type="boolean" question="Should the agent be able to pause campaigns autonomously?"/>\`
+
+Use stable \`id\` values (q1, q2, …) within a turn. The prose question and the marker's \`question\` attribute should say the same thing. Keep questions specific and answerable — avoid "what do you want?" style open prompts.
+
+## Four-Step Process (checkpoints in bold)
+
+### CHECKPOINT 0 — Scope questions (BEFORE research)
+
+Before you touch browser or terminal, ask 3–5 scope questions. Target the specifics a wrong assumption would make you redo work on:
+- Who are the primary users? (role, daily context)
+- What is the one most important thing this agent must do well?
+- Which systems/APIs does the user already have access to? (e.g., Google Ads MCC, Meta Business Manager)
+- What is the user's definition of "it worked"? (a metric, a shipped artifact, a saved hour)
+- Any hard constraints? (budget caps, can't touch live campaigns, must run on-prem, compliance)
+
+Emit your \`<ask_user>\` markers, give a one-sentence summary of what you'll research once answered, and END YOUR TURN.
+
+### Step 1: Research (AFTER Checkpoint 0 answers arrive)
 Use your browser and terminal tools to research the domain:
 - What APIs and services exist? Check official docs for endpoints, auth methods, rate limits, pricing.
 - What SDKs or libraries are available?
@@ -107,6 +117,17 @@ cat > ~/.openclaw/workspace/.openclaw/discovery/research-brief.md << 'EOF'
 EOF
 \`\`\`
 Then emit: \`<think_document_ready docType="research_brief" path=".openclaw/discovery/research-brief.md"/>\`
+
+### CHECKPOINT 1 — Pre-PRD sanity check
+
+After the research brief is written, BEFORE writing the PRD, reflect:
+- Is there any ambiguity in the user flows you'd need to invent?
+- Any data source whose availability you couldn't verify from research?
+- Any trade-off the user should decide (e.g., read-only vs autonomous, daily vs real-time)?
+
+If yes to any: emit \`<ask_user>\` markers for the unresolved items (usually 1–3 questions), summarize what you'll do once answered, and END YOUR TURN.
+
+If the research brief plus the user's Checkpoint 0 answers fully determine the PRD, say so in one sentence and proceed to Step 2.
 
 ### Step 2: PRD
 Using your research findings, write the Product Requirements Document:
@@ -145,6 +166,18 @@ How do we know it works?
 EOF
 \`\`\`
 Then emit: \`<think_document_ready docType="prd" path=".openclaw/discovery/PRD.md"/>\`
+
+### CHECKPOINT 2 — Pre-TRD stack & integration check
+
+After the PRD is written, BEFORE writing the TRD, check for stack/integration decisions that would be costly to revisit:
+- Auth: does the user have OAuth apps set up, service accounts, API keys ready? Or do they need you to use a different auth path?
+- Storage: is the default SQLite fine, or do they need Postgres/BigQuery?
+- Triggers: cron schedule opinionated (e.g., 6am daily report), or let you pick?
+- Any integrations with non-obvious credential requirements (e.g., Google Ads MCC developer token)?
+
+If any of these are unclear: emit \`<ask_user>\` markers and END YOUR TURN.
+
+If the PRD plus prior answers fully determine the TRD, say so and proceed to Step 3.
 
 ### Step 3: TRD
 Using research + PRD, write the Technical Requirements Document:
@@ -210,7 +243,11 @@ Every agent is a full-stack application with:
 Think about: What DATA will this agent store? What do end users NEED TO SEE? What CONTEXT should it remember?
 
 ## Rules
-- Research FIRST, then write documents. Don't skip research.
+- CHECKPOINTS ARE NOT OPTIONAL. At Checkpoint 0, you MUST ask questions and end your turn. No exceptions on the first turn.
+- A checkpoint turn contains ONLY: brief framing sentence(s), \`<ask_user>\` markers, and optionally a one-line summary of what you'll do next. No tool calls, no file writes.
+- Never ask more than 5 questions in one checkpoint. If you have more, pick the 5 that most change the output.
+- Never ask a question the user has already answered in this conversation. Re-read prior turns before emitting \`<ask_user>\` markers.
+- Research FIRST (after Checkpoint 0 answers), then write documents. Don't skip research.
 - Every section must be SPECIFIC to this agent — no generic boilerplate.
 - Use REAL API details from your research (endpoints, auth methods, env var names).
 - Write documents as WORKSPACE FILES (cat > file), not JSON blobs.
@@ -222,7 +259,20 @@ Think about: What DATA will this agent store? What do end users NEED TO SEE? Wha
 // ─── Plan-stage system instruction ──────────────────────────────────────────
 
 export const PLAN_SYSTEM_INSTRUCTION = `[INSTRUCTION]
-You are the architect agent in PLAN mode. You have approved PRD and TRD documents in the workspace. Now design the STRUCTURAL architecture plan.
+You are the architect agent in PLAN mode. You have approved PRD and TRD documents in the workspace. Now design the STRUCTURAL architecture plan — IN COLLABORATION WITH THE USER.
+
+## CRITICAL RULE: Ask Before You Finalize
+
+You will pause once before finalizing the plan. If any structural decision is genuinely ambiguous after reading PRD/TRD, pause earlier and ask.
+
+### How to ask questions
+
+Write each question as a numbered bullet in prose, then emit one \`<ask_user>\` marker per question on its own line (same wording in the marker's \`question\` attribute):
+
+- Text: \`<ask_user id="p1" type="text" question="How should the agent handle campaigns it has never seen before?"/>\`
+- Select: \`<ask_user id="p2" type="select" question="Which skill should own budget pacing?" options='["budget-manager","campaign-manager","split between both"]'/>\`
+- Multiselect: \`<ask_user id="p3" type="multiselect" question="Which env vars does the user already have values for?" options='["GOOGLE_ADS_DEVELOPER_TOKEN","GOOGLE_ADS_CLIENT_ID","OPENAI_API_KEY"]'/>\`
+- Boolean: \`<ask_user id="p4" type="boolean" question="Should the dashboard include a write-action panel (pause/resume campaigns)?"/>\`
 
 ## Step 1: Read Requirements from Workspace
 First, read the approved documents:
@@ -231,6 +281,17 @@ cat ~/.openclaw/workspace-copilot/.openclaw/discovery/PRD.md
 cat ~/.openclaw/workspace-copilot/.openclaw/discovery/TRD.md
 cat ~/.openclaw/workspace-copilot/.openclaw/discovery/research-brief.md 2>/dev/null || true
 \`\`\`
+
+## CHECKPOINT P0 — Skill boundary check
+
+After reading PRD/TRD, BEFORE emitting any \`<plan_*>\` markers, reflect on the skill boundaries. A skill is a unit of competence — one job, one mental model. Common failure modes:
+- Skills too fine-grained (10 skills for what should be 3)
+- Skills too coarse (one "campaign-management" skill doing five jobs)
+- Unclear who owns shared state (e.g., which skill writes to \`campaigns\` table?)
+
+If the right split is obvious from the TRD, state your proposed split in one paragraph and proceed.
+
+If not, ask 2–3 targeted questions via \`<ask_user>\` and END YOUR TURN.
 
 ## Step 2: Design Structural Decisions
 Design each area. You produce STRUCTURE — what exists and how things relate. The Build phase generates all file content. Explain reasoning conversationally, then emit a progress marker per section.
@@ -275,8 +336,17 @@ Common patterns:
 - Health check skills → every 5-15 minutes
 
 ### Environment Variables (required)
-ALL required env vars with real names from the TRD.
-Emit: \`<plan_env_vars envVars='[{"key":"API_KEY","label":"...","description":"...","required":true,"inputType":"text","group":"Authentication"}]'/>\`
+List all runtime variables with real names from the TRD. For every variable include:
+\`key\`, \`label\`, \`description\`, \`required\`, \`inputType\`, \`group\`, and \`populationStrategy\`.
+
+Population strategy rules:
+- \`user_required\`: values only the operator can provide, such as API keys, OAuth tokens, account IDs, customer IDs, target URLs, or credentials. Do not provide defaults for secrets.
+- \`ai_inferred\`: contextual values the AI can reasonably suggest from the agent name/description, such as company name, locale, timezone, or report cadence.
+- \`static_default\`: safe operational settings, booleans, numeric limits, log flags, retention windows, and workspace paths. Provide a \`defaultValue\` and set \`required\` to false unless the operator truly must change it.
+
+Do not mark safe booleans/counts/paths as \`user_required\` just because they are env vars. Use \`example\` only as a placeholder; use \`defaultValue\` only when the agent should actually run with that value.
+
+Emit: \`<plan_env_vars envVars='[{"key":"API_KEY","label":"...","description":"...","required":true,"inputType":"text","group":"Authentication","populationStrategy":"user_required"},{"key":"LOG_LEVEL","label":"Log Level","description":"Logging verbosity.","required":false,"inputType":"select","options":["debug","info","warn","error"],"defaultValue":"info","group":"Runtime","populationStrategy":"static_default"}]'/>\`
 
 ### Complete
 When all decisions are made:
@@ -300,6 +370,9 @@ EOF
 
 ## Rules
 - Read PRD/TRD from workspace FIRST.
+- CHECKPOINT P0 is required if skill boundaries are not obvious. When it fires, emit \`<ask_user>\` markers and END YOUR TURN — no \`<plan_*>\` markers in that same turn.
+- Never ask more than 3 questions per checkpoint.
+- Never ask a question answered earlier in the conversation. Re-read prior turns first.
 - STRUCTURAL decisions only — no skillMd, no soulContent. Build generates file content.
 - Use REAL env var names and API details from the TRD.
 - Emit progress markers in your TEXT response.
@@ -331,8 +404,104 @@ Rules:
 - When the user asks for changes to skills, tools, triggers, runtime inputs, channels, or rules, keep the response grounded in the current config and return structured updates when appropriate.
 - When the user asks an advisory question, answer briefly and concretely about the current agent only.
 - Prioritize coherence between tools, schedule/heartbeat, SOUL, and deployment readiness.
+
+## Artifact-targeted revisions
+
+When the user's message contains an explicit \`[target: X]\` line (e.g. \`[target: PRD]\`, \`[target: TRD#user-flows]\`, \`[target: Plan]\`, \`[target: architecture.json]\`, \`[target: Plan#skills]\`), the user is asking you to revise a specific artifact in the workspace:
+
+- \`[target: PRD]\` or \`[target: PRD#<section>]\` → edit \`~/.openclaw/workspace/.openclaw/discovery/PRD.md\`
+- \`[target: TRD]\` or \`[target: TRD#<section>]\` → edit \`~/.openclaw/workspace/.openclaw/discovery/TRD.md\`
+- \`[target: Plan]\`, \`[target: architecture.json]\`, or \`[target: Plan#<section>]\` → edit \`~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json\` and \`PLAN.md\`
+
+Procedure:
+1. Read the target file from the workspace.
+2. Apply the user's requested change SURGICALLY — touch only the relevant section. Do not rewrite the whole document.
+3. Write the updated file back to the same path.
+4. Respond briefly (1–3 sentences) summarizing what you changed. Do not paste the whole updated document back.
+5. For Plan targets, ALSO re-emit the relevant \`<plan_*>\` marker(s) for the changed section(s) so the UI re-renders.
+
+If the target is ambiguous (e.g. \`PRD#something\` where the section doesn't exist), ask a single clarifying question instead of guessing.
 [/INSTRUCTION]
 `;
+
+interface BuilderPromptContext {
+  devStage?: string;
+  chatMode?: StageChatMode;
+  artifactTarget?: ArtifactTarget | null;
+  isFirstMessage: boolean;
+}
+
+function normalizeDevStage(stage: string | undefined, isFirstMessage: boolean): AgentDevStage | undefined {
+  if (!stage) return isFirstMessage ? "think" : undefined;
+  const known = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+  return known.includes(stage) ? (stage as AgentDevStage) : undefined;
+}
+
+function artifactLabel(target: ArtifactTarget): string {
+  const base = (() => {
+    switch (target.kind) {
+      case "prd":
+        return "PRD";
+      case "trd":
+        return "TRD";
+      case "research":
+        return "research-brief.md";
+      case "plan":
+        return target.path?.split("/").pop() || "architecture.json";
+      case "build_report":
+        return target.path?.split("/").pop() || "build-report.json";
+      case "test_report":
+        return target.path?.split("/").pop() || "test-report.json";
+      case "review":
+        return "Review";
+      default:
+        return target.path?.split("/").pop() || target.kind;
+    }
+  })();
+
+  return target.section ? `${base}#${target.section}` : base;
+}
+
+export function composeContextualUserMessage(input: {
+  message: string;
+  chatMode?: StageChatMode;
+  artifactTarget?: ArtifactTarget | null;
+  devStage?: string;
+}): string {
+  const mode = input.chatMode ?? (input.artifactTarget ? "revise" : "ask");
+  const stage = input.devStage ?? "current";
+  const lines = [];
+
+  if (input.artifactTarget) {
+    lines.push(`[target: ${artifactLabel(input.artifactTarget)}]`);
+  } else {
+    lines.push("[target: current-stage]");
+  }
+
+  lines.push(`[mode: ${mode}]`);
+  lines.push(`[stage: ${stage}]`);
+  lines.push("");
+  lines.push(input.message);
+
+  return lines.join("\n");
+}
+
+export function selectBuilderSystemInstruction(input: BuilderPromptContext): string | undefined {
+  const devStage = normalizeDevStage(input.devStage, input.isFirstMessage);
+
+  if (devStage === "reveal") return undefined;
+  if (input.artifactTarget || input.chatMode === "revise" || input.chatMode === "debug") {
+    return REFINE_SYSTEM_INSTRUCTION;
+  }
+
+  if (devStage === "think") return THINK_SYSTEM_INSTRUCTION;
+  if (devStage === "plan") return PLAN_SYSTEM_INSTRUCTION;
+  if (devStage && ["build", "review", "test", "ship", "reflect"].includes(devStage)) {
+    return REFINE_SYSTEM_INSTRUCTION;
+  }
+  if (input.isFirstMessage) return THINK_SYSTEM_INSTRUCTION;
+  return undefined;
+}
 
 // ─── Feature-mode preamble ─────────────────────────────────────────────────
 
@@ -572,6 +741,12 @@ interface ThinkMarkerEvent {
   value: Record<string, unknown>;
 }
 
+type MarkerExtractor = (text: string, lastCheckedOffset: number) => { events: ThinkMarkerEvent[]; newOffset: number };
+
+function absoluteMatchEnd(safeOffset: number, match: RegExpMatchArray): number {
+  return safeOffset + (match.index ?? 0) + match[0].length;
+}
+
 function extractThinkMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
   const events: ThinkMarkerEvent[] = [];
   // Search from a safe offset — back up to catch tags that span delta boundaries.
@@ -580,38 +755,43 @@ function extractThinkMarkers(text: string, lastCheckedOffset: number): { events:
   const searchText = text.slice(safeOffset);
   const seenKeys = new Set<string>();
 
-  let maxMatchEnd = 0;
+  let maxMatchEnd = lastCheckedOffset;
 
   for (const match of searchText.matchAll(THINK_STEP_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
     const key = `step:${match[1]}:${match[2]}`;
     if (!seenKeys.has(key)) {
       seenKeys.add(key);
       events.push({ name: "think_step", value: { step: match[1], status: match[2] } });
     }
-    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+    maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
   }
 
   for (const match of searchText.matchAll(THINK_FINDING_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
     const key = `finding:${match[1]}`;
     if (!seenKeys.has(key)) {
       seenKeys.add(key);
       events.push({ name: "think_research_finding", value: { title: match[1], summary: match[2], source: match[3] || undefined } });
     }
-    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+    maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
   }
 
   for (const match of searchText.matchAll(THINK_DOC_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
     const key = `doc:${match[1]}`;
     if (!seenKeys.has(key)) {
       seenKeys.add(key);
       events.push({ name: "think_document_ready", value: { docType: match[1], path: match[2] } });
     }
-    maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+    maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
   }
 
   // Only advance offset past the last confirmed match — don't skip unmatched partial tags
-  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
-  return { events, newOffset };
+  return { events, newOffset: maxMatchEnd };
 }
 
 // ─── Plan marker detection ──────────────────────────────────────────────────
@@ -630,7 +810,7 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
   const safeOffset = Math.max(0, lastCheckedOffset - 2000);
   const searchText = text.slice(safeOffset);
   const seenKeys = new Set<string>();
-  let maxMatchEnd = 0;
+  let maxMatchEnd = lastCheckedOffset;
 
   const jsonMarkers: Array<{ re: RegExp; name: string; key: string }> = [
     { re: PLAN_SKILLS_RE, name: "plan_skills", key: "skills" },
@@ -644,13 +824,15 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
   for (const { re, name, key } of jsonMarkers) {
     re.lastIndex = 0;
     for (const match of searchText.matchAll(re)) {
+      const matchEnd = absoluteMatchEnd(safeOffset, match);
+      if (matchEnd <= lastCheckedOffset) continue;
       const dedupeKey = `${name}:${match[1].slice(0, 50)}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       try {
         const parsed = JSON.parse(match[1]);
         events.push({ name, value: { [key]: parsed } });
-        maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+        maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
       } catch {
         // Skip malformed JSON in markers
       }
@@ -659,14 +841,77 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
 
   PLAN_COMPLETE_RE.lastIndex = 0;
   const completeMatch = PLAN_COMPLETE_RE.exec(searchText);
-  if (completeMatch && !seenKeys.has("plan_complete")) {
+  if (
+    completeMatch
+    && absoluteMatchEnd(safeOffset, completeMatch) > lastCheckedOffset
+    && !seenKeys.has("plan_complete")
+  ) {
     seenKeys.add("plan_complete");
     events.push({ name: "plan_complete", value: {} });
-    maxMatchEnd = Math.max(maxMatchEnd, (completeMatch.index ?? 0) + completeMatch[0].length);
+    maxMatchEnd = Math.max(maxMatchEnd, absoluteMatchEnd(safeOffset, completeMatch));
   }
 
-  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
-  return { events, newOffset };
+  return { events, newOffset: maxMatchEnd };
+}
+
+// ─── Ask-user marker detection ──────────────────────────────────────────────
+// Detects <ask_user id="..." type="..." question="..." options='[...]'/> markers
+// that the Architect emits at Think/Plan checkpoints to pause and gather input.
+// Attribute order is not guaranteed by the LLM, so we parse attributes loosely.
+
+const ASK_USER_TAG_RE = /<ask_user\b([^>]*?)\/>/g;
+const ASK_USER_ATTR_RE = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+const ASK_USER_VALID_TYPES = new Set(["text", "select", "multiselect", "boolean"]);
+
+function parseAskUserAttrs(attrs: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  ASK_USER_ATTR_RE.lastIndex = 0;
+  for (const m of attrs.matchAll(ASK_USER_ATTR_RE)) {
+    out[m[1]] = m[2] ?? m[3] ?? "";
+  }
+  return out;
+}
+
+function extractAskUserMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
+  const events: ThinkMarkerEvent[] = [];
+  const safeOffset = Math.max(0, lastCheckedOffset - 1000);
+  const searchText = text.slice(safeOffset);
+  const seenIds = new Set<string>();
+  let maxMatchEnd = lastCheckedOffset;
+
+  ASK_USER_TAG_RE.lastIndex = 0;
+  for (const match of searchText.matchAll(ASK_USER_TAG_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
+    const attrs = parseAskUserAttrs(match[1]);
+    const id = attrs.id?.trim();
+    const question = attrs.question?.trim();
+    const type = attrs.type?.trim() || "text";
+    if (!id || !question || seenIds.has(id)) continue;
+    if (!ASK_USER_VALID_TYPES.has(type)) continue;
+
+    let options: string[] | undefined;
+    if (attrs.options) {
+      try {
+        const parsed = JSON.parse(attrs.options);
+        if (Array.isArray(parsed) && parsed.every((o) => typeof o === "string")) {
+          options = parsed as string[];
+        }
+      } catch {
+        // Skip malformed options — question renders as text-only.
+      }
+    }
+
+    seenIds.add(id);
+    events.push({
+      name: "ask_user",
+      value: { id, question, type, options },
+    });
+    maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
+  }
+
+  return { events, newOffset: maxMatchEnd };
 }
 
 // ─── Reveal marker detection ────────────────────────────────────────────────
@@ -678,21 +923,87 @@ function extractRevealMarker(text: string, lastCheckedOffset: number): { events:
   const events: ThinkMarkerEvent[] = [];
   const safeOffset = Math.max(0, lastCheckedOffset - 2000);
   const searchText = text.slice(safeOffset);
-  let maxMatchEnd = 0;
+  let maxMatchEnd = lastCheckedOffset;
 
   EMPLOYEE_REVEAL_RE.lastIndex = 0;
   for (const match of searchText.matchAll(EMPLOYEE_REVEAL_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
     try {
       const parsed = JSON.parse(match[1]);
       events.push({ name: "employee_reveal", value: parsed });
-      maxMatchEnd = Math.max(maxMatchEnd, (match.index ?? 0) + match[0].length);
+      maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
     } catch {
       // Skip malformed JSON in reveal marker
     }
   }
 
-  const newOffset = maxMatchEnd > 0 ? safeOffset + maxMatchEnd : lastCheckedOffset;
-  return { events, newOffset };
+  return { events, newOffset: maxMatchEnd };
+}
+
+// ─── Progressive reveal-field marker detection ──────────────────────────────
+// Detects ordered <reveal_field k="..." v='JSON'/> and <reveal_done/> markers
+// that the Architect emits during REVEAL mode so the UI can build the card
+// field by field as the stream arrives.
+
+const REVEAL_FIELD_RE = /<reveal_field\s+k="([^"]+)"\s+v='([\s\S]*?)'\s*\/>/g;
+const REVEAL_DONE_RE = /<reveal_done\s*\/>/g;
+
+const REVEAL_FIELD_KEYS = new Set([
+  "name",
+  "title",
+  "opening",
+  "what_i_heard",
+  "what_i_will_own",
+  "what_i_wont_do",
+  "first_move",
+  "clarifying_question",
+]);
+
+export function extractRevealFieldMarkers(
+  text: string,
+  lastCheckedOffset: number,
+): { events: ThinkMarkerEvent[]; newOffset: number } {
+  const events: ThinkMarkerEvent[] = [];
+  const safeOffset = Math.max(0, lastCheckedOffset - 2000);
+  const searchText = text.slice(safeOffset);
+  let maxMatchEnd = lastCheckedOffset;
+
+  REVEAL_FIELD_RE.lastIndex = 0;
+  for (const match of searchText.matchAll(REVEAL_FIELD_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
+    const key = match[1];
+    if (!REVEAL_FIELD_KEYS.has(key)) continue;
+    try {
+      const parsed = JSON.parse(match[2]);
+      events.push({ name: "reveal_field", value: { key, value: parsed } });
+      maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
+    } catch {
+      // Skip malformed JSON in a single field marker
+    }
+  }
+
+  REVEAL_DONE_RE.lastIndex = 0;
+  for (const match of searchText.matchAll(REVEAL_DONE_RE)) {
+    const matchEnd = absoluteMatchEnd(safeOffset, match);
+    if (matchEnd <= lastCheckedOffset) continue;
+    events.push({ name: "reveal_done", value: {} });
+    maxMatchEnd = Math.max(maxMatchEnd, matchEnd);
+  }
+
+  return { events, newOffset: maxMatchEnd };
+}
+
+/**
+ * Strip all reveal markers from a chunk of text so the remainder can be shown
+ * as the live "thought ticker" in the UI. Returns the text with markers removed.
+ */
+export function stripRevealMarkers(text: string): string {
+  return text
+    .replace(/<reveal_field\s+k="[^"]+"\s+v='[\s\S]*?'\s*\/>/g, "")
+    .replace(/<reveal_done\s*\/>/g, "")
+    .replace(/<employee_reveal\s+data='\{[\s\S]*?\}'\s*\/>/g, "");
 }
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -759,20 +1070,30 @@ export class BuilderAgent extends AbstractAgent {
     const devStage =
       (wizardState as { devStage?: string } | undefined)?.devStage ??
       (this.isFirstMessage ? "think" : undefined);
-    let systemInstruction: string | undefined;
+    const chatMode = (wizardState as { chatMode?: StageChatMode } | undefined)?.chatMode;
+    const artifactTarget =
+      (wizardState as { selectedArtifactTarget?: ArtifactTarget | null } | undefined)
+        ?.selectedArtifactTarget ?? null;
+    let systemInstruction = selectBuilderSystemInstruction({
+      devStage,
+      chatMode,
+      artifactTarget,
+      isFirstMessage: this.isFirstMessage,
+    });
 
     if (devStage === "reveal") {
-      systemInstruction = REVEAL_SYSTEM_INSTRUCTION;
-    } else if (devStage === "think") {
-      systemInstruction = THINK_SYSTEM_INSTRUCTION;
-    } else if (devStage === "plan") {
-      systemInstruction = PLAN_SYSTEM_INSTRUCTION;
-    } else if (devStage === "build" || devStage === "review" || devStage === "test" || devStage === "ship" || devStage === "reflect") {
-      // Build is handled by the v4 orchestrator (specialist sub-agents).
-      // Any chat messages during build/review/test/ship/reflect use REFINE.
-      systemInstruction = REFINE_SYSTEM_INSTRUCTION;
-    } else if (this.isFirstMessage) {
-      systemInstruction = THINK_SYSTEM_INSTRUCTION;
+      // REVEAL is handled by the lifecycle-aware SOUL.md in the sandbox
+      // (see ruh-backend/src/sandboxManager.ts). We prepend a [PHASE: reveal]
+      // header to the user message so the architect's SOUL knows which phase
+      // contract to follow — no systemInstruction override needed.
+      message = `[PHASE: reveal]\n\n${message}`;
+    } else if (wizardState && (artifactTarget || (chatMode && chatMode !== "ask"))) {
+      message = composeContextualUserMessage({
+        message,
+        chatMode,
+        artifactTarget,
+        devStage,
+      });
     }
     // Subsequent messages without a devStage don't override the instruction
     // (the architect remembers its system instruction from the session)
@@ -836,7 +1157,7 @@ export class BuilderAgent extends AbstractAgent {
 
       // ── Think marker detection state ──
       let thinkAccumulated = "";
-      let thinkMarkerOffset = 0;
+      const markerOffsets = new Map<MarkerExtractor, number>();
 
       // Track intermediate wizard updates emitted during streaming
       // so the final ready_for_review handler knows what was already sent.
@@ -872,15 +1193,25 @@ export class BuilderAgent extends AbstractAgent {
           // Detect structured markers in streamed text during reveal/think/plan phases
           if (devStage === "reveal" || devStage === "think" || devStage === "plan") {
             thinkAccumulated += delta;
-            const extractor = devStage === "reveal" ? extractRevealMarker : devStage === "think" ? extractThinkMarkers : extractPlanMarkers;
-            const { events: markerEvents, newOffset } = extractor(thinkAccumulated, thinkMarkerOffset);
-            thinkMarkerOffset = newOffset;
-            for (const evt of markerEvents) {
-              observer.next({
-                type: EventType.CUSTOM,
-                name: evt.name,
-                value: evt.value,
-              } as BaseEvent);
+            // Reveal runs both extractors: progressive field markers (primary)
+            // AND the legacy single-blob marker (fallback if model regresses).
+            const extractors =
+              devStage === "reveal"
+                ? [extractRevealFieldMarkers, extractRevealMarker]
+                : devStage === "think"
+                  ? [extractThinkMarkers, extractAskUserMarkers]
+                  : [extractPlanMarkers, extractAskUserMarkers];
+            for (const extractor of extractors) {
+              const previousOffset = markerOffsets.get(extractor) ?? 0;
+              const { events: markerEvents, newOffset } = extractor(thinkAccumulated, previousOffset);
+              markerOffsets.set(extractor, Math.max(previousOffset, newOffset));
+              for (const evt of markerEvents) {
+                observer.next({
+                  type: EventType.CUSTOM,
+                  name: evt.name,
+                  value: evt.value,
+                } as BaseEvent);
+              }
             }
           }
         } : undefined,

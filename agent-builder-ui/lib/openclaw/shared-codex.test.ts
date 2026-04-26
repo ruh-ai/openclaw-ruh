@@ -9,7 +9,7 @@ describe("shared Codex sandbox helpers", () => {
   const sharedSandbox = {
     sandbox_id: "sb-shared-codex",
     shared_codex_enabled: true,
-    shared_codex_model: "openai-codex/gpt-5.4",
+    shared_codex_model: "openai-codex/gpt-5.5",
   };
 
   test("clears a stale non-Codex agent model when sandbox is locked to shared Codex", () => {
@@ -18,8 +18,8 @@ describe("shared Codex sandbox helpers", () => {
 
   test("preserves a shared Codex model when sandbox is locked to shared Codex", () => {
     expect(
-      sanitizeAgentModelForSandbox("openai-codex/gpt-5.4", sharedSandbox),
-    ).toBe("openai-codex/gpt-5.4");
+      sanitizeAgentModelForSandbox("openai-codex/gpt-5.5", sharedSandbox),
+    ).toBe("openai-codex/gpt-5.5");
   });
 
   test("preserves a legacy explicit model when sandbox is not shared Codex", () => {
@@ -48,7 +48,7 @@ describe("shared Codex sandbox helpers", () => {
   });
 
   test("reports the shared Codex display model from sandbox metadata", () => {
-    expect(getSharedCodexDisplayModel(sharedSandbox)).toBe("openai-codex/gpt-5.4");
+    expect(getSharedCodexDisplayModel(sharedSandbox)).toBe("openai-codex/gpt-5.5");
   });
 
   test("falls back to the default shared Codex display model when metadata is missing", () => {
@@ -57,6 +57,6 @@ describe("shared Codex sandbox helpers", () => {
         sandbox_id: "sb-shared-codex-default",
         shared_codex_enabled: true,
       }),
-    ).toBe("openai-codex/gpt-5.4");
+    ).toBe("openai-codex/gpt-5.5");
   });
 });

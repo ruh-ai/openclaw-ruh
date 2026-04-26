@@ -10,6 +10,11 @@ export interface ForgeSandboxInfo {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+function noStoreUrl(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}_=${Date.now()}`;
+}
+
 /**
  * Fetches the forge sandbox record for a given agent.
  * Returns the sandbox info so the builder chat can route to the agent's
@@ -30,7 +35,9 @@ export function useForgeSandbox(agentId: string | null | undefined) {
 
     (async () => {
       try {
-        const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge`);
+        const res = await fetchBackendWithAuth(noStoreUrl(`${API_BASE}/api/agents/${agentId}/forge`), {
+          cache: "no-store",
+        });
         if (!res.ok) { setSandbox(null); return; }
         const data = await res.json();
         if (cancelled) return;
