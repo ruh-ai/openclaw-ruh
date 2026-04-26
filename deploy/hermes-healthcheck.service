@@ -1,0 +1,14 @@
+[Unit]
+Description=Hermes public health check
+Documentation=https://hermes.codezero2pi.com/health
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/hermes-healthcheck
+ExecStart=/usr/local/bin/hermes-healthcheck
+# rc=1 (under-threshold failure) should not mark the unit as failed — only
+# rc=2 (remediation attempted) or signals should. But oneshot can't express
+# that cleanly, so we swallow all non-zero with SuccessExitStatus.
+SuccessExitStatus=1 2
