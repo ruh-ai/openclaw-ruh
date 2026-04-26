@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/orchestrator.schema.json",
+  "title": "OpenClaw Orchestrator Protocol",
+  "description": "Routing rules, handoff contract, and merge policy. See spec/openclaw-v1/006-orchestrator.md.",
+  "type": "object",
+  "$defs": {
+    "OrchestratorRef": {
+      "description": "pipeline-manifest.json's orchestrator field.",
+      "type": "object",
+      "required": ["agent_id", "skills"],
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "minItems": 1
+        }
+      }
+    },
+    "RoutingRules": {
+      "type": "object",
+      "required": ["rules", "fallback"],
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RoutingRule" }
+        },
+        "fallback": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Specialist or skill to invoke when no rule matches."
+        },
+        "fan_out_default_max_parallelism": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 4
+        }
+      }
+    },
+    "RoutingRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "match": { "$ref": "#/$defs/MatchClause" },
+        "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "specialists": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "fan_out": { "$ref": "#/$defs/FanOutSpec" },
+        "then": { "type": "string", "description": "Specialist to run after this rule's specialist(s) complete." },
+        "context": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Additional context passed in the handoff (e.g., config_filter)."
+        },
+        "priority": {
+          "type": "integer",
+          "default": 0,
+          "description": "Higher priority rules win in case of multiple matches."
+        }
+      },
+      "anyOf": [
+        { "required": ["match", "specialist"] },
+        { "required": ["match", "specialists"] },
+        { "required": ["match", "fan_out"] }
+      ]
+    },
+    "MatchClause": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "stage": { "type": "string" },
+        "message_kind": { "type": "string" },
+        "input_has": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "regions": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "agent_status": {
+          "type": "object",
+          "additionalProperties": {
+            "enum": ["pending", "running", "completed", "failed", "stopped", "skipped"]
+          }
+        },
+        "decision_count": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" }
+        },
+        "custom": {
+          "type": "string",
+          "description": "Path to a custom matcher module."
+        }
+      }
+    },
+    "FanOutSpec": {
+      "type": "object",
+      "required": ["specialist", "split_input", "max_parallelism"],
+      "additionalProperties": false,
+      "properties": {
+        "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "split_input": {
+          "type": "string",
+          "description": "Reference to a function that produces input chunks (e.g., 'chunk_photos')."
+        },
+        "max_parallelism": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      }
+    },
+    "FailurePolicy": {
+      "enum": [
+        "abort",
+        "skip",
+        "retry-then-escalate",
+        "retry-then-skip",
+        "manual-review"
+      ]
+    },
+    "MergePolicyRule": {
+      "type": "object",
+      "required": ["path_glob", "resolution"],
+      "additionalProperties": false,
+      "properties": {
+        "path_glob": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolution": {
+          "enum": ["last-write-wins", "explicit-merge", "error"]
+        }
+      }
+    },
+    "OrchestratorHandoff": {
+      "description": "The shape passed when the orchestrator hands off to a specialist.",
+      "type": "object",
+      "required": ["to_specialist", "context", "parent_session_id", "parent_decision_id"],
+      "additionalProperties": false,
+      "properties": {
+        "to_specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "context": { "$ref": "#/$defs/HandoffContext" },
+        "parent_session_id": { "type": "string", "minLength": 1 },
+        "parent_decision_id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" }
+      }
+    },
+    "HandoffContext": {
+      "type": "object",
+      "required": ["workspace_scope"],
+      "additionalProperties": false,
+      "properties": {
+        "user_message": { "type": "string" },
+        "upstream_results": { "type": "object", "additionalProperties": true },
+        "config_filter": { "type": "object", "additionalProperties": true },
+        "memory_lanes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "workspace_scope": { "type": "string", "minLength": 1 },
+        "deadline": { "type": "string", "format": "date-time" }
+      }
+    },
+    "OrchestratorResult": {
+      "type": "object",
+      "required": ["specialist", "success", "files_written", "decision_log_entries", "output_summary"],
+      "additionalProperties": false,
+      "properties": {
+        "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "success": { "type": "boolean" },
+        "files_written": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "decision_log_entries": { "type": "integer", "minimum": 0 },
+        "output_summary": { "type": "string", "maxLength": 200 },
+        "emitted_events": { "type": "array" },
+        "error": { "type": "string" }
+      }
+    }
+  }
+}

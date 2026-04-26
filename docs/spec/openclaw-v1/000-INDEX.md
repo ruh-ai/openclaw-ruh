@@ -60,10 +60,10 @@ Out of scope for v1 (deferred to later versions):
 
 | Section | Title | Status |
 |---|---|---|
-| [006](006-orchestrator.md) | Orchestrator protocol — handoff, context transfer, result merge | 📝 pending |
-| [007](007-sub-agent.md) | Sub-agent isolation — workspace scope, identity, lifecycle | 📝 pending |
-| [008](008-eval-task.md) | Eval task format — input, expected output, judge prompt, score rubric | 📝 pending |
-| [011](011-pipeline-manifest.md) | Pipeline manifest — the top-level artifact | 📝 pending |
+| [006](006-orchestrator.md) | Orchestrator protocol — handoff, context transfer, result merge | ✅ done |
+| [007](007-sub-agent.md) | Sub-agent isolation — workspace scope, identity, lifecycle | ✅ done |
+| [008](008-eval-task.md) | Eval task format — input, expected output, judge prompt, score rubric | ✅ done |
+| [011](011-pipeline-manifest.md) | Pipeline manifest — the top-level artifact | ✅ done |
 
 ### Part D — Surfaces (how end users interact)
 
@@ -98,7 +98,7 @@ Out of scope for v1 (deferred to later versions):
 
 **Phase 2 — State and memory (✅ complete):** 004 (memory), 005 (decision log), 009 (config), 012 (checkpoint), 013 (hooks). What agents persist and observe.
 
-**Phase 3 — Composition:** 006 (orchestrator), 007 (sub-agent), 008 (eval task), 011 (pipeline manifest). How fleets work.
+**Phase 3 — Composition (✅ complete):** 006 (orchestrator), 007 (sub-agent), 008 (eval task), 011 (pipeline manifest). How fleets work.
 
 **Phase 4 — Surfaces and meta:** 010 (dashboards), 100 (versioning), 101 (conformance). How users interact and how the spec evolves.
 

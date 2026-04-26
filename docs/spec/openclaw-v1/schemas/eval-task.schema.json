@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/eval-task.schema.json",
+  "title": "OpenClaw Eval Task and Convergence Loop",
+  "description": "Eval suite, task format, judge, convergence-loop config. See spec/openclaw-v1/008-eval-task.md.",
+  "type": "object",
+  "$defs": {
+    "EvalSuite": {
+      "type": "object",
+      "required": ["spec_version", "pipeline_id", "name", "description", "tasks", "judge_model", "pass_rate_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "pipeline_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EvalTask" },
+          "minItems": 1
+        },
+        "judge_model": { "type": "string", "minLength": 1 },
+        "pass_rate_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "EvalTask": {
+      "type": "object",
+      "required": ["id", "spec_version", "name", "description", "source", "input", "expected", "judge", "acceptance_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/$defs/EvalTaskSource" },
+        "input": { "$ref": "#/$defs/EvalTaskInput" },
+        "expected": { "$ref": "#/$defs/EvalTaskExpected" },
+        "judge": { "$ref": "#/$defs/EvalJudge" },
+        "acceptance_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "status": { "$ref": "#/$defs/EvalStatus" },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "deltas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Pipeline-defined delta shape; reflector consumes for skill-rewrite proposals."
+          }
+        }
+      }
+    },
+    "EvalTaskSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "author"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "synthetic" },
+            "author": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pipeline_id", "original_session_id"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "historical" },
+            "pipeline_id": { "type": "string" },
+            "original_session_id": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "customer", "reference"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "customer-curated" },
+            "customer": { "type": "string" },
+            "reference": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "EvalTaskInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["user_message"] },
+        { "required": ["files"] },
+        { "required": ["initial_state"] }
+      ],
+      "properties": {
+        "user_message": { "type": "string" },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "content_ref"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "content_ref": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "initial_state": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "EvalTaskExpected": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["files_written"] },
+        { "required": ["output_summary"] },
+        { "required": ["must_call_tools"] },
+        { "required": ["must_not_call_tools"] }
+      ],
+      "properties": {
+        "output_summary": { "type": "string", "minLength": 1 },
+        "files_written": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "content_ref": { "type": "string" },
+              "structural_match": { "type": "object", "additionalProperties": true },
+              "semantic_match": { "type": "string" }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string" },
+              "metadata_constraints": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+        "must_call_tools": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "must_not_call_tools": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        }
+      }
+    },
+    "EvalStatus": {
+      "enum": ["pending", "running", "pass", "fail", "manual", "error"]
+    },
+    "EvalJudge": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["exact", "structural", "semantic", "composite"] },
+        "prompt": { "type": "string" },
+        "rubric": { "$ref": "#/$defs/EvalRubric" },
+        "weights": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "sub_judges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EvalJudge" }
+        }
+      }
+    },
+    "EvalRubric": {
+      "type": "object",
+      "required": ["dimensions", "pass_threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "description", "scale"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "description": { "type": "string", "minLength": 1 },
+              "scale": {
+                "type": "object",
+                "required": ["min", "max"],
+                "additionalProperties": false,
+                "properties": {
+                  "min": { "type": "number" },
+                  "max": { "type": "number" }
+                }
+              },
+              "tolerance_percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "For numeric dimensions; tolerance as a percentage."
+              }
+            }
+          },
+          "minItems": 1
+        },
+        "pass_threshold": { "type": "number" }
+      }
+    },
+    "ConvergenceLoopConfig": {
+      "type": "object",
+      "required": ["max_iterations", "max_consecutive_degradations", "reload_pause_ms", "pass_rate_threshold", "budget"],
+      "additionalProperties": false,
+      "properties": {
+        "max_iterations": { "type": "integer", "minimum": 1, "maximum": 50, "default": 5 },
+        "max_consecutive_degradations": { "type": "integer", "minimum": 1, "default": 2 },
+        "reload_pause_ms": { "type": "integer", "minimum": 0, "default": 2000 },
+        "pass_rate_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "budget": {
+          "type": "object",
+          "required": ["max_llm_calls", "max_cost_usd"],
+          "additionalProperties": false,
+          "properties": {
+            "max_llm_calls": { "type": "integer", "minimum": 1 },
+            "max_cost_usd": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "EvalLoopState": {
+      "type": "object",
+      "required": ["iteration", "max_iterations", "scores", "mutations", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "iteration": { "type": "integer", "minimum": 0 },
+        "max_iterations": { "type": "integer", "minimum": 1 },
+        "scores": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["iteration", "pass_rate", "avg_score"],
+            "additionalProperties": false,
+            "properties": {
+              "iteration": { "type": "integer" },
+              "pass_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+              "avg_score": { "type": "number" }
+            }
+          }
+        },
+        "mutations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SkillMutation" }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agent_calls": { "type": "integer", "minimum": 0 },
+            "judge_calls": { "type": "integer", "minimum": 0 },
+            "reflector_calls": { "type": "integer", "minimum": 0 },
+            "total_llm_calls": { "type": "integer", "minimum": 0 },
+            "estimated_cost_usd": { "type": "number", "minimum": 0 }
+          }
+        },
+        "status": {
+          "enum": ["running", "completed", "degraded", "aborted"]
+        },
+        "stop_reason": {
+          "enum": [
+            "all_passed",
+            "max_iterations",
+            "degraded",
+            "no_actionable_changes",
+            "mutation_failed",
+            "budget_exhausted",
+            "aborted"
+          ]
+        }
+      }
+    },
+    "SkillMutation": {
+      "type": "object",
+      "required": ["skill_id", "iteration", "rewrite_kind", "new_content"],
+      "additionalProperties": false,
+      "properties": {
+        "skill_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "rewrite_kind": {
+          "enum": ["section_replace", "section_append", "frontmatter_update"]
+        },
+        "target_section": { "type": "string" },
+        "new_content": { "type": "string" },
+        "accepted": { "type": "boolean", "default": false },
+        "reverted_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
