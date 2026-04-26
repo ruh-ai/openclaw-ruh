@@ -1,8 +1,9 @@
 # OpenClaw Spec v1 — Index
 
-> **Status:** `draft` — all sections written; pending validation pass + GPT-5.5 second opinion
-> **Spec version:** `1.0.0-alpha.1`
+> **Status:** `v1.0.0-rc.1` — feature complete; v1.1 backlog explicit (see bottom of this file)
+> **Spec version:** `1.0.0-rc.1`
 > **Last updated:** 2026-04-27
+> **Validation:** Three GPT-5.5 (Codex) adversarial passes informed Patches 1-4. The remaining HIGH-severity findings are tracked as the v1.1 backlog at the bottom of this index. Implementation begins on this spec; v1.1 patches arrive in parallel.
 > **Audience:** humans authoring conformant pipelines, **and coding agents (Claude Opus 4.7+, GPT 5.5+) building them**
 
 ---
@@ -162,3 +163,48 @@ Full versioning policy: [100-versioning.md](100-versioning.md) (pending).
 ---
 
 *Each section number is reserved even if the file is empty. Pending sections show their planned headings as a stub, not as TBD content.*
+
+---
+
+## v1.1 Backlog — known issues and deferrals
+
+This list is exhaustive and authoritative. Every item is a real defect that v1.0 ships with, documented here so coding agents reading the spec know to treat it with care and humans planning v1.1 know exactly what's in scope.
+
+The criterion for v1.1 inclusion was: **the issue does not block ECC go-live, but does need to land within 30 days of implementation kickoff.**
+
+### From Codex pass 3 (HIGH)
+
+1. **`004` Matt scenario is internally false.** The pipeline-manifest example lists Scott (not Matt) at Tier-2 estimating, but the auto-downgrade walk-through in 004 uses Matt. Either update the manifest example to put Matt at Tier-2 estimating, or rewrite the walk-through with Scott. Trivial fix; deferred only because it's documentation polish.
+
+2. **Memory metadata field-name inconsistency between 004 and 005.** 005 uses `downgrade_reason`; 004 uses `reason`. 004 also references `requested_tier` as preserved on the entry, but `MemoryEntry` schema has `additionalProperties: false` and no such field. Fix: rename one to match, add `requested_tier` to MemoryEntry, align metadata shape across both sections.
+
+3. **`decision_metadata_schemas` examples reference schemas that don't exist.** `openclaw-v1:ToolExecutionEndMetadata`, `openclaw-v1:MemoryWriteProposedMetadata`, and `milestone.schema.json#/$defs/ExitRampTriggeredMetadata` are referenced as `schema_ref` strings but never defined. Fix: define each as `$defs` in their respective schema files.
+
+4. **Hook capability sandboxing is decorative without runtime enforcement.** The capability model in 013 is correct as a *contract*, but:
+   - Per-hook default profiles omit required capability parameters (allowed_hosts, from, to_pattern, namespace)
+   - Strict mode is prose-only, not schema-enforced
+   - `hook_capability_violation` is referenced but missing from `DecisionType` enum
+   - Ambient JS authority (`fs`, `fetch`, `child_process`) is not explicitly removed — capabilities only matter if the runtime actually sandboxes handlers (vm2 / isolated workers / process boundary). Spec needs to make this explicit.
+   - Fix in v1.1: add the missing decision type, encode strict-mode validation in the schema, document the runtime sandbox requirement.
+
+5. **Path-safety contract is not implementation-complete.** 007 has the right framework but misses: percent-decoding order, backslash/drive-relative paths (Windows), null/control chars, Unicode/case normalization (HFS+/APFS case-insensitive vs ext4 case-sensitive), hard-link inode equality, TOCTOU-safe openat (`realpath()` itself has a TOCTOU window). `realpath() with O_NOFOLLOW` isn't a real API contract — `O_NOFOLLOW` is open-time, not realpath-time. Fix in v1.1: prescribe per-component `openat()` with `O_NOFOLLOW`, add explicit ordering of normalization steps, address each platform-specific gotcha.
+
+### From Codex pass 3 (regressions)
+
+6. **`007`/`011` disagree on privileged scope shape.** 007 cites `skills/` and `.openclaw/architecture.json` as extended scopes; 011 cites `agents/*/skills/`. Pick one. The runtime/architect rule in 002+101 says only the architect writes `.openclaw/architecture.json` — privileged specialists writing it directly contradicts that.
+
+7. **Pipeline-local schema names can shadow platform schema names in 100 resolution rules.** Resolution order (local → pipeline-local → canonical → registry) means a pipeline could define `schemas/memory.schema.json` and it would shadow the platform `memory.schema.json`. Fix: reserve platform schema names; pipelines must use a `pipeline-` prefix for their own schemas, OR resolution must always check platform first then pipeline-local.
+
+### From earlier passes (still deferred)
+
+8. **C4 — Tier/lane scaling features.** The flat list of `(tier, lane, writers[])` works for ECC's ~15 regions × 3 tiers × ~10 lanes. Beyond that scale (100+ regions, per-state regulatory overlays), pipelines need groups, wildcards, negative grants, inheritance, and conflict precedence. Codex agreed this is ergonomics, not v1 contract.
+
+9. **S2 — SemVer pattern centralization.** Multiple schemas inline the SemVer regex; should `$ref` to `version.schema.json#/$defs/SemVer`. Cosmetic; no functional impact.
+
+10. **S4 — Termination data export contract.** ECC's MSA commits to CSV/JSON/PDF export of trained skill files, training inputs, estimate packages, config/rate tables, scope definitions, jurisdictional data, authority mappings, and integration configs within 30 days of termination. v1 has decision-log export (005); the broader pipeline-export contract is missing. New section `017-pipeline-export.md` planned for v1.1.
+
+### v1.1 schedule
+
+Within 30 days of v1.0 implementation kickoff. Backlog items 1-7 (from Codex pass 3) ship as `1.1.0`. Items 8-10 (from earlier deferrals) ship as either `1.1.0` or `1.2.0` depending on customer demand signal during the first deployment.
+
+---
