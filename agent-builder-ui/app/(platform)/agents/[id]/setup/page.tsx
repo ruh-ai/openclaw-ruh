@@ -33,6 +33,29 @@ function isEffectivelyFilled(input: AgentRuntimeInput): boolean {
   return (input.value?.trim().length ?? 0) > 0 || (input.defaultValue?.trim().length ?? 0) > 0;
 }
 
+export function getSetupSaveState({
+  missingRequiredCount,
+  saving,
+}: {
+  missingRequiredCount: number;
+  saving: boolean;
+}): { disabled: boolean; label: string; ready: boolean } {
+  const missingCount = Math.max(0, missingRequiredCount);
+  if (missingCount > 0) {
+    return {
+      disabled: true,
+      label: `${missingCount} required input${missingCount === 1 ? "" : "s"} remaining`,
+      ready: false,
+    };
+  }
+
+  return {
+    disabled: saving,
+    label: "All set",
+    ready: true,
+  };
+}
+
 // ─── Type-aware input rendering ─────────────────────────────────────────────
 
 function RuntimeInputField({
@@ -306,6 +329,7 @@ export default function AgentSetupPage() {
       !input.value?.trim() &&
       !(input.defaultValue?.trim()),
   ).length;
+  const saveState = getSetupSaveState({ missingRequiredCount, saving });
 
   // Spark animation when all required filled
   useEffect(() => {
@@ -318,6 +342,7 @@ export default function AgentSetupPage() {
 
   const handleSave = useCallback(async () => {
     if (!agent) return;
+    if (missingRequiredCount > 0) return;
     setSaving(true);
     try {
       const resolvedInputs = inputs.map((input) => ({
@@ -354,7 +379,7 @@ export default function AgentSetupPage() {
     } finally {
       setSaving(false);
     }
-  }, [agent, inputs, updateAgentConfig, targetSandboxId, nextPage, id, router]);
+  }, [agent, inputs, missingRequiredCount, updateAgentConfig, targetSandboxId, nextPage, id, router]);
 
   // Loading state
   if (!agent) {
@@ -511,21 +536,22 @@ export default function AgentSetupPage() {
             Back
           </Button>
           <div className="flex items-center gap-3">
-            {missingRequiredCount > 0 && (
+            {!saveState.ready && (
               <p className="text-xs font-satoshi-medium text-[var(--text-tertiary)]">
-                {missingRequiredCount} required input{missingRequiredCount === 1 ? "" : "s"} remaining
+                {saveState.label}
               </p>
             )}
-            {missingRequiredCount === 0 && userRequired.length > 0 && (
+            {saveState.ready && userRequired.length > 0 && (
               <p className="text-xs font-satoshi-medium text-[var(--success)]">
-                All set
+                {saveState.label}
               </p>
             )}
             <Button
               onClick={handleSave}
-              disabled={saving}
+              disabled={saveState.disabled}
+              title={!saveState.ready ? saveState.label : undefined}
               className={`gap-2 ${allRequiredJustFilled ? "spark" : ""} ${
-                missingRequiredCount === 0 ? "gradient-drift" : ""
+                saveState.ready ? "gradient-drift" : ""
               }`}
             >
               {saving ? (

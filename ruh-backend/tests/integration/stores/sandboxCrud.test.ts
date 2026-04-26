@@ -74,13 +74,13 @@ describe('sandbox CRUD (real DB)', () => {
       gateway_port: 18789,
       ssh_command: 'docker exec -it openclaw-sb-shared-codex bash',
       shared_codex_enabled: true,
-      shared_codex_model: 'openai-codex/gpt-5.4',
+      shared_codex_model: 'openai-codex/gpt-5.5',
     }, 'shared-codex-sandbox');
 
     const retrieved = await store.getSandbox('sb-shared-codex');
     expect(retrieved).not.toBeNull();
     expect((retrieved as Record<string, unknown>).shared_codex_enabled).toBe(true);
-    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.4');
+    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.5');
   });
 
   test('listSandboxes returns all saved records ordered by created_at DESC', async () => {
@@ -230,11 +230,11 @@ describe('sandbox CRUD (real DB)', () => {
     await (store as Record<string, unknown>).updateSandboxSharedCodex?.(
       'sb-retrofit',
       true,
-      'openai-codex/gpt-5.4',
+      'openai-codex/gpt-5.5',
     );
 
     const retrieved = await store.getSandbox('sb-retrofit');
     expect((retrieved as Record<string, unknown>).shared_codex_enabled).toBe(true);
-    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.4');
+    expect((retrieved as Record<string, unknown>).shared_codex_model).toBe('openai-codex/gpt-5.5');
   });
 });

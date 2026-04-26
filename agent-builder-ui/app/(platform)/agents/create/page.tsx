@@ -40,7 +40,6 @@ import {
   type CreateSessionConfigState,
 } from "./create-session-config";
 import {
-  canPersistReviewOrLaterForgeStage,
   resolveCoPilotCompletionKind,
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
@@ -58,7 +57,11 @@ import {
   buildResumedCoPilotSeed,
   clearCreateSessionCache,
   loadCreateSessionFromCache,
+  resolveRouteAgentForRestore,
   saveCreateSessionToCache,
+  shouldReconcileToPersistedForgeStage,
+  shouldSuppressRevealTriggerForResume,
+  shouldWaitForRouteAgentBeforeCacheRestore,
 } from "@/lib/openclaw/create-session-cache";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -114,14 +117,48 @@ function CreateAgentPageContent() {
   const [reviewOutput, setReviewOutput] = useState<ReviewAgentOutput | null>(null);
 
   const { agents, saveAgent, persistAgentEdits, updateAgentConfig, deleteForge, fetchAgent } = useAgentsStore();
-  const existingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
+  const [routeFetchedAgent, setRouteFetchedAgent] = useState<SavedAgent | null>(null);
+  const storeExistingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) ?? null : null;
+  const existingAgent = editingAgentId
+    ? resolveRouteAgentForRestore({
+      editingAgentId,
+      storeAgent: storeExistingAgent,
+      routeFetchedAgent,
+    })
+    : null;
 
   const { builderState, updateBuilderState, resetBuilderState, initializeFromAgent } = useBuilderState();
   const { sandbox: architectSandbox } = useArchitectSandbox();
+  const coPilotStore = useCoPilotStore();
 
   // ── v2: per-agent forge sandbox ──────────────────────────────────────────
-  // Each new agent gets its own container. forgePhase tracks the provisioning
-  // lifecycle. Once ready, the chat routes to the agent's own container.
+  // Each new agent gets its own container. forgePhase tracks creation lifecycle.
+  //
+  // Agent Creation State Machine
+  // ============================
+  //
+  //   "init"  ──submit──>  POST /api/agents/create
+  //                              │
+  //                              ▼
+  //                     "provisioning" (SSE stream, OnboardingSequence shown)
+  //                              │
+  //                         container ready
+  //                              │
+  //                              ▼
+  //                     Architect generates employee_reveal event
+  //                              │
+  //                         ┌────▼────┐
+  //                         │"reveal"  │  ← user sees MeetYourEmployee
+  //                         │         │
+  //                         ├─"Yes"───┼──> save answer + advance to copilot
+  //                         ├─"Not quite"─> regenerate (max 2x)
+  //                         └─"Skip"──┼──> (after 3x)
+  //                              │
+  //                              ▼
+  //                     null (copilot) → Think stage with reveal context
+  //
+  //   Error at any point ──> reset to "init"
+  //
   const [forgePhase, setForgePhase] = useState<"init" | "provisioning" | null>(() =>
     editingAgentId ? null : "init"
   );
@@ -138,7 +175,25 @@ function CreateAgentPageContent() {
   const [isRouteAgentHydrated, setIsRouteAgentHydrated] = useState(() => !editingAgentId);
   const [hasRestoredSession, setHasRestoredSession] = useState(() => !editingAgentId);
 
+  // Track reveal regeneration attempts (max 3 total views)
+  const sseAbortRef = useRef<AbortController | null>(null);
+
+  const revealFiredRef = useRef(false);
+
   const handleInitSubmit = useCallback(async (name: string, description: string) => {
+    revealFiredRef.current = false;
+    resetBuilderState();
+    coPilotStore.reset();
+    setCreatedAgentId(null);
+    setNameOverride(null);
+    setRulesOverride(null);
+    setReviewOutput(null);
+    updateBuilderState({
+      name,
+      description,
+      systemName: name,
+      forgeSandboxStatus: "provisioning",
+    });
     setForgePhase("provisioning");
     setForgeLog(["Creating your agent..."]);
     setForgeError(null);
@@ -154,9 +209,25 @@ function CreateAgentPageContent() {
 
       // Update URL immediately so the agent ID is visible and the page is refreshable
       window.history.replaceState(null, "", `/agents/create?agentId=${agent_id}`);
+      setCreatedAgentId(agent_id);
+      clearCreateSessionCache(agent_id);
+      clearCoPilotLifecycleCache(agent_id);
+      updateBuilderState({
+        draftAgentId: agent_id,
+        name,
+        description,
+        systemName: name,
+        forgeSandboxStatus: "provisioning",
+      });
       setForgeLog((prev) => [...prev, "Starting container..."]);
 
-      const sseRes = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`);
+      const abortController = new AbortController();
+      sseAbortRef.current = abortController;
+
+      const sseRes = await fetchBackendWithAuth(
+        `${API_BASE}/api/agents/${agent_id}/forge/stream/${stream_id}`,
+        { signal: abortController.signal },
+      );
       if (!sseRes.ok || !sseRes.body) throw new Error("Failed to open provisioning stream");
 
       const reader = sseRes.body.getReader();
@@ -196,28 +267,55 @@ function CreateAgentPageContent() {
                 break;
               }
             } catch (e) {
-              // Re-throw intentional errors (from error events); only swallow JSON parse failures on non-JSON SSE data
               if (e instanceof SyntaxError) continue;
               throw e;
             }
           }
         }
       } finally {
+        try { abortController.abort(); } catch { /* ignore */ }
         try { await reader.cancel(); } catch { /* ignore cancel errors */ }
         try { reader.releaseLock(); } catch { /* may already be released */ }
+        sseAbortRef.current = null;
       }
 
-      setForgeLog((prev) => [...prev, "Agent workspace ready — opening chat..."]);
-      // Use window.location for hard navigation — router.push can be blocked
-      // by the still-pending fetch response cleanup
-      window.location.href = `/agents/create?agentId=${agent_id}`;
+      setForgeLog((prev) => [...prev, "Agent workspace ready — preparing your digital employee..."]);
+      // Container is ready. Go straight to copilot mode (forgePhase=null) so
+      // CoPilotLayout mounts and can send the first message to the Architect.
+      // The devStage starts at "reveal"; the Architect receives a [PHASE: reveal]-prefixed message
+      // and its lifecycle-aware SOUL.md emits the <reveal_field/> sequence.
+      // MeetYourEmployee renders inside the copilot section when revealData arrives.
+
+      const refreshedAgent = await fetchAgent(agent_id).catch(() => null);
+      const forgeSandboxId = refreshedAgent?.forgeSandboxId ?? null;
+
+      updateBuilderState({
+        draftAgentId: agent_id,
+        name,
+        description,
+        systemName: name,
+        forgeSandboxId,
+        forgeSandboxStatus: forgeSandboxId ? "ready" : "idle",
+      });
+
+      // Seed the copilot store with name/description from the form BEFORE
+      // CoPilotLayout mounts, so the reveal auto-trigger has the description
+      // it needs to fire. Without this, the store is empty and the reveal
+      // effect early-returns because agentDescription.trim() is "".
+      coPilotStore.hydrateFromSeed({
+        name,
+        description,
+        devStage: "reveal" as const,
+        agentSandboxId: forgeSandboxId,
+      });
+
+      setForgePhase(null);
     } catch (err) {
+      if ((err as Error).name === "AbortError") return; // User navigated away
       setForgeError(err instanceof Error ? err.message : "Failed to provision agent workspace");
       setForgePhase("init");
     }
-  }, [router]);
-
-  const coPilotStore = useCoPilotStore();
+  }, [coPilotStore, fetchAgent, resetBuilderState, updateBuilderState]);
 
   // Feature session: load and hydrate copilot for feature branch mode
   const featureSession = useFeatureSession(isFeatureBranchMode ? editingAgentId : null, isFeatureBranchMode ? featureBranch : null);
@@ -248,9 +346,15 @@ function CreateAgentPageContent() {
 
     setIsRouteAgentHydrated(false);
     setHasRestoredSession(false);
+    setRouteFetchedAgent(null);
 
     void fetchAgent(editingAgentId)
       .catch(() => null)
+      .then((agent) => {
+        if (!cancelled) {
+          setRouteFetchedAgent(agent);
+        }
+      })
       .finally(() => {
         if (!cancelled) {
           setIsRouteAgentHydrated(true);
@@ -284,6 +388,175 @@ function CreateAgentPageContent() {
   // the hook is mid-fetch, the agent record hasn't hydrated yet, or the
   // sandbox API hasn't returned a ready sandbox.
   const forgeSandboxPending = hasForgeAgent && !forgeSandbox;
+
+  // ── Reveal trigger (page-level) ──────────────────────────────────────────
+  // The reveal waiting screen in the render block returns BEFORE CoPilotLayout
+  // mounts, so CoPilotLayout's internal reveal useEffect never runs. This
+  // effect fires the architect call from page.tsx directly.
+  //
+  // Recovery path: if a prior reveal attempt failed (e.g., transient gateway
+  // error) the effect fell back to setDevStage("think") and persisted
+  // forge_stage="think" to the backend. On resume we land at "think" with no
+  // revealData — a dead empty screen until the user types. Detect that stuck
+  // state and retry the reveal from scratch. `revealFiredRef` guarantees we
+  // only do this once per mount.
+  useEffect(() => {
+    if (forgePhase === "provisioning") return;
+    if (revealFiredRef.current) return;
+    if (coPilotStore.revealData) return;
+
+    const persistedSeed = workingAgent ? buildResumedCoPilotSeed(workingAgent, null) : {};
+    if (shouldSuppressRevealTriggerForResume({
+      hasRestoredSession,
+      currentStage: coPilotStore.devStage,
+      persistedStage: persistedSeed.devStage,
+    })) {
+      return;
+    }
+
+    const isRevealStage = coPilotStore.devStage === "reveal";
+    const isStuckAtThink =
+      coPilotStore.devStage === "think"
+      && !coPilotStore.userTriggeredThink
+      && coPilotStore.thinkStatus === "idle";
+    if (!isRevealStage && !isStuckAtThink) return;
+
+    const sandboxId = effectiveSandbox?.sandbox_id;
+    const desc = builderState.description || workingAgent?.description || "";
+    const agName = builderState.name || workingAgent?.name || "";
+    if (!sandboxId || !desc.trim()) return;
+
+    revealFiredRef.current = true;
+    if (isStuckAtThink) {
+      console.log("[Reveal] RECOVERY — agent stuck at think with no reveal data, restarting reveal");
+      coPilotStore.setDevStage("reveal");
+    }
+    coPilotStore.setRevealStatus("generating");
+
+    console.log("[Reveal] FIRING from page.tsx:", { sandboxId, name: agName.slice(0, 30) });
+
+    Promise.all([
+      import("@/lib/openclaw/api"),
+      import("@/lib/openclaw/ag-ui/builder-agent"),
+    ]).then(([{ sendToArchitectStreaming }, { stripRevealMarkers }]) => {
+      // The sandbox's SOUL.md is lifecycle-aware: the [PHASE: reveal] header
+      // tells the architect to emit <reveal_field/> markers instead of
+      // conversing. See ruh-backend/src/sandboxManager.ts for the SOUL contract.
+      const prompt = `[PHASE: reveal]\n\nAgent name: ${agName}\n\nAgent description: ${desc}`;
+      let accumulated = "";
+
+      // Progressive markers (primary): <reveal_field k="..." v='JSON'/> + <reveal_done/>
+      // Legacy fallback: <employee_reveal data='{...}'/>
+      const REVEAL_FIELD_RE = /<reveal_field\s+k="([^"]+)"\s+v='([\s\S]*?)'\s*\/>/g;
+      const REVEAL_DONE_RE = /<reveal_done\s*\/>/;
+      const REVEAL_BLOB_RE = /<employee_reveal\s+data='(\{[\s\S]*?\})'\s*\/>/;
+
+      const VALID_KEYS = new Set<"name" | "title" | "opening" | "what_i_heard" | "what_i_will_own" | "what_i_wont_do" | "first_move" | "clarifying_question">([
+        "name",
+        "title",
+        "opening",
+        "what_i_heard",
+        "what_i_will_own",
+        "what_i_wont_do",
+        "first_move",
+        "clarifying_question",
+      ]);
+      const seenFields = new Set<string>();
+      let fieldOffset = 0;
+      let tickerOffset = 0;
+      let doneSeen = false;
+
+      sendToArchitectStreaming(
+        `agent:main:${sandboxId}`,
+        prompt,
+        {
+          onDelta: (delta: string) => {
+            accumulated += delta;
+
+            // 1. Progressive <reveal_field> markers.
+            REVEAL_FIELD_RE.lastIndex = fieldOffset;
+            let m: RegExpExecArray | null;
+            while ((m = REVEAL_FIELD_RE.exec(accumulated)) !== null) {
+              const key = m[1] as "name" | "title" | "opening" | "what_i_heard" | "what_i_will_own" | "what_i_wont_do" | "first_move" | "clarifying_question";
+              if (VALID_KEYS.has(key) && !seenFields.has(key)) {
+                try {
+                  const value = JSON.parse(m[2]);
+                  seenFields.add(key);
+                  coPilotStore.setRevealFieldPartial(key, value);
+                } catch (e) {
+                  console.warn("[Reveal] malformed reveal_field JSON for key", key, e);
+                }
+              }
+              fieldOffset = REVEAL_FIELD_RE.lastIndex;
+            }
+
+            // 2. Terminal <reveal_done/>.
+            if (!doneSeen && REVEAL_DONE_RE.test(accumulated)) {
+              doneSeen = true;
+              coPilotStore.setRevealStatus("ready");
+              console.log("[Reveal] SUCCESS — reveal_done received");
+            }
+
+            // 3. Legacy blob fallback.
+            if (!doneSeen) {
+              const blob = REVEAL_BLOB_RE.exec(accumulated);
+              if (blob) {
+                try {
+                  const d = JSON.parse(blob[1]);
+                  coPilotStore.setRevealData({
+                    name: d.name ?? agName,
+                    title: d.title ?? "",
+                    opening: d.opening ?? "",
+                    what_i_heard: d.what_i_heard ?? [],
+                    what_i_will_own: d.what_i_will_own ?? [],
+                    what_i_wont_do: d.what_i_wont_do ?? [],
+                    first_move: d.first_move ?? "",
+                    clarifying_question: d.clarifying_question ?? "",
+                  });
+                  coPilotStore.setRevealStatus("ready");
+                  doneSeen = true;
+                  console.log("[Reveal] SUCCESS — legacy blob received");
+                } catch (e) {
+                  console.warn("[Reveal] legacy blob parse failed:", e);
+                }
+              }
+            }
+
+            // 4. Feed the live thought ticker with marker-stripped prose.
+            const newChunk = accumulated.slice(tickerOffset);
+            tickerOffset = accumulated.length;
+            const cleanChunk = stripRevealMarkers(newChunk);
+            if (cleanChunk.trim().length > 0) {
+              coPilotStore.appendRevealThought(cleanChunk);
+            }
+          },
+          onStatus: () => {},
+        },
+        { forgeSandboxId: sandboxId, agentId: workingAgent?.id ?? undefined },
+      ).then((result) => {
+        console.log("[Reveal] Stream complete.", {
+          chars: accumulated.length,
+          doneSeen,
+          revealStatus: coPilotStore.revealStatus,
+          resultType: (result as { type?: string } | null)?.type,
+        });
+        if (!doneSeen && coPilotStore.revealStatus !== "ready") {
+          console.warn("[Reveal] No marker in response — skipping to think");
+          coPilotStore.setRevealStatus("failed");
+          coPilotStore.setDevStage("think");
+        }
+      }).catch((err) => {
+        console.warn("[Reveal] Failed:", err);
+        coPilotStore.setRevealStatus("failed");
+        coPilotStore.setDevStage("think");
+      });
+    });
+
+    return () => {
+      console.log("[Reveal] effect cleanup (component unmount or deps changed)");
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSandbox?.sandbox_id, builderState.description, builderState.name, workingAgent, workingAgent?.description, workingAgent?.name, coPilotStore.devStage, coPilotStore.thinkStatus, coPilotStore.userTriggeredThink, forgePhase, hasRestoredSession]);
 
   // v2: Workspace updates are event-driven via file_written/workspace_changed events
   // from the WebSocket gateway. The workspaceFileCount tracks writes for badge display
@@ -356,6 +629,14 @@ function CreateAgentPageContent() {
     const cachedLifecycle = restoreId ? loadCoPilotLifecycleFromCache(restoreId) : null;
     let cachedCoPilot = cachedSession?.coPilot ?? cachedLifecycle ?? null;
     let cachedBuilder = cachedSession?.builder ?? null;
+
+    if (shouldWaitForRouteAgentBeforeCacheRestore({
+      editingAgentId,
+      hasAgentRecord: Boolean(workingAgent),
+      isRouteAgentHydrated,
+    })) {
+      return;
+    }
 
     // Discard stale caches in two cases:
     // 1. Agent is active with skills but cache is stuck at an early stage
@@ -493,7 +774,7 @@ function CreateAgentPageContent() {
     }
 
     if (cachedCoPilot || cachedBuilder) {
-      applyRecoveredSession(null);
+      applyRecoveredSession(workingAgent ?? null);
       return;
     }
 
@@ -531,7 +812,20 @@ function CreateAgentPageContent() {
     coPilotStore.reset();
     setHasRestoredSession(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingAgentId, reflectStage, existingAgent, isRouteAgentHydrated]);
+  }, [editingAgentId, reflectStage, existingAgent, workingAgent, isRouteAgentHydrated]);
+
+  useEffect(() => {
+    if (!workingAgent) return;
+    const persistedSeed = buildResumedCoPilotSeed(workingAgent, null);
+    const persistedStage = persistedSeed.devStage;
+    if (!shouldReconcileToPersistedForgeStage({
+      currentStage: coPilotStore.devStage,
+      persistedStage,
+    })) {
+      return;
+    }
+    coPilotStore.hydrateFromSeed(persistedSeed);
+  }, [coPilotStore, coPilotStore.devStage, workingAgent]);
 
   useEffect(() => {
     setCreateSessionConfig(createInitialCreateSessionConfig(workingAgent));
@@ -694,41 +988,6 @@ function CreateAgentPageContent() {
 
     return () => window.clearTimeout(timeout);
   });
-
-  // Persist forge_stage to backend immediately on every stage transition.
-  // This is the source of truth for where the creation process is — used by
-  // reconciliation and new-tab restore. Not debounced because stage transitions
-  // are infrequent and critical to persist.
-  const lastSavedForgeStageRef = useRef<string | null>(null);
-  useEffect(() => {
-    const agentId = editingAgentId ?? effectiveAgentId ?? builderState.draftAgentId;
-    if (!agentId || !hasRestoredSession) return;
-
-    const currentStage = coPilotStore.devStage;
-    const skillGraphCount =
-      builderState.skillGraph?.length
-      ?? workingAgent?.skillGraph?.length
-      ?? 0;
-    if (!canPersistReviewOrLaterForgeStage(currentStage, skillGraphCount)) {
-      return;
-    }
-    if (lastSavedForgeStageRef.current === currentStage) return;
-    lastSavedForgeStageRef.current = currentStage;
-
-    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage: currentStage }),
-    }).catch(() => { /* best-effort — creationSession is the backup */ });
-  }, [
-    coPilotStore.devStage,
-    editingAgentId,
-    effectiveAgentId,
-    builderState.draftAgentId,
-    builderState.skillGraph,
-    workingAgent?.skillGraph,
-    hasRestoredSession,
-  ]);
 
   const syntheticAgent: SavedAgent = useMemo(() => {
     const effectiveImprovements = builderState.improvements.length > 0 ? builderState.improvements : (workingAgent?.improvements ?? []);
@@ -1101,17 +1360,9 @@ function CreateAgentPageContent() {
     }
   }, []);
 
-  // Mark the creation lifecycle as complete and publish to marketplace.
+  // Publish to marketplace after a successful Ship action.
   // Called at every successful Ship completion path.
   const finalizeShipCompletion = useCallback(async (agentId: string, agentName: string, agentDescription: string) => {
-    // Mark forge_stage as "complete" — this is the source of truth for reconciliation.
-    // The endpoint also promotes agent status to "active".
-    void fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage: "complete" }),
-    }).catch(() => { /* best-effort */ });
-
     void autoPublishToMarketplace(agentId, agentName, agentDescription);
   }, [autoPublishToMarketplace]);
 
@@ -1365,7 +1616,7 @@ function CreateAgentPageContent() {
     return true;
   }, [builderState.description, builderState.draftAgentId, builderState.name, builderState.systemName, coPilotStore, existingAgent, finalizePendingCredentialDrafts, finalizeShipCompletion, persistAgentEdits, resetBuilderState, router, saveAgent, workingAgent?.forgeSandboxId, workingAgent?.skills]);
 
-  // ── v2 init form: shown when creating a brand-new agent ──────────────────
+  // ── v2 init/provisioning: shown when creating a brand-new agent ────────────
   if (forgePhase === "init" || forgePhase === "provisioning") {
     return (
       <ForgeInitScreen
@@ -1377,6 +1628,10 @@ function CreateAgentPageContent() {
       />
     );
   }
+
+  // Reveal is no longer a dedicated full-page screen — it renders inline inside
+  // the Co-Pilot workspace (see StageReveal in LifecycleStepRenderer) so the
+  // chat and the employee card live on the same view.
 
   if (mode === "copilot") {
     return (

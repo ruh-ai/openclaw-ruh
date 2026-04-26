@@ -48,7 +48,8 @@ When the operator loads `/agents/create?agentId=<id>`:
   - backend agent snapshot as the persisted baseline
   - local safe create-session cache as the overlay for in-progress non-secret work
 - If no saved agent record exists but a local safe cache does, the page may recover from that cache alone for the same `agentId`.
-- `forge_stage` is only a lifecycle hint. Resume must not treat `review`, `test`, `ship`, or `reflect` as completed unless persisted build artifacts already exist for that agent.
+- `forge_stage` is only a lifecycle hint. Resume must not trust `plan` unless PRD/TRD discovery documents already exist, and must not treat `review`, `test`, `ship`, or `reflect` as completed unless persisted build artifacts already exist for that agent.
+- If `forge_stage` points at `plan` but the agent still has no persisted PRD/TRD, the page must fail closed to Think so the operator can regenerate or approve artifact-backed discovery output.
 - If `forge_stage` points at `review` or later but the agent still has no persisted `skillGraph` or saved co-pilot snapshot, the page must fail closed to the artifact-backed state instead of reopening with green completed stages.
 - When the page must infer a viewed stage from persisted agent data alone, completion badges must still come from explicit saved lifecycle statuses rather than from the inferred stage position itself. Older active agents may reopen on `review` for inspection without automatically marking Think/Plan/Build complete.
 - Existing-agent improve flows must not treat already-saved workspace files or baseline `skillGraph` data as proof that a new improvement build already ran. Workspace reconciliation may fast-forward only brand-new or truly in-progress create sessions, not prebuilt agents reopened for edits.
@@ -69,7 +70,8 @@ When the operator loads `/agents/create?agentId=<id>`:
 
 ### Forge Stage Persistence Contract
 
-- `forge_stage` updates may remain immediate for `think`, `plan`, and `build`, because those are in-progress lifecycle markers.
+- `forge_stage=plan` may only be written after the approved PRD/TRD have been saved into the agent workspace.
+- `forge_stage` updates may remain immediate for `think` and `build`, because those are in-progress lifecycle markers after their predecessor artifacts exist.
 - `review` and later must not be written back to `forge_stage` until the matching persisted build artifacts exist, so refresh/reopen cannot observe a stage marker that outran the saved skill graph/session data.
 
 ## Implementation Notes

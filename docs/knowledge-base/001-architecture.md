@@ -49,7 +49,7 @@ Each sandbox is a `node:22-bookworm` Docker container with `openclaw` installed 
 The `agent-builder-ui` doesn't have its own LLM logic. It routes messages to an OpenClaw agent running inside a sandbox acting as the "architect". The gateway bridge (`agent-builder-ui/app/api/openclaw/route.ts`) handles the WebSocket protocol, retries, execution-approval policy, and response format normalization (JSON / YAML / embedded JSON). The bridge still authenticates to that gateway with `OPENCLAW_GATEWAY_TOKEN`; this transport auth is separate from whatever model auth the gateway uses internally.
 
 ### 5. Shared Codex OAuth Can Override API-Key Bootstrap
-When host shared auth state exists, sandbox creation now prefers that over API-key bootstrap: it seeds host OpenClaw OAuth or Codex CLI auth into the container, skips interactive provider onboarding, sets the default model to `openai-codex/gpt-5.4`, and live-probes `openai-codex` before continuing. Existing running sandboxes can be retrofitted later and marked with persisted shared-Codex metadata. If no shared auth is available, the legacy provider priority still applies: **OpenRouter → OpenAI → Anthropic → Gemini → Ollama (fallback)**.
+When host shared auth state exists, sandbox creation now prefers that over API-key bootstrap: it seeds host OpenClaw OAuth or Codex CLI auth into the container, skips interactive provider onboarding, sets the default model to `openai-codex/gpt-5.5`, and live-probes `openai-codex` before continuing. Existing running sandboxes can be retrofitted later and marked with persisted shared-Codex metadata. If no shared auth is available, the legacy provider priority still applies: **OpenRouter → OpenAI → Anthropic → Gemini → Ollama (fallback)**.
 
 ### 6. Conversations Have Session Keys
 Each conversation gets an `openclaw_session_key` formatted as `agent:main:<uuid>`. This key is sent as `x-openclaw-session-key` header when proxying chat completions, so the OpenClaw gateway maintains session context for that conversation.
@@ -151,7 +151,7 @@ User types in agent-builder-ui
     → POST /api/openclaw (Next.js route — bridge)
     → WebSocket to OPENCLAW_GATEWAY_URL
       Handshake: connect.challenge → connect req → hello-ok
-      Send: chat.send { sessionKey: "agent:architect:main", message }
+      Send: chat.send { sessionKey: "agent:architect:<session_id>", message }
       Receive: agent lifecycle events + final text
       Bridge policy: only a narrow read-only exec allowlist auto-runs; other approval requests fail closed
       Parse: JSON → YAML → embedded JSON → agent_response fallback

@@ -2,7 +2,7 @@ name: openclaw-langfuse
 
 services:
   langfuse-worker:
-    image: docker.io/langfuse/langfuse-worker:3
+    image: docker.io/langfuse/langfuse-worker:3.40.0
     restart: unless-stopped
     depends_on: &langfuse-depends-on
       postgres:
@@ -67,7 +67,7 @@ services:
       REDIS_TLS_KEY: ${REDIS_TLS_KEY:-/certs/redis.key}
 
   langfuse-web:
-    image: docker.io/langfuse/langfuse:3
+    image: docker.io/langfuse/langfuse:3.40.0
     restart: unless-stopped
     depends_on: *langfuse-depends-on
     ports:
@@ -121,8 +121,8 @@ services:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 15s
+      retries: 60
+      start_period: 60s
 
   minio:
     image: cgr.dev/chainguard/minio

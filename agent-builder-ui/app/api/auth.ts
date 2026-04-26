@@ -4,7 +4,7 @@ import {
   clearAuthCookies,
   getRefreshToken,
   setAuthCookies,
-} from "@/services/authCookies";
+} from "@/services/authCookies.client";
 import { useUserStore } from "@/hooks/use-user";
 import { assertBuilderAppAccess } from "@/lib/auth/app-access";
 import { ensureBuilderSurfaceSession } from "@/lib/auth/tenant-switch";
@@ -68,7 +68,7 @@ interface LocalRegisterInput {
   membershipRole?: "owner" | "admin" | "developer" | "employee";
 }
 
-const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
+const ACCESS_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const REFRESH_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
 function syncBuilderUser(session: AuthSessionResponse) {
@@ -86,8 +86,8 @@ function syncBuilderUser(session: AuthSessionResponse) {
   });
 }
 
-async function persistSession(session: AuthSessionResponse): Promise<void> {
-  await setAuthCookies(
+function persistSession(session: AuthSessionResponse): void {
+  setAuthCookies(
     session.accessToken,
     session.refreshToken,
     ACCESS_TOKEN_MAX_AGE_SECONDS,
@@ -100,7 +100,7 @@ export async function switchBuilderOrganizationRequest(
   organizationId: string,
   refreshToken?: string
 ): Promise<AuthSessionResponse> {
-  const resolvedRefreshToken = refreshToken ?? (await getRefreshToken());
+  const resolvedRefreshToken = refreshToken ?? getRefreshToken();
   const response = await api.post<AuthSessionResponse>("/api/auth/switch-org", {
     organizationId,
     ...(resolvedRefreshToken ? { refreshToken: resolvedRefreshToken } : {}),
@@ -125,7 +125,7 @@ export const authApi = {
       });
       const session = await ensureBuilderSession(response.data);
       assertBuilderAppAccess(session);
-      await persistSession(session);
+      persistSession(session);
       return session;
     } catch (error: unknown) {
       const axiosError = error as APIError;
@@ -142,7 +142,7 @@ export const authApi = {
       const response = await api.post<AuthSessionResponse>("/api/auth/register", input);
       const session = await ensureBuilderSession(response.data);
       assertBuilderAppAccess(session);
-      await persistSession(session);
+      persistSession(session);
       return session;
     } catch (error: unknown) {
       const axiosError = error as APIError;
@@ -164,7 +164,7 @@ export const authApi = {
       await api.post("/api/auth/logout");
 
       // Clear auth cookies
-      await clearAuthCookies();
+      clearAuthCookies();
       // Clear user store
       useUserStore.getState().clearUser("auth api logout");
     } catch (error: unknown) {
@@ -188,7 +188,7 @@ export const authApi = {
       });
       const session = await ensureBuilderSession(response.data);
       assertBuilderAppAccess(session);
-      await persistSession(session);
+      persistSession(session);
       return session;
     } catch (error: unknown) {
       const axiosError = error as APIError;
@@ -206,7 +206,7 @@ export const authApi = {
     try {
       const session = await switchBuilderOrganizationRequest(organizationId);
       assertBuilderAppAccess(session);
-      await persistSession(session);
+      persistSession(session);
       return session;
     } catch (error: unknown) {
       const axiosError = error as APIError;

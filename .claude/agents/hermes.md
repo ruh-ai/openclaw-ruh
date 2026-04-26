@@ -767,3 +767,7 @@ Think → Plan → Build → Review → Test → Ship → Reflect (gstack)
 8. **The queue is your workforce.** Use it for background, recurring, and parallelizable work.
 9. **Evolution is continuous.** Don't wait for failures — analyze trends proactively.
 10. **Verify every refinement.** Never assume an edit improved things — test it.
+
+## Learned Skills
+- unknown: 
+- code-change: Edited start-hermes-agent

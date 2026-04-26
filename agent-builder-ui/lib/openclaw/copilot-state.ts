@@ -23,6 +23,7 @@ import type {
   WorkflowDefinition,
 } from "./types";
 import { AGENT_DEV_STAGES } from "./types";
+import type { ArtifactTarget, ChatMode } from "./stage-context";
 import type { SkillAvailability } from "@/lib/skills/skill-registry";
 import type { AgentChannelSelection, AgentImprovement, AgentRuntimeInput } from "@/lib/agents/types";
 import type {
@@ -37,6 +38,15 @@ import type {
 export type CoPilotPhase = "purpose" | "discovery" | "skills" | "tools" | "runtime_inputs" | "triggers" | "channels" | "review";
 export type SkillGenerationStatus = "idle" | "loading" | "ready" | "error";
 export type DiscoveryStatus = "idle" | "loading" | "ready" | "skipped" | "error";
+export type LifecycleAdvanceStatus = "idle" | "saving" | "failed";
+
+export interface ConfirmedStageAdvance {
+  stage: AgentDevStage;
+}
+
+export interface AdvanceDevStageOptions {
+  confirmStage?: (nextStage: AgentDevStage) => Promise<ConfirmedStageAdvance>;
+}
 
 // Re-export for convenience
 export type { AgentDevStage, StageStatus } from "./types";
@@ -139,6 +149,24 @@ export interface CoPilotState {
   // ── Agent Development Lifecycle ────────────────────────────────────────────
   devStage: AgentDevStage;
   maxUnlockedDevStage: AgentDevStage;
+  lifecycleAdvanceStatus: LifecycleAdvanceStatus;
+  lifecycleAdvanceError: string | null;
+  selectedArtifactTarget: ArtifactTarget | null;
+  chatMode: ChatMode;
+
+  // Reveal stage — employee profile brief-back
+  revealStatus: StageStatus;
+  /**
+   * Employee profile, filled progressively as the Architect streams fields.
+   * Treat as Partial until revealStatus flips to "ready".
+   */
+  revealData: Partial<import("./ag-ui/types").EmployeeRevealPayload> | null;
+  /** Ordered list of field keys that have arrived so far (drives the progressive reveal). */
+  revealProgress: import("./ag-ui/types").RevealFieldKey[];
+  /** Raw Architect stream (markers stripped) — rendered as the live "thought ticker". */
+  revealThoughtStream: string;
+  /** User's answer to the clarifying question on the reveal screen. */
+  revealAnswer: string | null;
 
   // Think stage
   thinkStatus: StageStatus;
@@ -157,6 +185,12 @@ export interface CoPilotState {
   prdPath: string | null;
   /** Workspace path for the TRD, set when written. */
   trdPath: string | null;
+  /**
+   * Questions the architect is currently waiting on (emitted via `<ask_user>`
+   * markers at Think/Plan checkpoints). Cleared when the user submits answers
+   * as their next message.
+   */
+  pendingQuestions: import("./ag-ui/types").AskUserPayload[];
 
   // Plan stage
   architecturePlan: ArchitecturePlan | null;
@@ -244,10 +278,26 @@ export interface CoPilotActions {
 
   // ── Lifecycle actions ──────────────────────────────────────────────────────
   setDevStage: (stage: AgentDevStage) => void;
-  advanceDevStage: () => void;
+  setSelectedArtifactTarget: (target: ArtifactTarget | null) => void;
+  setChatMode: (mode: ChatMode) => void;
+  advanceDevStage: (options?: AdvanceDevStageOptions) => Promise<boolean>;
   /** Returns true if the current stage's hard gate is satisfied. */
   canAdvanceDevStage: () => boolean;
   goBackDevStage: () => void;
+  // Reveal
+  setRevealStatus: (status: StageStatus) => void;
+  setRevealData: (data: Partial<import("./ag-ui/types").EmployeeRevealPayload> | null) => void;
+  setRevealAnswer: (answer: string | null) => void;
+  /** Merge a single streamed field into revealData and append it to revealProgress. */
+  setRevealFieldPartial: (
+    key: import("./ag-ui/types").RevealFieldKey,
+    value: string | string[],
+  ) => void;
+  /** Append a chunk of raw Architect prose (markers already stripped) to the thought ticker. */
+  appendRevealThought: (delta: string) => void;
+  /** Clear all progressive reveal streaming state (used on regenerate). */
+  resetRevealStreaming: () => void;
+  // Think
   setThinkStatus: (status: StageStatus) => void;
   setUserTriggeredThink: (triggered: boolean) => void;
   markThinkRunDispatched: (runId: string | null) => void;
@@ -256,6 +306,8 @@ export interface CoPilotActions {
   setThinkStep: (step: ThinkSubStep | string) => void;
   pushResearchFinding: (finding: Omit<ThinkResearchFinding, "id" | "timestamp">) => void;
   clearResearchFindings: () => void;
+  pushPendingQuestion: (question: import("./ag-ui/types").AskUserPayload) => void;
+  clearPendingQuestions: () => void;
   setResearchBriefPath: (path: string | null) => void;
   setPrdPath: (path: string | null) => void;
   setTrdPath: (path: string | null) => void;
@@ -318,8 +370,17 @@ function createInitialState(): CoPilotState {
     improvements: [],
     systemName: null,
     // Lifecycle
-    devStage: "think",
-    maxUnlockedDevStage: "think",
+    devStage: "reveal",
+    maxUnlockedDevStage: "reveal",
+    lifecycleAdvanceStatus: "idle",
+    lifecycleAdvanceError: null,
+    selectedArtifactTarget: null,
+    chatMode: "ask",
+      revealStatus: "idle",
+      revealData: null,
+      revealProgress: [],
+      revealThoughtStream: "",
+      revealAnswer: null,
       thinkStatus: "idle",
       thinkActivity: [],
       userTriggeredThink: false,
@@ -329,6 +390,7 @@ function createInitialState(): CoPilotState {
       researchFindings: [],
       researchBriefPath: null,
       prdPath: null,
+      pendingQuestions: [],
       trdPath: null,
       architecturePlan: null,
       planStatus: "idle",
@@ -371,6 +433,10 @@ function maxDevStage(a: AgentDevStage, b: AgentDevStage): AgentDevStage {
   return getDevStageIndex(a) >= getDevStageIndex(b) ? a : b;
 }
 
+function hasThinkDocuments(state: Pick<CoPilotState, "discoveryDocuments">): boolean {
+  return Boolean(state.discoveryDocuments?.prd && state.discoveryDocuments?.trd);
+}
+
 function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage {
   const currentStage = seed.devStage ?? "think";
   const unlockedStage = seed.maxUnlockedDevStage ?? currentStage;
@@ -380,6 +446,13 @@ function resolveMaxUnlockedDevStage(seed: Partial<CoPilotState>): AgentDevStage 
 // ─── Stage-status reset map (used by goBackDevStage) ────────────────────────
 
 const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> = {
+  reveal: {
+    revealStatus: "idle" as StageStatus,
+    revealData: null,
+    revealProgress: [],
+    revealThoughtStream: "",
+    revealAnswer: null,
+  },
   think: {
     thinkStatus: "idle" as StageStatus,
     thinkActivity: [] as ThinkActivityItem[],
@@ -390,6 +463,7 @@ const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> 
     researchFindings: [] as ThinkResearchFinding[],
     researchBriefPath: null as string | null,
     prdPath: null as string | null,
+    pendingQuestions: [] as import("./ag-ui/types").AskUserPayload[],
     trdPath: null as string | null,
     userTriggeredPlan: false,
     planRunId: null,
@@ -623,10 +697,14 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       buildStatus: "idle" as StageStatus, evalStatus: "idle" as StageStatus, deployStatus: "idle" as StageStatus,
       userTriggeredThink: false, userTriggeredPlan: false, userTriggeredBuild: false,
       thinkActivity: [], thinkRunId: null, lastDispatchedThinkRunId: null,
-      thinkStep: "idle" as ThinkSubStep, researchFindings: [], researchBriefPath: null, prdPath: null, trdPath: null,
+      thinkStep: "idle" as ThinkSubStep, researchFindings: [], researchBriefPath: null, prdPath: null, trdPath: null, pendingQuestions: [],
       planActivity: [], planRunId: null, lastDispatchedPlanRunId: null, planStep: "idle" as PlanSubStep, architecturePlan: null,
       buildActivity: [], buildProgress: null, buildRunId: null, buildManifest: null, buildValidation: null, buildReport: null,
       evalTasks: [], evalLoopState: { iteration: 0, maxIterations: 3, scores: [], mutations: [], status: "idle" as const },
+      lifecycleAdvanceStatus: "idle",
+      lifecycleAdvanceError: null,
+      selectedArtifactTarget: null,
+      chatMode: "ask",
       featureContext: featureCtx,
     };
   }),
@@ -637,7 +715,13 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     set((state) => ({
       devStage: stage,
       maxUnlockedDevStage: maxDevStage(state.maxUnlockedDevStage, stage),
+      lifecycleAdvanceStatus: "idle",
+      lifecycleAdvanceError: null,
     })),
+
+  setSelectedArtifactTarget: (target) => set({ selectedArtifactTarget: target }),
+
+  setChatMode: (mode) => set({ chatMode: mode }),
 
   canAdvanceDevStage: () => {
     const state = get();
@@ -645,48 +729,77 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     if (idx >= AGENT_DEV_STAGES.length - 1) return false;
     switch (state.devStage) {
       case "think":
-        return state.thinkStatus === "approved" || state.thinkStatus === "done";
+        return hasThinkDocuments(state) && (state.thinkStatus === "approved" || state.thinkStatus === "done");
       case "plan":
         return state.planStatus === "approved" || state.planStatus === "done";
       case "build":
         return state.buildStatus === "done";
+      case "test":
+        return (
+          state.evalStatus === "done"
+          && state.evalTasks.length > 0
+          && state.evalTasks.every((task) => task.status === "pass")
+        );
       default:
         return true;
     }
   },
 
-  advanceDevStage: () => {
+  advanceDevStage: (options) => {
     const state = get();
-    const { devStage, evalStatus, maxUnlockedDevStage } = state;
+    const { devStage, maxUnlockedDevStage } = state;
     const idx = AGENT_DEV_STAGES.indexOf(devStage);
-    if (idx >= AGENT_DEV_STAGES.length - 1) return;
+    if (idx >= AGENT_DEV_STAGES.length - 1) return Promise.resolve(false);
 
     // Gate: don't advance past an incomplete stage.
     // Each stage has a hard approval/completion requirement.
     const canAdvance = (() => {
       switch (devStage) {
         case "think":
-          return state.thinkStatus === "approved" || state.thinkStatus === "done";
+          return hasThinkDocuments(state) && (state.thinkStatus === "approved" || state.thinkStatus === "done");
         case "plan":
           return state.planStatus === "approved" || state.planStatus === "done";
         case "build":
           return state.buildStatus === "done";
-        // review, test, ship — allow free navigation once reached
+        case "test":
+          return (
+            state.evalStatus === "done"
+            && state.evalTasks.length > 0
+            && state.evalTasks.every((task) => task.status === "pass")
+          );
+        // review and ship — allow free navigation once reached
         default:
           return true;
       }
     })();
-    if (!canAdvance) return;
+    if (!canAdvance) return Promise.resolve(false);
 
     const nextStage = AGENT_DEV_STAGES[idx + 1];
-    const updates: Partial<CoPilotState> = {
-      devStage: nextStage,
-      maxUnlockedDevStage: maxDevStage(maxUnlockedDevStage, nextStage),
+    const applyConfirmedStage = (stage: AgentDevStage) => {
+      const updates: Partial<CoPilotState> = {
+        devStage: stage,
+        maxUnlockedDevStage: maxDevStage(maxUnlockedDevStage, stage),
+        lifecycleAdvanceStatus: "idle",
+        lifecycleAdvanceError: null,
+      };
+      set(updates as Partial<CoPilotState>);
+      return true;
     };
-    if (devStage === "test" && (evalStatus === "idle" || evalStatus === "running")) {
-      (updates as Record<string, unknown>).evalStatus = "done";
+
+    if (!options?.confirmStage) {
+      return Promise.resolve(applyConfirmedStage(nextStage));
     }
-    set(updates as Partial<CoPilotState>);
+
+    set({ lifecycleAdvanceStatus: "saving", lifecycleAdvanceError: null });
+    return options.confirmStage(nextStage)
+      .then((confirmed) => applyConfirmedStage(confirmed.stage))
+      .catch((error: unknown) => {
+        set({
+          lifecycleAdvanceStatus: "failed",
+          lifecycleAdvanceError: error instanceof Error ? error.message : "Stage update rejected.",
+        });
+        return false;
+      });
   },
 
   goBackDevStage: () => {
@@ -698,6 +811,39 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     }
   },
 
+  setRevealStatus: (status) => set({ revealStatus: status }),
+  setRevealData: (data) => set({ revealData: data }),
+  setRevealAnswer: (answer) => set({ revealAnswer: answer }),
+
+  setRevealFieldPartial: (key, value) =>
+    set((state) => {
+      const nextData = { ...(state.revealData ?? {}), [key]: value };
+      const nextProgress = state.revealProgress.includes(key)
+        ? state.revealProgress
+        : [...state.revealProgress, key];
+      return {
+        revealData: nextData,
+        revealProgress: nextProgress,
+        // First field promotes us out of idle — the card mounts and starts composing.
+        revealStatus: state.revealStatus === "idle" ? "generating" : state.revealStatus,
+      };
+    }),
+
+  appendRevealThought: (delta) =>
+    set((state) => {
+      if (!delta) return {};
+      // Cap at ~2kb — the ticker only renders the tail.
+      const next = (state.revealThoughtStream + delta).slice(-2000);
+      return { revealThoughtStream: next };
+    }),
+
+  resetRevealStreaming: () =>
+    set({
+      revealData: null,
+      revealProgress: [],
+      revealThoughtStream: "",
+      revealStatus: "idle",
+    }),
   setThinkStatus: (status) => set({ thinkStatus: status }),
   setUserTriggeredThink: (triggered) =>
     set((state) => ({
@@ -737,6 +883,14 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
     })),
 
   clearResearchFindings: () => set({ researchFindings: [] }),
+
+  pushPendingQuestion: (question) =>
+    set((state) => {
+      if (state.pendingQuestions.some((q) => q.id === question.id)) return state;
+      return { pendingQuestions: [...state.pendingQuestions, question] };
+    }),
+
+  clearPendingQuestions: () => set({ pendingQuestions: [] }),
 
   setResearchBriefPath: (path) => set({ researchBriefPath: path }),
   setPrdPath: (path) => set({ prdPath: path }),
@@ -897,6 +1051,15 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       // Lifecycle
       devStage: state.devStage,
       maxUnlockedDevStage: state.maxUnlockedDevStage,
+      lifecycleAdvanceStatus: state.lifecycleAdvanceStatus,
+      lifecycleAdvanceError: state.lifecycleAdvanceError,
+      selectedArtifactTarget: state.selectedArtifactTarget,
+      chatMode: state.chatMode,
+      revealStatus: state.revealStatus,
+      revealData: state.revealData,
+      revealProgress: state.revealProgress,
+      revealThoughtStream: state.revealThoughtStream,
+      revealAnswer: state.revealAnswer,
       thinkStatus: state.thinkStatus,
       thinkActivity: state.thinkActivity,
       userTriggeredThink: state.userTriggeredThink,
@@ -907,6 +1070,7 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       researchBriefPath: state.researchBriefPath,
       prdPath: state.prdPath,
       trdPath: state.trdPath,
+      pendingQuestions: state.pendingQuestions,
       architecturePlan: state.architecturePlan,
       planStatus: state.planStatus,
       userTriggeredPlan: state.userTriggeredPlan,

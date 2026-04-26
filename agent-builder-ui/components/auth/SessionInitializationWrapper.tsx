@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useUserStore } from "@/hooks/use-user";
 import { userApi } from "@/app/api/user";
-import { getAccessToken, getRefreshToken } from "@/services/authCookies";
+import { getAccessToken, getRefreshToken } from "@/services/authCookies.client";
 import Image from "next/image";
 import { ruhLogoGif } from "@/shared/constants";
 import { resolveSessionGateDecision, type SessionBootstrapStatus } from "@/lib/auth/session-guard";
@@ -47,10 +47,10 @@ function SessionInitializerContentInner({ children }: SessionInitializerProps) {
   useEffect(() => {
     if (!isHydrated) return;
 
-    const checkToken = async () => {
+    const checkToken = () => {
       try {
-        const currentToken = await getAccessToken();
-        const refreshToken = await getRefreshToken();
+        const currentToken = getAccessToken();
+        const refreshToken = getRefreshToken();
         const hasCurrentToken = Boolean(currentToken);
         const hasCurrentRefreshToken = Boolean(refreshToken);
 
@@ -106,9 +106,9 @@ function SessionInitializerContentInner({ children }: SessionInitializerProps) {
   // Update store when data is fetched
   useEffect(() => {
     if (userData && shouldFetchData) {
-      const updateUserWithToken = async () => {
+      const updateUserWithToken = () => {
         try {
-          const currentToken = await getAccessToken();
+          const currentToken = getAccessToken();
           setUser({
             id: userData.id,
             fullName: userData.fullName,
@@ -186,6 +186,14 @@ function SessionInitializerContentInner({ children }: SessionInitializerProps) {
   const clearedForDecisionRef = useRef(false);
 
   useEffect(() => {
+    // Wait for hydration before acting on the gate decision. On the very first
+    // render, hasAccessToken/hasRefreshToken are still their initial `false`
+    // defaults (they're populated by checkToken AFTER isHydrated flips true).
+    // Acting here before hydration would produce a false "no cookies" verdict
+    // and redirect to /authenticate even when valid cookies exist — a full
+    // login-loop bug.
+    if (!isHydrated) return;
+
     if (decision.clearUser && !clearedForDecisionRef.current) {
       clearedForDecisionRef.current = true;
       clearUser("session gate decision");
@@ -198,7 +206,7 @@ function SessionInitializerContentInner({ children }: SessionInitializerProps) {
     if (decision.type === "redirect") {
       router.replace(decision.href);
     }
-  }, [clearUser, decision, router]);
+  }, [clearUser, decision, router, isHydrated]);
 
   // Show loading spinner until hydration and initialization are complete
   if (

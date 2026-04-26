@@ -31,6 +31,7 @@ class FakeBackendClient implements BackendClient {
 
   // ---- token storage ----
   String? storedToken;
+  String? storedRefreshToken;
 
   // ---- SSE stream stubs ----
   List<String>? streamPostLines;
@@ -155,5 +156,35 @@ class FakeBackendClient implements BackendClient {
   @override
   Future<void> clearAccessToken() async {
     storedToken = null;
+  }
+
+  @override
+  Future<void> setRefreshToken(String token) async {
+    storedRefreshToken = token;
+  }
+
+  @override
+  Future<String?> getRefreshToken() async {
+    return storedRefreshToken;
+  }
+
+  @override
+  Future<void> clearRefreshToken() async {
+    storedRefreshToken = null;
+  }
+
+  @override
+  Future<Response<List<int>>> getBytes(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    lastGetPath = path;
+    lastGetQuery = queryParameters;
+    if (getError != null) throw getError!;
+    return Response<List<int>>(
+      data: <int>[],
+      requestOptions: RequestOptions(path: path),
+      statusCode: 200,
+    );
   }
 }

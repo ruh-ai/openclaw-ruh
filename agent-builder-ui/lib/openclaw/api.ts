@@ -27,6 +27,31 @@ export interface SendToArchitectOptions {
 
 const DEFAULT_SSE_READ_TIMEOUT_MS = 180_000;
 
+// ─── Trace instrumentation ─────────────────────────────────────────────────
+// Client-side trace for diagnosing premature SSE disconnects. Enable with
+// ?trace=reveal in the URL or localStorage.setItem('reveal-trace', '1').
+// Logs every SSE event, abort signal, and stream-end cause. The trace is
+// keyed by requestId so events from concurrent streams don't interleave.
+function isTraceEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.localStorage?.getItem("reveal-trace") === "1") return true;
+    return new URLSearchParams(window.location.search).get("trace") === "reveal";
+  } catch {
+    return false;
+  }
+}
+
+function traceLog(id: string, event: string, detail?: unknown): void {
+  if (!isTraceEnabled()) return;
+  const t = ((performance?.now?.() ?? Date.now()) | 0);
+  if (detail === undefined) {
+    console.log(`[reveal-trace ${id} t=${t}] ${event}`);
+  } else {
+    console.log(`[reveal-trace ${id} t=${t}] ${event}`, detail);
+  }
+}
+
 export class BridgeApiError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -67,6 +92,19 @@ export async function sendToArchitectStreaming(
   // or when the proxy supports token-based auth via query param.
   // See: gateway-ws-adapter.ts, gatewayProxy.ts, use-gateway-ws.ts
 
+  const traceId = options?.requestId || `${sessionId.slice(-8)}-${(performance?.now?.() | 0) || Date.now()}`;
+  traceLog(traceId, "fetch.start", {
+    sessionId,
+    mode: options?.mode,
+    forgeSandboxId: options?.forgeSandboxId,
+    messageLen: message.length,
+    hasSignal: !!options?.signal,
+    signalAborted: options?.signal?.aborted ?? false,
+  });
+  options?.signal?.addEventListener("abort", () => {
+    traceLog(traceId, "signal.abort", { reason: String(options.signal?.reason ?? "unknown") });
+  }, { once: true });
+
   // HTTP SSE bridge (fallback or when no forge sandbox)
   const res = await fetch("/api/openclaw", {
     method: "POST",
@@ -83,6 +121,7 @@ export async function sendToArchitectStreaming(
       ...(options?.agentId ? { agent_id: options.agentId } : {}),
     }),
   });
+  traceLog(traceId, "fetch.headers", { status: res.status, contentType: res.headers.get("content-type") });
 
   if (!res.ok) {
     const contentType = res.headers.get("content-type") || "";
@@ -143,6 +182,11 @@ export async function sendToArchitectStreaming(
 
     try {
       const parsed = JSON.parse(eventData);
+      traceLog(traceId, `sse.${eventName}`, eventName === "delta"
+        ? { len: (parsed.text || "").length }
+        : eventName === "result"
+          ? { type: parsed?.type, contentLen: (parsed?.content || "").length }
+          : parsed);
 
       if (eventName === "status") {
         callbacks?.onStatus?.(parsed.phase, parsed.message);
@@ -191,6 +235,12 @@ export async function sendToArchitectStreaming(
           ),
         ]);
       } catch (timeoutErr) {
+        traceLog(traceId, "sse.read.error", {
+          message: (timeoutErr as Error)?.message,
+          accumulatedDeltaLen: accumulatedDeltaText.length,
+          signalAborted: options?.signal?.aborted ?? false,
+          signalReason: options?.signal?.aborted ? String(options.signal?.reason ?? "unknown") : null,
+        });
         // If we have partial data, treat as stream end rather than hard error
         if (accumulatedDeltaText) {
           console.warn("[SSE] Read timed out, returning partial response from accumulated deltas");
@@ -199,7 +249,14 @@ export async function sendToArchitectStreaming(
         throw timeoutErr;
       }
       const { done, value } = readResult;
-      if (done) break;
+      if (done) {
+        traceLog(traceId, "sse.done", {
+          hasFinalResult: !!finalResult,
+          accumulatedDeltaLen: accumulatedDeltaText.length,
+          bufferLen: buffer.length,
+        });
+        break;
+      }
 
       buffer += normalizeSseChunk(decoder.decode(value, { stream: true }));
 

@@ -83,8 +83,6 @@ export const CustomEventName = {
   WIZARD_SET_RULES: "wizard_set_rules",
   WIZARD_SET_CHANNELS: "wizard_set_channels",
   PREVIEW_SERVER_DETECTED: "preview_server_detected",
-  /** @deprecated Use AG-UI REASONING_* EventType instead. Kept for backward compatibility. */
-  REASONING: "reasoning",
   // ── Workspace & build events (from tool execution via WebSocket) ──
   /** A file was written to the agent workspace via exec. */
   FILE_WRITTEN: "file_written",
@@ -118,6 +116,16 @@ export const CustomEventName = {
   PLAN_ENV_VARS: "plan_env_vars",
   /** All plan decisions emitted — plan is complete. */
   PLAN_COMPLETE: "plan_complete",
+  // ── Checkpoint pause event (Think/Plan checkpoints) ──
+  /** The Architect has paused to ask the user a clarifying question. */
+  ASK_USER: "ask_user",
+  // ── Reveal phase events (employee profile reveal) ──
+  /** The Architect's first structured output: employee profile brief-back. */
+  EMPLOYEE_REVEAL: "employee_reveal",
+  /** Progressive reveal: one field arrives from the Architect. */
+  REVEAL_FIELD: "reveal_field",
+  /** Progressive reveal: all fields emitted — the composition is complete. */
+  REVEAL_DONE: "reveal_done",
 } as const;
 
 // ─── Event payload types ─────────────────────────────────────────────────────
@@ -199,6 +207,47 @@ export interface PlanDashboardPagesPayload {
 
 export interface PlanEnvVarsPayload {
   envVars: Array<{ key: string; label: string; description: string; required: boolean; inputType?: string; defaultValue?: string; group?: string }>;
+}
+
+// ─── Ask-user checkpoint payload ────────────────────────────────────────────
+
+export type AskUserQuestionType = "text" | "select" | "multiselect" | "boolean";
+
+export interface AskUserPayload {
+  id: string;
+  question: string;
+  type: AskUserQuestionType;
+  options?: string[];
+}
+
+// ─── Employee reveal payload ────────────────────────────────────────────────
+
+export interface EmployeeRevealPayload {
+  name: string;
+  title: string;
+  opening: string;
+  what_i_heard: string[];
+  what_i_will_own: string[];
+  what_i_wont_do: string[];
+  first_move: string;
+  clarifying_question: string;
+}
+
+// ─── Progressive reveal field payload ───────────────────────────────────────
+
+export type RevealFieldKey =
+  | "name"
+  | "title"
+  | "opening"
+  | "what_i_heard"
+  | "what_i_will_own"
+  | "what_i_wont_do"
+  | "first_move"
+  | "clarifying_question";
+
+export interface RevealFieldPayload {
+  key: RevealFieldKey;
+  value: string | string[];
 }
 
 // ─── Editor file changed payload ────────────────────────────────────────────

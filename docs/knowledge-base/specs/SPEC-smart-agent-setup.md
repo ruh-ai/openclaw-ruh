@@ -41,7 +41,7 @@ Response: `{ values: { KEY: "suggested_value" } }`
 
 ### Setup Screen (all clients)
 
-Only `user_required` inputs without values are shown prominently. AI-inferred and static-default values are collapsed in a "Smart Defaults" accordion. The chat/launch gate (`hasMissingRequiredInputs`) only blocks on `user_required` inputs.
+Only `user_required` inputs without values are shown prominently. AI-inferred and static-default values are collapsed in a "Smart Defaults" accordion. The chat/launch gate (`hasMissingRequiredInputs`) only blocks on `user_required` inputs. The setup footer must also block `Save & Continue` while required `user_required` values are missing, with an explicit remaining-count message, so the user cannot save an incomplete setup and immediately bounce back from chat.
 
 ### Launch Validation
 
@@ -49,7 +49,7 @@ Only `user_required` inputs without values are shown prominently. AI-inferred an
 
 ### Architect Prompt
 
-`PLAN_SYSTEM_INSTRUCTION` in `builder-agent.ts` now requires the Architect to classify every `envVar` with `populationStrategy`. Classification rules are embedded in the prompt.
+`PLAN_SYSTEM_INSTRUCTION` in `builder-agent.ts` now requires the Architect to classify every `envVar` with `populationStrategy`. Classification rules are embedded in the prompt, including explicit guidance that safe booleans, numeric limits, log flags, retention windows, and workspace paths should be `static_default` with `defaultValue` rather than `user_required`.
 
 ## Implementation Notes
 
@@ -87,6 +87,8 @@ Only `user_required` inputs without values are shown prominently. AI-inferred an
 ## Test Plan
 
 - [x] `agent-builder-ui/lib/agents/runtime-inputs.test.ts` — 12 tests (7 new for populationStrategy gate logic)
+- [x] `agent-builder-ui/app/(platform)/agents/[id]/__tests__/agent-id-pages.test.tsx` — setup save state blocks missing required values
+- [x] `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts` — plan prompt requires env-var population strategy/default guidance
 - [x] `ruh_app/test/models/agent_runtime_input_test.dart` — 13 tests (all new: fromJson, isFilled, isUserRequired, hasMissingRequiredInputs)
 - [ ] Backend contract test for `POST /api/agents/:id/infer-inputs`
 - [ ] E2E: Create agent → verify Architect classifies envVars → setup shows only user_required

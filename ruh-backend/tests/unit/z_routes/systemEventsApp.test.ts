@@ -150,7 +150,7 @@ mock.module('../../../src/sandboxManager', () => ({
   PREVIEW_PORTS: [],
   createOpenclawSandbox: mockCreateSandbox,
   reconfigureSandboxLlm: mock(async () => ({ ok: true, provider: 'openai', model: 'gpt-4o', logs: [] })),
-  retrofitSandboxToSharedCodex: mock(async () => ({ ok: true, model: 'openai-codex/gpt-5.4', authSource: 'Codex CLI auth' })),
+  retrofitSandboxToSharedCodex: mock(async () => ({ ok: true, model: 'openai-codex/gpt-5.5', authSource: 'Codex CLI auth' })),
   dockerExec: mock(async () => [true, 'true']),
   ensureInteractiveRuntimeServices: mock(async () => {}),
   getContainerName: (sandboxId: string) => `openclaw-${sandboxId}`,

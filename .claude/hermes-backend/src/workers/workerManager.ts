@@ -9,6 +9,7 @@ import { createEvolutionWorker } from './evolutionWorker';
 import { createFactoryWorker } from './factoryWorker';
 import { createAnalystWorker } from './analystWorker';
 import { killAllSubprocesses, activeSubprocessCount } from './subprocess';
+import { pruneStaleWorktrees, listHermesWorktrees, removeWorktree } from './worktreeManager';
 import * as workerPoolStore from '../stores/workerPoolStore';
 import * as goalStore from '../stores/goalStore';
 import * as scheduledTaskStore from '../stores/scheduledTaskStore';
@@ -45,6 +46,19 @@ export class WorkerManager {
 
     for (const [name, worker] of workers) {
       this.workerMap.set(name, worker);
+    }
+
+    // Clean up stale hermes worktrees from previous runs
+    try {
+      const config = getConfig();
+      if (config.enableWorktreeIsolation) {
+        const pruned = await pruneStaleWorktrees(config.projectRoot);
+        if (pruned > 0) {
+          console.log(`[hermes:workers] Pruned ${pruned} stale worktrees`);
+        }
+      }
+    } catch (err) {
+      console.warn('[hermes:workers] Stale worktree cleanup failed:', err);
     }
 
     this.running = true;
@@ -320,6 +334,25 @@ export class WorkerManager {
       console.log(`[hermes:workers] Force-killing ${activeSubprocessCount()} remaining subprocesses`);
       await killAllSubprocesses();
     }
+
+    // 3b. Clean up any remaining hermes worktrees
+    try {
+      const config = getConfig();
+      if (config.enableWorktreeIsolation) {
+        const remaining = await listHermesWorktrees(config.projectRoot);
+        for (const wtPath of remaining) {
+          try {
+            await removeWorktree(
+              { worktreePath: wtPath, branchName: '', baseBranch: '', created: true },
+              { deleteBranch: true },
+            );
+          } catch { /* best effort */ }
+        }
+        if (remaining.length > 0) {
+          console.log(`[hermes:workers] Cleaned up ${remaining.length} worktrees during shutdown`);
+        }
+      }
+    } catch { /* best effort */ }
 
     // 4. Close workers
     await Promise.all(workers.map(w => w.close()));

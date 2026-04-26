@@ -16,6 +16,7 @@ import { isRuntimeInputFilled, mergeRuntimeInputDefinitions, enrichRuntimeInputs
 import { generateSkillTests, skillTestsToEvalTasks } from "@/lib/openclaw/skill-test-generator";
 import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
+  buildReviewStateFromArchitecturePlan,
   evaluateCoPilotDeployReadiness,
   hasPurposeMetadata,
   getSelectedUnresolvedSkillIds,
@@ -29,6 +30,26 @@ import {
 import { generateDiscoveryQuestions, generateSkillsFromArchitect } from "../../_config/generate-skills";
 import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { ArchitectSandboxInfo } from "@/hooks/use-architect-sandbox";
+import type { AgentDevStage, ArchitecturePlan } from "@/lib/openclaw/types";
+import type { BuildReport } from "@/lib/openclaw/types";
+
+/**
+ * True when the plan object was synthesized from `normalizePlan({})` — every
+ * array is empty and every optional object is null. Treat these as "no plan"
+ * so we overwrite them with the real one from the sandbox file.
+ */
+function isEmptyArchitecturePlan(plan: ArchitecturePlan | null): boolean {
+  if (!plan) return false;
+  return (
+    (plan.skills?.length ?? 0) === 0
+    && (plan.workflow?.steps?.length ?? 0) === 0
+    && (plan.integrations?.length ?? 0) === 0
+    && (plan.apiEndpoints?.length ?? 0) === 0
+    && (plan.dashboardPages?.length ?? 0) === 0
+    && (plan.envVars?.length ?? 0) === 0
+    && !plan.dataSchema
+  );
+}
 
 interface CoPilotLayoutProps {
   existingAgent: SavedAgent | null;
@@ -91,6 +112,7 @@ export function CoPilotLayout({
     setUserTriggeredBuild,
     pushBuildActivity,
     setBuildProgress,
+    setBuildReport,
   } = coPilotStore;
   const [skillRegistry, setSkillRegistry] = useState<SkillRegistryEntry[]>([]);
   const lastGeneratedSignatureRef = useRef<string | null>(null);
@@ -315,6 +337,13 @@ export function CoPilotLayout({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, description]);
 
+  // ── Reveal trigger lives at page-level ───────────────────────────────────
+  // The reveal screen is rendered by page.tsx BEFORE CoPilotLayout mounts,
+  // so the reveal architect call is authored there. A duplicate trigger here
+  // (kept historically) races with the page-level fire in the recovery flow
+  // and produces double architect calls — see the gateway logs showing two
+  // WS connections opened milliseconds apart. Single source of truth.
+
   // ── Workspace rehydration: restore Think/Plan state from workspace files ──
   const rehydratedRef = useRef(false);
   useEffect(() => {
@@ -323,7 +352,29 @@ export function CoPilotLayout({
     rehydratedRef.current = true;
 
     // Non-blocking: try reading workspace files to restore state after page refresh
-    import("@/lib/openclaw/workspace-writer").then(({ readWorkspaceFile }) => {
+    Promise.all([
+      import("@/lib/openclaw/workspace-writer"),
+      import("@/lib/openclaw/plan-formatter"),
+    ]).then(([{ readWorkspaceFile }, { normalizePlan }]) => {
+      const parseDiscoveryDoc = (md: string) => {
+        const lines = md.split("\n");
+        const title = lines[0]?.replace(/^#\s+/, "") ?? "Document";
+        const sections: Array<{ heading: string; content: string }> = [];
+        let heading = "";
+        let content: string[] = [];
+        for (const line of lines.slice(1)) {
+          if (line.startsWith("## ")) {
+            if (heading) sections.push({ heading, content: content.join("\n").trim() });
+            heading = line.replace(/^##\s+/, "");
+            content = [];
+          } else {
+            content.push(line);
+          }
+        }
+        if (heading) sections.push({ heading, content: content.join("\n").trim() });
+        return { title, sections };
+      };
+
       Promise.all([
         readWorkspaceFile(sandboxId, ".openclaw/discovery/PRD.md"),
         readWorkspaceFile(sandboxId, ".openclaw/discovery/TRD.md"),
@@ -335,16 +386,30 @@ export function CoPilotLayout({
         if (prd) coPilotStore.setPrdPath(".openclaw/discovery/PRD.md");
         if (trd) coPilotStore.setTrdPath(".openclaw/discovery/TRD.md");
 
-        // If all think docs exist and think hasn't progressed, mark as ready
-        if (prd && trd && coPilotStore.thinkStatus === "idle") {
+        // If all Think docs exist, prefer the workspace as source of truth.
+        // A dropped WebSocket can leave the UI stuck at "generating" even after
+        // the architect wrote PRD/TRD successfully.
+        if (prd && trd && !coPilotStore.discoveryDocuments) {
+          coPilotStore.setDiscoveryDocuments({
+            prd: parseDiscoveryDoc(prd),
+            trd: parseDiscoveryDoc(trd),
+          });
+        }
+        const canRecoverThink = coPilotStore.thinkStatus !== "approved" && coPilotStore.thinkStatus !== "done";
+        if (prd && trd && canRecoverThink) {
           coPilotStore.setThinkStep("complete");
           coPilotStore.setThinkStatus("ready");
+          coPilotStore.setUserTriggeredThink(false);
         }
 
-        // Rehydrate Plan if architecture.json exists
-        if (planJson && !coPilotStore.architecturePlan) {
+        // Rehydrate Plan if architecture.json exists.
+        // The on-disk shape matches ArchitecturePlan loosely — normalize so
+        // missing arrays/objects get filled with [] / null and the UI can
+        // render without defensive fallbacks.
+        const hasEmptyPlan = isEmptyArchitecturePlan(coPilotStore.architecturePlan);
+        if (planJson && (!coPilotStore.architecturePlan || hasEmptyPlan)) {
           try {
-            const plan = JSON.parse(planJson);
+            const plan = normalizePlan(JSON.parse(planJson) as Record<string, unknown>);
             coPilotStore.setArchitecturePlan(plan);
             // If the plan was successfully parsed, mark plan status as ready
             // so the UI shows the plan content with the "Approve & Start Build"
@@ -374,6 +439,42 @@ export function CoPilotLayout({
       coPilotStore.setAgentSandboxId(activeSandbox.sandbox_id);
     }
   }, [activeSandbox?.sandbox_id, coPilotStore.agentSandboxId, coPilotStore]);
+
+  const confirmForgeStage = useCallback(async (stage: AgentDevStage): Promise<boolean> => {
+    const agentId = existingAgent?.id;
+    if (!agentId) {
+      useCoPilotStore.setState({
+        lifecycleAdvanceStatus: "failed",
+        lifecycleAdvanceError: "No agent ID is available for lifecycle advancement.",
+      });
+      return false;
+    }
+    useCoPilotStore.setState({ lifecycleAdvanceStatus: "saving", lifecycleAdvanceError: null });
+    try {
+      const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+      const res = await fetchBackendWithAuth(`${apiBase}/api/agents/${agentId}/forge/stage`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage }),
+      });
+      const payload = await res.json().catch(() => ({})) as { forge_stage?: string; detail?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(payload.detail ?? payload.message ?? `Stage update failed (${res.status})`);
+      }
+      if (payload.forge_stage !== stage) {
+        throw new Error("Stage update returned an unexpected lifecycle stage.");
+      }
+      useCoPilotStore.setState({ lifecycleAdvanceStatus: "idle", lifecycleAdvanceError: null });
+      return true;
+    } catch (error) {
+      useCoPilotStore.setState({
+        lifecycleAdvanceStatus: "failed",
+        lifecycleAdvanceError: error instanceof Error ? error.message : "Stage update rejected.",
+      });
+      return false;
+    }
+  }, [existingAgent?.id]);
 
   // ── Step 2: When discovery is complete/skipped, trigger skill generation ──
   const buildRetryCountRef = useRef(0);
@@ -469,7 +570,9 @@ export function CoPilotLayout({
             }
           }
 
-          setDevStage("review");
+          void confirmForgeStage("review").then((confirmed) => {
+            if (confirmed) setDevStage("review");
+          });
         })
         .catch((error) => {
           if (latestPurposeSignatureRef.current !== signature) return;
@@ -498,26 +601,61 @@ export function CoPilotLayout({
           setBuildStatus("failed");
         });
     },
-    [activeSandbox?.sandbox_id, onBuilderStateChange, pushBuildActivity, setBuildProgress, setBuildStatus, setDevStage, setSkillGeneration, setSkillGraph, updateFields],
+    [activeSandbox?.sandbox_id, confirmForgeStage, onBuilderStateChange, pushBuildActivity, setBuildProgress, setBuildStatus, setDevStage, setSkillGeneration, setSkillGraph, updateFields],
   );
 
   // Called when user completes discovery (Think stage) or clicks "Skip"
-  const handleDiscoveryComplete = useCallback(() => {
-    setThinkStatus("approved");
-
-    // Persist PRD/TRD to workspace so they survive refresh and ship with the template
+  const handleDiscoveryComplete = useCallback(async () => {
     const sandboxId = activeSandbox?.sandbox_id;
     const docs = coPilotStore.discoveryDocuments;
-    if (sandboxId && docs) {
-      import("@/lib/openclaw/plan-formatter").then(({ formatPRD, formatTRD }) =>
-        import("@/lib/openclaw/workspace-writer").then(({ writeWorkspaceFiles }) =>
-          writeWorkspaceFiles(sandboxId, [
-            { path: ".openclaw/discovery/PRD.md", content: formatPRD(docs.prd) },
-            { path: ".openclaw/discovery/TRD.md", content: formatTRD(docs.trd) },
-          ]).catch((err) => console.warn("[CoPilot] Failed to persist discovery docs:", err)),
-        ),
-      );
+
+    if (!docs?.prd || !docs?.trd) {
+      console.warn("[CoPilot] Refusing to start Plan without approved PRD/TRD documents.");
+      setThinkStatus("failed");
+      useCoPilotStore.setState({
+        lifecycleAdvanceStatus: "failed",
+        lifecycleAdvanceError: "Generate and approve PRD/TRD documents before planning.",
+      });
+      return;
     }
+
+    if (!sandboxId) {
+      console.warn("[CoPilot] Refusing to start Plan without a forge sandbox.");
+      setThinkStatus("failed");
+      useCoPilotStore.setState({
+        lifecycleAdvanceStatus: "failed",
+        lifecycleAdvanceError: "Agent workspace is not ready yet.",
+      });
+      return;
+    }
+
+    // Persist PRD/TRD to workspace before advancing forge_stage. Otherwise a
+    // stale in-memory document can move the backend to Plan with no artifacts.
+    try {
+      const [{ formatPRD, formatTRD }, { writeWorkspaceFiles }] = await Promise.all([
+        import("@/lib/openclaw/plan-formatter"),
+        import("@/lib/openclaw/workspace-writer"),
+      ]);
+      await writeWorkspaceFiles(sandboxId, [
+        { path: ".openclaw/discovery/PRD.md", content: formatPRD(docs.prd) },
+        { path: ".openclaw/discovery/TRD.md", content: formatTRD(docs.trd) },
+      ]);
+      coPilotStore.setPrdPath(".openclaw/discovery/PRD.md");
+      coPilotStore.setTrdPath(".openclaw/discovery/TRD.md");
+    } catch (err) {
+      console.warn("[CoPilot] Failed to persist discovery docs:", err);
+      setThinkStatus("failed");
+      useCoPilotStore.setState({
+        lifecycleAdvanceStatus: "failed",
+        lifecycleAdvanceError: "Could not save PRD/TRD into the agent workspace.",
+      });
+      return;
+    }
+
+    setThinkStatus("approved");
+
+    const stageConfirmed = await confirmForgeStage("plan");
+    if (!stageConfirmed) return;
 
     setDevStage("plan");
     setPlanStatus("generating");
@@ -534,7 +672,10 @@ export function CoPilotLayout({
     }
     if (forgeSandboxId) {
       const agentId = existingAgent?.id;
-      import("@/lib/openclaw/api").then(({ sendToArchitectStreaming }) => {
+      Promise.all([
+        import("@/lib/openclaw/api"),
+        import("@/lib/openclaw/ag-ui/builder-agent"),
+      ]).then(([{ sendToArchitectStreaming }, { PLAN_SYSTEM_INSTRUCTION }]) => {
         let planPrompt = "Generate the architecture plan for this agent.";
         if (docs) {
           const prdSummary = docs.prd.sections.map((s: { heading: string; content: string }) => `### ${s.heading}\n${s.content}`).join("\n\n");
@@ -542,13 +683,13 @@ export function CoPilotLayout({
           planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
         }
         sendToArchitectStreaming(
-          `agent:main:${forgeSandboxId}`,
+          `agent:architect:${forgeSandboxId}`,
           planPrompt,
           {
             onDelta: () => {},
             onStatus: () => {},
           },
-          { forgeSandboxId, agentId: agentId ?? undefined },
+          { forgeSandboxId, agentId: agentId ?? undefined, soulOverride: PLAN_SYSTEM_INSTRUCTION },
         ).then(async () => {
           // Read architecture.json from workspace
           try {
@@ -576,7 +717,7 @@ export function CoPilotLayout({
         });
       });
     }
-  }, [setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments, coPilotStore]);
+  }, [confirmForgeStage, setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments, coPilotStore]);
 
   // Called when user approves Plan stage — triggers v4 orchestrator build
   const handlePlanApproved = useCallback(async () => {
@@ -587,6 +728,9 @@ export function CoPilotLayout({
     }
 
     setPlanStatus("approved");
+    const stageConfirmed = await confirmForgeStage("build");
+    if (!stageConfirmed) return;
+
     setDevStage("build");
     setBuildStatus("building");
     setUserTriggeredBuild(true);
@@ -622,6 +766,7 @@ export function CoPilotLayout({
       const decoder = new TextDecoder();
       let buffer = "";
       let buildDone = false;
+      let terminalEventSeen = false;
 
       while (!buildDone) {
         const { done, value } = await reader.read();
@@ -632,11 +777,25 @@ export function CoPilotLayout({
 
         for (const block of events) {
           if (!block.trim()) continue;
-          let eventData = "";
+          let eventName = "";
+          const eventDataLines: string[] = [];
           for (const line of block.split("\n")) {
-            if (line.startsWith("data: ")) eventData = line.slice(6);
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            if (line.startsWith("data:")) eventDataLines.push(line.slice(5).trimStart());
           }
+          const eventData = eventDataLines.join("\n");
           if (!eventData) continue;
+
+          if (eventName === "done") {
+            buildDone = true;
+            if (!terminalEventSeen) {
+              const message = "Build stream ended before completion.";
+              pushBuildActivity({ type: "tool", label: message });
+              setSkillGeneration("error", message);
+              setBuildStatus("failed");
+            }
+            continue;
+          }
 
           try {
             const evt = JSON.parse(eventData) as Record<string, unknown>;
@@ -664,56 +823,112 @@ export function CoPilotLayout({
               case "setup_progress":
                 pushBuildActivity({ type: "tool", label: `Setup: ${String(evt.message ?? "")}` });
                 break;
+              case "build_report": {
+                const report = evt.report as BuildReport;
+                setBuildReport(report);
+                if (report.readiness === "blocked") {
+                  setBuildStatus("failed");
+                  pushBuildActivity({
+                    type: "tool",
+                    label: report.blockers?.[0] ?? "Build report blocked progression.",
+                  });
+                } else {
+                  setBuildStatus("done");
+                  pushBuildActivity({
+                    type: "tool",
+                    label: `Build report ready: ${report.readiness ?? "ready"}`,
+                  });
+                }
+                break;
+              }
               case "build_complete": {
                 buildDone = true;
+                terminalEventSeen = true;
                 const manifest = evt.manifest as { tasks: Array<{ specialist: string; status: string; files: string[] }> };
+                coPilotStore.setBuildManifest(evt.manifest as import("@/lib/openclaw/types").BuildManifest);
                 coPilotStore.setAgentSandboxId(activeSandbox?.sandbox_id ?? null);
+                const currentReport = useCoPilotStore.getState().buildReport;
 
-                // Extract skill graph from plan for Review stage
-                if (architecturePlan) {
-                  const nodes = architecturePlan.skills.map((s) => ({
-                    skill_id: s.id,
-                    name: s.name,
-                    description: s.description,
-                    status: "generated" as const,
-                    source: "custom" as const,
-                    depends_on: s.dependencies,
-                    requires_env: s.envVars,
-                    skill_md: s.skillMd ?? "",
-                  }));
-                  const workflow = architecturePlan.workflow
-                    ? {
-                        name: "main-workflow",
-                        description: `${trimmedName} workflow`,
-                        steps: architecturePlan.workflow.steps.map((step, i) => ({
-                          id: `step-${i}`,
-                          action: "execute" as const,
-                          skill: step.skillId,
-                          wait_for: i > 0 ? [architecturePlan.workflow.steps[i - 1].skillId] : [],
-                        })),
-                      }
-                    : null;
-                  setSkillGraph(nodes, workflow, []);
-                  onBuilderStateChange({ name: trimmedName, description: trimmedDescription, skillGraph: nodes, workflow, systemName: trimmedName });
+                // Extract skill graph from the latest plan for Review stage. The
+                // stream callback can outlive the render that created it, so read
+                // the store first and fall back to the captured value.
+                let planForReview = useCoPilotStore.getState().architecturePlan ?? architecturePlan;
+                if (!planForReview && activeSandbox?.sandbox_id) {
+                  try {
+                    const [{ readWorkspaceFile }, { normalizePlan }] = await Promise.all([
+                      import("@/lib/openclaw/workspace-writer"),
+                      import("@/lib/openclaw/plan-formatter"),
+                    ]);
+                    const planJson = await readWorkspaceFile(activeSandbox.sandbox_id, ".openclaw/plan/architecture.json");
+                    if (planJson) {
+                      planForReview = normalizePlan(JSON.parse(planJson) as Record<string, unknown>);
+                      coPilotStore.setArchitecturePlan(planForReview);
+                    }
+                  } catch {
+                    // The Review screen will show the empty state if no plan can be recovered.
+                  }
+                }
+
+                if (planForReview) {
+                  const reviewState = buildReviewStateFromArchitecturePlan({
+                    plan: planForReview,
+                    manifest,
+                    agentName: trimmedName,
+                  });
+                  setSkillGraph(reviewState.nodes, reviewState.workflow, []);
+                  for (const skillId of reviewState.builtSkillIds) {
+                    coPilotStore.markSkillBuilt(skillId);
+                  }
+                  if (reviewState.nodes.length > 0) {
+                    setSkillGeneration("ready");
+                  }
+                  onBuilderStateChange({
+                    name: trimmedName,
+                    description: trimmedDescription,
+                    skillGraph: reviewState.nodes,
+                    workflow: reviewState.workflow,
+                    systemName: trimmedName,
+                  });
                 }
 
                 const allDone = manifest?.tasks?.every((t) => t.status === "done") ?? false;
-                if (allDone) {
+                if (currentReport?.readiness === "blocked") {
+                  setBuildStatus("failed");
+                  pushBuildActivity({ type: "tool", label: "Build complete, but readiness is blocked. Check the build report." });
+                } else if (allDone) {
                   setBuildStatus("done");
-                  setDevStage("review");
+                  if (await confirmForgeStage("review")) {
+                    setDevStage("review");
+                  }
                 } else {
                   setBuildStatus("done");
-                  setDevStage("review");
+                  if (await confirmForgeStage("review")) {
+                    setDevStage("review");
+                  }
                   pushBuildActivity({ type: "tool", label: "Build complete — some tasks had issues. Check Review." });
                 }
                 break;
               }
               case "error":
-                pushBuildActivity({ type: "tool", label: `Error: ${evt.message}` });
+                terminalEventSeen = true;
+                buildDone = true;
+                {
+                  const message = String(evt.message ?? evt.error ?? "Build failed.");
+                  pushBuildActivity({ type: "tool", label: `Error: ${message}` });
+                  setSkillGeneration("error", message);
+                  setBuildStatus("failed");
+                }
                 break;
             }
           } catch { /* skip unparseable SSE */ }
         }
+      }
+
+      if (!terminalEventSeen) {
+        const message = "Build stream ended before completion.";
+        pushBuildActivity({ type: "tool", label: message });
+        setSkillGeneration("error", message);
+        setBuildStatus("failed");
       }
 
       try { await reader.cancel(); } catch { /* ignore */ }
@@ -721,7 +936,7 @@ export function CoPilotLayout({
       setSkillGeneration("error", error instanceof Error ? error.message : "Build failed.");
       setBuildStatus("failed");
     }
-  }, [name, description, architecturePlan, existingAgent, activeSandbox, coPilotStore, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, onBuilderStateChange]);
+  }, [name, description, architecturePlan, existingAgent, activeSandbox, coPilotStore, confirmForgeStage, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, setBuildReport, onBuilderStateChange]);
 
   // Called when user retries a failed build — re-triggers handlePlanApproved
   const handleRetryBuild = useCallback(() => {

@@ -80,6 +80,20 @@ export function parseJsonOutput(output: string): unknown {
       }
     }
   }
+  // Fallback: try lines that start with a log prefix followed by JSON.
+  // OpenClaw v2026.4.14+ may prefix JSON output with log lines like
+  // "[subsystem] synced... { ... }". Filter those out and retry.
+  const cleanedLines = lines.filter(
+    (l) => !l.match(/^\[[\w/.-]+\]/) && l.trim().length > 0,
+  );
+  if (cleanedLines.length > 0 && cleanedLines.length < lines.length) {
+    const cleaned = cleanedLines.join('\n').trim();
+    if (cleaned.startsWith('{') || cleaned.startsWith('[')) {
+      try {
+        return JSON.parse(cleaned);
+      } catch { /* fall through */ }
+    }
+  }
   throw new Error(`No JSON found in output: ${output.slice(0, 200)}`);
 }
 

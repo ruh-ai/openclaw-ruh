@@ -11,6 +11,16 @@ describe("classifySandboxHealth", () => {
     expect(classifySandboxHealth({ container_running: true, status: "running" })).toBe("running");
   });
 
+  test("treats backend drift status with reachable gateway as running", () => {
+    expect(
+      classifySandboxHealth({
+        container_running: true,
+        status: "live",
+        gateway_reachable: true,
+      }),
+    ).toBe("running");
+  });
+
   test("treats a stopped container as stopped", () => {
     expect(classifySandboxHealth({ container_running: false, status: "running" })).toBe("stopped");
   });

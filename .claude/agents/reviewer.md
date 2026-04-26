@@ -98,3 +98,6 @@ The Hermes learning worker parses these markers from your output and uses them t
 
 ## Learned Skills
 - analysis: HERMES-CODEX-SMOKE
+
+## Learned Skills
+- unknown: 

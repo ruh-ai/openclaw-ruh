@@ -83,7 +83,7 @@ async function ensureRepo(
     headers: { Authorization: `token ${token}`, "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       name: repoName,
-      private: true,
+      private: false,
       description,
       auto_init: false,
     }),
@@ -100,7 +100,7 @@ async function ensureRepo(
     headers: { Authorization: `token ${token}`, "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       name: repoName,
-      private: true,
+      private: false,
       description,
       auto_init: false,
     }),

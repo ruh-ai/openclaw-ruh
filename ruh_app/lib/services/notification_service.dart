@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'logger.dart';
@@ -36,10 +35,15 @@ class NotificationService {
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
 
+    const linux = LinuxInitializationSettings(
+      defaultActionName: 'Open Ruh',
+    );
+
     const settings = InitializationSettings(
       macOS: macOS,
       iOS: iOS,
       android: android,
+      linux: linux,
     );
 
     try {
@@ -58,24 +62,50 @@ class NotificationService {
   // Public notification methods
   // ---------------------------------------------------------------------------
 
+  /// Callback invoked when a notification tap should navigate the app.
+  /// Set this from the router layer so the notification service can trigger
+  /// in-app navigation without depending on GoRouter directly.
+  static void Function(String route)? onNavigate;
+
+  /// Whether notifications are enabled by the user. Set from the settings
+  /// provider. Defaults to true.
+  bool enabled = true;
+
   /// Show a notification for task completion.
-  Future<void> notifyTaskComplete(String agentName, String summary) async {
+  Future<void> notifyTaskComplete(
+    String agentName,
+    String summary, {
+    String? agentId,
+  }) async {
     final truncated = summary.length > 100
         ? '${summary.substring(0, 100)}…'
         : summary;
-    await _show(title: '✓ $agentName finished', body: truncated);
+    await _show(
+      title: '✓ $agentName finished',
+      body: truncated,
+      payload: agentId != null ? 'chat:$agentId' : null,
+    );
   }
 
   /// Show a notification for agent error.
-  Future<void> notifyAgentError(String agentName, String error) async {
-    await _show(title: '⚠ $agentName error', body: error);
+  Future<void> notifyAgentError(
+    String agentName,
+    String error, {
+    String? agentId,
+  }) async {
+    await _show(
+      title: '⚠ $agentName error',
+      body: error,
+      payload: agentId != null ? 'chat:$agentId' : null,
+    );
   }
 
   /// Show a notification for sandbox going offline.
-  Future<void> notifySandboxDown(String sandboxName) async {
+  Future<void> notifySandboxDown(String sandboxName, {String? agentId}) async {
     await _show(
       title: 'Sandbox offline',
       body: '$sandboxName is no longer reachable',
+      payload: agentId != null ? 'chat:$agentId' : null,
     );
   }
 
@@ -85,9 +115,12 @@ class NotificationService {
 
   int _nextId = 0;
 
-  Future<void> _show({required String title, required String body}) async {
-    if (!_initialized) {
-      Log.w('Notifications', 'Notification service not initialized, skipping');
+  Future<void> _show({
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    if (!_initialized || !enabled) {
       return;
     }
 
@@ -101,22 +134,34 @@ class NotificationService {
 
     const darwinDetails = DarwinNotificationDetails();
 
+    const linuxDetails = LinuxNotificationDetails();
+
     const details = NotificationDetails(
       android: androidDetails,
       iOS: darwinDetails,
       macOS: darwinDetails,
+      linux: linuxDetails,
     );
 
     try {
-      await _plugin.show(_nextId++, title, body, details);
+      await _plugin.show(_nextId++, title, body, details, payload: payload);
     } catch (e, st) {
       Log.e('Notifications', 'Failed to show notification', e, st);
     }
   }
 
   void _onNotificationTapped(NotificationResponse response) {
-    if (kDebugMode) {
-      Log.d('Notifications', 'Tapped notification: ${response.payload}');
+    final payload = response.payload;
+    Log.d('Notifications', 'Tapped notification: $payload');
+
+    if (payload == null || payload.isEmpty) return;
+
+    // Payload format: "chat:<agentId>"
+    if (payload.startsWith('chat:')) {
+      final agentId = payload.substring(5);
+      if (agentId.isNotEmpty) {
+        onNavigate?.call('/chat/$agentId');
+      }
     }
   }
 }

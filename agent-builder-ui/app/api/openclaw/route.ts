@@ -36,28 +36,6 @@ const AUTH_ME_PATH = "/api/auth/me";
 
 type StreamEventSender = (event: string, data: object) => void;
 
-// Cache forge gateways that reject WS auth so we don't retry every request.
-// Key = sandbox_id, value = timestamp of last failure. Expires after 10 min.
-const _forgeWsAuthFailures = new Map<string, number>();
-const FORGE_WS_AUTH_CACHE_TTL_MS = 10 * 60 * 1000;
-
-function shouldSkipForgeWs(sandboxId: string): boolean {
-  const failedAt = _forgeWsAuthFailures.get(sandboxId);
-  if (!failedAt) return false;
-  if (Date.now() - failedAt > FORGE_WS_AUTH_CACHE_TTL_MS) {
-    _forgeWsAuthFailures.delete(sandboxId);
-    return false;
-  }
-  return true;
-}
-
-class AuthError extends Error {
-  constructor(msg: string) {
-    super(msg);
-    this.name = "AuthError";
-  }
-}
-
 class RequestAbortedError extends Error {
   constructor(msg = "Request aborted by client") {
     super(msg);
@@ -122,18 +100,27 @@ function mapLifecyclePhase(phase: string): LifecycleEvent {
 
 interface GatewayCredentials {
   url: string;
-  token: string;
   /** Origin header to send when connecting. Forge sandboxes need an origin from their allowed list. */
   origin?: string;
 }
 
 /**
- * Resolve gateway credentials for a forge sandbox by querying the backend.
- * Converts HTTP URL to WebSocket URL for the gateway connection.
+ * Resolve gateway credentials for a forge sandbox.
+ *
+ * Routes through the backend's WebSocket proxy at /ws/gateway/{sandboxId}
+ * instead of connecting directly to the container gateway. The backend proxy
+ * handles auth (gateway_token) server-side and supports the full OpenClaw
+ * gateway protocol including tool execution, file writes, and lifecycle events.
+ *
+ * Direct WS to the container fails with token_mismatch because the DB stores
+ * the config auth token while the gateway's WS connect method expects the
+ * device operator token. The backend proxy resolves this internally.
  */
 async function resolveForgeGateway(
-  forgeSandboxId: string
+  forgeSandboxId: string,
+  cookieHeader?: string,
 ): Promise<GatewayCredentials> {
+  // Verify the sandbox exists and has a gateway
   const res = await fetch(`${BACKEND_URL}/api/sandboxes/${forgeSandboxId}`);
   if (!res.ok) {
     throw new Error(
@@ -149,56 +136,34 @@ async function resolveForgeGateway(
   }
 
   // Health-check: verify the gateway is reachable before returning.
-  // If the container is running but the gateway process crashed, attempt
-  // to restart it via the backend before giving up.
   try {
     const probe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
     if (!probe.ok) throw new Error(`probe status ${probe.status}`);
-  } catch (probeErr) {
-    console.warn(
-      `[Gateway] Forge sandbox ${forgeSandboxId} gateway at ${httpUrl} is unreachable, attempting restart...`,
-    );
-    // Ask the backend to restart the gateway inside the sandbox container.
-    // POST /api/sandboxes/:id/gateway/restart is the standard restart endpoint.
+  } catch {
+    // Try restart
     try {
       const restartRes = await fetch(
         `${BACKEND_URL}/api/sandboxes/${forgeSandboxId}/gateway/restart`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(20000),
-        },
+        { method: "POST", signal: AbortSignal.timeout(20000) },
       );
       if (restartRes.ok) {
-        // Wait a few seconds for the gateway to come up, then re-probe
         await new Promise((r) => setTimeout(r, 5000));
-        const reProbe = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-        if (!reProbe.ok) {
-          throw new Error(`Gateway still unreachable after restart (status ${reProbe.status})`);
-        }
-      } else {
-        throw new Error(`Restart endpoint returned ${restartRes.status}`);
       }
-    } catch (restartErr) {
-      throw new Error(
-        `Forge sandbox ${forgeSandboxId} gateway is unreachable at ${httpUrl} and restart failed: ${
-          restartErr instanceof Error ? restartErr.message : String(restartErr)
-        }`
-      );
-    }
+    } catch { /* ignore restart failure */ }
   }
 
-  // Convert HTTP URL to WebSocket URL
-  const wsUrl = httpUrl
-    .replace(/^https:/, "wss:")
-    .replace(/^http:/, "ws:");
-  // Derive an origin the forge sandbox will accept (localhost sandboxes allow http://localhost)
-  const parsedUrl = new URL(httpUrl);
-  const forgeOrigin = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+  // Route through the backend WebSocket proxy instead of direct connection.
+  // The proxy at /ws/gateway/{sandboxId} handles gateway auth server-side
+  // using the stored gateway_token — no token mismatch issues.
+  const backendWsUrl = BACKEND_URL.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const proxyUrl = `${backendWsUrl}/ws/gateway/${forgeSandboxId}`;
+
   return {
-    url: wsUrl,
-    token: record.gateway_token || "",
-    origin: forgeOrigin,
+    url: proxyUrl,
+    // The backend proxy authenticates via the accessToken cookie
+    // (forwarded in the WS Cookie header by forwardToGateway) and
+    // handles the gateway_token handshake server-side.
+    origin: "http://localhost",
   };
 }
 
@@ -299,278 +264,39 @@ export async function POST(req: NextRequest) {
               ],
             },
             async (trace) => {
-              // Forge sandboxes: use the backend's WebSocket bridge endpoint
-              // which connects to the container gateway from localhost (bypasses
-              // device identity requirement). The backend handles auth, tool
-              // approval, and streams events back as SSE.
-              // Forge sandbox: try direct WebSocket (real tool events), fall
-              // back to HTTP chat proxy if gateway rejects auth. The WS probe
-              // is a single fast attempt — no retries — so fallback is instant.
+              // Forge sandboxes: use the backend's WebSocket bridge.
+              // Everything-WS mandate: there is no HTTP fallback.
+              // If the WS connection fails, the error surfaces loudly to the
+              // caller rather than being papered over by a parallel HTTP path.
               if (typeof forge_sandbox_id === "string" && forge_sandbox_id) {
                 trace.recordEvent("openclaw.bridge.forge", {
                   forge_sandbox_id,
                 });
 
-                // ── Direct WebSocket (real tool events) ──
-                // If the gateway accepts WS, we get tool_start/tool_end/file_written
-                // events in real time. Falls back to HTTP proxy on auth failure.
-                // Auth failures are cached so subsequent requests skip the WS probe.
-                // Clear stale WS failures for copilot mode (build stage) so tool
-                // events flow through — the HTTP fallback has no real-time events.
-                if (resolvedMode === "copilot" && _forgeWsAuthFailures.has(forge_sandbox_id)) {
-                  _forgeWsAuthFailures.delete(forge_sandbox_id);
-                }
-                if (!shouldSkipForgeWs(forge_sandbox_id)) {
-                  let forgeGateway: GatewayCredentials | null = null;
-                  try {
-                    forgeGateway = await resolveForgeGateway(forge_sandbox_id);
-                  } catch {
-                    // Sandbox unreachable — fall through to HTTP
-                  }
-
-                  if (forgeGateway) {
-                    try {
-                      const forgeTimeout = typeof timeout_ms === "number"
-                        ? Math.min(timeout_ms, 600_000)
-                        : PER_ATTEMPT_TIMEOUT_MS;
-                      const wsResponse = await forwardToGateway(
-                        forgeGateway.url,
-                        session_id,
-                        message,
-                        resolvedAgent,
-                        resolvedMode,
-                        typeof soul_override === "string" ? soul_override : undefined,
-                        onLifecycleEvent,
-                        send,
-                        requestId,
-                        req.signal,
-                        forgeGateway.token,
-                        forgeGateway.origin,
-                        forgeTimeout,
-                        trace,
-                      );
-                      return wsResponse;
-                    } catch (wsErr) {
-                      const msg = wsErr instanceof Error ? wsErr.message : "";
-                      if (msg.includes("Auth failed") || msg.includes("device identity")) {
-                        _forgeWsAuthFailures.set(forge_sandbox_id, Date.now());
-                      }
-                      console.warn(`[Gateway] Forge WS failed, falling back to HTTP: ${msg.slice(0, 120)}`);
-                      trace.recordEvent("openclaw.bridge.forge_ws_fallback", { reason: msg.slice(0, 100) });
-                    }
-                  }
-                }
-
-                // ── HTTP chat proxy fallback ──
-                onLifecycleEvent({ phase: "connecting", message: "Connecting to agent..." });
-
-                const sessionKey = buildGatewaySessionKey(resolvedAgent, session_id, resolvedMode);
-                const chatRes = await fetch(
-                  `${BACKEND_URL}/api/sandboxes/${forge_sandbox_id}/chat`,
-                  {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      ...(sessionKey ? { "x-openclaw-session-key": sessionKey } : {}),
-                    },
-                    body: JSON.stringify({
-                      model: "openclaw",
-                      stream: true,
-                      messages: [
-                        ...(typeof soul_override === "string" ? [{ role: "system", content: soul_override }] : []),
-                        { role: "user", content: message },
-                      ],
-                      session_key: sessionKey,
-                    }),
-                    signal: AbortSignal.timeout(
-                      typeof timeout_ms === "number" ? Math.min(timeout_ms, 600_000) : PER_ATTEMPT_TIMEOUT_MS
-                    ),
-                  },
+                const forgeGateway = await resolveForgeGateway(
+                  forge_sandbox_id,
+                  req.headers.get("cookie") ?? undefined,
                 );
 
-                if (!chatRes.ok) {
-                  const errText = await chatRes.text().catch(() => "unknown error");
-                  throw new Error(`Forge bridge failed (${chatRes.status}): ${errText.slice(0, 200)}`);
-                }
-
-                onLifecycleEvent({ phase: "thinking", message: "Agent thinking..." });
-
-                const reader = chatRes.body?.getReader();
-                if (!reader) throw new Error("No response body from forge bridge");
-
-                // Periodic progress events to keep the UI alive during long builds.
-                // The architect executes tools internally — no tool events stream
-                // through the HTTP chat endpoint — so we emit synthetic phases.
-                const buildPhases = [
-                  { at: 10, phase: "planning", message: "Planning workspace structure..." },
-                  { at: 25, phase: "writing", message: "Writing SOUL.md — agent personality..." },
-                  { at: 45, phase: "generating", message: "Generating skill files..." },
-                  { at: 80, phase: "configuring", message: "Configuring tools and integrations..." },
-                  { at: 120, phase: "triggers", message: "Setting up triggers and schedules..." },
-                  { at: 160, phase: "assembling", message: "Assembling skill graph..." },
-                  { at: 200, phase: "working", message: "Still working — complex agents take time..." },
-                ];
-                const streamStart = Date.now();
-                let nextPhaseIdx = 0;
-                const progressInterval = setInterval(() => {
-                  const elapsed = (Date.now() - streamStart) / 1000;
-                  while (nextPhaseIdx < buildPhases.length && elapsed >= buildPhases[nextPhaseIdx].at) {
-                    const bp = buildPhases[nextPhaseIdx];
-                    send("status", { phase: bp.phase, message: bp.message });
-                    nextPhaseIdx++;
-                  }
-                }, 5000);
-
-                const decoder = new TextDecoder();
-                let fullContent = "";
-                let buffer = "";
-                const emittedFiles = new Set<string>();
-                const emittedSkills = new Set<string>();
-                let lastScanIndex = 0;
-
-                const scanForFileEvents = () => {
-                  const scanText = fullContent.slice(lastScanIndex);
-                  lastScanIndex = fullContent.length;
-
-                  // Detect skill files from workspace paths
-                  for (const m of scanText.matchAll(/skills\/([a-z0-9_-]+)\/SKILL\.md/gi)) {
-                    const skillId = m[1];
-                    if (!emittedSkills.has(skillId)) {
-                      emittedSkills.add(skillId);
-                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                    }
-                  }
-
-                  // Detect skill names from conversational text (e.g., "Created skill: weather-intake")
-                  for (const m of scanText.matchAll(/(?:creat|writ|generat|built)\w*\s+(?:skill|the)\s+["`']?([a-z][a-z0-9-]+)["`']?/gi)) {
-                    const skillId = m[1].toLowerCase();
-                    if (skillId.length > 3 && !emittedSkills.has(skillId)) {
-                      emittedSkills.add(skillId);
-                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                    }
-                  }
-
-                  for (const m of scanText.matchAll(/\.openclaw\/workspace\/([^\s'"`\\]+)/g)) {
-                    const filePath = m[1];
-                    if (!emittedFiles.has(filePath)) {
-                      emittedFiles.add(filePath);
-                      send("file_written", { path: filePath, tool: "bash" });
-                    }
-                  }
-
-                  // Detect file writes from conversational text
-                  for (const m of scanText.matchAll(/(?:writ|creat|sav)\w+\s+["`']?([A-Z][A-Z_]+\.(?:md|yml|json|env))["`']?/gi)) {
-                    const fileName = m[1];
-                    if (!emittedFiles.has(fileName)) {
-                      emittedFiles.add(fileName);
-                      send("file_written", { path: fileName, tool: "bash" });
-                    }
-                  }
-
-                  if (scanText.includes("SOUL.md") && !emittedFiles.has("SOUL.md")) {
-                    emittedFiles.add("SOUL.md");
-                    send("file_written", { path: "SOUL.md", tool: "bash" });
-                  }
-
-                  // Emit build_progress when we have skills
-                  if (emittedSkills.size > 0) {
-                    send("build_progress", { completed: emittedSkills.size, total: null, currentSkill: Array.from(emittedSkills).pop() });
-                  }
-                };
-
-                try {
-                  while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split("\n");
-                    buffer = lines.pop() || "";
-
-                    for (const line of lines) {
-                      if (line.startsWith("event: ")) continue;
-                      if (!line.startsWith("data: ")) continue;
-                      const data = line.slice(6).trim();
-                      if (data === "[DONE]") continue;
-
-                      try {
-                        const parsed = JSON.parse(data);
-
-                        if (parsed.tool) {
-                          send("tool_start", { tool: parsed.tool, input: parsed.input || "" });
-                          const cmd = String(parsed.input || "");
-                          const skillMatch = cmd.match(/skills\/([a-z0-9_-]+)\/SKILL\.md/i);
-                          if (skillMatch) send("skill_created", { skillId: skillMatch[1], path: `skills/${skillMatch[1]}/SKILL.md` });
-                          const fileMatch = cmd.match(/\.openclaw\/workspace\/([^\s'"]+)/);
-                          if (fileMatch) {
-                            send("file_written", { path: fileMatch[1], tool: parsed.tool });
-                            send("workspace_changed", { action: "create", path: fileMatch[1] });
-                          }
-                          continue;
-                        }
-
-                        const delta = parsed.choices?.[0]?.delta?.content;
-                        if (typeof delta === "string" && delta) {
-                          fullContent += delta;
-                          send("delta", { text: delta });
-                          scanForFileEvents();
-                        }
-
-                        if (parsed.phase) {
-                          onLifecycleEvent({ phase: parsed.phase, message: parsed.message || "" });
-                        }
-
-                        if (parsed.message && !parsed.choices && !parsed.tool && !parsed.phase) {
-                          send("status", { phase: "error", message: parsed.message });
-                        }
-                      } catch {
-                        // Skip unparseable chunks
-                      }
-                    }
-                  }
-                } catch (streamErr) {
-                  if ((streamErr as Error).name !== "AbortError") {
-                    console.warn("[forge-bridge] Stream error:", streamErr);
-                  }
-                } finally {
-                  clearInterval(progressInterval);
-                }
-
-                const parsed = finalizeGatewayResponse(fullContent, {
-                  agentId: resolvedAgent,
-                }) as object;
-
-                if (
-                  typeof parsed === "object" &&
-                  parsed !== null &&
-                  (parsed as Record<string, unknown>).type === "ready_for_review"
-                ) {
-                  // Emit skill_created for each node in the skill graph
-                  // so the UI gets real skill events at build completion.
-                  const skillGraph = (parsed as Record<string, unknown>).skill_graph;
-                  const skillNodes =
-                    typeof skillGraph === "object" &&
-                    skillGraph !== null &&
-                    Array.isArray((skillGraph as { nodes?: unknown }).nodes)
-                      ? (skillGraph as { nodes: Array<Record<string, unknown>> }).nodes
-                      : [];
-
-                  for (const node of skillNodes) {
-                    const skillId = (node as Record<string, unknown>).skill_id;
-                    if (typeof skillId === "string" && skillId) {
-                      send("skill_created", { skillId, path: `skills/${skillId}/SKILL.md` });
-                    }
-                  }
-
-                  if (skillNodes.length > 0) {
-                    send("build_progress", {
-                      completed: skillNodes.length,
-                      total: skillNodes.length,
-                      currentSkill: null,
-                    });
-                  }
-                }
-
-                return parsed;
+                const forgeTimeout = typeof timeout_ms === "number"
+                  ? Math.min(timeout_ms, 600_000)
+                  : PER_ATTEMPT_TIMEOUT_MS;
+                return await forwardToGateway(
+                  forgeGateway.url,
+                  session_id,
+                  message,
+                  resolvedAgent,
+                  resolvedMode,
+                  typeof soul_override === "string" ? soul_override : undefined,
+                  onLifecycleEvent,
+                  send,
+                  requestId,
+                  req.signal,
+                  forgeGateway.origin,
+                  forgeTimeout,
+                  trace,
+                  req.headers.get("cookie") ?? undefined,
+                );
               }
 
               const response = buildMissingForgeSandboxResponse(requestId);
@@ -712,19 +438,19 @@ async function forwardToGateway(
   onStreamEvent: StreamEventSender,
   requestId: string,
   abortSignal?: AbortSignal,
-  gatewayToken?: string,
   origin?: string,
   perAttemptTimeoutMs?: number,
-  trace?: BridgeTraceHandle
+  trace?: BridgeTraceHandle,
+  cookieHeader?: string,
 ): Promise<object> {
   const effectiveTimeout = perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
-  const token = gatewayToken ?? "";
   return new Promise((resolve, reject) => {
-    const ws = origin
-      ? new WebSocket(gatewayUrl, {
-          headers: { Origin: origin },
-        })
-      : new WebSocket(gatewayUrl);
+    const wsHeaders: Record<string, string> = {};
+    if (origin) wsHeaders["Origin"] = origin;
+    if (cookieHeader) wsHeaders["Cookie"] = cookieHeader;
+    const ws = new WebSocket(gatewayUrl, {
+      headers: Object.keys(wsHeaders).length > 0 ? wsHeaders : undefined,
+    });
     let chatAccepted = false;
     const timeout = setTimeout(() => {
       rejectOnce(
@@ -786,6 +512,7 @@ async function forwardToGateway(
     abortSignal?.addEventListener("abort", onAbort, { once: true });
 
     const finalizeResponse = (text: string) => {
+      console.log(`[bridge][${requestId}] finalize — textLen=${text.length} runId=${runId}`);
       resolveOnce(
         finalizeGatewayResponse(text, {
           agentId,
@@ -796,6 +523,7 @@ async function forwardToGateway(
 
     ws.on("error", (err) => {
       const error = err instanceof Error ? err : new Error(String(err));
+      console.warn(`[bridge][${requestId}] ws.error stage=${chatAccepted ? "post_accept" : "pre_accept"} msg=${error.message}`);
       trace?.recordEvent(
         "openclaw.bridge.socket_error",
         {
@@ -813,7 +541,10 @@ async function forwardToGateway(
       );
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code?: number, reason?: Buffer) => {
+      const reasonStr = reason?.toString() || "n/a";
+      const stage = !connected ? "pre_connect" : chatAccepted ? "post_accept" : "pre_accept";
+      console.warn(`[bridge][${requestId}] ws.close stage=${stage} code=${code ?? "?"} reason="${reasonStr}" resolved=${resolved} aborted=${abortSignal?.aborted ?? false}`);
       if (!connected) {
         trace?.recordEvent(
           "openclaw.bridge.socket_closed",
@@ -857,50 +588,16 @@ async function forwardToGateway(
         return;
       }
 
-      // Step 1: Server sends connect.challenge
-      if (frame.type === "event" && frame.event === "connect.challenge") {
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id: "1",
-            method: "connect",
-            params: {
-              minProtocol: 3,
-              maxProtocol: 3,
-              client: {
-                id: "openclaw-control-ui",
-                version: "2026.3.13",
-                platform: "web",
-                mode: "webchat",
-              },
-              role: "operator",
-              scopes: ["operator.read", "operator.write"],
-              auth: { token },
-            },
-          })
-        );
-        return;
-      }
-
-      // Step 2: Server responds with hello-ok
-      if (frame.type === "res" && frame.id === "1") {
-        if (!frame.ok) {
-          trace?.recordEvent(
-            "openclaw.bridge.auth_failed",
-            {
-              request_id: requestId,
-            },
-            "ERROR"
-          );
-          rejectOnce(
-            new AuthError(
-              `Auth failed: ${JSON.stringify(frame.error || frame.payload)}`
-            )
-          );
-          return;
-        }
-
+      // Step 1: Backend proxy signals it has authenticated with the gateway.
+      // The proxy intercepts the real connect.challenge/res handshake server-side
+      // (so the gateway_token never reaches this process) and emits a synthetic
+      // `proxy_ready` frame once auth succeeds. After this we go straight to
+      // chat.send — no CONNECT_REQUEST from this side.
+      // See: ruh-backend/src/gatewayProxy.ts
+      if (frame.type === "proxy_ready") {
+        if (connected) return; // idempotent
         connected = true;
+        console.log(`[bridge][${requestId}] proxy_ready — sending chat.send (msgLen=${message.length})`);
         trace?.recordEvent("openclaw.bridge.connected", {
           request_id: requestId,
         });
@@ -909,12 +606,11 @@ async function forwardToGateway(
           message: "Agent started...",
         });
 
-        // Step 3: Send chat.send
+        // Step 2: Send chat.send
         // Use sessionId in the session key so every create-agent session gets its
-        // own isolated conversation context on the gateway. Previously the hardcoded
-        // "agent:architect:main" key meant all sessions shared one context — a
-        // crash or malformed response in any session would poison every future one
-        // until the gateway was restarted.
+        // own isolated conversation context on the gateway. Builder sandboxes
+        // explicitly register architect/copilot/test/reveal agents, each backed
+        // by workspace-architect, so the session key also selects the role.
         ws.send(
           JSON.stringify({
             type: "req",
@@ -937,6 +633,7 @@ async function forwardToGateway(
       // Step 3b: Acknowledge chat.send
       if (frame.type === "res" && frame.id === "2") {
         if (!frame.ok) {
+          console.warn(`[bridge][${requestId}] chat.send rejected:`, JSON.stringify(frame.payload));
           rejectOnce(
             new Error(
               `chat.send failed: ${JSON.stringify(frame.payload)}`
@@ -947,6 +644,7 @@ async function forwardToGateway(
         const payload = frame.payload as Record<string, unknown> | undefined;
         runId = (payload?.runId as string) || "";
         chatAccepted = true;
+        console.log(`[bridge][${requestId}] chat.send ack — runId=${runId}`);
         trace?.recordEvent("openclaw.bridge.chat_accepted", {
           request_id: requestId,
           run_id: runId || null,

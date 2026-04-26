@@ -1,0 +1,12 @@
+[Unit]
+Description=Run hermes health check every 2 minutes
+Requires=hermes-healthcheck.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=hermes-healthcheck.service
+
+[Install]
+WantedBy=timers.target

@@ -7,6 +7,10 @@ import {
   clearCreateSessionCache,
   loadCreateSessionFromCache,
   saveCreateSessionToCache,
+  resolveRouteAgentForRestore,
+  shouldReconcileToPersistedForgeStage,
+  shouldSuppressRevealTriggerForResume,
+  shouldWaitForRouteAgentBeforeCacheRestore,
 } from "./create-session-cache";
 
 const storage = new Map<string, string>();
@@ -317,6 +321,80 @@ describe("create-session-cache", () => {
     expect(loadCreateSessionFromCache("agent-1")).toBeNull();
   });
 
+  test("waits for route agent data before applying cache-only restore", () => {
+    expect(shouldWaitForRouteAgentBeforeCacheRestore({
+      editingAgentId: "agent-1",
+      hasAgentRecord: false,
+      isRouteAgentHydrated: false,
+    })).toBe(true);
+
+    expect(shouldWaitForRouteAgentBeforeCacheRestore({
+      editingAgentId: "agent-1",
+      hasAgentRecord: true,
+      isRouteAgentHydrated: false,
+    })).toBe(false);
+
+    expect(shouldWaitForRouteAgentBeforeCacheRestore({
+      editingAgentId: null,
+      hasAgentRecord: false,
+      isRouteAgentHydrated: false,
+    })).toBe(false);
+  });
+
+  test("reconciles forward when backend forge stage is ahead of restored UI stage", () => {
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "reveal",
+      persistedStage: "test",
+    })).toBe(true);
+
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "test",
+      persistedStage: "reveal",
+    })).toBe(false);
+
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "test",
+      persistedStage: null,
+    })).toBe(false);
+  });
+
+  test("suppresses reveal trigger until resume is restored or backend stage is reconciled", () => {
+    expect(shouldSuppressRevealTriggerForResume({
+      hasRestoredSession: false,
+      currentStage: "reveal",
+      persistedStage: null,
+    })).toBe(true);
+
+    expect(shouldSuppressRevealTriggerForResume({
+      hasRestoredSession: true,
+      currentStage: "reveal",
+      persistedStage: "test",
+    })).toBe(true);
+
+    expect(shouldSuppressRevealTriggerForResume({
+      hasRestoredSession: true,
+      currentStage: "reveal",
+      persistedStage: "reveal",
+    })).toBe(false);
+  });
+
+  test("prefers freshly fetched route agent over stale persisted store agent", () => {
+    const staleAgent = { ...agent, forgeStage: null };
+    const freshAgent = { ...agent, forgeStage: "test" };
+
+    expect(resolveRouteAgentForRestore({
+      editingAgentId: "agent-1",
+      storeAgent: staleAgent,
+      routeFetchedAgent: freshAgent,
+    })?.forgeStage).toBe("test");
+
+    expect(resolveRouteAgentForRestore({
+      editingAgentId: "agent-1",
+      storeAgent: staleAgent,
+      routeFetchedAgent: { ...freshAgent, id: "agent-2" },
+    })?.forgeStage).toBeNull();
+  });
+
   test("buildResumedCoPilotSeed layers cached progress over persisted agent data", () => {
     const resumed = buildResumedCoPilotSeed(agent, {
       devStage: "build",
@@ -332,6 +410,95 @@ describe("create-session-cache", () => {
       channels: [],
       runtimeInputs: agent.runtimeInputs,
     }));
+  });
+
+  test("buildResumedCoPilotSeed does not let empty cached skill selection block deploy after review", () => {
+    const resumed = buildResumedCoPilotSeed(
+      {
+        ...agent,
+        forgeStage: "ship",
+      },
+      {
+        devStage: "ship",
+        selectedSkillIds: [],
+      },
+    );
+
+    expect(resumed.selectedSkillIds).toEqual(["inventory-monitor"]);
+  });
+
+  test("buildResumedCoPilotSeed does not let empty cached skill graph block deploy after review", () => {
+    const resumed = buildResumedCoPilotSeed(
+      {
+        ...agent,
+        forgeStage: "ship",
+      },
+      {
+        devStage: "ship",
+        skillGraph: null,
+        selectedSkillIds: [],
+      },
+    );
+
+    expect(resumed.skillGraph).toEqual(agent.skillGraph);
+    expect(resumed.selectedSkillIds).toEqual(["inventory-monitor"]);
+  });
+
+  test("buildResumedCoPilotSeed prefers the backend forge sandbox over stale cached agentSandboxId", () => {
+    const resumed = buildResumedCoPilotSeed(agent, {
+      agentSandboxId: "previous-forge-sandbox",
+      devStage: "think",
+      thinkStatus: "ready",
+    });
+
+    expect(resumed.agentSandboxId).toBe("forge-sb-1");
+  });
+
+  test("buildResumedCoPilotSeed does not let stale cached reveal regress a backend test stage", () => {
+    const resumed = buildResumedCoPilotSeed(
+      {
+        ...agent,
+        forgeStage: "test",
+      },
+      {
+        devStage: "reveal",
+        thinkStatus: "idle",
+        planStatus: "idle",
+        buildStatus: "idle",
+      },
+    );
+
+    expect(resumed.devStage).toBe("test");
+    expect(resumed.thinkStatus).toBe("approved");
+    expect(resumed.planStatus).toBe("approved");
+    expect(resumed.buildStatus).toBe("done");
+  });
+
+  test("buildResumedCoPilotSeed does not let stale cached plan outrun missing discovery docs", () => {
+    const resumed = buildResumedCoPilotSeed(
+      {
+        ...agent,
+        forgeStage: "plan",
+        discoveryDocuments: null,
+        skillGraph: [],
+        skills: [],
+        workflow: null,
+      },
+      {
+        devStage: "plan",
+        maxUnlockedDevStage: "plan",
+        thinkStatus: "approved",
+        planStatus: "failed",
+        userTriggeredPlan: true,
+        planRunId: "plan-run-1",
+      },
+    );
+
+    expect(resumed.devStage).toBe("think");
+    expect(resumed.maxUnlockedDevStage).toBe("think");
+    expect(resumed.planStatus).toBe("idle");
+    expect(resumed.userTriggeredPlan).toBe(false);
+    expect(resumed.planRunId).toBeNull();
   });
 
   test("buildResumedCoPilotSeed clears stale think trigger when status is not generating", () => {

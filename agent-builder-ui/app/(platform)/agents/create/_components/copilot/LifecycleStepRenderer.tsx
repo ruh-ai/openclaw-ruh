@@ -9,9 +9,10 @@
  * Replaces the old WizardStepRenderer for the copilot mode.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem, type PlanActivityItem } from "@/lib/openclaw/copilot-state";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { BranchDiffPanel } from "../BranchDiffPanel";
 import { FeatureBriefCard } from "../FeatureBriefCard";
 import { AGENT_DEV_STAGES, type AgentDevStage, type StageStatus } from "@/lib/openclaw/types";
@@ -54,6 +55,7 @@ import {
   Compass,
   Layers,
   Target,
+  UserCheck,
 } from "lucide-react";
 import type {
   ArchitecturePlan,
@@ -70,11 +72,19 @@ import type {
 } from "@/lib/openclaw/types";
 import type { EvalLoopProgress } from "@/lib/openclaw/eval-loop";
 import { getTestStageContainerState as resolveTestStageContainerState } from "@/lib/openclaw/test-stage-readiness";
+import type { ArtifactTarget } from "@/lib/openclaw/stage-context";
 import { StepDiscovery } from "../configure/StepDiscovery";
+import { MeetYourEmployee } from "../MeetYourEmployee";
+import { ArtifactActionBar } from "./ArtifactActionBar";
+import { BuildReportPanel } from "./BuildReportPanel";
+import { approveManualEvalTasks, resolveEvalReviewState, resolveReviewSkillNodes } from "@/lib/openclaw/copilot-flow";
 
 export { getTestStageContainerState } from "@/lib/openclaw/test-stage-readiness";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb; description: string }> = {
+  reveal: { label: "Meet", icon: UserCheck, description: "Meet your digital employee" },
   think: { label: "Think", icon: Lightbulb, description: "Define requirements (PRD + TRD)" },
   plan: { label: "Plan", icon: Map, description: "Lock architecture" },
   build: { label: "Build", icon: Hammer, description: "Create skills & config" },
@@ -85,6 +95,7 @@ const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb;
 };
 
 const FEATURE_STAGE_META: Record<AgentDevStage, { label: string; description: string }> = {
+  reveal:  { label: "Meet",           description: "Meet your digital employee" },
   think:   { label: "Discover",       description: "Analyze feature requirements" },
   plan:    { label: "Plan Changes",   description: "Design the delta" },
   build:   { label: "Build Feature",  description: "Create new skills & config" },
@@ -93,6 +104,14 @@ const FEATURE_STAGE_META: Record<AgentDevStage, { label: string; description: st
   ship:    { label: "Merge",          description: "Create PR & merge to main" },
   reflect: { label: "Summary",        description: "Feature summary" },
 };
+
+interface ArtifactActionHandlers {
+  requestChanges: (target: ArtifactTarget) => void;
+  regenerate: (target: ArtifactTarget) => void;
+  compare: (target: ArtifactTarget) => void;
+  explain: (target: ArtifactTarget) => void;
+  openFiles: (target: ArtifactTarget) => void;
+}
 
 function getStageIndex(stage: AgentDevStage): number {
   return AGENT_DEV_STAGES.indexOf(stage);
@@ -144,6 +163,25 @@ export function isLifecycleStageDone(
   const idx = getStageIndex(stage);
   const unlockedIdx = getStageIndex(maxUnlockedDevStage);
   return idx < unlockedIdx;
+}
+
+export function formatWorkflowStepLabel(step: unknown, index: number): string {
+  if (typeof step === "string") return step.trim().replace(/_/g, " ") || `Step ${index + 1}`;
+  if (!step || typeof step !== "object") return `Step ${index + 1}`;
+
+  const record = step as Record<string, unknown>;
+  const raw = [
+    record.skill,
+    record.skillId,
+    record.node_id,
+    record.nodeId,
+    record.name,
+    record.id,
+    record.step,
+    record.action,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+
+  return typeof raw === "string" ? raw.trim().replace(/_/g, " ") : `Step ${index + 1}`;
 }
 
 // ─── Elapsed timer for async waits ──────────────────────────────────────────
@@ -1609,6 +1647,12 @@ interface LifecycleStepRendererProps {
   onRetryBuild?: () => void;
   onCancelBuild?: () => void;
   onDone?: () => void;
+  /**
+   * Called when the user asks the architect to revise a specific artifact
+   * (PRD, TRD, or Plan). Parent selects the target and switches chat into
+   * revision mode.
+   */
+  onRequestArtifactChange?: (target: ArtifactTarget) => void;
 }
 
 export function LifecycleStepRenderer({
@@ -1622,14 +1666,66 @@ export function LifecycleStepRenderer({
   onRetryBuild,
   onCancelBuild,
   onDone,
+  onRequestArtifactChange,
 }: LifecycleStepRendererProps) {
   const store = useCoPilotStore();
   const { devStage, maxUnlockedDevStage } = store;
   const searchParams = useSearchParams();
   const featureBranch = searchParams.get("branch");
   const featureCtx = store.featureContext;
+  const [revealAttemptCount, setRevealAttemptCount] = useState(1);
 
   const stageIdx = AGENT_DEV_STAGES.indexOf(devStage);
+  const stageAdvanceSaving = store.lifecycleAdvanceStatus === "saving";
+
+  const confirmStageWithBackend = useCallback(async (nextStage: AgentDevStage) => {
+    if (featureBranch) {
+      return { stage: nextStage };
+    }
+    if (devStage === "ship" && nextStage === "reflect") {
+      return { stage: nextStage };
+    }
+    if (!agentId) {
+      throw new Error("No agent ID is available for lifecycle advancement.");
+    }
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/forge/stage`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: nextStage }),
+    });
+    const payload = await res.json().catch(() => ({})) as { forge_stage?: string; detail?: string; message?: string };
+    if (!res.ok) {
+      throw new Error(payload.detail ?? payload.message ?? `Stage update failed (${res.status})`);
+    }
+    const confirmedStage = payload.forge_stage;
+    if (!AGENT_DEV_STAGES.includes(confirmedStage as AgentDevStage)) {
+      throw new Error("Stage update returned an invalid lifecycle stage.");
+    }
+    return { stage: confirmedStage as AgentDevStage };
+  }, [agentId, devStage, featureBranch]);
+
+  const advanceDevStage = useCallback(() => {
+    void store.advanceDevStage({ confirmStage: confirmStageWithBackend });
+  }, [confirmStageWithBackend, store]);
+
+  const setArtifactChatContext = useCallback((target: ArtifactTarget, mode: "ask" | "revise" | "debug") => {
+    store.setSelectedArtifactTarget(target);
+    store.setChatMode(mode);
+  }, [store]);
+
+  const artifactActions = useMemo<ArtifactActionHandlers>(() => ({
+    requestChanges: (target) => {
+      setArtifactChatContext(target, "revise");
+      onRequestArtifactChange?.(target);
+    },
+    regenerate: (target) => {
+      setArtifactChatContext(target, "revise");
+      onRequestArtifactChange?.(target);
+    },
+    compare: (target) => setArtifactChatContext(target, "ask"),
+    explain: (target) => setArtifactChatContext(target, "ask"),
+    openFiles: (target) => setArtifactChatContext(target, "ask"),
+  }), [onRequestArtifactChange, setArtifactChatContext]);
 
   // Determine which stages are unlocked
   const isStageUnlocked = (stage: AgentDevStage): boolean =>
@@ -1658,7 +1754,7 @@ export function LifecycleStepRenderer({
     }
   };
 
-  const anyStageLoading = AGENT_DEV_STAGES.some((s) => isStageLoading(s));
+  const anyStageLoading = AGENT_DEV_STAGES.some((s) => isStageLoading(s)) || stageAdvanceSaving;
 
   return (
     <div
@@ -1716,7 +1812,23 @@ export function LifecycleStepRenderer({
       </div>
 
       {/* ── Stage content ─────────────────────────────────────── */}
+      {store.lifecycleAdvanceError && (
+        <div className="shrink-0 border-b border-red-500/20 bg-red-500/5 px-4 py-2">
+          <p className="text-xs font-satoshi-medium text-red-600">
+            {store.lifecycleAdvanceError}
+          </p>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto">
+        {devStage === "reveal" && (
+          <StageReveal
+            store={store}
+            agentId={agentId ?? store.systemName ?? store.name ?? ""}
+            attemptCount={revealAttemptCount}
+            onRegenerate={() => setRevealAttemptCount((c) => c + 1)}
+          />
+        )}
         {devStage === "think" && featureCtx && (
           <div className="px-4 pt-4">
             <FeatureBriefCard
@@ -1732,12 +1844,16 @@ export function LifecycleStepRenderer({
             store={store}
             onDiscoveryComplete={onDiscoveryComplete}
             sandboxId={store.agentSandboxId}
+            onRequestArtifactChange={onRequestArtifactChange}
+            artifactActions={artifactActions}
           />
         )}
         {devStage === "plan" && (
           <StagePlan
             store={store}
             onPlanApproved={onPlanApproved}
+            onRequestArtifactChange={onRequestArtifactChange}
+            artifactActions={artifactActions}
           />
         )}
         {devStage === "build" && (
@@ -1748,6 +1864,27 @@ export function LifecycleStepRenderer({
                 The architect is creating SOUL.md, skill files, and configuration. Watch the terminal for progress.
               </p>
             </div>
+
+            {store.buildReport && (
+              <div className="space-y-3">
+                <ArtifactActionBar
+                  target={{ kind: "build_report", path: ".openclaw/build/build-report.json" }}
+                  canApprove={store.buildStatus === "done" && store.buildReport.readiness !== "blocked"}
+                  canRegenerate={false}
+                  onApprove={advanceDevStage}
+                  onRequestChanges={artifactActions.requestChanges}
+                  onRegenerate={artifactActions.regenerate}
+                  onCompare={artifactActions.compare}
+                  onExplain={artifactActions.explain}
+                  onOpenFiles={artifactActions.openFiles}
+                />
+                <BuildReportPanel
+                  report={store.buildReport}
+                  onRetryFailedStep={onRetryBuild ?? (() => undefined)}
+                  onSelectArtifact={artifactActions.explain}
+                />
+              </div>
+            )}
 
             {store.buildStatus === "building" && (
               <>
@@ -1823,15 +1960,17 @@ export function LifecycleStepRenderer({
             )}
             <StageReview
               store={store}
-              onApprove={() => store.advanceDevStage()}
+              onApprove={advanceDevStage}
+              artifactActions={artifactActions}
             />
           </>
         )}
         {devStage === "test" && (
           <StageTest
             store={store}
-            onApprove={() => store.advanceDevStage()}
+            onApprove={advanceDevStage}
             agentId={agentId}
+            artifactActions={artifactActions}
           />
         )}
         {devStage === "ship" && featureCtx && featureBranch && agentId ? (
@@ -1865,14 +2004,57 @@ export function LifecycleStepRenderer({
           </span>
         </div>
         <button
-          onClick={() => store.advanceDevStage()}
+          onClick={advanceDevStage}
           disabled={stageIdx >= AGENT_DEV_STAGES.length - 1 || anyStageLoading || !store.canAdvanceDevStage()}
           className="px-3 py-1.5 text-xs font-satoshi-bold text-[var(--primary)] hover:text-[var(--primary)]/80 disabled:opacity-30 disabled:text-[var(--text-tertiary)] transition-colors"
         >
-          {stageIdx >= AGENT_DEV_STAGES.length - 1 ? "Done" : "Next →"}
+          {stageAdvanceSaving ? "Saving..." : stageIdx >= AGENT_DEV_STAGES.length - 1 ? "Done" : "Next →"}
         </button>
       </div>
     </div>
+  );
+}
+
+// ─── Reveal stage (embedded employee profile card) ──────────────────────────
+// Renders MeetYourEmployee inside the Co-Pilot workspace panel so the reveal
+// lives alongside the chat instead of replacing the whole page.
+
+function StageReveal({
+  store,
+  agentId,
+  attemptCount,
+  onRegenerate,
+}: {
+  store: CoPilotState & CoPilotActions;
+  agentId: string;
+  attemptCount: number;
+  onRegenerate?: () => void;
+}) {
+  const phase: "composing" | "ready" =
+    store.revealStatus === "ready" ? "ready" : "composing";
+  const progress = new Set(store.revealProgress);
+
+  return (
+    <MeetYourEmployee
+      embedded
+      reveal={store.revealData ?? {}}
+      agentId={agentId || "genesis"}
+      agentName={store.name || "Agent"}
+      phase={phase}
+      progress={progress}
+      thoughtStream={store.revealThoughtStream}
+      attemptCount={attemptCount}
+      isProvisioning={false}
+      onConfirm={(answer) => {
+        store.setRevealAnswer(answer);
+        store.setRevealStatus("approved");
+        store.setDevStage("think");
+      }}
+      onRegenerate={() => {
+        store.resetRevealStreaming();
+        onRegenerate?.();
+      }}
+    />
   );
 }
 
@@ -1882,10 +2064,14 @@ function StageThinkPlaceholder({
   store,
   onDiscoveryComplete,
   sandboxId,
+  onRequestArtifactChange,
+  artifactActions,
 }: {
   store: CoPilotState & CoPilotActions;
   onDiscoveryComplete?: () => void;
   sandboxId?: string | null;
+  onRequestArtifactChange?: (target: ArtifactTarget) => void;
+  artifactActions?: ArtifactActionHandlers;
 }) {
   // New XML flow: workspace paths are set but in-memory documents are not.
   // Read the files from workspace and hydrate discoveryDocuments so StepDiscovery
@@ -1982,6 +2168,8 @@ function StageThinkPlaceholder({
         store.setThinkStatus("approved");
         onDiscoveryComplete?.();
       }}
+      onRequestArtifactChange={onRequestArtifactChange}
+      artifactActions={artifactActions}
     />
   );
 }
@@ -1991,9 +2179,12 @@ function StageThinkPlaceholder({
 function StagePlan({
   store,
   onPlanApproved,
+  artifactActions,
 }: {
   store: CoPilotState & CoPilotActions;
   onPlanApproved?: () => void;
+  onRequestArtifactChange?: (target: ArtifactTarget) => void;
+  artifactActions: ArtifactActionHandlers;
 }) {
   const rawPlan = store.architecturePlan;
   const status = store.planStatus;
@@ -2064,8 +2255,23 @@ function StagePlan({
     );
   }
 
+  const planTarget: ArtifactTarget = { kind: "plan", path: ".openclaw/plan/architecture.json" };
+  const canApprovePlan = status === "ready" || status === "done" || status === "approved";
+
   return (
     <div className="p-4 space-y-4">
+      <ArtifactActionBar
+        target={planTarget}
+        canApprove={canApprovePlan}
+        canRegenerate
+        onApprove={() => onPlanApproved?.()}
+        onRequestChanges={artifactActions.requestChanges}
+        onRegenerate={artifactActions.regenerate}
+        onCompare={artifactActions.compare}
+        onExplain={artifactActions.explain}
+        onOpenFiles={artifactActions.openFiles}
+      />
+
       {/* Skills */}
       <PlanSection
         icon={<Zap className="h-3.5 w-3.5" />}
@@ -2427,7 +2633,8 @@ function StagePlan({
             </label>
           )}
 
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between">
+            <span />
             <button
               onClick={() => onPlanApproved?.()}
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
@@ -2519,9 +2726,11 @@ function SkillCard({ skill }: { skill: ArchitecturePlanSkill }) {
 function StageReview({
   store,
   onApprove,
+  artifactActions,
 }: {
   store: CoPilotState & CoPilotActions;
   onApprove: () => void;
+  artifactActions: ArtifactActionHandlers;
 }) {
   const plan = store.architecturePlan;
   const skillGraph = store.skillGraph;
@@ -2544,9 +2753,10 @@ function StageReview({
   const subAgents = plan?.subAgents ?? [];
   const workflow = plan?.workflow;
   const planChannels = plan?.channels ?? [];
+  const reviewSkillNodes = resolveReviewSkillNodes(plan, skillGraph);
 
   // Count built vs total skills
-  const totalSkills = skillGraph?.length ?? skills.length;
+  const totalSkills = reviewSkillNodes.length;
   const builtCount = builtSkillIds.length;
 
   // Merge trigger sources: plan triggers + runtime trigger selections
@@ -2555,7 +2765,7 @@ function StageReview({
     ...triggers.map((t) => t.id),
   ]);
 
-  const hasContent = skills.length > 0 || (skillGraph && skillGraph.length > 0);
+  const hasContent = reviewSkillNodes.length > 0;
 
   if (!hasContent) {
     return (
@@ -2573,8 +2783,22 @@ function StageReview({
     );
   }
 
+  const reviewTarget: ArtifactTarget = { kind: "review" };
+
   return (
     <div className="p-4 space-y-3">
+      <ArtifactActionBar
+        target={reviewTarget}
+        canApprove
+        canRegenerate={false}
+        onApprove={onApprove}
+        onRequestChanges={artifactActions.requestChanges}
+        onRegenerate={artifactActions.regenerate}
+        onCompare={artifactActions.compare}
+        onExplain={artifactActions.explain}
+        onOpenFiles={artifactActions.openFiles}
+      />
+
       {/* Agent Identity */}
       <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-subtle)]/50 px-4 py-3">
         <div className="flex items-center gap-3">
@@ -2608,7 +2832,7 @@ function StageReview({
         onToggle={() => toggle("skills")}
       >
         <div className="space-y-1.5">
-          {(skillGraph ?? skills.map((s) => ({ skill_id: s.id, name: s.name, description: s.description } as SkillGraphNode))).map((node) => {
+          {reviewSkillNodes.map((node) => {
             const planSkill = skills.find((s) => s.id === node.skill_id);
             const isBuilt = builtSkillIds.includes(node.skill_id);
             return (
@@ -2970,10 +3194,12 @@ function StageTest({
   store,
   onApprove,
   agentId,
+  artifactActions,
 }: {
   store: CoPilotState & CoPilotActions;
   onApprove: () => void;
   agentId?: string | null;
+  artifactActions: ArtifactActionHandlers;
 }) {
   const {
     evalTasks, evalStatus, skillGraph, agentRules, sessionId, workflow,
@@ -2995,12 +3221,29 @@ function StageTest({
   const runningCount = evalTasks.filter((t) => t.status === "running").length;
   const manualCount = evalTasks.filter((t) => t.status === "manual").length;
   const totalCount = evalTasks.length;
-  const allDone = totalCount > 0 && pendingCount === 0 && runningCount === 0;
-  const hasFailures = failCount > 0;
   const containerState = resolveTestStageContainerState(agentSandboxId);
   const hasRealContainer = containerState.hasRealContainer;
   const isLoopRunning = evalLoopState.status === "running";
   const hasLoopResults = evalLoopState.scores.length > 0;
+  const testTarget: ArtifactTarget = { kind: "test_report" };
+  const evalReviewState = resolveEvalReviewState({
+    totalCount,
+    pendingCount,
+    runningCount,
+    failCount,
+    manualCount,
+    hasRealContainer,
+    runMode,
+    loopIterations: evalLoopState.iteration,
+  });
+  const {
+    allDone,
+    hasFailures,
+    hasManualReview,
+    canApprove: canApproveTest,
+    canRerunManual,
+    canApproveManual,
+  } = evalReviewState;
 
   // Cleanup abort controller on unmount
   useEffect(() => () => { abortRef.current?.abort(); }, []);
@@ -3039,7 +3282,7 @@ function StageTest({
     setGenerating(null);
   };
 
-  const handleRunTasks = async (filter: "pending" | "fail") => {
+  const handleRunTasks = async (filter: "pending" | "fail" | "manual") => {
     if (!agentSandboxId) return;
 
     const controller = new AbortController();
@@ -3073,19 +3316,30 @@ function StageTest({
     persistEvalResults();
   };
 
-  const persistEvalResults = async () => {
+  const persistEvalResults = async (tasksOverride?: EvalTask[]) => {
     if (!agentId) return;
     try {
       const { saveEvalResults } = await import("@/lib/openclaw/eval-persistence");
       await saveEvalResults(agentId, {
         sandboxId: agentSandboxId,
         mode: evalMode,
-        tasks: evalTasks,
+        tasks: tasksOverride ?? evalTasks,
         loopState: evalLoopState.scores.length > 0 ? evalLoopState : null,
       });
     } catch (err) {
       console.warn("[Eval] Failed to persist results:", err);
     }
+  };
+
+  const handleApproveManualResults = () => {
+    const approvedTasks = approveManualEvalTasks(evalTasks);
+    approvedTasks.forEach((task, index) => {
+      if (task !== evalTasks[index]) {
+        store.updateEvalTask(task.id, task);
+      }
+    });
+    store.setEvalStatus("done");
+    persistEvalResults(approvedTasks);
   };
 
   const handleRunAutoImprove = async () => {
@@ -3143,54 +3397,79 @@ function StageTest({
   // Empty state — generate scenarios
   if (totalCount === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <div className="w-12 h-12 rounded-2xl bg-[var(--primary)]/8 border border-[var(--primary)]/15 flex items-center justify-center mb-4">
-          <FlaskConical className="h-5 w-5 text-[var(--primary)]" />
+      <div className="p-4 space-y-4">
+        <ArtifactActionBar
+          target={testTarget}
+          canApprove={canApproveTest}
+          canRegenerate
+          onApprove={onApprove}
+          onRequestChanges={artifactActions.requestChanges}
+          onRegenerate={artifactActions.regenerate}
+          onCompare={artifactActions.compare}
+          onExplain={artifactActions.explain}
+          onOpenFiles={artifactActions.openFiles}
+        />
+        <div className="flex flex-col items-center justify-center py-12">
+          <div className="w-12 h-12 rounded-2xl bg-[var(--primary)]/8 border border-[var(--primary)]/15 flex items-center justify-center mb-4">
+            <FlaskConical className="h-5 w-5 text-[var(--primary)]" />
+          </div>
+          <p className="text-xs font-satoshi-medium text-[var(--text-secondary)]">
+            No evaluation tasks yet
+          </p>
+          <p className="mt-1 text-[10px] font-satoshi-regular text-[var(--text-tertiary)] text-center max-w-xs">
+            Generate test scenarios based on your agent&apos;s skills and requirements.
+            {` ${containerState.emptyStateMessage}`}
+          </p>
+          {generating ? (
+            <div className="mt-4 flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 text-[var(--primary)] animate-spin" />
+              <span className="text-xs font-satoshi-medium text-[var(--primary)]">
+                {generating === "ai" ? "AI generating scenarios..." : "Generating..."}
+              </span>
+            </div>
+          ) : (
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                onClick={handleGenerateQuick}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-[var(--primary)] bg-[var(--primary)]/10 border border-[var(--primary)]/20 rounded-lg hover:bg-[var(--primary)]/15 transition-colors"
+              >
+                <Zap className="h-3 w-3" />
+                Quick Generate
+              </button>
+              <button
+                onClick={handleGenerateAI}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
+              >
+                <Bot className="h-3 w-3" />
+                AI Generate
+              </button>
+            </div>
+          )}
+          <button
+            onClick={onApprove}
+            className="mt-3 text-[10px] font-satoshi-regular text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            Skip tests →
+          </button>
         </div>
-        <p className="text-xs font-satoshi-medium text-[var(--text-secondary)]">
-          No evaluation tasks yet
-        </p>
-        <p className="mt-1 text-[10px] font-satoshi-regular text-[var(--text-tertiary)] text-center max-w-xs">
-          Generate test scenarios based on your agent&apos;s skills and requirements.
-          {` ${containerState.emptyStateMessage}`}
-        </p>
-        {generating ? (
-          <div className="mt-4 flex items-center gap-2">
-            <Loader2 className="h-3.5 w-3.5 text-[var(--primary)] animate-spin" />
-            <span className="text-xs font-satoshi-medium text-[var(--primary)]">
-              {generating === "ai" ? "AI generating scenarios..." : "Generating..."}
-            </span>
-          </div>
-        ) : (
-          <div className="mt-4 flex items-center gap-2">
-            <button
-              onClick={handleGenerateQuick}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-[var(--primary)] bg-[var(--primary)]/10 border border-[var(--primary)]/20 rounded-lg hover:bg-[var(--primary)]/15 transition-colors"
-            >
-              <Zap className="h-3 w-3" />
-              Quick Generate
-            </button>
-            <button
-              onClick={handleGenerateAI}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
-            >
-              <Bot className="h-3 w-3" />
-              AI Generate
-            </button>
-          </div>
-        )}
-        <button
-          onClick={onApprove}
-          className="mt-3 text-[10px] font-satoshi-regular text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
-        >
-          Skip tests →
-        </button>
       </div>
     );
   }
 
   return (
     <div className="p-4 space-y-3">
+      <ArtifactActionBar
+        target={testTarget}
+        canApprove={canApproveTest}
+        canRegenerate
+        onApprove={onApprove}
+        onRequestChanges={artifactActions.requestChanges}
+        onRegenerate={artifactActions.regenerate}
+        onCompare={artifactActions.compare}
+        onExplain={artifactActions.explain}
+        onOpenFiles={artifactActions.openFiles}
+      />
+
       {/* Summary bar */}
       <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-subtle)]/50 px-4 py-3">
         <div className="flex items-center justify-between">
@@ -3377,22 +3656,14 @@ function StageTest({
       {allDone && (
         <div className="pt-2 space-y-3">
           <div className={`rounded-xl border px-4 py-3 ${
-            hasFailures
+            hasFailures || hasManualReview
               ? "border-amber-500/20 bg-amber-500/5"
               : "border-[var(--primary)]/20 bg-[var(--primary)]/5"
           }`}>
             <p className={`text-xs font-satoshi-medium ${
-              hasFailures ? "text-amber-600" : "text-[var(--primary)]"
+              hasFailures || hasManualReview ? "text-amber-600" : "text-[var(--primary)]"
             }`}>
-              {hasFailures
-                ? `${failCount} test${failCount !== 1 ? "s" : ""} failed. ${
-                    hasRealContainer && runMode === "single"
-                      ? "Try Auto-Improve to iteratively fix skills."
-                      : "Review the results above."
-                  }`
-                : evalLoopState.scores.length > 0
-                  ? `All tests passed after ${evalLoopState.iteration} iteration(s). Skills have been optimized.`
-                  : "All tests passed. Approve to proceed to deployment."}
+              {evalReviewState.message}
             </p>
           </div>
           <div className="flex items-center justify-between">
@@ -3404,6 +3675,24 @@ function StageTest({
                 >
                   <RotateCcw className="h-3 w-3" />
                   Re-run Failed
+                </button>
+              )}
+              {canRerunManual && (
+                <button
+                  onClick={() => handleRunTasks("manual")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Re-run Manual
+                </button>
+              )}
+              {canApproveManual && (
+                <button
+                  onClick={handleApproveManualResults}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-satoshi-medium text-amber-600 hover:text-amber-700 transition-colors"
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                  Mark Manual Passed
                 </button>
               )}
               {hasFailures && hasRealContainer && runMode !== "auto-improve" && (
@@ -3418,10 +3707,11 @@ function StageTest({
             </div>
             <button
               onClick={onApprove}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
+              disabled={!canApproveTest}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <CheckCircle2 className="h-3 w-3" />
-              {hasFailures ? "Approve with Failures" : "Approve Tests"}
+              {evalReviewState.buttonLabel}
             </button>
           </div>
         </div>
@@ -4458,15 +4748,18 @@ function StageReflect({
         <div>
           <p className="text-xs font-satoshi-bold text-[var(--text-secondary)] mb-2">Workflow</p>
           <div className="flex flex-wrap gap-1.5">
-            {workflow.steps.map((step, i) => (
-              <span
-                key={`${step.id}-${i}`}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-[var(--border-default)] bg-[var(--card-color)] text-[10px] font-satoshi-medium text-[var(--text-secondary)]"
-              >
-                {step.skill.replace(/_/g, " ")}
-                {i < workflow.steps.length - 1 && <ChevronRight className="h-2.5 w-2.5 text-[var(--text-tertiary)]" />}
-              </span>
-            ))}
+            {workflow.steps.map((step, i) => {
+              const label = formatWorkflowStepLabel(step, i);
+              return (
+                <span
+                  key={`${label}-${i}`}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-[var(--border-default)] bg-[var(--card-color)] text-[10px] font-satoshi-medium text-[var(--text-secondary)]"
+                >
+                  {label}
+                  {i < workflow.steps.length - 1 && <ChevronRight className="h-2.5 w-2.5 text-[var(--text-tertiary)]" />}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}

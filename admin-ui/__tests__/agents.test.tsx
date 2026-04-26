@@ -47,6 +47,7 @@ describe("AgentsPage", () => {
     mockFetch.mockClear();
     globalThis.fetch = mockFetch as unknown as typeof fetch;
     localStorage.setItem("accessToken", "t");
+    window.confirm = mock(() => true);
   });
 
   afterEach(() => {
@@ -136,5 +137,274 @@ describe("AgentsPage", () => {
       expect(container.textContent).toContain("forging");
     });
     expect(container.textContent).toContain("draft");
+  });
+
+  test("handles fetch error gracefully", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.reject(new Error("Connection refused")),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Connection refused");
+    });
+  });
+
+  test("handles non-Error fetch rejection", async () => {
+    mockFetch.mockImplementation(() => Promise.reject("string error"));
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("Failed to load agents");
+    });
+  });
+
+  test("renders no agents message when list is empty", async () => {
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("No agents matched");
+    });
+  });
+
+  test("renders agent with no org fallback text", async () => {
+    const noOrgAgent = {
+      ...agentRecord,
+      id: "a4",
+      orgName: null,
+      orgSlug: null,
+      orgKind: null,
+      creatorDisplayName: null,
+      creatorEmail: null,
+      description: "",
+    };
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [noOrgAgent], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("No owning organization recorded");
+    });
+    expect(container.textContent).toContain("Unknown creator");
+    expect(container.textContent).toContain("No agent description saved.");
+  });
+
+  test("renders customer org kind as warning tone", async () => {
+    const customerOrgAgent = {
+      ...agentRecord,
+      id: "a5",
+      orgKind: "customer",
+    };
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [customerOrgAgent], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(container.textContent).toContain("customer");
+    });
+  });
+
+  test("calls restartSandboxes when Restart runtime is clicked", async () => {
+    window.confirm = mock(() => true);
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Restart runtime")).toBeTruthy();
+    });
+
+    mockFetch.mockClear();
+    await act(async () => {
+      await userEvent.click(getByText("Restart runtime"));
+    });
+
+    expect(window.confirm).toHaveBeenCalled();
+    await waitFor(() => {
+      const postCall = mockFetch.mock.calls.find((call) => {
+        const [url, init] = call as [string, RequestInit | undefined];
+        return url.includes("/restart") && init?.method === "POST";
+      });
+      expect(postCall).toBeTruthy();
+    });
+  });
+
+  test("calls restartSandboxes for forge when Restart forge is clicked", async () => {
+    window.confirm = mock(() => true);
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Restart forge")).toBeTruthy();
+    });
+
+    mockFetch.mockClear();
+    await act(async () => {
+      await userEvent.click(getByText("Restart forge"));
+    });
+
+    expect(window.confirm).toHaveBeenCalled();
+  });
+
+  test("does not restart when confirmation is cancelled", async () => {
+    window.confirm = mock(() => false);
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Restart runtime")).toBeTruthy();
+    });
+
+    const callCountBefore = mockFetch.mock.calls.length;
+    await act(async () => {
+      await userEvent.click(getByText("Restart runtime"));
+    });
+
+    const postCalls = mockFetch.mock.calls.slice(callCountBefore).filter((call) => {
+      const [, init] = call as [string, RequestInit | undefined];
+      return init?.method === "POST";
+    });
+    expect(postCalls.length).toBe(0);
+  });
+
+  test("calls deleteAgent when Delete agent is clicked and confirmed", async () => {
+    window.confirm = mock(() => true);
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Delete agent")).toBeTruthy();
+    });
+
+    mockFetch.mockClear();
+    await act(async () => {
+      await userEvent.click(getByText("Delete agent"));
+    });
+
+    expect(window.confirm).toHaveBeenCalled();
+    await waitFor(() => {
+      const deleteCall = mockFetch.mock.calls.find((call) => {
+        const [, init] = call as [string, RequestInit | undefined];
+        return init?.method === "DELETE";
+      });
+      expect(deleteCall).toBeTruthy();
+    });
+  });
+
+  test("does not delete when confirmation is cancelled", async () => {
+    window.confirm = mock(() => false);
+    mockFetch.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+      } as Response),
+    );
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Delete agent")).toBeTruthy();
+    });
+
+    const callCountBefore = mockFetch.mock.calls.length;
+    await act(async () => {
+      await userEvent.click(getByText("Delete agent"));
+    });
+
+    const deleteCalls = mockFetch.mock.calls.slice(callCountBefore).filter((call) => {
+      const [, init] = call as [string, RequestInit | undefined];
+      return init?.method === "DELETE";
+    });
+    expect(deleteCalls.length).toBe(0);
+  });
+
+  test("shows error when restartSandboxes fails", async () => {
+    window.confirm = mock(() => true);
+    let callCount = 0;
+    mockFetch.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ message: "Restart failed" }),
+      } as unknown as Response);
+    });
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container, getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Restart runtime")).toBeTruthy();
+    });
+
+    await act(async () => {
+      await userEvent.click(getByText("Restart runtime"));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Restart failed");
+    });
+  });
+
+  test("shows error when deleteAgent fails", async () => {
+    window.confirm = mock(() => true);
+    let callCount = 0;
+    mockFetch.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ items: [agentRecord], total: 1 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ message: "Delete failed" }),
+      } as unknown as Response);
+    });
+    const { default: AgentsPage } = await import("../app/(admin)/agents/page");
+    const { container, getByText } = render(<AgentsPage />);
+    await waitFor(() => {
+      expect(getByText("Delete agent")).toBeTruthy();
+    });
+
+    await act(async () => {
+      await userEvent.click(getByText("Delete agent"));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Delete failed");
+    });
   });
 });

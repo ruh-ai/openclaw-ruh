@@ -4,7 +4,7 @@ export interface SharedCodexSandboxLike {
   shared_codex_model?: string | null;
 }
 
-const DEFAULT_SHARED_CODEX_MODEL = "openai-codex/gpt-5.4";
+const DEFAULT_SHARED_CODEX_MODEL = "openai-codex/gpt-5.5";
 
 export function isSharedCodexSandbox(
   sandbox: SharedCodexSandboxLike | null | undefined,

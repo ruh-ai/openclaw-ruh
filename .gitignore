@@ -53,3 +53,10 @@ ruh-backend/coverage/
 # ── E2E artifacts ─────────────────────────────────────────────────────────────
 **/*.e2e-*.png
 **/e2e-*.png
+
+# ── Playwright MCP debug artifacts ────────────────────────────────────────────
+.playwright-mcp/
+openai-auth-snapshot.md
+
+# ── Editor backups ────────────────────────────────────────────────────────────
+*.bak

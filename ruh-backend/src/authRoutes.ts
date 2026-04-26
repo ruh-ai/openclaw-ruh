@@ -2,7 +2,7 @@
  * Auth routes — register, login, refresh, logout, profile.
  *
  * Refresh tokens are raw UUIDs stored in the session table.
- * Access tokens are short-lived JWTs (15 min).
+ * Access tokens are JWTs (7 days).
  *
  * @kb: 014-auth-system 004-api-reference
  */
@@ -37,16 +37,23 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
   };
 }
 
+// NOTE: httpOnly is false because the frontend's client-side cookie manager
+// (services/authCookies.client.ts) writes the same cookie names from
+// document.cookie so middleware can read them. Cookies do not distinguish
+// between ports on the same host, so an HttpOnly cookie set by this backend
+// on `localhost` silently blocks the frontend on a different port from
+// overwriting it — breaking the login flow. Keep httpOnly: false so both
+// sides can manage these cookies cooperatively.
 const COOKIE_OPTS_ACCESS = {
-  httpOnly: true,
+  httpOnly: false,
   secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
-  maxAge: 15 * 60 * 1000, // 15 min
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   path: '/',
 };
 
 const COOKIE_OPTS_REFRESH = {
-  httpOnly: true,
+  httpOnly: false,
   secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days

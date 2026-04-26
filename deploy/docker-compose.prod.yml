@@ -119,6 +119,12 @@ services:
     volumes:
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_webroot:/var/www/certbot:ro
+    # Required so the hermes.codezero2pi.com vhost can proxy to the
+    # hermes-backend (:8100) and mission-control (:3333) systemd services
+    # that run on the host, not in this compose network. Without this,
+    # proxy_pass http://host.docker.internal:... returns 502 on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - internal

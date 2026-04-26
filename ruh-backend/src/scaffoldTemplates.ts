@@ -18,7 +18,7 @@ export interface ArchitecturePlan {
   skills: ArchitecturePlanSkill[];
   workflow: { steps: Array<{ skillId: string; parallel?: boolean }> };
   integrations: Array<{ name: string; method: string }>;
-  triggers: Array<{ type: string; config?: Record<string, unknown> }>;
+  triggers: Array<{ type: string; name?: string; schedule?: string; every?: string; cron?: string; skillId?: string; message?: string; config?: Record<string, unknown> }>;
   channels: string[];
   envVars: ArchitecturePlanEnvVar[];
   subAgents: Array<{ id: string; name: string }>;
@@ -31,22 +31,233 @@ export interface ArchitecturePlan {
   buildDependencies?: Array<{ from: string; to: string }>;
 }
 
-// Minimal normalizePlan — fills missing fields
-function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as UnknownRecord
+    : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function asStringArray(value: unknown): string[] {
+  return asArray(value)
+    .map((entry) => typeof entry === "string" ? entry.trim() : "")
+    .filter(Boolean);
+}
+
+function slugifyValue(value: string, fallback: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    || fallback;
+}
+
+function normalizeDashboardComponentType(value: string): string {
+  const lower = value.toLowerCase();
+  if (lower.includes("metric") || lower.includes("card") || lower.includes("kpi")) return "metric-cards";
+  if (lower.includes("activity") || lower.includes("feed") || lower.includes("log")) return "activity-feed";
+  if (lower.includes("bar")) return "bar-chart";
+  if (lower.includes("pie")) return "pie-chart";
+  if (lower.includes("line") || lower.includes("trend") || lower.includes("chart")) return "line-chart";
+  if (lower.includes("empty")) return "empty-state";
+  if (lower.includes("status")) return "status-badge";
+  return "data-table";
+}
+
+function normalizeDataSchema(value: unknown): DataSchema | null {
+  const schema = asRecord(value);
+  const tables = asArray(schema.tables).map((rawTable, tableIndex) => {
+    const table = asRecord(rawTable);
+    const name = asString(table.name, `table_${tableIndex + 1}`);
+    const columns = asArray(table.columns).map((rawColumn, columnIndex) => {
+      if (typeof rawColumn === "string") {
+        return { name: rawColumn.trim() || `column_${columnIndex + 1}`, type: "text" };
+      }
+      const column = asRecord(rawColumn);
+      return {
+        name: asString(column.name, `column_${columnIndex + 1}`),
+        type: asString(column.type, "text"),
+        description: asString(column.description),
+      };
+    });
+    const indexes = asArray(table.indexes).map((rawIndex) => {
+      if (typeof rawIndex === "string") return { columns: [rawIndex] };
+      const index = asRecord(rawIndex);
+      return { columns: asStringArray(index.columns) };
+    }).filter((index) => index.columns.length > 0);
+    return { name, columns, indexes };
+  });
+
+  return tables.length > 0 ? { tables } : null;
+}
+
+// Normalize loose architect output into the stricter scaffold contract.
+export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
+  const apiEndpoints = asArray(raw.apiEndpoints).map((rawEndpoint, index) => {
+    if (typeof rawEndpoint === "string") {
+      const path = rawEndpoint.startsWith("/") ? rawEndpoint : `/api/${slugifyValue(rawEndpoint, `endpoint-${index + 1}`)}`;
+      return { method: "GET", path, description: rawEndpoint };
+    }
+    const endpoint = asRecord(rawEndpoint);
+    const purpose = asString(endpoint.purpose);
+    const description = asString(endpoint.description, purpose);
+    const label = description || asString(endpoint.name, `endpoint-${index + 1}`);
+    let path = asString(endpoint.path, `/api/${slugifyValue(label, `endpoint-${index + 1}`)}`);
+    if (!path.startsWith("/")) path = `/${path}`;
+    return {
+      method: asString(endpoint.method, "GET").toUpperCase(),
+      path,
+      description: description || `${asString(endpoint.method, "GET").toUpperCase()} ${path}`,
+      query: asString(endpoint.query),
+      responseShape: asString(endpoint.responseShape),
+    };
+  });
+
+  const dashboardDataSource = apiEndpoints[0]?.path ?? "/api/status";
+  const skills = asArray(raw.skills).map((rawSkill, index) => {
+    if (typeof rawSkill === "string") {
+      const name = rawSkill.trim() || `Skill ${index + 1}`;
+      return {
+        id: slugifyValue(name, `skill-${index + 1}`),
+        name,
+        description: name,
+        dependencies: [],
+        envVars: [],
+      };
+    }
+    const skill = asRecord(rawSkill);
+    const name = asString(skill.name, asString(skill.id, `Skill ${index + 1}`));
+    return {
+      id: asString(skill.id, slugifyValue(name, `skill-${index + 1}`)),
+      name,
+      description: asString(skill.description, name),
+      dependencies: asStringArray(skill.dependencies ?? skill.depends_on),
+      envVars: asStringArray(skill.envVars ?? skill.requires_env),
+      toolType: asString(skill.toolType ?? skill.tool_type),
+      externalApi: asString(skill.externalApi ?? skill.external_api),
+    };
+  });
+
+  const workflowRecord = asRecord(raw.workflow);
+  const workflowSteps = asArray(workflowRecord.steps).map((rawStep) => {
+    if (typeof rawStep === "string") return { skillId: rawStep, parallel: false };
+    const step = asRecord(rawStep);
+    return {
+      skillId: asString(step.skillId ?? step.skill ?? step.id),
+      parallel: Boolean(step.parallel),
+    };
+  }).filter((step) => step.skillId);
+
   return {
-    skills: (raw.skills as ArchitecturePlanSkill[]) ?? [],
-    workflow: (raw.workflow as ArchitecturePlan['workflow']) ?? { steps: [] },
-    integrations: (raw.integrations as ArchitecturePlan['integrations']) ?? [],
-    triggers: (raw.triggers as ArchitecturePlan['triggers']) ?? [],
-    channels: (raw.channels as string[]) ?? [],
-    envVars: (raw.envVars as ArchitecturePlanEnvVar[]) ?? [],
-    subAgents: (raw.subAgents as ArchitecturePlan['subAgents']) ?? [],
+    skills,
+    workflow: { steps: workflowSteps },
+    integrations: asArray(raw.integrations).map((rawIntegration, index) => {
+      if (typeof rawIntegration === "string") {
+        return { name: rawIntegration, method: "api" };
+      }
+      const integration = asRecord(rawIntegration);
+      return {
+        name: asString(integration.name ?? integration.toolId, `integration-${index + 1}`),
+        method: asString(integration.method, "api"),
+      };
+    }),
+    triggers: asArray(raw.triggers).map((rawTrigger) => {
+      if (typeof rawTrigger === "string") return { type: "manual", name: rawTrigger };
+      return rawTrigger as ArchitecturePlan["triggers"][number];
+    }),
+    channels: asStringArray(raw.channels),
+    envVars: asArray(raw.envVars).map((rawEnv, index) => {
+      if (typeof rawEnv === "string") {
+        const key = rawEnv.trim() || `VAR_${index + 1}`;
+        return {
+          key,
+          label: key,
+          description: key,
+          required: true,
+          inputType: "text",
+          group: "General",
+        };
+      }
+      const env = asRecord(rawEnv);
+      const key = asString(env.key ?? env.name, `VAR_${index + 1}`);
+      return {
+        key,
+        label: asString(env.label, key),
+        description: asString(env.description, key),
+        required: typeof env.required === "boolean" ? env.required : true,
+        inputType: asString(env.inputType ?? env.type, "text"),
+        group: asString(env.group, "General"),
+        example: asString(env.example),
+        defaultValue: asString(env.defaultValue),
+      };
+    }),
+    subAgents: asArray(raw.subAgents).map((rawAgent, index) => {
+      if (typeof rawAgent === "string") {
+        return { id: slugifyValue(rawAgent, `sub-agent-${index + 1}`), name: rawAgent };
+      }
+      const agent = asRecord(rawAgent);
+      const name = asString(agent.name, `Sub Agent ${index + 1}`);
+      return { id: asString(agent.id, slugifyValue(name, `sub-agent-${index + 1}`)), name };
+    }),
     missionControl: raw.missionControl ?? null,
     soulContent: raw.soulContent as string | undefined,
-    dataSchema: (raw.dataSchema as DataSchema | null) ?? null,
-    apiEndpoints: (raw.apiEndpoints as ApiEndpoint[]) ?? [],
-    dashboardPages: (raw.dashboardPages as DashboardPage[]) ?? [],
-    vectorCollections: (raw.vectorCollections as ArchitecturePlan['vectorCollections']) ?? [],
+    dataSchema: normalizeDataSchema(raw.dataSchema),
+    apiEndpoints,
+    dashboardPages: asArray(raw.dashboardPages).map((rawPage, index) => {
+      if (typeof rawPage === "string") {
+        return {
+          path: `/${slugifyValue(rawPage, `page-${index + 1}`)}`,
+          title: rawPage,
+          components: [{ type: "data-table", title: rawPage, dataSource: dashboardDataSource }],
+        };
+      }
+      const page = asRecord(rawPage);
+      const title = asString(page.title, asString(page.name, `Page ${index + 1}`));
+      let path = asString(page.path, `/${slugifyValue(title, `page-${index + 1}`)}`);
+      if (!path.startsWith("/")) path = `/${path}`;
+      const components = asArray(page.components).map((rawComponent, componentIndex) => {
+        if (typeof rawComponent === "string") {
+          return {
+            type: normalizeDashboardComponentType(rawComponent),
+            title: rawComponent,
+            dataSource: dashboardDataSource,
+          };
+        }
+        const component = asRecord(rawComponent);
+        const typeLabel = asString(component.type, `component-${componentIndex + 1}`);
+        return {
+          type: normalizeDashboardComponentType(typeLabel),
+          title: asString(component.title, typeLabel),
+          dataSource: asString(component.dataSource ?? component.endpoint, dashboardDataSource),
+          config: asRecord(component.config),
+        };
+      });
+      return {
+        path,
+        title,
+        description: asString(page.description),
+        components: components.length > 0
+          ? components
+          : [{ type: "data-table", title, dataSource: dashboardDataSource }],
+      };
+    }),
+    vectorCollections: asArray(raw.vectorCollections).map((rawCollection, index) => {
+      if (typeof rawCollection === "string") {
+        return { name: rawCollection, description: rawCollection };
+      }
+      const collection = asRecord(rawCollection);
+      const name = asString(collection.name, `collection-${index + 1}`);
+      return { name, description: asString(collection.description, name) };
+    }),
     buildDependencies: (raw.buildDependencies as ArchitecturePlan['buildDependencies']) ?? [],
   };
 }
@@ -103,6 +314,7 @@ function generatePackageJson(plan: ArchitecturePlan, agentName: string): Scaffol
       dev: "tsx watch backend/index.ts",
       start: "node --loader tsx backend/index.ts",
       "db:migrate": "tsx db/migrate.ts",
+      "db:seed": "tsx db/seed.ts",
       build: "tsc",
       test: "vitest run",
     },
@@ -242,9 +454,10 @@ function generateTsconfig(): ScaffoldFile {
       skipLibCheck: true,
       resolveJsonModule: true,
       declaration: true,
+      jsx: "react-jsx",
       paths: { "@/*": ["./*"] },
     },
-    include: ["**/*.ts"],
+    include: ["**/*.ts", "**/*.tsx"],
     exclude: ["node_modules", "dist"],
   };
   return {
@@ -342,6 +555,17 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
     });
   }
 
+  // Install cron jobs from the plan's triggers
+  const hasTriggers = (plan.triggers?.length ?? 0) > 0;
+  if (hasTriggers) {
+    setup.push({
+      name: "install-cron-jobs",
+      command: "sh $HOME/.openclaw/workspace/.openclaw/install-crons.sh 2>&1",
+      condition: "file:.openclaw/install-crons.sh",
+      optional: true,
+    });
+  }
+
   // Single-port architecture: the backend serves both API AND dashboard static files.
   // No separate serve process — eliminates CORS, SPA routing, and proxy issues.
   const services: Array<{ name: string; command: string; port: number; healthCheck?: string; optional?: boolean }> = [];
@@ -354,13 +578,13 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
     });
     // Register dashboard on the same port so the builder tab discovers it
     if (hasDashboard) {
-      services.push({ name: "dashboard", command: "", port: 3100, optional: true });
+      services.push({ name: "dashboard", command: "", port: 3100, healthCheck: "/health", optional: true });
     }
   }
 
   const manifest = {
     schemaVersion: 1,
-    install: "NODE_ENV=development npm install",
+    install: "NODE_ENV=development npm install --include=dev",
     setup,
     services,
     requires: {
@@ -393,8 +617,37 @@ function pascalCase(title: string): string {
 function hookName(dataSource: string): string {
   // /api/amazon/overview → useAmazonOverview
   const parts = dataSource.replace(/^\/api\//, "").split(/[/?]/).filter(Boolean).filter(p => !p.startsWith(":"));
-  const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+  const name = parts
+    .flatMap((part) => part.split(/[^a-zA-Z0-9]+/).filter(Boolean))
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
   return `use${name || "Data"}`;
+}
+
+function legacyHookName(dataSource: string): string {
+  const parts = dataSource.replace(/^\/api\//, "").split(/[/?]/).filter(Boolean).filter(p => !p.startsWith(":"));
+  const name = parts
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+  return `use${name || "Data"}`;
+}
+
+export function staleScaffoldFilesForPlan(rawPlan: ArchitecturePlan | Record<string, unknown>): string[] {
+  const plan = normalizePlan(rawPlan as Record<string, unknown>);
+  const stale = new Set<string>(["dashboard/components/ui.ts"]);
+  const dataSources = new Set<string>();
+
+  for (const endpoint of plan.apiEndpoints ?? []) dataSources.add(endpoint.path);
+  for (const page of plan.dashboardPages ?? []) {
+    for (const component of page.components ?? []) dataSources.add(component.dataSource);
+  }
+
+  for (const dataSource of dataSources) {
+    const legacyName = legacyHookName(dataSource);
+    if (legacyName !== hookName(dataSource)) stale.add(`dashboard/hooks/${legacyName}.ts`);
+  }
+
+  return Array.from(stale);
 }
 
 function generateDashboardFiles(plan: ArchitecturePlan): ScaffoldFile[] {
@@ -447,9 +700,9 @@ export default defineConfig({
 `,
   });
 
-  // ── components/ui.ts — design tokens + shared styles ──
+  // ── components/ui.tsx — design tokens + shared styles ──
   files.push({
-    path: "dashboard/components/ui.ts",
+    path: "dashboard/components/ui.tsx",
     content: `import type { CSSProperties } from 'react';
 
 export const tokens = {
@@ -899,6 +1152,43 @@ export function authMiddleware(_req: Request, _res: Response, next: NextFunction
   return files;
 }
 
+// ─── Cron/trigger install script ─────────────────────────────────────────────
+// Generates a shell script that installs cron jobs via `openclaw cron add`.
+// Called during setup after services are running.
+
+function generateCronInstallScript(plan: ArchitecturePlan): ScaffoldFile | null {
+  const triggers = plan.triggers ?? [];
+  if (triggers.length === 0) return null;
+
+  const commands = triggers.map((t) => {
+    const trigger = t as { type?: string; name?: string; schedule?: string; skillId?: string; message?: string; every?: string; cron?: string };
+    if (trigger.type !== 'cron') return null;
+
+    const name = trigger.name ?? trigger.skillId ?? 'job';
+    const schedule = trigger.cron ?? trigger.schedule ?? trigger.every ?? '0 */1 * * *'; // default: every hour
+    const message = trigger.message ?? `Run ${trigger.skillId ?? name}`;
+
+    // Determine if it's a cron expression or an interval
+    const isCron = schedule.includes('*') || schedule.split(' ').length >= 5;
+    const scheduleFlag = isCron ? `--cron "${schedule}"` : `--every "${schedule}"`;
+
+    return `openclaw cron add --name "${name}" ${scheduleFlag} --message "${message.replace(/"/g, '\\"')}" --session isolated --json 2>/dev/null && echo "  ✅ ${name}" || echo "  ⚠️ ${name} (may already exist)"`;
+  }).filter(Boolean);
+
+  if (commands.length === 0) return null;
+
+  return {
+    path: ".openclaw/install-crons.sh",
+    content: `#!/bin/sh
+# Auto-generated cron job installer from architecture plan.
+# Run after the gateway is healthy.
+echo "Installing ${commands.length} scheduled job(s)..."
+${commands.join('\n')}
+echo "Done."
+`,
+  };
+}
+
 // ─── Master function ─────────────────────────────────────────────────────────
 
 /**
@@ -912,6 +1202,7 @@ export function generateScaffoldFiles(
   // Normalize: fill missing fields to prevent crashes from architect omissions
   const plan = normalizePlan(rawPlan as unknown as Record<string, unknown>);
   const backendEntry = generateBackendEntryFile(plan);
+  const cronScript = generateCronInstallScript(plan);
   return [
     generatePackageJson(plan, agentName),
     generateDockerfile(),
@@ -924,5 +1215,6 @@ export function generateScaffoldFiles(
     ...(backendEntry ? [backendEntry] : []),
     ...generatePlaceholderRoutes(plan),
     ...generateDashboardFiles(plan),
+    ...(cronScript ? [cronScript] : []),
   ];
 }

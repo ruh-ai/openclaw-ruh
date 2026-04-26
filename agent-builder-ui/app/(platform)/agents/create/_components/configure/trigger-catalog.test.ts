@@ -91,7 +91,7 @@ describe("trigger-catalog", () => {
     ]);
   });
 
-  test("normalizes legacy chat-command selections to unsupported on reopen", () => {
+  test("marks unknown trigger IDs as unsupported on reopen", () => {
     const rebuiltSelections = buildTriggerSelections(
       new Set(["chat-command"]),
       [
@@ -100,7 +100,7 @@ describe("trigger-catalog", () => {
           title: "Chat Command",
           kind: "manual",
           status: "supported",
-          description: "Legacy saved trigger from the old mock picker.",
+          description: "Saved trigger not in current catalog.",
         },
       ],
     );
@@ -111,12 +111,12 @@ describe("trigger-catalog", () => {
         title: "Chat Command",
         kind: "manual",
         status: "unsupported",
-        description: "Legacy saved trigger from the old mock picker.",
+        description: "Saved trigger not in current catalog.",
       },
     ]);
   });
 
-  test("normalizes legacy generic webhook selections to unsupported on reopen", () => {
+  test("marks unknown webhook trigger IDs as unsupported on reopen", () => {
     const rebuiltSelections = buildTriggerSelections(
       new Set(["webhook"]),
       [
@@ -125,7 +125,7 @@ describe("trigger-catalog", () => {
           title: "Instant webhook",
           kind: "webhook",
           status: "supported",
-          description: "Legacy saved trigger before runtime-backed webhook ids existed.",
+          description: "Saved trigger not in current catalog.",
         },
       ],
     );
@@ -136,7 +136,7 @@ describe("trigger-catalog", () => {
         title: "Instant webhook",
         kind: "webhook",
         status: "unsupported",
-        description: "Legacy saved trigger before runtime-backed webhook ids existed.",
+        description: "Saved trigger not in current catalog.",
       },
     ]);
   });

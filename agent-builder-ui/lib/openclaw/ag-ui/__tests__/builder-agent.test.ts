@@ -10,7 +10,7 @@ mock.module("@/lib/openclaw/api", () => ({
   BridgeApiError: class BridgeApiError extends Error { status; constructor(m: string, s = 0) { super(m); this.status = s; } },
 }));
 
-const { BuilderAgent } = await import("../builder-agent");
+const { BuilderAgent, PLAN_SYSTEM_INSTRUCTION } = await import("../builder-agent");
 const { CustomEventName } = await import("../types");
 
 function collectBuilderEvents(response: unknown) {
@@ -70,6 +70,14 @@ describe("BuilderAgent", () => {
   beforeEach(() => {
     mockSendToArchitectStreaming.mockReset();
     mockSendToForgeSandboxChat.mockReset();
+  });
+
+  test("instructs plan-stage env vars to include setup population strategy", () => {
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("populationStrategy");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("user_required");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("ai_inferred");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("static_default");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("defaultValue");
   });
 
   test("normalizes object-shaped clarification questions into conversational text", async () => {
@@ -828,6 +836,144 @@ describe("BuilderAgent", () => {
     expect(skillGraphReadyIndex).toBeGreaterThanOrEqual(0);
     expect(textMessageEndIndex).toBeGreaterThanOrEqual(0);
     expect(skillGraphReadyIndex).toBeLessThan(textMessageEndIndex);
+  });
+
+  test("extracts streamed ask_user markers whose options contain slashes", async () => {
+    mockSendToArchitectStreaming.mockImplementationOnce(
+      async (
+        _sessionId: string,
+        _message: string,
+        callbacks?: { onDelta?: (delta: string) => void },
+      ) => {
+        callbacks?.onDelta?.(
+          [
+            "Two checkpoints:",
+            "<ask_user id=\"q2\" type=\"multiselect\" question=\"Which Ruh builder surfaces should it test first?\" options='[\"Web UI pages\",\"Backend lifecycle APIs/logs\",\"Generated workspace files\",\"Local database/state\"]'/>",
+            "<ask_user id=\"q3\" type=\"multiselect\" question=\"What counts as stage readiness?\" options='[\"Visible UI state\",\"Expected files\",\"Log markers\",\"API status\",\"Database/state checks\"]'/>",
+          ].join("\n"),
+        );
+
+        return {
+          type: "agent_response",
+          content: "Two checkpoints.",
+        };
+      },
+    );
+
+    const agent = new BuilderAgent({
+      sessionId: "session-1",
+      mode: "copilot",
+    });
+    const events: Array<Record<string, unknown>> = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const subscription = agent.run({
+        threadId: "thread-1",
+        runId: "run-1",
+        messages: [{ id: "msg-1", role: "user", content: "Build a QA agent" }],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {
+          wizardState: {
+            devStage: "think",
+            name: "Flow QA Sentinel",
+            description: "Tests the builder lifecycle",
+            selectedSkillIds: [],
+            connectedTools: [],
+            triggers: [],
+            agentRules: [],
+          },
+        },
+      }).subscribe({
+        next: (event) => events.push(event as Record<string, unknown>),
+        error: reject,
+        complete: () => {
+          subscription.unsubscribe();
+          resolve();
+        },
+      });
+    });
+
+    const askUserEvents = events.filter(
+      (event) => event.type === EventType.CUSTOM && event.name === "ask_user",
+    );
+
+    expect(askUserEvents).toHaveLength(2);
+    expect(askUserEvents).toContainEqual(expect.objectContaining({
+      value: expect.objectContaining({
+        id: "q2",
+        options: expect.arrayContaining(["Backend lifecycle APIs/logs", "Local database/state"]),
+      }),
+    }));
+    expect(askUserEvents).toContainEqual(expect.objectContaining({
+      value: expect.objectContaining({
+        id: "q3",
+        options: expect.arrayContaining(["Database/state checks"]),
+      }),
+    }));
+  });
+
+  test("does not re-emit markers from stream overlap windows", async () => {
+    mockSendToArchitectStreaming.mockImplementationOnce(
+      async (
+        _sessionId: string,
+        _message: string,
+        callbacks?: { onDelta?: (delta: string) => void },
+      ) => {
+        callbacks?.onDelta?.('<think_step step="research" status="started"/>');
+        callbacks?.onDelta?.(" Continuing the same response after the marker.");
+
+        return {
+          type: "agent_response",
+          content: "Continuing the same response after the marker.",
+        };
+      },
+    );
+
+    const agent = new BuilderAgent({
+      sessionId: "session-1",
+      mode: "copilot",
+    });
+    const events: Array<Record<string, unknown>> = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const subscription = agent.run({
+        threadId: "thread-1",
+        runId: "run-1",
+        messages: [{ id: "msg-1", role: "user", content: "Build a QA agent" }],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {
+          wizardState: {
+            devStage: "think",
+            name: "Flow QA Sentinel",
+            description: "Tests the builder lifecycle",
+            selectedSkillIds: [],
+            connectedTools: [],
+            triggers: [],
+            agentRules: [],
+          },
+        },
+      }).subscribe({
+        next: (event) => events.push(event as Record<string, unknown>),
+        error: reject,
+        complete: () => {
+          subscription.unsubscribe();
+          resolve();
+        },
+      });
+    });
+
+    const thinkStepEvents = events.filter(
+      (event) => event.type === EventType.CUSTOM && event.name === "think_step",
+    );
+
+    expect(thinkStepEvents).toHaveLength(1);
+    expect(thinkStepEvents[0]).toEqual(expect.objectContaining({
+      value: { step: "research", status: "started" },
+    }));
   });
 });
 

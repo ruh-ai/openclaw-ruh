@@ -15,6 +15,17 @@ import { useState, useCallback } from "react";
 import { FileText, Wrench, SkipForward, ChevronRight, RefreshCw, Check } from "lucide-react";
 import type { DiscoveryDocuments, DiscoveryQuestion } from "@/lib/openclaw/types";
 import type { DiscoveryStatus } from "@/lib/openclaw/copilot-state";
+import { RequestChangesButton } from "../copilot/RequestChangesButton";
+import { ArtifactActionBar } from "../copilot/ArtifactActionBar";
+import type { ArtifactTarget } from "@/lib/openclaw/stage-context";
+
+interface DiscoveryArtifactActions {
+  requestChanges: (target: ArtifactTarget) => void;
+  regenerate: (target: ArtifactTarget) => void;
+  compare: (target: ArtifactTarget) => void;
+  explain: (target: ArtifactTarget) => void;
+  openFiles: (target: ArtifactTarget) => void;
+}
 
 interface StepDiscoveryProps {
   questions: DiscoveryQuestion[] | null;
@@ -27,6 +38,12 @@ interface StepDiscoveryProps {
   onContinue: () => void;
   onSkip: () => void;
   onRegenerate?: () => void;
+  /**
+   * Called when the user asks the architect to revise a specific artifact.
+   * Parent selects the target and switches chat into revision mode.
+   */
+  onRequestArtifactChange?: (target: ArtifactTarget) => void;
+  artifactActions?: DiscoveryArtifactActions;
 }
 
 export function StepDiscovery({
@@ -37,8 +54,13 @@ export function StepDiscovery({
   onContinue,
   onSkip,
   onRegenerate,
+  onRequestArtifactChange,
+  artifactActions,
 }: StepDiscoveryProps) {
   const [activeTab, setActiveTab] = useState<"prd" | "trd">("prd");
+  const activeTarget: ArtifactTarget = activeTab === "prd"
+    ? { kind: "prd", path: ".openclaw/discovery/PRD.md" }
+    : { kind: "trd", path: ".openclaw/discovery/TRD.md" };
 
   if (status === "loading") {
     return (
@@ -138,13 +160,46 @@ export function StepDiscovery({
 
       {/* Document sections */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {activeDoc.sections.map((section, idx) => (
-          <DocSectionCard
-            key={`${activeTab}-${idx}`}
-            heading={section.heading}
-            content={section.content}
-            onChange={(content) => onDocSectionEdit(activeTab, idx, content)}
+        {artifactActions ? (
+          <ArtifactActionBar
+            target={activeTarget}
+            canApprove={status === "ready"}
+            canRegenerate
+            onApprove={onContinue}
+            onRequestChanges={artifactActions.requestChanges}
+            onRegenerate={(target) => {
+              artifactActions.regenerate(target);
+              onRegenerate?.();
+            }}
+            onCompare={artifactActions.compare}
+            onExplain={artifactActions.explain}
+            onOpenFiles={artifactActions.openFiles}
           />
+        ) : onRequestArtifactChange ? (
+          <div className="flex justify-end">
+            <RequestChangesButton
+              target={activeTarget}
+              label={`Ask architect to revise ${activeTab.toUpperCase()}`}
+              onRequestRevision={onRequestArtifactChange}
+            />
+          </div>
+        ) : null}
+        {activeDoc.sections.map((section, idx) => (
+          <div key={`${activeTab}-${idx}`} className="space-y-1">
+            <DocSectionCard
+              heading={section.heading}
+              content={section.content}
+              onChange={(content) => onDocSectionEdit(activeTab, idx, content)}
+            />
+            {onRequestArtifactChange && (
+              <div className="pl-2">
+                <RequestChangesButton
+                  target={{ ...activeTarget, section: section.heading }}
+                  onRequestRevision={onRequestArtifactChange}
+                />
+              </div>
+            )}
+          </div>
         ))}
       </div>
 

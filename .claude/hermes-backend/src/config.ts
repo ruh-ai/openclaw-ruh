@@ -16,6 +16,7 @@ export interface HermesConfig {
   strategistIntervalMs: number;   // strategist self-assessment schedule
   projectRoot: string;            // cwd for agent subprocesses
   agentsDir: string;              // path to .claude/agents/
+  enableWorktreeIsolation: boolean; // per-job git worktree isolation
   defaultAgentRunner: AgentRunnerKind;
 }
 
@@ -43,6 +44,7 @@ export function getConfig(): HermesConfig {
     strategistIntervalMs: parseInt(process.env.STRATEGIST_INTERVAL_MS || '28800000', 10),   // 8h
     projectRoot,
     agentsDir,
+    enableWorktreeIsolation: process.env.HERMES_WORKTREE_ISOLATION !== 'false',
     defaultAgentRunner: selectedRunner,
   });
 }

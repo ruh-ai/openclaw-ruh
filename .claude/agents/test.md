@@ -164,6 +164,7 @@ The Hermes learning worker parses these markers from your output and uses them t
 - pattern: For narrow regression requests, add one focused test in the existing file and run that file first before any broader suite
 - pattern: For `agent-builder-ui` sandbox continuity regressions, reuse the nearest existing harness and patch one focused regression before any reproduction or broader test runs
 
+- unknown: 
 ## Learned Skills
 - Reframed a legacy Next.js home route from sandbox-shell behavior to installed-listings workspace coverage while keeping the verification loop focused to one Jest page spec plus typecheck.
 - <description> — for new capabilities you used

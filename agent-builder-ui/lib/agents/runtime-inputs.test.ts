@@ -217,7 +217,7 @@ describe("hasMissingRequiredInputs", () => {
     ).toBe(false);
   });
 
-  test("treats missing populationStrategy as user_required (backward compat)", () => {
+  test("treats missing populationStrategy as user_required", () => {
     expect(
       hasMissingRequiredInputs({
         runtimeInputs: [

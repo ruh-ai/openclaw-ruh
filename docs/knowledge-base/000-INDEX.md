@@ -122,7 +122,7 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-deployed-chat-task-and-terminal-history]] — Deployed-agent conversations persist bounded task-plan and terminal replay in the shared workspace history envelope
 - [[SPEC-graceful-shutdown]] — Backend shutdown contract for draining requests, terminating SSE streams, and closing the DB pool within a bounded grace period
 - [[SPEC-sandbox-conversation-cleanup]] — Sandbox deletion purges dependent conversation history and direct conversation routes fail closed after delete
-- [[SPEC-shared-codex-oauth-bootstrap]] — New sandboxes can seed shared OpenClaw/Codex auth state and default to `openai-codex/gpt-5.4`
+- [[SPEC-shared-codex-oauth-bootstrap]] — New sandboxes can seed shared OpenClaw/Codex auth state and default to `openai-codex/gpt-5.5`
 - [[SPEC-sandbox-bootstrap-config-apply-contract]] — Sandbox create fails closed unless required bootstrap config writes land and verify before `result`
 - [[SPEC-shared-codex-retrofit]] — Existing running sandboxes and the standalone builder gateway can be retrofitted in place to the shared Codex auth model
 - [[SPEC-agent-learning-and-journal]] — Contract for daily agent journals and reusable KB learning notes

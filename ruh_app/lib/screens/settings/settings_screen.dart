@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,7 +10,7 @@ import '../../config/responsive.dart';
 import '../../config/theme.dart';
 import '../../models/auth_session.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/theme_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../utils/error_formatter.dart';
 
 /// Key used to persist the backend URL in SharedPreferences.
@@ -70,7 +71,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           receiveTimeout: const Duration(seconds: 5),
         ),
       );
-      final response = await dio.get('/api/sandboxes');
+      final response = await dio.get('/health');
       if (response.statusCode != null && response.statusCode! < 400) {
         setState(() {
           _connectionStatus = _ConnectionStatus.success;
@@ -153,7 +154,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: session == null
                 ? 'Manage your account'
                 : '${session.user.email} • ${session.activeOrganization?.name ?? 'No organization'}',
-            onTap: () {},
+            onTap: () => context.push('/settings/profile'),
           ),
           if (customerMemberships.length > 1)
             Card(
@@ -234,7 +235,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             icon: LucideIcons.key,
             title: 'API Keys',
             subtitle: 'Manage LLM provider keys',
-            onTap: () {},
+            onTap: () => context.push('/settings/api-keys'),
           ),
           const SizedBox(height: 24),
           _SettingsTile(
@@ -286,6 +287,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ref
                           .read(themeModeProvider.notifier)
                           .setThemeMode(selected.first);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // -- Notifications toggle --
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Icon(
+                    LucideIcons.bell,
+                    size: IconSizes.lg,
+                    color: RuhTheme.primary,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Notifications',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        Text(
+                          'Agent tasks, errors, and health alerts',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final notifAsync =
+                          ref.watch(notificationsEnabledProvider);
+                      final enabled = notifAsync.valueOrNull ?? true;
+                      return Switch.adaptive(
+                        value: enabled,
+                        onChanged: (value) {
+                          ref
+                              .read(notificationsEnabledProvider.notifier)
+                              .setEnabled(value);
+                        },
+                        activeTrackColor: RuhTheme.primary,
+                      );
                     },
                   ),
                 ],

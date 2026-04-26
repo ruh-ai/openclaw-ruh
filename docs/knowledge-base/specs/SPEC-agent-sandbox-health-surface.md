@@ -40,7 +40,7 @@ The deployed-agent surfaces should expose live sandbox health instead of inferri
 
 ### UI interpretation rules
 
-- `running`: `container_running === true` and the backend returned a live gateway `status` signal indicating the sandbox is reachable.
+- `running`: `container_running === true` and the backend returned a live gateway signal indicating the sandbox is reachable. Current backend responses may report this as `status: "live"`, `gateway_reachable: true`, `ok: true`, `drift_state: "healthy"`, or the older gateway status strings (`running`, `healthy`, `ready`, etc.).
 - `stopped`: `container_running === false`.
 - `unreachable`: `container_running === true` but the gateway health payload is unavailable or not clearly healthy.
 - `loading`: initial client state before the first completed poll for a sandbox ID.

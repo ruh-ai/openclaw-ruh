@@ -4,6 +4,7 @@ import { getConfig } from '../config';
 import { getQueue, QUEUE_NAMES, WORKER_CONCURRENCY, type ExecutionJobData, type LearningJobData } from '../queues/definitions';
 import { publish } from '../eventBus';
 import { spawnAgentProcess } from './subprocess';
+import { createWorktree, removeWorktree, type WorktreeInfo } from './worktreeManager';
 import * as queueJobStore from '../stores/queueJobStore';
 import * as taskStore from '../stores/taskStore';
 import * as boardTaskStore from '../stores/boardTaskStore';
@@ -20,8 +21,12 @@ function classifyFailure(stderr: string, killed: boolean, exitCode: number | nul
 } {
   const err = (stderr || '').toLowerCase();
 
-  if (killed) {
-    return { retryable: true, category: 'timeout', reason: 'Task timed out — may succeed with more time' };
+  // killed=true means our timeout callback fired. Exit codes 128+signal also
+  // indicate the process was terminated (143=SIGTERM, 137=SIGKILL). Due to race
+  // conditions the killed flag may not be set even when our timeout fires, so
+  // treat signal-based exit codes as timeouts too.
+  if (killed || exitCode === 143 || exitCode === 137) {
+    return { retryable: true, category: 'timeout', reason: 'Task timed out or was killed by signal — may succeed with more time' };
   }
 
   if (err.includes('rate limit') || err.includes('429') || err.includes('too many requests')) {
@@ -68,13 +73,37 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
 
       publish({ type: 'task', action: 'updated', data: { taskLogId, status: 'running', agent: agentName } });
 
+      // Create per-job worktree if enabled
+      let worktree: WorktreeInfo | null = null;
+      if (config.enableWorktreeIsolation) {
+        try {
+          worktree = await createWorktree({
+            jobId: job.id ?? queueJobId,
+            agentName,
+            projectRoot: config.projectRoot,
+          });
+          if (worktree.created) {
+            console.log(`[hermes:execution] Worktree created: ${worktree.branchName} at ${worktree.worktreePath}`);
+          }
+        } catch (err) {
+          console.warn(`[hermes:execution] Worktree creation failed, falling back to repo root:`, err);
+          worktree = null;
+        }
+      }
+
+      // Resolve agent path: use worktree-local copy if worktree was created
+      const effectiveAgentPath = worktree?.created
+        ? agentPath.replace(config.projectRoot, worktree.worktreePath)
+        : agentPath;
+
       // Spawn the selected agent runner subprocess
       const result = await spawnAgentProcess({
         jobId: job.id ?? queueJobId,
-        agentPath,
+        agentPath: effectiveAgentPath,
         prompt,
         timeout,
         dangerouslySkipPermissions: true,
+        cwd: worktree?.created ? worktree.worktreePath : undefined,
       });
 
       // Parse structured output
@@ -84,7 +113,14 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
         try {
           const parsed = JSON.parse(result.stdout);
           outputJson = parsed;
-          if (Array.isArray(parsed?.filesChanged)) {
+          if (worktree?.created && Array.isArray(parsed?.filesChanged)) {
+            // Normalize paths from worktree-relative back to repo-relative
+            filesChanged = parsed.filesChanged.map((f: string) =>
+              f.startsWith(worktree!.worktreePath)
+                ? f.replace(worktree!.worktreePath, config.projectRoot)
+                : f
+            );
+          } else if (Array.isArray(parsed?.filesChanged)) {
             filesChanged = parsed.filesChanged;
           }
         } catch {
@@ -92,6 +128,13 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
           outputJson = { raw: result.stdout };
         }
       }
+
+      // Build a descriptive error message that never falls through to undefined/empty
+      const errorMessage = result.success
+        ? undefined
+        : (result.killed
+          ? 'Timed out'
+          : (result.stderr?.slice(0, 500) || `Process exited with code ${result.exitCode}`));
 
       // Update task and queue job
       const finalStatus = result.success ? 'completed' : 'failed';
@@ -106,16 +149,33 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
       await taskStore.updateTask(taskLogId, {
         status: finalStatus,
         resultSummary: result.success ? `Agent ${agentName} completed successfully` : undefined,
-        error: result.success ? undefined : (result.killed ? 'Timed out' : result.stderr?.slice(0, 500)),
+        error: errorMessage,
       });
 
       await boardTaskStore.syncBoardTaskFromTaskLog(taskLogId, {
         taskStatus: finalStatus,
         agentName,
-        error: result.success ? null : (result.killed ? 'Timed out' : result.stderr?.slice(0, 500)),
+        error: result.success ? null : (errorMessage ?? null),
       });
 
       publish({ type: 'task', action: 'updated', data: { taskLogId, status: finalStatus, agent: agentName } });
+
+      // Clean up worktree
+      if (worktree?.created) {
+        try {
+          if (result.success) {
+            // On success: remove worktree directory but KEEP the branch for review/merge
+            await removeWorktree(worktree, { deleteBranch: false });
+            console.log(`[hermes:execution] Worktree removed, branch ${worktree.branchName} preserved`);
+          } else {
+            // On failure: remove worktree AND branch (nothing to keep)
+            await removeWorktree(worktree, { deleteBranch: true });
+            console.log(`[hermes:execution] Worktree and branch cleaned up after failure`);
+          }
+        } catch (cleanupErr) {
+          console.warn(`[hermes:execution] Worktree cleanup failed:`, cleanupErr);
+        }
+      }
 
       // Enqueue learning job
       const learningData: LearningJobData = {
@@ -128,6 +188,7 @@ export function createExecutionWorker(): Worker<ExecutionJobData> {
         durationMs: result.durationMs,
         filesChanged,
         description: prompt.split('\n')[0].slice(0, 200),
+        worktreeBranch: worktree?.created && result.success ? worktree.branchName : undefined,
       };
 
       await getQueue(QUEUE_NAMES.LEARNING).add('learn', learningData);

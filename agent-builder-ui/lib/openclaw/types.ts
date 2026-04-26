@@ -131,7 +131,7 @@ export interface ArchitectResponse {
   skill_graph?: {
     system_name?: string; // present only in YAML-normalized path
     nodes: SkillGraphNode[];
-    workflow: WorkflowDefinition | { steps: string[] };
+    workflow: WorkflowDefinition;
     agents?: Array<{ id: string; skills: string[] }>;
   };
   deployment?: { repo_url: string };
@@ -193,9 +193,9 @@ export interface DiscoveryDocuments {
 
 // ─── Agent Development Lifecycle Types ──────────────────────────────────────
 
-export type AgentDevStage = "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
+export type AgentDevStage = "reveal" | "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
 
-export const AGENT_DEV_STAGES: AgentDevStage[] = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+export const AGENT_DEV_STAGES: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
 
 export type StageStatus = "idle" | "generating" | "ready" | "approved" | "building" | "running" | "done" | "failed";
 
@@ -506,7 +506,15 @@ export interface EvalTask {
   iteration?: number;
 }
 
-// ── Build Report (Reflect stage) ────────────────────────────────────────────
+// ── Build Report (backend-authoritative build readiness + Reflect summary) ──
+
+export type BuildReadiness = "blocked" | "test-ready" | "ship-ready";
+
+export interface BuildReportCheck {
+  name: string;
+  status: "pass" | "fail" | "warning";
+  detail?: string;
+}
 
 export interface BuildReportStage {
   stage: AgentDevStage;
@@ -517,14 +525,19 @@ export interface BuildReportStage {
 }
 
 export interface BuildReport {
-  agentName: string;
-  createdAt: string;
-  stages: BuildReportStage[];
-  skillCount: number;
-  subAgentCount: number;
-  integrationCount: number;
-  triggerCount: number;
-  notes: string;
+  generatedAt?: string;
+  readiness?: BuildReadiness;
+  blockers?: string[];
+  warnings?: string[];
+  checks?: BuildReportCheck[];
+  agentName?: string;
+  createdAt?: string;
+  stages?: BuildReportStage[];
+  skillCount?: number;
+  subAgentCount?: number;
+  integrationCount?: number;
+  triggerCount?: number;
+  notes?: string;
 }
 
 // ── Agent Backend (Artifact + Run) ──────────────────────────────────────────

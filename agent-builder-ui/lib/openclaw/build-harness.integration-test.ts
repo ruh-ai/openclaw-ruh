@@ -112,7 +112,7 @@ async function main() {
       },
       body: JSON.stringify({
         messages: [{ role: "user", content: prompt }],
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.5",
         stream: true,
       }),
     });

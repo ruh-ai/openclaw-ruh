@@ -16,14 +16,7 @@ import { tmpdir } from "os";
 interface GitHubExportRequest {
   repo: string;
   agentName: string;
-  /** V3: flat file array — preferred */
-  files?: Array<{ path: string; content: string }>;
-  /** V2 compat: SOUL.md content */
-  soulContent?: string;
-  /** V2 compat: skill files keyed by name */
-  skills?: Record<string, string>;
-  /** V2 compat: config files keyed by path */
-  config?: Record<string, string>;
+  files: Array<{ path: string; content: string }>;
   commitMessage?: string;
 }
 
@@ -74,35 +67,12 @@ export async function POST(req: NextRequest): Promise<NextResponse<GitHubExportR
       );
     }
 
-    // Build file list — V3 (flat array) or V2 (soul + skills + config)
-    let files: Array<{ path: string; content: string }>;
-
-    if (body.files && body.files.length > 0) {
-      // V3: use flat file array directly
-      files = body.files;
-    } else {
-      // V2 compat: reconstruct from soul + skills + config
-      files = [];
-      if (body.soulContent) {
-        files.push({ path: "SOUL.md", content: body.soulContent });
-      }
-      if (body.skills) {
-        for (const [name, content] of Object.entries(body.skills)) {
-          const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
-          files.push({ path: `skills/${safeName}/SKILL.md`, content });
-        }
-      }
-      if (body.config) {
-        for (const [path, content] of Object.entries(body.config)) {
-          files.push({ path, content });
-        }
-      }
-      if (files.length === 0) {
-        return NextResponse.json(
-          { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: "No files to push" },
-          { status: 400 },
-        );
-      }
+    const files = body.files;
+    if (!files || files.length === 0) {
+      return NextResponse.json(
+        { ok: false, repoUrl: null, commitSha: null, filesPushed: 0, error: "No files to push" },
+        { status: 400 },
+      );
     }
 
     // Verify gh CLI

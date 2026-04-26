@@ -65,7 +65,7 @@ Runtime checks:
 | `OPENCLAW_ADMIN_TOKEN` | Optional nullable | None | Trimmed non-empty string when set |
 | `OPENCLAW_SHARED_OAUTH_JSON_PATH` | Optional with default | `$HOME/.openclaw/credentials/oauth.json` | Absolute host path string |
 | `CODEX_AUTH_JSON_PATH` | Optional with default | `$HOME/.codex/auth.json` | Absolute host path string |
-| `OPENCLAW_SHARED_CODEX_MODEL` | Optional with default | `openai-codex/gpt-5.4` | Trimmed non-empty string |
+| `OPENCLAW_SHARED_CODEX_MODEL` | Optional with default | `openai-codex/gpt-5.5` | Trimmed non-empty string |
 | `OPENROUTER_API_KEY` | Optional nullable | None | Trimmed non-empty string when set |
 | `OPENAI_API_KEY` | Optional nullable | None | Trimmed non-empty string when set |
 | `ANTHROPIC_API_KEY` | Optional nullable | None | Trimmed non-empty string when set |

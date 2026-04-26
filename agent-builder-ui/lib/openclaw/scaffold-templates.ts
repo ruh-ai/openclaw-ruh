@@ -61,6 +61,7 @@ function generatePackageJson(plan: ArchitecturePlan, agentName: string): Scaffol
       dev: "tsx watch backend/index.ts",
       start: "node --loader tsx backend/index.ts",
       "db:migrate": "tsx db/migrate.ts",
+      "db:seed": "tsx db/seed.ts",
       build: "tsc",
       test: "vitest run",
     },
@@ -312,7 +313,7 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
     });
     // Register dashboard on the same port so the builder tab discovers it
     if (hasDashboard) {
-      services.push({ name: "dashboard", command: "", port: 3100, optional: true });
+      services.push({ name: "dashboard", command: "", port: 3100, healthCheck: "/health", optional: true });
     }
   }
 

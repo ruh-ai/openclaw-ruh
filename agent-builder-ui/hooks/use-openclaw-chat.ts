@@ -8,7 +8,6 @@ import {
   ArchitectResponse,
   SkillGraphNode,
   WorkflowDefinition,
-  WorkflowStep,
 } from "@/lib/openclaw/types";
 
 interface InitializeAgentData {
@@ -50,11 +49,10 @@ function createInitialMessages(): ChatMessage[] {
 }
 
 // ---------------------------------------------------------------------------
-// Normalize the workflow field — gateway may return null, a WorkflowDefinition,
-// or the legacy { steps: string[] } shape. Always produce a WorkflowDefinition.
+// Normalize the workflow field — gateway may return null or a WorkflowDefinition.
 // ---------------------------------------------------------------------------
 function normalizeWorkflow(
-  rawWorkflow: WorkflowDefinition | { steps: string[] } | null | undefined,
+  rawWorkflow: WorkflowDefinition | null | undefined,
   nodes: SkillGraphNode[],
   systemName: string | null
 ): WorkflowDefinition {
@@ -72,22 +70,7 @@ function normalizeWorkflow(
     };
   }
 
-  const rawSteps = (rawWorkflow as { steps: unknown }).steps;
-  if (Array.isArray(rawSteps) && rawSteps.length > 0 && typeof rawSteps[0] === "string") {
-    // Legacy format: steps is a plain string array of skill IDs
-    return {
-      name: "main-workflow",
-      description: `${systemName || "agent"} workflow`,
-      steps: (rawSteps as string[]).map((skill, i) => ({
-        id: `step-${i}`,
-        action: "execute",
-        skill,
-        wait_for: i > 0 ? [(rawSteps as string[])[i - 1]] : [],
-      })) as WorkflowStep[],
-    };
-  }
-
-  return rawWorkflow as WorkflowDefinition;
+  return rawWorkflow;
 }
 
 // ---------------------------------------------------------------------------

@@ -55,7 +55,7 @@
 - `OLLAMA_MODEL` — non-empty string, default `qwen3-coder:30b`
 - `OPENCLAW_SHARED_OAUTH_JSON_PATH` — default `$HOME/.openclaw/credentials/oauth.json`
 - `CODEX_AUTH_JSON_PATH` — default `$HOME/.codex/auth.json`
-- `OPENCLAW_SHARED_CODEX_MODEL` — non-empty string, default `openai-codex/gpt-5.4`
+- `OPENCLAW_SHARED_CODEX_MODEL` — non-empty string, default `openai-codex/gpt-5.5`
 
 #### Optional nullable / feature-disabled when absent
 

@@ -46,8 +46,7 @@ class MockWebSocket {
     scenario.wsConstructed += 1;
     queueMicrotask(() => {
       this.emit("message", Buffer.from(JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
+        type: "proxy_ready",
       })));
     });
   }
@@ -500,10 +499,8 @@ describe("POST /api/openclaw forge requirement", () => {
 });
 
 describe("POST /api/openclaw retry safety", () => {
-  test("falls back after a pre-ack forge gateway failure without opening a second socket", async () => {
+  test("fails closed after a pre-ack forge gateway failure without opening a second socket", async () => {
     scenario.attempts = ["pre_ack_fail"];
-    scenario.allowForgeHttpFallback = true;
-    scenario.finalMessage = "Recovered through forge HTTP fallback";
 
     const response = await POST(
       new Request("http://localhost/api/openclaw", {
@@ -528,8 +525,9 @@ describe("POST /api/openclaw retry safety", () => {
     expect(scenario.chatSendParams[0]?.idempotencyKey).toBe("req-123");
     expect(extractResultEvent(body)).toEqual(
       expect.objectContaining({
-        type: "agent_response",
-        content: "Recovered through forge HTTP fallback",
+        type: "error",
+        error: "socket dropped before ack",
+        request_id: "req-123",
       }),
     );
     expect(scenario.wsConstructed).toBe(1);

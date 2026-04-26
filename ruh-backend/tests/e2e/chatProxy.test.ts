@@ -111,7 +111,7 @@ const mockReconfigureSandboxLlm = mock(async () => ({
 const mockRetrofitSandboxToSharedCodex = mock(async () => ({
   ok: true,
   sandboxId: SANDBOX_ID,
-  model: 'openai-codex/gpt-5.4',
+  model: 'openai-codex/gpt-5.5',
   homeDir: '/root',
   authSource: 'Codex CLI auth',
   logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
@@ -189,7 +189,7 @@ beforeEach(() => {
   mockRetrofitSandboxToSharedCodex.mockImplementation(async () => ({
     ok: true,
     sandboxId: SANDBOX_ID,
-    model: 'openai-codex/gpt-5.4',
+    model: 'openai-codex/gpt-5.5',
     homeDir: '/root',
     authSource: 'Codex CLI auth',
     logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
@@ -520,7 +520,7 @@ describe('POST /api/sandboxes/:sandbox_id/reconfigure-llm', () => {
     mockGetSandbox.mockImplementation(async () =>
       makeSandboxRecord({
         shared_codex_enabled: true,
-        shared_codex_model: 'openai-codex/gpt-5.4',
+        shared_codex_model: 'openai-codex/gpt-5.5',
       } as never),
     );
 
@@ -550,7 +550,7 @@ describe('POST /api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', () => {
       return {
         ok: true,
         sandboxId: SANDBOX_ID,
-        model: 'openai-codex/gpt-5.4',
+        model: 'openai-codex/gpt-5.5',
         homeDir: '/root',
         authSource: 'Codex CLI auth',
         logs: ['Shared auth ready', 'Default model set', 'Gateway restarted'],
@@ -565,7 +565,7 @@ describe('POST /api/admin/sandboxes/:sandbox_id/retrofit-shared-codex', () => {
 
     expect(capturedArgs[0]).toBe(SANDBOX_ID);
     expect(capturedArgs[1]).toEqual({ model: undefined });
-    expect(res.body.model).toBe('openai-codex/gpt-5.4');
+    expect(res.body.model).toBe('openai-codex/gpt-5.5');
     expect(res.body.authSource).toBe('Codex CLI auth');
   });
 });

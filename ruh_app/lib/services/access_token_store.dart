@@ -84,7 +84,10 @@ class AccessTokenStore {
        _allowInsecureFallback = allowInsecureFallback ?? _defaultAllowFallback;
 
   static bool get _defaultAllowFallback =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux);
 
   final SecureTokenStore _secureStore;
   final Future<FallbackTokenStore> Function() _fallbackStoreFactory;
@@ -263,7 +266,7 @@ class AccessTokenStore {
 
     Log.w(
       'AccessTokenStore',
-      'Secure token storage failed during $operation. Falling back to shared preferences on macOS debug.',
+      'Secure token storage failed during $operation. Falling back to shared preferences.',
       error,
     );
     Log.d('AccessTokenStore', stackTrace.toString());

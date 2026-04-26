@@ -15,21 +15,29 @@ import '../screens/auth/login_screen.dart';
 import '../screens/chat/chat_screen.dart';
 import '../screens/marketplace/marketplace_detail_screen.dart';
 import '../screens/marketplace/marketplace_screen.dart';
+import '../screens/agents/agent_detail_screen.dart';
+import '../screens/settings/api_keys_screen.dart';
+import '../screens/settings/profile_screen.dart';
 import '../screens/settings/settings_screen.dart';
+import '../services/deep_link_service.dart';
+import '../services/notification_service.dart';
 
 /// App-wide GoRouter configuration.
 ///
 /// Routes:
 ///   /login               -> LoginScreen
 ///   /                    -> AgentListScreen (main dashboard)
+///   /agents/:agentId/detail -> AgentDetailScreen
 ///   /chat/:agentId       -> ChatScreen (tabbed chat interface)
 ///   /marketplace         -> MarketplaceScreen
 ///   /settings            -> SettingsScreen
+///   /settings/profile    -> ProfileScreen
+///   /settings/api-keys   -> ApiKeysScreen
 final appRouterProvider = Provider<GoRouter>((ref) {
   final refreshNotifier = _RouterRefreshNotifier(ref);
   ref.onDispose(refreshNotifier.dispose);
 
-  return GoRouter(
+  final router = GoRouter(
     initialLocation: '/',
     refreshListenable: refreshNotifier,
     redirect: (context, state) {
@@ -140,10 +148,45 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               transitionsBuilder: _fadeTransition,
             ),
           ),
+          GoRoute(
+            path: '/settings/profile',
+            pageBuilder: (context, state) => CustomTransitionPage(
+              key: state.pageKey,
+              child: const ProfileScreen(),
+              transitionsBuilder: _slideTransition,
+            ),
+          ),
+          GoRoute(
+            path: '/settings/api-keys',
+            pageBuilder: (context, state) => CustomTransitionPage(
+              key: state.pageKey,
+              child: const ApiKeysScreen(),
+              transitionsBuilder: _slideTransition,
+            ),
+          ),
+          GoRoute(
+            path: '/agents/:agentId/detail',
+            pageBuilder: (context, state) {
+              final agentId = state.pathParameters['agentId']!;
+              return CustomTransitionPage(
+                key: state.pageKey,
+                child: AgentDetailScreen(agentId: agentId),
+                transitionsBuilder: _slideTransition,
+              );
+            },
+          ),
         ],
       ),
     ],
   );
+
+  // Wire notification tap → router navigation
+  NotificationService.onNavigate = (route) => router.go(route);
+
+  // Wire deep link → router navigation
+  DeepLinkService.onNavigate = (route) => router.go(route);
+
+  return router;
 });
 
 class _RouterRefreshNotifier extends ChangeNotifier {

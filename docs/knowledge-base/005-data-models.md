@@ -51,7 +51,7 @@ CREATE TABLE sandboxes (
 - `approved` — set to TRUE after `openclaw devices approve --latest` succeeds
 - `standard_url` / `signed_url` — gateway base URLs; `signed_url` takes priority if set
 - `shared_codex_enabled` — set to TRUE when a sandbox is created with shared auth or retrofitted later
-- `shared_codex_model` — the pinned shared Codex model, usually `openai-codex/gpt-5.4`
+- `shared_codex_model` — the pinned shared Codex model, usually `openai-codex/gpt-5.5`
 
 ---
 

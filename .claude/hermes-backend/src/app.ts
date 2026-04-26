@@ -366,6 +366,128 @@ app.patch('/api/sessions/:id', asyncHandler(async (req, res) => {
   res.json(session);
 }));
 
+// ── Session Report (interactive feedback bridge) ────────────
+// Accepts results from interactive Claude CLI sessions (start-hermes-agent.sh)
+// and enqueues a learning job so the full scoring/memory/evolution pipeline runs.
+app.post('/api/sessions/:id/report', asyncHandler(async (req, res) => {
+  const sessionId = req.params.id;
+  const {
+    agentName = 'hermes',
+    description = 'Interactive session',
+    success = true,
+    durationMs = 0,
+    filesChanged = [],
+    worktreeBranch,
+    output,
+    error,
+    status: requestedStatus,
+  } = req.body;
+
+  if (!description) throw httpError(400, 'description is required');
+
+  // Verify session exists
+  await sessionStore.getSessionDetail(sessionId);
+
+  // ── "running" status: register an active task (no learning job yet) ──
+  if (requestedStatus === 'running') {
+    const task = await taskStore.createTask({
+      description,
+      delegatedTo: agentName,
+      sessionId,
+      priority: 'normal',
+    });
+    // Task is created with status 'running' by default — leave it as-is
+
+    await sessionStore.updateSession(sessionId, {
+      tasksCount: 1,
+      summary: `Interactive ${agentName} session: ${description.slice(0, 100)}`,
+    });
+
+    eventBus.publish({ type: 'task', action: 'created', data: { taskLogId: task.id, status: 'running', agent: agentName, source: 'interactive' } });
+
+    console.log(`[hermes:session-report] running: agent=${agentName} session=${sessionId} task=${task.id}`);
+
+    return res.status(201).json({
+      taskLogId: task.id,
+      sessionId,
+      status: 'running',
+    });
+  }
+
+  // ── Completion report: find running task for this session, or create one ──
+  const existingTasks = await taskStore.listTasks({ sessionId, status: 'running', limit: 1, offset: 0 });
+  let task;
+  if (existingTasks.items.length > 0) {
+    task = existingTasks.items[0];
+  } else {
+    task = await taskStore.createTask({
+      description,
+      delegatedTo: agentName,
+      sessionId,
+      priority: 'normal',
+    });
+  }
+
+  // Mark completed/failed
+  const finalStatus = success ? 'completed' : 'failed';
+  await taskStore.updateTask(task.id, {
+    status: finalStatus,
+    resultSummary: success ? `Interactive ${agentName} session completed` : undefined,
+    error: success ? undefined : (error || 'Session exited with error'),
+  });
+
+  // Create a queue job record for tracking
+  const { v4: uuidv4 } = await import('uuid');
+  const queueJobId = uuidv4();
+  await import('./stores/queueJobStore').then(store =>
+    store.createQueueJob({
+      id: queueJobId,
+      queueName: 'hermes-learning',
+      jobId: `interactive-${task.id.slice(0, 8)}`,
+      taskLogId: task.id,
+      agentName,
+      priority: 5,
+      status: finalStatus,
+      source: 'interactive',
+      prompt: description,
+    })
+  );
+
+  // Enqueue a learning job — the existing learning worker handles the rest
+  const { getQueue, QUEUE_NAMES } = await import('./queues/definitions');
+  const learningData = {
+    taskLogId: task.id,
+    queueJobId,
+    agentName,
+    success,
+    output: output ? String(output).slice(0, 50_000) : null,
+    error: error ? String(error).slice(0, 5_000) : null,
+    durationMs,
+    filesChanged: Array.isArray(filesChanged) ? filesChanged : [],
+    description,
+    worktreeBranch: worktreeBranch || undefined,
+  };
+
+  await getQueue(QUEUE_NAMES.LEARNING).add('learn', learningData);
+
+  // Update session counters
+  await sessionStore.updateSession(sessionId, {
+    tasksCount: 1,
+    summary: `Interactive ${agentName} session: ${description.slice(0, 100)}`,
+  });
+
+  eventBus.publish({ type: 'task', action: 'updated', data: { taskLogId: task.id, status: finalStatus, agent: agentName, source: 'interactive' } });
+
+  console.log(`[hermes:session-report] ${finalStatus}: agent=${agentName} session=${sessionId} task=${task.id} (${durationMs}ms, ${filesChanged.length} files)`);
+
+  res.status(201).json({
+    taskLogId: task.id,
+    queueJobId,
+    sessionId,
+    learningJobEnqueued: true,
+  });
+}));
+
 // ── Error middleware (must be last) ─────────────────────────
 app.use((err: Error & { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = err.status ?? 500;

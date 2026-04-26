@@ -6,12 +6,18 @@ import {
 } from "./test-mode";
 
 describe("test-mode helpers", () => {
-  test("uses an isolated test session key for review-mode chats", () => {
+  test("uses isolated named-agent session keys for builder modes", () => {
     expect(buildGatewaySessionKey("architect", "abc123", "test")).toBe(
       "agent:test:abc123"
     );
     expect(buildGatewaySessionKey("architect", "abc123", "build")).toBe(
       "agent:architect:abc123"
+    );
+    expect(buildGatewaySessionKey("architect", "abc123", "copilot")).toBe(
+      "agent:copilot:abc123"
+    );
+    expect(buildGatewaySessionKey("architect", "abc123", "reveal")).toBe(
+      "agent:reveal:abc123"
     );
   });
 

@@ -10,8 +10,8 @@ describe("create-mode contract", () => {
     ]);
   });
 
-  test("fails closed to Co-Pilot when legacy guided mode is requested", () => {
-    expect(normalizeCreateMode("wizard")).toBe("copilot");
+  test("defaults to copilot for any unrecognized mode", () => {
+    expect(normalizeCreateMode("anything")).toBe("copilot");
     expect(normalizeCreateMode("copilot")).toBe("copilot");
     expect(normalizeCreateMode("chat")).toBe("chat");
   });
