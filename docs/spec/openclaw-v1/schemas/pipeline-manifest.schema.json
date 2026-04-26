@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/pipeline-manifest.schema.json",
+  "title": "OpenClaw Pipeline Manifest",
+  "description": "Top-level artifact that defines a complete OpenClaw pipeline. See spec/openclaw-v1/011-pipeline-manifest.md.",
+  "type": "object",
+  "required": [
+    "id", "spec_version", "version", "name", "description",
+    "agents", "orchestrator",
+    "routing", "failure_policy", "merge_policy",
+    "memory_authority", "config_docs", "imports",
+    "output_validator",
+    "dashboard",
+    "eval_suite_ref",
+    "hooks", "custom_hooks",
+    "runtime",
+    "dev_stage", "generated_at", "generated_by", "checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/AgentRef" },
+      "minItems": 1
+    },
+    "orchestrator": { "$ref": "orchestrator.schema.json#/$defs/OrchestratorRef" },
+
+    "routing": { "$ref": "orchestrator.schema.json#/$defs/RoutingRules" },
+    "failure_policy": {
+      "type": "object",
+      "additionalProperties": { "$ref": "orchestrator.schema.json#/$defs/FailurePolicy" }
+    },
+    "merge_policy": {
+      "type": "array",
+      "items": { "$ref": "orchestrator.schema.json#/$defs/MergePolicyRule" }
+    },
+
+    "memory_authority": { "$ref": "memory.schema.json#/$defs/MemoryAuthority" },
+    "config_docs": {
+      "type": "array",
+      "items": { "$ref": "config-substrate.schema.json#/$defs/DocIndexEntry" }
+    },
+    "imports": {
+      "type": "array",
+      "items": { "$ref": "config-substrate.schema.json#/$defs/ImportJob" }
+    },
+
+    "output_validator": { "$ref": "output-validator.schema.json#/$defs/OutputValidatorConfig" },
+
+    "dashboard": { "$ref": "#/$defs/DashboardRef" },
+
+    "eval_suite_ref": { "type": "string", "minLength": 1 },
+    "convergence_loop": { "$ref": "eval-task.schema.json#/$defs/ConvergenceLoopConfig" },
+
+    "milestones": {
+      "$ref": "milestone.schema.json#/$defs/MilestonesConfig",
+      "description": "Optional. Required for pipelines with contractual performance milestones (e.g., ECC's M2/M4/M6/M12). See spec/openclaw-v1/016-milestone-tracking.md."
+    },
+
+    "hooks": {
+      "type": "array",
+      "items": { "$ref": "hooks.schema.json#/$defs/HookHandlerRegistration" }
+    },
+    "hook_capability_mode": { "$ref": "hooks.schema.json#/$defs/HookCapabilityMode" },
+    "custom_hooks": {
+      "type": "array",
+      "items": { "$ref": "hooks.schema.json#/$defs/CustomHookDeclaration" }
+    },
+    "custom_tool_kinds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/CustomToolKind" }
+    },
+
+    "decision_metadata_schemas": {
+      "type": "array",
+      "items": { "$ref": "decision-log.schema.json#/$defs/DecisionMetadataSchemaBinding" },
+      "description": "Optional. Pipeline-declared bindings from DecisionType to metadata JSON Schemas. The runtime validates decision metadata against these at write time. Without bindings, decisions of the same type may carry incompatible metadata shapes across pipelines."
+    },
+
+    "retry_overrides": { "$ref": "error.schema.json#/$defs/PipelineRetryOverrides" },
+
+    "runtime": { "$ref": "#/$defs/RuntimeRequirements" },
+
+    "dev_stage": {
+      "enum": ["drafted", "validated", "tested", "shipped"]
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "generated_by": { "type": "string", "minLength": 1 },
+    "checksum": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  },
+
+  "$defs": {
+    "AgentRef": {
+      "type": "object",
+      "required": ["id", "path", "version", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "path": {
+          "type": "string",
+          "pattern": "^agents/[a-z][a-z0-9-]*/$"
+        },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+        "role": { "type": "string", "minLength": 1 },
+        "is_orchestrator": { "type": "boolean", "default": false },
+        "privileged": { "type": "boolean", "default": false },
+        "extended_scopes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "if": { "properties": { "privileged": { "const": true } } },
+      "then": { "required": ["extended_scopes"], "properties": { "extended_scopes": { "minItems": 1 } } }
+    },
+    "DashboardRef": {
+      "type": "object",
+      "required": ["manifest_path", "title", "default_landing_panel"],
+      "additionalProperties": false,
+      "properties": {
+        "manifest_path": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "branding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "primary_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "secondary_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+            "logo_path": { "type": "string" }
+          }
+        },
+        "default_landing_panel": { "type": "string", "minLength": 1 }
+      }
+    },
+    "CustomToolKind": {
+      "description": "Pipeline-registered tool kind beyond the canonical set (workspace-read, workspace-write, sandbox-exec, research, plan-validate). MUST go through security review per 101 conformance — schema enforces evidence of review.",
+      "type": "object",
+      "required": [
+        "kind",
+        "implementation_path",
+        "default_permissions",
+        "security_reviewed_at",
+        "security_reviewed_by",
+        "threat_model_path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "implementation_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workspace-relative path to the tool's implementation module."
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Path to JSON Schema for the tool's input/output shape."
+        },
+        "default_permissions": {
+          "$ref": "tool.schema.json#/$defs/PermissionConfig",
+          "description": "Default permission flags for instances of this tool kind. Concrete tool refs in tools/<id>.json may override but cannot loosen (e.g., a destructive default cannot be marked non-destructive at the instance)."
+        },
+        "egress_scope": {
+          "type": "object",
+          "description": "Network egress this tool kind may use. Required when the kind is non-trivial.",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "rate_limit_per_minute": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "subprocess_allowed": {
+          "type": "boolean",
+          "default": false,
+          "description": "True if this tool kind invokes subprocesses (sandbox-exec-like). Triggers stricter conformance checks."
+        },
+        "security_reviewed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the security review that approved registration. Stale reviews (>180 days) trigger re-review warnings."
+        },
+        "security_reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity (email or team URI) of the reviewer who approved."
+        },
+        "threat_model_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to a threat-model document describing what damage a malicious input could cause and what mitigations are in place. Required by 101 conformance."
+        }
+      }
+    },
+    "RuntimeRequirements": {
+      "type": "object",
+      "required": ["tenancy", "egress", "llm_providers", "sandbox", "database"],
+      "additionalProperties": false,
+      "properties": {
+        "tenancy": { "enum": ["shared", "dedicated", "on-prem"] },
+        "egress": { "enum": ["open", "restricted", "tenant-bounded"] },
+        "llm_providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "model", "via"],
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "enum": ["anthropic", "openai", "openrouter", "gemini", "ollama"] },
+              "model": { "type": "string", "minLength": 1 },
+              "via": { "enum": ["direct", "tenant-proxy"] }
+            }
+          },
+          "minItems": 1
+        },
+        "sandbox": {
+          "type": "object",
+          "required": ["image", "resources"],
+          "additionalProperties": false,
+          "properties": {
+            "image": { "type": "string", "minLength": 1 },
+            "resources": {
+              "type": "object",
+              "required": ["cpu_cores", "memory_gb", "disk_gb"],
+              "additionalProperties": false,
+              "properties": {
+                "cpu_cores": { "type": "integer", "minimum": 1 },
+                "memory_gb": { "type": "integer", "minimum": 1 },
+                "disk_gb": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "persistent_volumes": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "database": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["postgres", "sqlite"] },
+            "connection_ref": { "type": "string" }
+          }
+        },
+        "required_integrations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

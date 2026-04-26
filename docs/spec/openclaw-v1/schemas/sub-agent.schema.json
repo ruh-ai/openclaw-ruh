@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/sub-agent.schema.json",
+  "title": "OpenClaw Sub-Agent Isolation",
+  "description": "Lifecycle, scope, and result contracts for sub-agents spawned by the orchestrator. See spec/openclaw-v1/007-sub-agent.md.",
+  "type": "object",
+  "$defs": {
+    "SubAgentConfig": {
+      "type": "object",
+      "required": ["specialist", "parent_session_id", "parent_decision_id", "workspace_scope", "context"],
+      "additionalProperties": false,
+      "properties": {
+        "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "parent_session_id": { "type": "string", "minLength": 1 },
+        "parent_decision_id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" },
+        "workspace_scope": { "type": "string", "minLength": 1 },
+        "context": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "HandoffContext from orchestrator schema."
+        }
+      }
+    },
+    "SubAgent": {
+      "type": "object",
+      "required": [
+        "id", "specialist", "agent_uri", "session_id", "sandbox_id",
+        "workspace_scope", "status", "created_at",
+        "parent_session_id", "parent_decision_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" },
+        "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "agent_uri": {
+          "type": "string",
+          "pattern": "^openclaw://[a-z][a-z0-9-]*/agents/[a-z][a-z0-9-]*@[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$"
+        },
+        "session_id": { "type": "string", "minLength": 1 },
+        "sandbox_id": { "type": "string", "minLength": 1 },
+        "workspace_scope": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/SubAgentStatus" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "result": { "$ref": "#/$defs/SubAgentResult" },
+        "parent_session_id": { "type": "string" },
+        "parent_decision_id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" }
+      }
+    },
+    "SubAgentStatus": {
+      "enum": ["pending", "running", "completed", "failed", "stopped", "skipped"],
+      "description": "Lifecycle states of a sub-agent. 'stopped' = orchestrator killed it mid-run; 'skipped' = orchestrator decided not to run it (per failure_policy or routing). Both terminal."
+    },
+    "SubAgentResult": {
+      "type": "object",
+      "required": ["success", "files_written", "output_summary", "emitted_events", "decision_count"],
+      "additionalProperties": false,
+      "properties": {
+        "success": { "type": "boolean" },
+        "files_written": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "output_summary": { "type": "string", "maxLength": 500 },
+        "emitted_events": { "type": "array" },
+        "decision_count": { "type": "integer", "minimum": 0 },
+        "error": { "type": "string" },
+        "error_category": {
+          "type": "string",
+          "description": "From error.schema.json's ErrorCategory; populated when failure was classified."
+        },
+        "partial_completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "completed_steps": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "pending_steps": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "FileConflict": {
+      "type": "object",
+      "required": ["path", "agents", "resolution"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "agents": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "minItems": 2
+        },
+        "resolution": {
+          "enum": ["last-write-wins", "explicit-merge", "error"]
+        }
+      }
+    },
+    "MergeResult": {
+      "type": "object",
+      "required": ["success", "total_files", "conflicts", "agent_results", "partial_completion"],
+      "additionalProperties": false,
+      "properties": {
+        "success": { "type": "boolean" },
+        "total_files": { "type": "integer", "minimum": 0 },
+        "conflicts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FileConflict" }
+        },
+        "agent_results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["specialist", "success", "files_written", "output_summary"],
+            "additionalProperties": false,
+            "properties": {
+              "specialist": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "success": { "type": "boolean" },
+              "files_written": { "type": "integer", "minimum": 0 },
+              "output_summary": { "type": "string", "maxLength": 500 }
+            }
+          }
+        },
+        "partial_completion": { "type": "boolean" },
+        "failed_required": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "failed_optional": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        }
+      }
+    }
+  }
+}

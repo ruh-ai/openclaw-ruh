@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/hooks.schema.json",
+  "title": "OpenClaw Lifecycle Hooks",
+  "description": "Named extension points the runtime fires at well-defined moments. See spec/openclaw-v1/013-hooks.md.",
+  "type": "object",
+  "$defs": {
+    "HookName": {
+      "anyOf": [
+        { "$ref": "#/$defs/CanonicalHookName" },
+        {
+          "type": "string",
+          "pattern": "^custom:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$",
+          "description": "Custom hook in pipeline namespace."
+        }
+      ]
+    },
+    "CanonicalHookName": {
+      "enum": [
+        "session_start",
+        "session_end",
+        "stage_transition",
+        "pre_tool_execution",
+        "post_tool_execution",
+        "tool_approval_required",
+        "memory_write_review_required",
+        "memory_write_confirmed",
+        "memory_write_rejected",
+        "config_review_required",
+        "config_commit",
+        "compaction_ran",
+        "sub_agent_spawn",
+        "sub_agent_complete",
+        "result_merge",
+        "verification_check",
+        "verification_iteration_complete",
+        "eval_task_complete",
+        "eval_iteration_complete",
+        "error_classified",
+        "retry_decided",
+        "recovery_applied",
+        "output_validation_passed",
+        "output_validation_failed",
+        "checkpoint_created",
+        "checkpoint_resumed",
+        "checkpoint_drift_detected",
+        "milestone_evaluated",
+        "milestone_missed",
+        "milestone_signoff_required",
+        "milestone_exit_ramp_triggered"
+      ]
+    },
+    "VetoableHookName": {
+      "enum": [
+        "pre_tool_execution",
+        "tool_approval_required",
+        "memory_write_review_required"
+      ]
+    },
+    "HookHandlerRegistration": {
+      "description": "Pipeline-manifest entry under hooks[].",
+      "type": "object",
+      "required": ["name", "handler"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/HookName" },
+        "handler": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path within the workspace to the handler module."
+        },
+        "fire_mode": {
+          "enum": ["sync", "fire_and_forget"],
+          "default": "sync"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/HookCapability" },
+          "description": "Object capabilities granted to the handler. The runtime constructs HookContext to expose only these. Undeclared capability use produces hook_capability_violation. Omitted = use the per-hook default profile (see 013)."
+        }
+      }
+    },
+    "HookCapability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "decision_log_emit" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "allowed_hosts"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "egress_http" },
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "description": "Allowlisted hosts for outbound HTTP. Wildcards permitted (e.g., '*.datadoghq.com')."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "from", "to_pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "send_email" },
+            "from": { "type": "string", "format": "email" },
+            "to_pattern": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Allowed recipient pattern. Specific address or wildcard like '*@ecc.com'."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "channel"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "send_teams_card" },
+            "channel": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "namespace"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "publish_metric" },
+            "namespace": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "request_id_prefix"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "external_approval_gate" },
+            "request_id_prefix": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "scope"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "read_decision_log" },
+            "scope": { "enum": ["session", "pipeline"] }
+          }
+        }
+      ]
+    },
+    "HookCapabilityMode": {
+      "enum": ["strict", "loose"],
+      "default": "loose",
+      "description": "Pipeline-level mode for hook capability resolution. strict = handlers MUST declare capabilities explicitly; per-hook defaults disabled. loose (default) = per-hook default capability profile applies when capabilities is omitted."
+    },
+    "CustomHookDeclaration": {
+      "description": "Pipeline-manifest entry under custom_hooks[]. Required for any custom hook the pipeline fires.",
+      "type": "object",
+      "required": ["name", "payload_schema"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^custom:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$"
+        },
+        "payload_schema": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to JSON Schema validating this hook's payload."
+        }
+      }
+    },
+    "HookFiredDecisionMetadata": {
+      "description": "Shape of the metadata field on a 'hook_fired' decision-log entry.",
+      "type": "object",
+      "required": ["hook_name", "handler_count", "succeeded", "failed"],
+      "additionalProperties": false,
+      "properties": {
+        "hook_name": { "$ref": "#/$defs/HookName" },
+        "handler_count": { "type": "integer", "minimum": 0 },
+        "succeeded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["handler", "error"],
+            "additionalProperties": false,
+            "properties": {
+              "handler": { "type": "string" },
+              "error": { "type": "string" }
+            }
+          }
+        },
+        "veto_applied": {
+          "type": "boolean",
+          "description": "True if a vetoable hook handler returned VETO."
+        },
+        "veto_reason": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/dashboard.schema.json",
+  "title": "OpenClaw Dashboard Manifest",
+  "description": "Per-pipeline bespoke dashboard composed from a fixed library of registered panel kinds. See spec/openclaw-v1/010-dashboard-panels.md.",
+  "type": "object",
+  "required": ["spec_version", "pipeline_id", "title", "description", "panels", "navigation", "default_landing_panel", "role_visibility"],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$" },
+    "pipeline_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "branding": { "$ref": "#/$defs/BrandingConfig" },
+    "panels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/PanelInstance" },
+      "minItems": 1
+    },
+    "navigation": { "$ref": "#/$defs/NavigationConfig" },
+    "default_landing_panel": { "type": "string", "minLength": 1 },
+    "role_visibility": { "$ref": "#/$defs/RoleVisibilityRules" }
+  },
+  "$defs": {
+    "BrandingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primary_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "secondary_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "accent_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "logo_path": { "type": "string" },
+        "favicon_path": { "type": "string" },
+        "font_stack": { "type": "string" },
+        "custom_css_path": { "type": "string" }
+      }
+    },
+    "PanelInstance": {
+      "type": "object",
+      "required": ["kind", "id", "title"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/PanelKind" },
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "title": { "type": "string", "minLength": 1 },
+        "data_source": { "$ref": "#/$defs/DataSource" },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PanelAction" }
+        },
+        "refresh": { "$ref": "#/$defs/RefreshConfig" },
+        "role_visibility": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "permission_to_register": { "type": "string" },
+        "security_reviewed_at": { "type": "string", "format": "date-time" },
+        "security_reviewed_by": { "type": "string" }
+      },
+      "if": { "properties": { "kind": { "const": "custom" } } },
+      "then": { "required": ["security_reviewed_at", "security_reviewed_by", "permission_to_register"] }
+    },
+    "PanelKind": {
+      "enum": [
+        "chat",
+        "queue",
+        "timeline",
+        "table",
+        "form",
+        "kpi",
+        "map",
+        "decision-log-explorer",
+        "eval-results",
+        "custom"
+      ]
+    },
+    "DataSource": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "decision-log-query",
+            "memory-query",
+            "memory-pending-query",
+            "config-query",
+            "metric-query",
+            "eval-task-query",
+            "workspace-file",
+            "custom"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "PanelAction": {
+      "type": "object",
+      "required": ["label", "kind"],
+      "additionalProperties": true,
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": [
+            "navigate",
+            "agent-call",
+            "memory-confirm",
+            "memory-reject",
+            "config-edit",
+            "download",
+            "external-link",
+            "custom"
+          ]
+        },
+        "permission": { "type": "string" },
+        "requires_reason": { "type": "boolean" }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": ["memory-confirm", "memory-reject", "config-edit"]
+          }
+        }
+      },
+      "then": { "required": ["permission"] }
+    },
+    "RefreshConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval_seconds": { "type": "integer", "minimum": 5, "maximum": 3600 },
+        "on_event": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "manual_only": { "type": "boolean" }
+      }
+    },
+    "NavigationConfig": {
+      "type": "object",
+      "required": ["layout", "groups"],
+      "additionalProperties": false,
+      "properties": {
+        "layout": { "enum": ["sidebar", "topbar", "hybrid"] },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "panels"],
+            "additionalProperties": false,
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "icon": { "type": "string" },
+              "panels": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                "minItems": 1
+              },
+              "visible_to_roles": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "RoleVisibilityRules": {
+      "type": "object",
+      "required": ["roles"],
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Role" }
+        }
+      }
+    },
+    "Role": {
+      "type": "object",
+      "required": ["name", "description", "granted_to", "permissions", "visible_panels"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "description": { "type": "string", "minLength": 1 },
+        "granted_to": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "visible_panels": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "landing_panel": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+      }
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/version.schema.json",
+  "title": "OpenClaw Spec Versioning",
+  "description": "Version-handling primitives shared across the spec. See spec/openclaw-v1/100-versioning.md.",
+  "type": "object",
+  "$defs": {
+    "SemVer": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?(\\+[a-z0-9.]+)?$",
+      "description": "Semantic version string. Major.Minor.Patch with optional -prerelease and +build."
+    },
+    "SpecVersionMatchMode": {
+      "enum": ["loose", "exact"],
+      "default": "loose",
+      "description": "How strictly the runtime matches the pipeline's spec_version. 'loose' = forward-compatible (default); 'exact' = runtime must match the same minor."
+    },
+    "VersionedArtifact": {
+      "description": "Mixin: every spec-governed artifact carries spec_version stamping the version it was generated against.",
+      "type": "object",
+      "required": ["spec_version"],
+      "properties": {
+        "spec_version": { "$ref": "#/$defs/SemVer" }
+      }
+    },
+    "Codemod": {
+      "description": "Migration tool entry — declarative description of what a spec-version migration does.",
+      "type": "object",
+      "required": ["from", "to", "description", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/$defs/SemVer" },
+        "to": { "$ref": "#/$defs/SemVer" },
+        "description": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["no-op", "field-add", "field-rename", "schema-restructure", "manual-required"] },
+        "implementation_path": { "type": "string" }
+      }
+    },
+    "DeprecationNotice": {
+      "description": "Section-level annotation marking a section as deprecated.",
+      "type": "object",
+      "required": ["deprecated_since", "removal_target"],
+      "additionalProperties": false,
+      "properties": {
+        "deprecated_since": { "$ref": "#/$defs/SemVer" },
+        "replaced_by": {
+          "type": "string",
+          "description": "Section number or URL of the replacement, if any."
+        },
+        "removal_target": {
+          "type": "string",
+          "pattern": "^v[0-9]+$",
+          "description": "Major version where this section will be removed (e.g., 'v2')."
+        },
+        "reason": { "type": "string" }
+      }
+    },
+    "ChangelogEntry": {
+      "description": "An entry in the spec's CHANGELOG.md.",
+      "type": "object",
+      "required": ["version", "released_at", "kind", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/SemVer" },
+        "released_at": { "type": "string", "format": "date-time" },
+        "kind": { "enum": ["major", "minor", "patch", "prerelease"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "sections_added": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "sections_modified": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "sections_deprecated": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "schemas_added": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "schemas_modified": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "codemods": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Codemod" }
+        }
+      }
+    }
+  }
+}

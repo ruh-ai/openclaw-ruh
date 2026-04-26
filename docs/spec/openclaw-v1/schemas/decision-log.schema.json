@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/decision-log.schema.json",
+  "title": "OpenClaw Decision Log Entry and Metric",
+  "description": "Typed audit trail of meaningful runtime actions. See spec/openclaw-v1/005-decision-log.md.",
+  "type": "object",
+  "$defs": {
+    "Decision": {
+      "type": "object",
+      "required": [
+        "id", "pipeline_id", "agent_id", "session_id",
+        "type", "timestamp", "description", "metadata",
+        "spec_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9A-Z]{26}$",
+          "description": "ULID; sortable + globally unique."
+        },
+        "pipeline_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "parent_id": { "type": "string", "pattern": "^[0-9A-Z]{26}$" },
+        "type": { "$ref": "#/$defs/DecisionType" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "metadata": {
+          "type": "object",
+          "description": "Type-specific. The runtime validates per-type; this schema only requires it be an object.",
+          "additionalProperties": true
+        },
+        "spec_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$"
+        }
+      }
+    },
+    "DecisionType": {
+      "enum": [
+        "session_start", "session_end", "stage_transition",
+        "turn_start", "turn_end",
+        "tool_selection", "tool_execution_start", "tool_execution_end",
+        "permission_denied", "permission_approved",
+        "error_classified", "retry_decided", "recovery_applied",
+        "memory_read", "memory_write_proposed", "memory_write_routed",
+        "memory_write_confirmed", "memory_write_rejected",
+        "compaction",
+        "sub_agent_spawn", "sub_agent_complete", "result_merge", "orchestrator_handoff",
+        "output_validation_passed", "output_validation_failed", "parser_fallback",
+        "verification_check_run", "verification_fix_attempted",
+        "eval_task_run", "eval_iteration",
+        "config_commit",
+        "hook_fired", "hook_failed",
+        "checkpoint_created", "checkpoint_resumed", "checkpoint_drift_detected",
+        "milestone_classification", "milestone_reclassification",
+        "milestone_autonomy_evaluated", "milestone_evaluated", "milestone_missed",
+        "milestone_signoff_recorded", "milestone_exit_ramp_triggered",
+        "custom"
+      ]
+    },
+    "DecisionMetric": {
+      "type": "object",
+      "required": ["pipeline_id", "agent_id", "name", "value", "unit", "timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "pipeline_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "description": "Dot-separated metric name, e.g., tool_execution.latency_ms."
+        },
+        "value": { "type": "number" },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ms, tokens, usd, count, ratio, etc."
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Cardinality-bounded label set; do not include user-IDs or session-IDs as labels."
+        }
+      }
+    },
+    "DecisionLogQuery": {
+      "type": "object",
+      "required": ["pipeline_id"],
+      "additionalProperties": false,
+      "properties": {
+        "pipeline_id": { "type": "string" },
+        "agent_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "types": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DecisionType" }
+        },
+        "since": { "type": "string", "format": "date-time" },
+        "until": { "type": "string", "format": "date-time" },
+        "parent_id": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100 },
+        "cursor": { "type": "string" }
+      }
+    },
+    "DecisionMetadataSchemaBinding": {
+      "description": "Pipeline-declared mapping from a DecisionType to a JSON Schema validating that type's metadata. Goes in pipeline-manifest.json under decision_metadata_schemas[]. Without these bindings, two runtimes can produce decisions of the same type with incompatible metadata shapes; with them, the runtime validates metadata at write time and rejects malformed entries.",
+      "type": "object",
+      "required": ["type", "schema_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/DecisionType" },
+        "schema_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path or URI to the JSON Schema defining the metadata shape for this decision type. Canonical types may reference the spec's published schema (e.g., 'openclaw-v1:tool_execution_end'); custom types must reference a pipeline-local schema in schemas/."
+        },
+        "spec_version_min": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$",
+          "description": "Minimum spec version where this binding applies. Used during versioning transitions."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ruh.ai/spec/v1/schemas/agent-manifest.schema.json",
+  "title": "OpenClaw Agent Manifest",
+  "description": "The contract for what an agent IS in OpenClaw. Every agent's .openclaw/architecture.json conforms to this schema. See spec/openclaw-v1/002-agent-manifest.md.",
+  "type": "object",
+  "required": [
+    "spec_version",
+    "agent",
+    "skills",
+    "tools",
+    "triggers",
+    "memory",
+    "checksum",
+    "generated_at",
+    "generated_by"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$",
+      "description": "OpenClaw spec version this manifest targets."
+    },
+    "agent": {
+      "$ref": "#/$defs/AgentIdentity"
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/SkillRef" },
+      "description": "Every agent has at least one skill."
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ToolRef" }
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TriggerRef" }
+    },
+    "memory": {
+      "$ref": "#/$defs/MemoryConfig"
+    },
+    "config_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ConfigRef" },
+      "description": "References to config-substrate documents this agent reads."
+    },
+    "eval_suite_ref": {
+      "type": "string",
+      "description": "Path to the eval-task suite for this agent's skills."
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "SHA-256 of resolved workspace state, used for drift detection."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generated_by": {
+      "type": "string",
+      "description": "The architect (or tool) that produced this manifest, including version."
+    }
+  },
+  "$defs": {
+    "AgentIdentity": {
+      "type": "object",
+      "required": ["id", "name", "version", "role", "authority_lanes", "voice"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Stable kebab-case id; matches SOUL.md frontmatter slug."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line description of the agent's responsibility."
+        },
+        "authority_lanes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "uniqueItems": true,
+          "description": "Memory lanes (see 004) this agent is authorized to write to."
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceConfig"
+        }
+      }
+    },
+    "VoiceConfig": {
+      "type": "object",
+      "required": ["tone", "forbidden"],
+      "additionalProperties": false,
+      "properties": {
+        "tone": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "Adjectives describing the agent's voice. Empty list = no voice constraint = drift risk."
+        },
+        "forbidden": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Behaviors the agent never performs. Empty list permitted but discouraged."
+        }
+      }
+    },
+    "SkillRef": {
+      "type": "object",
+      "required": ["id", "path", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^skills/[a-z][a-z0-9-]*/SKILL\\.md$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?$"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "uniqueItems": true,
+          "description": "Skill IDs that must complete before this one runs. Cycles fail validation."
+        },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "uniqueItems": true,
+          "description": "Tool IDs this skill may call."
+        }
+      }
+    },
+    "ToolRef": {
+      "type": "object",
+      "required": ["id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^tools/[a-z][a-z0-9-]*\\.json$"
+        }
+      }
+    },
+    "TriggerRef": {
+      "type": "object",
+      "required": ["id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^triggers/[a-z][a-z0-9-]*\\.json$"
+        }
+      }
+    },
+    "MemoryConfig": {
+      "type": "object",
+      "required": ["index_path", "max_entries_warning", "tier_lanes"],
+      "additionalProperties": false,
+      "properties": {
+        "index_path": {
+          "type": "string",
+          "const": ".openclaw/MEMORY.md"
+        },
+        "max_entries_warning": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "Soft threshold above which the runtime warns about index bloat."
+        },
+        "tier_lanes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TierLane" }
+        }
+      }
+    },
+    "TierLane": {
+      "type": "object",
+      "required": ["tier", "lane"],
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "description": "1=authoritative, 2=trusted-with-confirmation, 3=proposed."
+        },
+        "lane": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Named domain (estimating, business, operations, ...)."
+        },
+        "writers": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" },
+          "uniqueItems": true,
+          "description": "Identities authorized to write at this tier+lane."
+        }
+      }
+    },
+    "ConfigRef": {
+      "type": "object",
+      "required": ["id", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "path": {
+          "type": "string"
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Path to JSON Schema validating this config document."
+        }
+      }
+    }
+  }
+}

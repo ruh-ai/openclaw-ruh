@@ -1,0 +1,210 @@
+# OpenClaw Spec v1 — Index
+
+> **Status:** `v1.0.0-rc.1` — feature complete; v1.1 backlog explicit (see bottom of this file)
+> **Spec version:** `1.0.0-rc.1`
+> **Last updated:** 2026-04-27
+> **Validation:** Three GPT-5.5 (Codex) adversarial passes informed Patches 1-4. The remaining HIGH-severity findings are tracked as the v1.1 backlog at the bottom of this index. Implementation begins on this spec; v1.1 patches arrive in parallel.
+> **Audience:** humans authoring conformant pipelines, **and coding agents (Claude Opus 4.7+, GPT 5.5+) building them**
+
+---
+
+## What this spec is
+
+The contract every artifact produced by — or accepted into — the OpenClaw platform must satisfy. It defines the shape of agents, tools, memory, orchestrators, dashboards, and the pipelines that compose them, so that work produced by any actor (human or AI) at any time composes with work produced by any other.
+
+The spec is the **strict guideline** the platform stands on. Coding agents read it as load-bearing context; humans read it to review, correct, and steer.
+
+## What this spec is *not*
+
+- **Not a tutorial.** Tutorials live next to it; the spec is reference material.
+- **Not a runtime.** The runtime that *implements* this spec lives in `agent-builder-ui/`, `ruh-backend/`, and (under iteration) `worktree-feat+architect-tool-harness`. The spec defines *what conforms*, not *how the runtime works internally*.
+- **Not a feature wishlist.** Sections are added when a concrete need (typically a customer pipeline like ECC) forces a decision we'd otherwise defer.
+
+## Scope (v1)
+
+This version targets the **multi-agent pipeline** model:
+
+- A pipeline is **one or more agents + an orchestrator + shared memory + shared config**, deployed as a unit.
+- Single-agent flows are the smallest case of a pipeline (1 agent, no orchestrator routing, single-tier memory).
+- Pipelines run on the OpenClaw runtime (sandboxed Docker containers; see `docs/knowledge-base/003-sandbox-lifecycle.md`).
+- Pipelines surface to end users through **bespoke dashboards** generated from registered panels, plus an **orchestrator chat** as the catch-all entry point.
+
+Out of scope for v1 (deferred to later versions):
+
+- Multi-tenant fleet isolation across customers (each pipeline assumes its own tenant boundary)
+- Cross-pipeline composition (one customer's pipeline calling another's)
+- Spec-evolution tooling (machine-assisted spec migration)
+
+## Table of contents
+
+### Part A — Agents and tools (the building blocks)
+
+| Section | Title | Status |
+|---|---|---|
+| [001](001-overview.md) | Overview — vision, principles, the role of the spec | ✅ done |
+| [002](002-agent-manifest.md) | Agent manifest — SOUL.md, skills/, tools/, triggers/, .openclaw/ | ✅ done |
+| [003](003-tool-contract.md) | Tool contract — schema, permissions, concurrency, observability | ✅ done |
+| [014](014-error-taxonomy.md) | Error taxonomy + retry strategy | ✅ done |
+| [015](015-output-validator.md) | Structured output validation (Zod schemas, marker tokenizer) | ✅ done |
+
+### Part B — Memory, observability, state
+
+| Section | Title | Status |
+|---|---|---|
+| [004](004-memory-model.md) | Memory model — tier/lane-aware, role-attested writes | ✅ done |
+| [005](005-decision-log.md) | Decision log — typed events, audit trail | ✅ done |
+| [009](009-config-substrate.md) | Configuration substrate — multi-dimensional, versioned, hot-swappable | ✅ done |
+| [012](012-checkpoint.md) | Checkpoint + resume — state snapshots, rate-limit recovery | ✅ done |
+| [013](013-hooks.md) | Lifecycle hooks — extensibility points | ✅ done |
+
+### Part C — Composition (multi-agent fleets)
+
+| Section | Title | Status |
+|---|---|---|
+| [006](006-orchestrator.md) | Orchestrator protocol — handoff, context transfer, result merge | ✅ done |
+| [007](007-sub-agent.md) | Sub-agent isolation — workspace scope, identity, lifecycle | ✅ done |
+| [008](008-eval-task.md) | Eval task format — input, expected output, judge prompt, score rubric | ✅ done |
+| [011](011-pipeline-manifest.md) | Pipeline manifest — the top-level artifact | ✅ done |
+
+### Part D — Surfaces (how end users interact)
+
+| Section | Title | Status |
+|---|---|---|
+| [010](010-dashboard-panels.md) | Dashboard panel registration — data sources, actions, role visibility | ✅ done |
+| [016](016-milestone-tracking.md) | Milestone tracking — performance KPIs, exit ramps, refund formulas | ✅ done |
+
+### Part E — Meta
+
+| Section | Title | Status |
+|---|---|---|
+| [100](100-versioning.md) | Spec versioning — how this document evolves without breaking pipelines | ✅ done |
+| [101](101-conformance.md) | Conformance — how to verify a pipeline conforms | ✅ done |
+
+### Schemas (machine-readable)
+
+`schemas/` contains JSON Schema definitions for every contract above. Coding agents and runtime validators reference these as the single source of truth — markdown is for humans, JSON Schema is for machines.
+
+### Examples (reference implementations)
+
+`examples/` contains complete, runnable conformant pipelines:
+
+- `single-agent-minimal/` — the smallest pipeline that conforms (one agent, no orchestrator, no eval loop)
+- `multi-agent-fleet/` — a representative fleet (orchestrator + 3 specialists + shared memory)
+- `ecc-estimator-pipeline/` — the proving case from `work/projects/ecc-construction/` — full ECC estimator with intake, vision-manifest, takeoff, pricing, gap, narrative, PPTX, and 200-project training-loop agents
+
+## Roadmap
+
+**Phase 0 — Foundation (✅ complete):** 000-INDEX, 001-overview. Sets vision and structure.
+
+**Phase 1 — Building blocks (✅ complete):** 002 (agent manifest), 003 (tool contract), 014 (errors), 015 (output validator). The primitives every agent uses. ~70% extracted from `worktree-feat+architect-tool-harness` into formal contracts.
+
+**Phase 2 — State and memory (✅ complete):** 004 (memory), 005 (decision log), 009 (config), 012 (checkpoint), 013 (hooks). What agents persist and observe.
+
+**Phase 3 — Composition (✅ complete):** 006 (orchestrator), 007 (sub-agent), 008 (eval task), 011 (pipeline manifest). How fleets work.
+
+**Phase 4 — Surfaces and meta (✅ complete):** 010 (dashboards), 100 (versioning), 101 (conformance). How users interact and how the spec evolves.
+
+Each phase is a separate PR. Phase 1 is the load-bearing one — once 002, 003, 014, 015 land, the spec is concrete enough that a coding agent could begin producing conformant agents (not yet pipelines).
+
+## Glossary
+
+Terms used across the spec with overlapping meanings — pinned here to prevent drift:
+
+| Term | Meaning |
+|---|---|
+| **Pipeline** | The unit of delivery: agents + orchestrator + shared memory + shared config + dashboard + eval suite, declared in `pipeline-manifest.json`. The whole thing. |
+| **Fleet** | Conversational synonym for "multi-agent pipeline" (a pipeline with `len(agents) > 1`). |
+| **Agent** | A single member of the cast: SOUL, skills, tools, triggers, memory. Conforms to [002](002-agent-manifest.md). |
+| **Specialist** | An agent that's not the orchestrator — i.e., owns a domain (intake, takeoff, pricing). The orchestrator routes to specialists. |
+| **Sub-agent** | The runtime concept of a specialist invocation: a scoped session, identity, and lifecycle. See [007](007-sub-agent.md). One specialist can be spawned as many sub-agents (e.g., parallel fan-out). |
+| **Sandbox** | A Docker container running the OpenClaw runtime + an agent's workspace. Synonymous with "container" in this spec. |
+| **Tenant** | The customer's environment — the boundary within which one or more sandboxes run. A tenant contains pipelines; pipelines do not span tenants in v1. |
+| **Lane** | A named domain of authority in the memory model: estimating, business, operations, etc. |
+| **Tier** | A level of authority within a lane: 1 (authoritative), 2 (trusted), 3 (proposing). See [004](004-memory-model.md). |
+| **AG-UI** | The event protocol streaming agent-side state to the dashboard. `AgUiEvent` shape: `{ type, name?, value? }`. See [003](003-tool-contract.md). |
+| **Architect** | The coding agent that produces conformant pipelines from requirements. May be Claude Opus, GPT 5.5+, or a successor. |
+| **Workspace** | The filesystem location of an agent's or pipeline's artifacts (SOUL.md, skills/, etc.). Workspace-relative paths are always relative to the **agent or pipeline workspace root**. |
+
+## Conventions
+
+- **Markdown for human-readable contracts.** Every section opens with the contract in prose, followed by examples, followed by the formal JSON Schema reference.
+- **JSON Schema for machine-enforced contracts.** Every shape declared in markdown has a corresponding `.schema.json` file in `schemas/`. The schema is authoritative on validation.
+- **Examples are mandatory, not optional.** Every section includes at least one minimal valid example and one anti-example (what *not* to do, and why).
+- **Cross-references use `[[wikilinks]]`** to neighboring sections, mirroring the KB convention.
+- **Stable section numbers.** Once a section is published in a release, its number does not change. New sections take new numbers; deprecated sections move to `999-deprecated/<old-number>.md` rather than being deleted.
+
+## How to use this spec
+
+### As a human reviewer
+
+Read 001 (overview) first, then jump to whichever section is relevant to the work in front of you. The TOC above maps tasks to sections. Use 101 (conformance) before approving any pipeline for ship.
+
+### As a coding agent
+
+Load the full spec into context at session start. When generating an artifact, validate against the corresponding section's JSON Schema before claiming completion. Cite the section and version when explaining decisions in the decision log (`spec://openclaw-v1/003-tool-contract#3.2`).
+
+### As a future-you reviewing past decisions
+
+Every conformant pipeline carries its `pipeline-manifest.json` declaring which spec version it was built against. To understand why a pipeline was structured a certain way, read the spec at that version (recovered via `git log` against this directory).
+
+## Versioning at a glance
+
+`major.minor.patch-prerelease`:
+
+- **Major** — breaking changes that require pipelines to migrate (rare, painful, should never happen for v1)
+- **Minor** — new sections or new optional fields in existing sections (additive, safe)
+- **Patch** — clarifications, examples, typo fixes (non-normative)
+- **Prerelease** — `-alpha.N` while sections are still being drafted; `-rc.N` once feature-complete; remove for stable
+
+Every section header carries `Since: <version>`. A pipeline declares its target version in its manifest and is expected to conform to that version exactly.
+
+Full versioning policy: [100-versioning.md](100-versioning.md) (pending).
+
+---
+
+*Each section number is reserved even if the file is empty. Pending sections show their planned headings as a stub, not as TBD content.*
+
+---
+
+## v1.1 Backlog — known issues and deferrals
+
+This list is exhaustive and authoritative. Every item is a real defect that v1.0 ships with, documented here so coding agents reading the spec know to treat it with care and humans planning v1.1 know exactly what's in scope.
+
+The criterion for v1.1 inclusion was: **the issue does not block ECC go-live, but does need to land within 30 days of implementation kickoff.**
+
+### From Codex pass 3 (HIGH)
+
+1. **`004` Matt scenario is internally false.** The pipeline-manifest example lists Scott (not Matt) at Tier-2 estimating, but the auto-downgrade walk-through in 004 uses Matt. Either update the manifest example to put Matt at Tier-2 estimating, or rewrite the walk-through with Scott. Trivial fix; deferred only because it's documentation polish.
+
+2. **Memory metadata field-name inconsistency between 004 and 005.** 005 uses `downgrade_reason`; 004 uses `reason`. 004 also references `requested_tier` as preserved on the entry, but `MemoryEntry` schema has `additionalProperties: false` and no such field. Fix: rename one to match, add `requested_tier` to MemoryEntry, align metadata shape across both sections.
+
+3. **`decision_metadata_schemas` examples reference schemas that don't exist.** `openclaw-v1:ToolExecutionEndMetadata`, `openclaw-v1:MemoryWriteProposedMetadata`, and `milestone.schema.json#/$defs/ExitRampTriggeredMetadata` are referenced as `schema_ref` strings but never defined. Fix: define each as `$defs` in their respective schema files.
+
+4. **Hook capability sandboxing is decorative without runtime enforcement.** The capability model in 013 is correct as a *contract*, but:
+   - Per-hook default profiles omit required capability parameters (allowed_hosts, from, to_pattern, namespace)
+   - Strict mode is prose-only, not schema-enforced
+   - `hook_capability_violation` is referenced but missing from `DecisionType` enum
+   - Ambient JS authority (`fs`, `fetch`, `child_process`) is not explicitly removed — capabilities only matter if the runtime actually sandboxes handlers (vm2 / isolated workers / process boundary). Spec needs to make this explicit.
+   - Fix in v1.1: add the missing decision type, encode strict-mode validation in the schema, document the runtime sandbox requirement.
+
+5. **Path-safety contract is not implementation-complete.** 007 has the right framework but misses: percent-decoding order, backslash/drive-relative paths (Windows), null/control chars, Unicode/case normalization (HFS+/APFS case-insensitive vs ext4 case-sensitive), hard-link inode equality, TOCTOU-safe openat (`realpath()` itself has a TOCTOU window). `realpath() with O_NOFOLLOW` isn't a real API contract — `O_NOFOLLOW` is open-time, not realpath-time. Fix in v1.1: prescribe per-component `openat()` with `O_NOFOLLOW`, add explicit ordering of normalization steps, address each platform-specific gotcha.
+
+### From Codex pass 3 (regressions)
+
+6. **`007`/`011` disagree on privileged scope shape.** 007 cites `skills/` and `.openclaw/architecture.json` as extended scopes; 011 cites `agents/*/skills/`. Pick one. The runtime/architect rule in 002+101 says only the architect writes `.openclaw/architecture.json` — privileged specialists writing it directly contradicts that.
+
+7. **Pipeline-local schema names can shadow platform schema names in 100 resolution rules.** Resolution order (local → pipeline-local → canonical → registry) means a pipeline could define `schemas/memory.schema.json` and it would shadow the platform `memory.schema.json`. Fix: reserve platform schema names; pipelines must use a `pipeline-` prefix for their own schemas, OR resolution must always check platform first then pipeline-local.
+
+### From earlier passes (still deferred)
+
+8. **C4 — Tier/lane scaling features.** The flat list of `(tier, lane, writers[])` works for ECC's ~15 regions × 3 tiers × ~10 lanes. Beyond that scale (100+ regions, per-state regulatory overlays), pipelines need groups, wildcards, negative grants, inheritance, and conflict precedence. Codex agreed this is ergonomics, not v1 contract.
+
+9. **S2 — SemVer pattern centralization.** Multiple schemas inline the SemVer regex; should `$ref` to `version.schema.json#/$defs/SemVer`. Cosmetic; no functional impact.
+
+10. **S4 — Termination data export contract.** ECC's MSA commits to CSV/JSON/PDF export of trained skill files, training inputs, estimate packages, config/rate tables, scope definitions, jurisdictional data, authority mappings, and integration configs within 30 days of termination. v1 has decision-log export (005); the broader pipeline-export contract is missing. New section `017-pipeline-export.md` planned for v1.1.
+
+### v1.1 schedule
+
+Within 30 days of v1.0 implementation kickoff. Backlog items 1-7 (from Codex pass 3) ship as `1.1.0`. Items 8-10 (from earlier deferrals) ship as either `1.1.0` or `1.2.0` depending on customer demand signal during the first deployment.
+
+---
