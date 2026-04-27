@@ -39,12 +39,25 @@ describe("isCustomHookName", () => {
     expect(isCustomHookName("custom:ecc:rfq-shipped")).toBe(true);
   });
 
-  test("accepts further-namespaced custom hooks", () => {
-    expect(isCustomHookName("custom:ecc:rfq:shipped")).toBe(true);
+  test("rejects further-namespaced custom hooks (spec requires exactly 3 segments)", () => {
+    expect(isCustomHookName("custom:ecc:rfq:shipped")).toBe(false);
+  });
+
+  test("rejects uppercase namespace or event (regression — spec requires lowercase kebab)", () => {
+    expect(isCustomHookName("custom:ECC:rfq-shipped")).toBe(false);
+    expect(isCustomHookName("custom:ecc:RFQ_Shipped")).toBe(false);
+  });
+
+  test("rejects underscores in segments (kebab-case only)", () => {
+    expect(isCustomHookName("custom:ecc:rfq_shipped")).toBe(false);
   });
 
   test("rejects custom: with no namespace", () => {
     expect(isCustomHookName("custom::rfq")).toBe(false);
+  });
+
+  test("rejects bare `custom:` prefix without segments", () => {
+    expect(isCustomHookName("custom:")).toBe(false);
   });
 
   test("rejects custom:<ns> without an event", () => {

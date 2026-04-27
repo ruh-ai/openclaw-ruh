@@ -22,6 +22,7 @@ export {
   CANONICAL_HOOK_NAMES,
   VETOABLE_HOOK_NAMES,
   HOOK_CAPABILITY_KINDS,
+  CUSTOM_HOOK_NAME_PATTERN,
   isCustomHookName,
   isCanonicalHookName,
   isVetoableHook,

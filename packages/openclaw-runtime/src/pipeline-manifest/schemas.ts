@@ -25,6 +25,7 @@ import {
   HookFireModeSchema,
   HookNameSchema,
 } from "../hooks/schemas";
+import { CUSTOM_HOOK_NAME_PATTERN } from "../hooks/types";
 import type {
   AgentRef,
   CustomHookDeclaration,
@@ -215,7 +216,15 @@ void _hookCheck;
 
 export const CustomHookDeclarationSchema = z
   .object({
-    name: z.string().regex(/^custom:/),
+    /**
+     * Canonical custom hook name pattern per
+     * `docs/spec/openclaw-v1/schemas/hooks.schema.json`. The previous
+     * revision used `^custom:` which let typo'd names like
+     * `custom:ECC:Bad_Event` or `custom:` pass validation. Using the
+     * shared pattern keeps the manifest schema and the hooks runtime
+     * in lockstep.
+     */
+    name: z.string().regex(CUSTOM_HOOK_NAME_PATTERN),
     payload_schema: z.string().min(1),
   })
   .strict();

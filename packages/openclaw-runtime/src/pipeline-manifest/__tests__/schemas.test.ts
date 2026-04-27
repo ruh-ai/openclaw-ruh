@@ -230,6 +230,39 @@ describe("CustomHookDeclarationSchema", () => {
       }).success,
     ).toBe(true);
   });
+
+  test("rejects uppercase / underscore segments (regression — round-1 only checked custom:)", () => {
+    expect(
+      CustomHookDeclarationSchema.safeParse({
+        name: "custom:ECC:Bad_Event",
+        payload_schema: "x",
+      }).success,
+    ).toBe(false);
+    expect(
+      CustomHookDeclarationSchema.safeParse({
+        name: "custom:ecc:rfq_shipped",
+        payload_schema: "x",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects bare `custom:` prefix without segments", () => {
+    expect(
+      CustomHookDeclarationSchema.safeParse({
+        name: "custom:",
+        payload_schema: "x",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects 4+ segments (spec mandates exactly custom:<ns>:<event>)", () => {
+    expect(
+      CustomHookDeclarationSchema.safeParse({
+        name: "custom:ecc:rfq:shipped",
+        payload_schema: "x",
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("ManifestDecisionMetadataBindingSchema", () => {

@@ -181,10 +181,12 @@ export const HandoffContextSchema = z
     config_filter: z.record(z.string(), z.unknown()).optional(),
     memory_lanes: z.array(z.string().regex(KEBAB_CASE)).optional(),
     /**
-     * Workspace-relative path. Absolute paths and scheme prefixes
-     * (file://, http://, etc.) are rejected at parse time — they would
-     * lexically normalize to the root and broaden access to the entire
-     * workspace.
+     * Workspace-relative path. Absolute paths, scheme prefixes, and
+     * scopes that lexically resolve to the workspace root (`.`, `./`,
+     * `./.`, `x/..`, etc.) are all rejected at parse time. Without the
+     * normalize-to-empty check a writer who typed `.` thinking it meant
+     * "current directory" would accidentally request root scope and
+     * broaden access to the whole workspace.
      */
     workspace_scope: z
       .string()
@@ -197,7 +199,33 @@ export const HandoffContextSchema = z
       })
       .refine((s) => !/^[a-zA-Z][a-zA-Z0-9+.-]*:(\/\/)?/.test(s), {
         message: "workspace_scope must not carry a scheme prefix (file://, http://, ...)",
-      }),
+      })
+      .refine(
+        (s) => {
+          // Reject inputs that normalize to empty — `.`, `./`, `./.`,
+          // `x/..`. The privileged "entire workspace" case requires
+          // the literal empty string, which `min(1)` already excludes
+          // here (HandoffContext always carries a real scope).
+          const segments = s.replace(/\\/g, "/").split("/").filter((p) => p !== "" && p !== ".");
+          if (segments.length === 0) return false;
+          // Defensive: a path like `foo/..` strips back to empty after
+          // dot-resolution. Walk the .. resolution.
+          const stack: string[] = [];
+          for (const seg of segments) {
+            if (seg === "..") {
+              if (stack.length === 0) return false; // escapes root
+              stack.pop();
+              continue;
+            }
+            stack.push(seg);
+          }
+          return stack.length > 0;
+        },
+        {
+          message:
+            'workspace_scope resolves to the workspace root (`.`, `./`, `x/..`, etc.); use the literal empty string to request root explicitly',
+        },
+      ),
     deadline: z.string().datetime({ offset: true }).optional(),
   })
   .strict();

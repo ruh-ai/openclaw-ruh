@@ -338,6 +338,21 @@ describe("HandoffContextSchema + OrchestratorHandoffSchema + OrchestratorResultS
     ).toBe(false);
   });
 
+  test("HandoffContext rejects workspace_scope that normalizes to empty (regression — `.`, `./`, `x/..`)", () => {
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "." }).success,
+    ).toBe(false);
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "./" }).success,
+    ).toBe(false);
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "./." }).success,
+    ).toBe(false);
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "x/.." }).success,
+    ).toBe(false);
+  });
+
   test("OrchestratorHandoff requires ULID parent_decision_id", () => {
     expect(
       OrchestratorHandoffSchema.safeParse({

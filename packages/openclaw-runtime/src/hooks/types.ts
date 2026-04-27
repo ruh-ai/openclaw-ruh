@@ -110,14 +110,25 @@ export type CustomHookName = `custom:${string}:${string}`;
 
 export type HookName = CanonicalHookName | CustomHookName;
 
+/**
+ * Canonical pattern for custom hook names per
+ * `docs/spec/openclaw-v1/schemas/hooks.schema.json`:
+ *
+ *   ^custom:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$
+ *
+ * Exactly three colon-separated segments — `custom:<kebab-namespace>:
+ * <kebab-event>`. Namespace and event must be lowercase kebab-case
+ * starting with a letter. Earlier substrate revisions allowed extra
+ * segments (`custom:ecc:rfq:shipped`) and tolerated uppercase /
+ * underscores (`custom:ECC:Bad_Event`); both diverged from the spec
+ * and let typo'd manifests pass validation.
+ */
+export const CUSTOM_HOOK_NAME_PATTERN =
+  /^custom:[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/;
+
 /** True iff the input is a valid custom hook name (`custom:<ns>:<event>`). */
 export function isCustomHookName(name: string): name is CustomHookName {
-  // Three or more colon-separated, non-empty segments after the leading
-  // "custom" (allows further namespacing like custom:ecc:rfq:shipped).
-  if (!name.startsWith("custom:")) return false;
-  const parts = name.split(":");
-  if (parts.length < 3) return false;
-  return parts.every((p) => p.length > 0);
+  return CUSTOM_HOOK_NAME_PATTERN.test(name);
 }
 
 /** True iff name is in the canonical set. */

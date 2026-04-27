@@ -105,17 +105,27 @@ export function checkScope(
  * Validate the scope itself before it's used as the containment baseline.
  * Returns the violation reason or `undefined` when the scope is well-formed.
  *
- * Empty string is valid — that means "the entire workspace is in scope"
- * (privileged / orchestrator-level use only).
+ * Only the literal empty string is accepted as "workspace root" (the
+ * intentional privileged-only case). Any non-empty input that lexically
+ * normalizes to empty — `.`, `./`, `./.`, `dir/..`, etc. — is rejected
+ * as `scope_invalid`. Without this rule a writer that typed `"."`
+ * thinking it meant "the current directory" would accidentally request
+ * root scope and broaden access to the whole workspace.
  */
 function validateScopeString(scope: string): ScopeViolationReason | undefined {
-  if (scope === "") return undefined; // empty scope is valid (workspace root)
+  if (scope === "") return undefined; // empty scope = workspace root (intentional)
   if (isAbsolute(scope)) return "scope_invalid";
   if (hasSchemePrefix(scope)) return "scope_invalid";
   if (hasControlChars(scope)) return "control_chars";
   // A scope that lexically resolves above its own root (e.g., "../etc")
   // is meaningless — there's no containment baseline.
-  if (lexicalNormalize(scope) === undefined) return "scope_invalid";
+  const normalized = lexicalNormalize(scope);
+  if (normalized === undefined) return "scope_invalid";
+  // Reject non-empty inputs that normalize to empty: ".", "./", "./.",
+  // "x/..", etc. The privileged "I want the entire workspace" path
+  // requires the literal empty string — anything else is treated as a
+  // probable typo.
+  if (normalized === "") return "scope_invalid";
   return undefined;
 }
 
