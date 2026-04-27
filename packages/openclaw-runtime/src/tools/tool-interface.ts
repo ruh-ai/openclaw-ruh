@@ -18,6 +18,7 @@
 
 import type { ZodType } from "zod";
 import type { AgentDevStage, ExecutionMode } from "../types/lifecycle";
+import type { DecisionLog } from "../decision-log/log";
 
 // ─── Tool context ─────────────────────────────────────────────────────
 
@@ -25,9 +26,10 @@ import type { AgentDevStage, ExecutionMode } from "../types/lifecycle";
  * The runtime hands a ToolContext to every tool call. Tools cannot reach into
  * globals or singletons; everything they need flows through this object.
  *
- * Note: handles like `decisionLog`, `memory`, `config`, `checkpoint` are added in
- * subsequent phases (1b-1h). This Phase 1a interface defines the bare minimum
- * the tool harness needs to operate; downstream phases extend it.
+ * Phase 1d added `decisionLog` for structured audit emission. Phase 1e-1h
+ * will add `memory`, `config`, `checkpoint`, `hooks` similarly. Tools that
+ * don't need a handle can ignore it; tools that do, receive a session-scoped
+ * instance.
  */
 export interface ToolContext {
   readonly sandboxId: string;
@@ -36,6 +38,8 @@ export interface ToolContext {
   readonly pipelineId: string;
   readonly mode: ExecutionMode;
   readonly devStage: AgentDevStage;
+  /** Phase 1d. Optional during the rollout window — tests may omit. The pipeline always passes one in production. */
+  readonly decisionLog?: DecisionLog;
 }
 
 // ─── Tool result ───────────────────────────────────────────────────────

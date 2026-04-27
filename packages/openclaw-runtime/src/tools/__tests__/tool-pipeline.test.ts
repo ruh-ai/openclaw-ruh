@@ -4,6 +4,7 @@ import { ToolRegistry } from "../tool-registry";
 import { BaseTool } from "../tool-interface";
 import type { ToolContext, ToolResult, PermissionDecision } from "../tool-interface";
 import { executeTool, executeTools, TOOL_EXECUTION_START, TOOL_EXECUTION_END } from "../tool-pipeline";
+import { DecisionLog, InMemoryDecisionStore } from "../../decision-log";
 
 const baseCtx: ToolContext = {
   sandboxId: "sb-1",
@@ -517,5 +518,169 @@ describe("executeTools (multi-tool)", () => {
         ),
       ).toBe(true);
     }
+  });
+});
+
+describe("decision-log emission (Phase 1d)", () => {
+  function ctxWithLog(): {
+    ctx: ToolContext;
+    store: InMemoryDecisionStore;
+    log: DecisionLog;
+  } {
+    const store = new InMemoryDecisionStore();
+    const log = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: "1.0.0-rc.1",
+      store,
+    });
+    return { ctx: { ...baseCtx, decisionLog: log }, store, log };
+  }
+
+  test("happy path emits tool_execution_start + tool_execution_end with chained parent_id", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new HelloTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "hello", { name: "Ada" }, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("tool_execution_end");
+
+    const start = r.entries.find((e) => e.type === "tool_execution_start");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(end?.parent_id).toBe(start?.id);
+    expect((end?.metadata as { success: boolean }).success).toBe(true);
+  });
+
+  test("execution_error emits error_classified + tool_execution_end with chained parent_id", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ThrowingTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "boom", { name: "Ada" }, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("error_classified");
+    expect(types).toContain("tool_execution_end");
+
+    const start = r.entries.find((e) => e.type === "tool_execution_start");
+    const errorClassified = r.entries.find((e) => e.type === "error_classified");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(errorClassified?.parent_id).toBe(start?.id);
+    expect(end?.parent_id).toBe(start?.id);
+    expect((end?.metadata as { success: boolean }).success).toBe(false);
+  });
+
+  test("redaction strips secret from error_classified.original_message_redacted", async () => {
+    class LeakyThrower extends HelloTool {
+      override readonly name: string = "leaky-throw";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        throw new Error("rate limit — Bearer abcdefghij1234567890");
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new LeakyThrower());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "leaky-throw", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const errorClassified = r.entries.find((e) => e.type === "error_classified");
+    const original = (errorClassified?.metadata as {
+      original_message_redacted: string;
+    }).original_message_redacted;
+    expect(original).not.toContain("abcdefghij1234567890");
+    expect(original).toContain("Bearer <REDACTED:credential>");
+  });
+
+  test("tool_failed (success:false) emits tool_execution_end with success:false", async () => {
+    class FailingTool extends BaseTool<unknown, { reason: string }> {
+      readonly name = "fail";
+      readonly description = "always fails";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      async call(): Promise<ToolResult<{ reason: string }>> {
+        return { success: false, output: { reason: "x" }, error: "rate limit hit" };
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new FailingTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "fail", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(end).toBeDefined();
+    expect((end?.metadata as { success: boolean }).success).toBe(false);
+    expect((end?.metadata as { error_category: string }).error_category).toBe(
+      "rate_limit",
+    );
+  });
+
+  test("permission_denied (no approval callback) emits permission_denied", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("permission_denied");
+    // No tool_execution_start / _end when denied at the gate
+    expect(types).not.toContain("tool_execution_start");
+    expect(types).not.toContain("tool_execution_end");
+  });
+
+  test("permission approved emits permission_approved + start + end", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => true,
+    });
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("permission_approved");
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("tool_execution_end");
+  });
+
+  test("permission denied via approval callback emits permission_denied with requires_approval:false", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => false,
+    });
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const denied = r.entries.find((e) => e.type === "permission_denied");
+    expect(denied).toBeDefined();
+    expect(
+      (denied?.metadata as { requires_approval: boolean }).requires_approval,
+    ).toBe(false);
+  });
+
+  test("absent decisionLog: existing pipeline behavior unchanged (no emissions, no errors)", async () => {
+    // baseCtx has no decisionLog
+    const registry = new ToolRegistry();
+    registry.register(new HelloTool());
+    const result = await executeTool(registry, "hello", { name: "Ada" }, baseCtx);
+    expect(result.status).toBe("success");
   });
 });

@@ -17,11 +17,13 @@ export * from "./error";
 // ─── Output validator + marker parser + canonical schemas (Phase 1c) ──
 export * from "./parser";
 
+// ─── Decision log + redaction + in-memory store (Phase 1d) ─────────────
+export * from "./decision-log";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
 
-// ─── Phase 1d-1h modules — added in subsequent commits ─────────────────
-// export * from "./decision-log";
+// ─── Phase 1e-1h modules — added in subsequent commits ─────────────────
 // export * from "./memory";
 // export * from "./config";
 // export * from "./checkpoint";

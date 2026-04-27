@@ -116,6 +116,17 @@ export async function executeTool<TOutput = unknown>(
     if (permission.requiresApproval && options?.onApprovalRequired) {
       const approved = await options.onApprovalRequired(toolName, permission.reason);
       if (!approved) {
+        if (ctx.decisionLog) {
+          await ctx.decisionLog.emit({
+            type: "permission_denied",
+            description: `Tool "${toolName}" denied by reviewer`,
+            metadata: {
+              tool_name: toolName,
+              reason: permission.reason,
+              requires_approval: false,
+            },
+          });
+        }
         return {
           status: "permission_denied",
           toolName,
@@ -123,8 +134,26 @@ export async function executeTool<TOutput = unknown>(
           requiresApproval: false,
         };
       }
-      // Approved — fall through to execution
+      // Approved — log + fall through to execution
+      if (ctx.decisionLog) {
+        await ctx.decisionLog.emit({
+          type: "permission_approved",
+          description: `Tool "${toolName}" approved by reviewer`,
+          metadata: { tool_name: toolName, reason: permission.reason },
+        });
+      }
     } else {
+      if (ctx.decisionLog) {
+        await ctx.decisionLog.emit({
+          type: "permission_denied",
+          description: `Tool "${toolName}" denied by policy`,
+          metadata: {
+            tool_name: toolName,
+            reason: permission.reason,
+            requires_approval: permission.requiresApproval,
+          },
+        });
+      }
       return {
         status: "permission_denied",
         toolName,
@@ -134,7 +163,7 @@ export async function executeTool<TOutput = unknown>(
     }
   }
 
-  // 6. Emit TOOL_EXECUTION_START
+  // 6. Emit TOOL_EXECUTION_START — both the AG-UI event AND a decision-log entry.
   const events: AgUiCustomEvent[] = [];
   const executionId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -143,6 +172,26 @@ export async function executeTool<TOutput = unknown>(
     name: TOOL_EXECUTION_START,
     value: { toolName, executionId, readOnly: tool.isReadOnly() },
   });
+
+  // Emit tool_execution_start to the decision log (Phase 1d) if a log is available.
+  // We don't await this — decision emission shouldn't block the tool call.
+  let parentDecisionId: string | undefined;
+  if (ctx.decisionLog) {
+    const startDecision = await ctx.decisionLog.emit({
+      type: "tool_execution_start",
+      description: `Tool "${toolName}" started`,
+      metadata: {
+        tool_name: toolName,
+        execution_id: executionId,
+        read_only: tool.isReadOnly(),
+        destructive: tool.isDestructive(),
+        concurrency_safe: tool.isConcurrencySafe(),
+        mode: ctx.mode,
+        dev_stage: ctx.devStage,
+      },
+    });
+    parentDecisionId = startDecision.id;
+  }
 
   // 7. Execute
   let result: ToolResult<TOutput>;
@@ -155,7 +204,7 @@ export async function executeTool<TOutput = unknown>(
     // Spec 014: originalMessage may contain credentials/internal paths.
     // The event is forwarded to AG-UI/dashboard — only userMessage is safe.
     // originalMessage stays in the typed PipelineResult for server-side
-    // logging (decision-log writer in Phase 1d redacts at write time).
+    // logging (decision-log writer redacts at write time).
     events.push({
       type: "CUSTOM",
       name: TOOL_EXECUTION_END,
@@ -168,6 +217,39 @@ export async function executeTool<TOutput = unknown>(
         retryable: classified.retryable,
       },
     });
+
+    // Emit error_classified + tool_execution_end to the decision log.
+    if (ctx.decisionLog) {
+      await ctx.decisionLog.emit({
+        type: "error_classified",
+        description: `Tool "${toolName}" threw — category: ${classified.category}`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          category: classified.category,
+          retryable: classified.retryable,
+          // The decision log redacts at write time — passing the original is safe
+          // because redaction strips credentials before storage.
+          original_message_redacted: classified.originalMessage,
+          user_message: classified.userMessage,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+      await ctx.decisionLog.emit({
+        type: "tool_execution_end",
+        description: `Tool "${toolName}" failed (${classified.category})`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          success: false,
+          user_message: classified.userMessage,
+          error_category: classified.category,
+          retryable: classified.retryable,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+    }
+
     return {
       status: "execution_error",
       toolName,
@@ -229,6 +311,22 @@ export async function executeTool<TOutput = unknown>(
       },
     });
 
+    if (ctx.decisionLog) {
+      await ctx.decisionLog.emit({
+        type: "tool_execution_end",
+        description: `Tool "${toolName}" returned success:false (${classified.category})`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          success: false,
+          user_message: classified.userMessage,
+          error_category: classified.category,
+          retryable: classified.retryable,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+    }
+
     return {
       status: "tool_failed",
       toolName,
@@ -246,6 +344,19 @@ export async function executeTool<TOutput = unknown>(
     name: TOOL_EXECUTION_END,
     value: { toolName, executionId, success: true },
   });
+
+  if (ctx.decisionLog) {
+    await ctx.decisionLog.emit({
+      type: "tool_execution_end",
+      description: `Tool "${toolName}" completed`,
+      metadata: {
+        tool_name: toolName,
+        execution_id: executionId,
+        success: true,
+      },
+      ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+    });
+  }
 
   return {
     status: "success",
