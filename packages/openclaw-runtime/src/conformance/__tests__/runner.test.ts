@@ -50,8 +50,8 @@ function basePipeline(): PipelineManifest {
     },
     dashboard: {
       manifest_path: "dashboard/manifest.json",
-      title: "ECC",
-      default_landing_panel: "queue",
+      title: "ECC Estimator",
+      default_landing_panel: "orchestrator-chat",
     },
     eval_suite_ref: "eval/tasks.json",
     hooks: [],
@@ -108,17 +108,6 @@ function baseDashboard(over: Partial<DashboardManifest> = {}): DashboardManifest
 }
 
 describe("runConformance — happy path", () => {
-  test("pipeline alone: runs pipeline validator only", () => {
-    const r = runConformance({ pipelineManifest: basePipeline() });
-    expect(r.ok).toBe(true);
-    expect(r.errors).toBe(0);
-  });
-
-  test("dashboard alone: runs dashboard validator only", () => {
-    const r = runConformance({ dashboardManifest: baseDashboard() });
-    expect(r.ok).toBe(true);
-  });
-
   test("pipeline + dashboard: aggregate report includes both validators + cross-checks", () => {
     const r = runConformance({
       pipelineManifest: basePipeline(),
@@ -128,10 +117,44 @@ describe("runConformance — happy path", () => {
     expect(r.errors).toBe(0);
   });
 
+  test("dashboard alone: runs dashboard validator only", () => {
+    const r = runConformance({ dashboardManifest: baseDashboard() });
+    expect(r.ok).toBe(true);
+  });
+
   test("no inputs: empty report, ok:true (vacuous)", () => {
     const r = runConformance({});
     expect(r.ok).toBe(true);
     expect(r.findings).toHaveLength(0);
+  });
+});
+
+describe("runConformance — dashboard manifest required when pipeline declares one (regression P1)", () => {
+  test("pipeline alone (with dashboard ref) fails — dashboard manifest must be supplied", () => {
+    const r = runConformance({ pipelineManifest: basePipeline() });
+    expect(r.ok).toBe(false);
+    expect(
+      r.findings.some(
+        (f) =>
+          f.source === "cross-artifact" &&
+          f.rule === "dashboard-manifest-required",
+      ),
+    ).toBe(true);
+  });
+
+  test("error finding cites the manifest_path the pipeline declared", () => {
+    const r = runConformance({ pipelineManifest: basePipeline() });
+    const finding = r.findings.find(
+      (f) => f.rule === "dashboard-manifest-required",
+    );
+    expect(finding?.message).toContain("dashboard/manifest.json");
+  });
+
+  test("malformed pipeline does NOT trigger dashboard-manifest-required (rule only fires when pipeline parses)", () => {
+    const r = runConformance({ pipelineManifest: {} });
+    expect(
+      r.findings.some((f) => f.rule === "dashboard-manifest-required"),
+    ).toBe(false);
   });
 });
 
@@ -271,6 +294,62 @@ describe("runConformance — cross-artifact rule: memory:confirm grants must ali
   });
 });
 
+describe("runConformance — dashboard ref alignment (regression P2)", () => {
+  test("pipeline.dashboard.default_landing_panel not in dashboard.panels[] is an error", () => {
+    const pipeline = basePipeline();
+    const broken = {
+      ...pipeline,
+      dashboard: { ...pipeline.dashboard, default_landing_panel: "ghost" },
+    };
+    const r = runConformance({
+      pipelineManifest: broken,
+      dashboardManifest: baseDashboard(),
+    });
+    expect(
+      r.findings.some(
+        (f) =>
+          f.source === "cross-artifact" &&
+          f.rule === "dashboard-default-landing-exists",
+      ),
+    ).toBe(true);
+  });
+
+  test("pipeline.dashboard.default_landing_panel exists but differs from dashboard.default_landing_panel → warning", () => {
+    const pipeline = basePipeline();
+    const stub = {
+      ...pipeline,
+      dashboard: { ...pipeline.dashboard, default_landing_panel: "estimate-queue" },
+    };
+    const r = runConformance({
+      pipelineManifest: stub,
+      // baseDashboard's default_landing_panel is "orchestrator-chat"
+      dashboardManifest: baseDashboard(),
+    });
+    const finding = r.findings.find(
+      (f) => f.rule === "dashboard-default-landing-mismatch",
+    );
+    expect(finding?.severity).toBe("warning");
+  });
+
+  test("pipeline.dashboard.title differs from dashboard.title → warning", () => {
+    const pipeline = basePipeline();
+    const stub = {
+      ...pipeline,
+      dashboard: { ...pipeline.dashboard, title: "Different Title" },
+    };
+    const r = runConformance({
+      pipelineManifest: stub,
+      dashboardManifest: baseDashboard(),
+    });
+    expect(
+      r.findings.some(
+        (f) =>
+          f.rule === "dashboard-title-mismatch" && f.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("runConformance — cross-checks skipped when one artifact failed schema", () => {
   test("pipeline schema-failure → no cross-artifact checks ran", () => {
     const r = runConformance({
@@ -291,8 +370,11 @@ describe("runConformance — cross-checks skipped when one artifact failed schem
 });
 
 describe("assertConformant", () => {
-  test("returns the report on success", () => {
-    const r = assertConformant({ pipelineManifest: basePipeline() });
+  test("returns the report on success (pipeline + dashboard)", () => {
+    const r = assertConformant({
+      pipelineManifest: basePipeline(),
+      dashboardManifest: baseDashboard(),
+    });
     expect(r.ok).toBe(true);
   });
 

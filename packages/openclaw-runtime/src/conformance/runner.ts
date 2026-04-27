@@ -32,7 +32,15 @@ import {
 export interface ConformanceInput {
   /** Pipeline manifest object (typed or raw — the runner re-validates). */
   readonly pipelineManifest?: unknown;
-  /** Dashboard manifest object — optional; pipelines may ship without one. */
+  /**
+   * Dashboard manifest object. Optional only when the pipeline manifest
+   * being validated declares no dashboard reference. Pipeline manifests
+   * targeting v1 spec require `dashboard.manifest_path` (it's in the
+   * schema's required[]), so for any conforming pipeline this MUST be
+   * supplied. The runner emits an error finding when a pipeline declares
+   * a dashboard but `dashboardManifest` is missing — partial conformance
+   * is non-conformance per spec 101.
+   */
   readonly dashboardManifest?: unknown;
 }
 
@@ -62,6 +70,24 @@ export function runConformance(input: ConformanceInput): ConformanceReport {
     const r = validateDashboardManifest(input.dashboardManifest);
     for (const f of r.findings) findings.push(dashboardFindingToConformance(f));
     if (r.ok) parsedDashboard = input.dashboardManifest as DashboardManifest;
+  }
+
+  // Spec 101 §what-conformance-means: "Its `pipeline-manifest.json`
+  // validates against the v1 schema and every cross-reference resolves"
+  // and "partial conformance is non-conformance." A pipeline that
+  // declares a dashboard ref MUST have its dashboard manifest validated
+  // — we cannot mark a pipeline conformant without seeing it. The
+  // schema makes `dashboard` required on PipelineManifest, so any
+  // schema-valid pipeline carries this ref.
+  if (parsedPipeline !== undefined && input.dashboardManifest === undefined) {
+    findings.push({
+      severity: "error",
+      source: "cross-artifact",
+      rule: "dashboard-manifest-required",
+      message: `pipeline declares dashboard.manifest_path "${parsedPipeline.dashboard.manifest_path}" but no dashboardManifest was supplied to runConformance — load and pass it (partial conformance is non-conformance per spec 101)`,
+      path: "dashboard.manifest_path",
+      involves: ["pipeline-manifest.dashboard", "dashboard-manifest"],
+    });
   }
 
   // Cross-artifact checks only run when both artifacts schema-validated.

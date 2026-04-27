@@ -213,27 +213,42 @@ function checkNavigationVisibleRolesExist(
 }
 
 /**
- * Every action.permission referenced by any panel action MUST appear in
- * at least one role's permissions[] — otherwise no user can ever run
- * the action and the panel is dead UI. Spec §validation §"Permissions
- * consistent" makes this explicit.
+ * For every action that requires a permission, at least one role must
+ * BOTH (a) be able to see the panel AND (b) hold the permission.
+ *
+ * Earlier revision only checked global existence — a permission held by
+ * any role passed even when no role with that permission could see the
+ * panel. The result: a panel action that's visible to one user group
+ * but the permission is held by a different group entirely → every
+ * user who sees the action gets a 403.
+ *
+ * Visibility precedence:
+ *   - role can see panel iff panel.id ∈ role.visible_panels
+ *   - AND (panel has no per-panel role_visibility OR role.name ∈ panel.role_visibility)
  */
 function checkActionPermissionsResolve(
   m: DashboardManifest,
   findings: DashboardValidationFinding[],
 ): void {
-  const declared = new Set<string>();
-  for (const role of m.role_visibility.roles) {
-    for (const p of role.permissions) declared.add(p);
-  }
   m.panels.forEach((panel, pi) => {
     panel.actions?.forEach((action: PanelAction, ai: number) => {
       if (!action.permission) return;
-      if (!declared.has(action.permission)) {
+
+      const reachable = m.role_visibility.roles.some((role) => {
+        const roleSeesPanel =
+          role.visible_panels.includes(panel.id) &&
+          (!panel.role_visibility ||
+            panel.role_visibility.length === 0 ||
+            panel.role_visibility.includes(role.name));
+        const roleHasPermission = role.permissions.includes(action.permission!);
+        return roleSeesPanel && roleHasPermission;
+      });
+
+      if (!reachable) {
         findings.push({
           severity: "error",
           rule: "action-permission-resolves",
-          message: `panel "${panel.id}" action "${action.label}" requires permission "${action.permission}" but no role declares it — the action is unreachable`,
+          message: `panel "${panel.id}" action "${action.label}" requires permission "${action.permission}" but no role both sees the panel AND holds the permission — the action is unreachable for every user`,
           path: `panels[${pi}].actions[${ai}].permission`,
         });
       }

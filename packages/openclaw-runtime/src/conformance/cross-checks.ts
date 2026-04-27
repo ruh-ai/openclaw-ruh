@@ -42,6 +42,11 @@ export function runCrossArtifactChecks(
       input.dashboardManifest,
       findings,
     );
+    checkDashboardRefAlignment(
+      input.pipelineManifest,
+      input.dashboardManifest,
+      findings,
+    );
     checkDashboardPermissionsResolveToMemoryAuthority(
       input.pipelineManifest.memory_authority,
       input.dashboardManifest,
@@ -85,6 +90,59 @@ function checkSpecVersionAlignment(
       rule: "spec-version-alignment",
       message: `pipeline.spec_version "${pipeline.spec_version}" ≠ dashboard.spec_version "${dashboard.spec_version}"`,
       involves: ["pipeline-manifest", "dashboard-manifest"],
+    });
+  }
+}
+
+/**
+ * The pipeline manifest's `dashboard` is a stub referring to the full
+ * dashboard manifest. Required fields on both must agree:
+ *
+ *   - default_landing_panel — error if pipeline's value isn't a real
+ *     panel id in the dashboard manifest. Warning if it's a real panel
+ *     but doesn't match the dashboard's own default_landing_panel
+ *     (the dashboard manifest is authoritative; mismatched stubs cause
+ *     load-time confusion when the runtime picks one over the other).
+ *
+ *   - title — warning when they differ (pipeline's stub usually mirrors
+ *     the dashboard's title; a mismatch is suspicious but not fatal).
+ */
+function checkDashboardRefAlignment(
+  pipeline: PipelineManifest,
+  dashboard: DashboardManifest,
+  findings: ConformanceFinding[],
+): void {
+  const refLanding = pipeline.dashboard.default_landing_panel;
+  const panelIds = new Set(dashboard.panels.map((p) => p.id));
+
+  if (!panelIds.has(refLanding)) {
+    findings.push({
+      severity: "error",
+      source: "cross-artifact",
+      rule: "dashboard-default-landing-exists",
+      message: `pipeline.dashboard.default_landing_panel "${refLanding}" not found in dashboard.panels[]`,
+      path: "dashboard.default_landing_panel",
+      involves: ["pipeline-manifest.dashboard", "dashboard-manifest.panels"],
+    });
+  } else if (refLanding !== dashboard.default_landing_panel) {
+    findings.push({
+      severity: "warning",
+      source: "cross-artifact",
+      rule: "dashboard-default-landing-mismatch",
+      message: `pipeline.dashboard.default_landing_panel "${refLanding}" exists but differs from dashboard.default_landing_panel "${dashboard.default_landing_panel}" — the dashboard's value is authoritative; the runtime may pick either depending on load order`,
+      path: "dashboard.default_landing_panel",
+      involves: ["pipeline-manifest.dashboard", "dashboard-manifest"],
+    });
+  }
+
+  if (pipeline.dashboard.title !== dashboard.title) {
+    findings.push({
+      severity: "warning",
+      source: "cross-artifact",
+      rule: "dashboard-title-mismatch",
+      message: `pipeline.dashboard.title "${pipeline.dashboard.title}" ≠ dashboard.title "${dashboard.title}" — usually the stub mirrors the dashboard's title`,
+      path: "dashboard.title",
+      involves: ["pipeline-manifest.dashboard", "dashboard-manifest"],
     });
   }
 }

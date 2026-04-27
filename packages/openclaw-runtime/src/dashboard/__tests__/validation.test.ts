@@ -238,6 +238,63 @@ describe("validateDashboardManifest — action-permission-resolves", () => {
       r.findings.some((f) => f.rule === "action-permission-resolves"),
     ).toBe(false);
   });
+
+  test("action unreachable when permission held by a role that CAN'T see the panel (regression P2-2)", () => {
+    // The role with `memory:confirm:estimating` does NOT see the
+    // memory-approval panel, while the role that DOES see it has no
+    // permissions. Globally the permission exists, but no single role
+    // both holds it AND sees the panel — every user gets a 403.
+    const m = baseManifest();
+    const broken: DashboardManifest = {
+      ...m,
+      role_visibility: {
+        roles: [
+          {
+            name: "regional_estimator",
+            description: "Can see approvals but can't approve",
+            granted_to: ["amelia@ecc.com"],
+            permissions: [],
+            visible_panels: ["orchestrator-chat", "memory-approval"],
+          },
+          {
+            name: "lead_estimator_remote",
+            description: "Holds permission but doesn't see the approval panel",
+            granted_to: ["darrow@ecc.com"],
+            permissions: ["memory:confirm:estimating"],
+            visible_panels: ["orchestrator-chat", "estimate-queue"],
+          },
+        ],
+      },
+    };
+    const r = validateDashboardManifest(broken);
+    expect(
+      r.findings.some(
+        (f) =>
+          f.rule === "action-permission-resolves" &&
+          f.message.includes("memory:confirm:estimating"),
+      ),
+    ).toBe(true);
+  });
+
+  test("per-panel role_visibility tightens reachability — only listed roles count", () => {
+    // The role has the permission AND `memory-approval` is in its
+    // visible_panels, BUT the panel itself declares
+    // role_visibility: ["other_role"], so the role can't see the panel
+    // anymore → action becomes unreachable.
+    const m = baseManifest();
+    const broken: DashboardManifest = {
+      ...m,
+      panels: m.panels.map((p) =>
+        p.id === "memory-approval"
+          ? { ...p, role_visibility: ["other_role"] }
+          : p,
+      ),
+    };
+    const r = validateDashboardManifest(broken);
+    expect(
+      r.findings.some((f) => f.rule === "action-permission-resolves"),
+    ).toBe(true);
+  });
 });
 
 describe("assertValidDashboardManifest", () => {
