@@ -314,7 +314,7 @@ describe("runConformance — dashboard ref alignment (regression P2)", () => {
     ).toBe(true);
   });
 
-  test("pipeline.dashboard.default_landing_panel exists but differs from dashboard.default_landing_panel → warning", () => {
+  test("pipeline.dashboard.default_landing_panel exists but differs from dashboard.default_landing_panel → error (substrate can't predict which the runtime resolves)", () => {
     const pipeline = basePipeline();
     const stub = {
       ...pipeline,
@@ -328,7 +328,7 @@ describe("runConformance — dashboard ref alignment (regression P2)", () => {
     const finding = r.findings.find(
       (f) => f.rule === "dashboard-default-landing-mismatch",
     );
-    expect(finding?.severity).toBe("warning");
+    expect(finding?.severity).toBe("error");
   });
 
   test("pipeline.dashboard.title differs from dashboard.title → warning", () => {

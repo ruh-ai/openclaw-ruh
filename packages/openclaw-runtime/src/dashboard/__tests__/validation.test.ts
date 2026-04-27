@@ -277,23 +277,116 @@ describe("validateDashboardManifest — action-permission-resolves", () => {
   });
 
   test("per-panel role_visibility tightens reachability — only listed roles count", () => {
-    // The role has the permission AND `memory-approval` is in its
-    // visible_panels, BUT the panel itself declares
-    // role_visibility: ["other_role"], so the role can't see the panel
-    // anymore → action becomes unreachable.
+    // The lead_estimator role has the permission AND `memory-approval`
+    // is in its visible_panels, BUT the panel itself declares
+    // role_visibility: ["regional_estimator"], so lead_estimator can't
+    // see the panel anymore → action becomes unreachable.
+    //
+    // We add `regional_estimator` as a real role so the
+    // panel-role-visibility-exists rule doesn't fire alongside —
+    // isolating the action-permission-resolves check.
     const m = baseManifest();
     const broken: DashboardManifest = {
       ...m,
       panels: m.panels.map((p) =>
         p.id === "memory-approval"
-          ? { ...p, role_visibility: ["other_role"] }
+          ? { ...p, role_visibility: ["regional_estimator"] }
           : p,
       ),
+      role_visibility: {
+        roles: [
+          ...m.role_visibility.roles,
+          {
+            name: "regional_estimator",
+            description: "Tier-3 writer; no confirm authority",
+            granted_to: ["jim@ecc.com"],
+            permissions: [],
+            visible_panels: ["orchestrator-chat", "memory-approval"],
+          },
+        ],
+      },
     };
     const r = validateDashboardManifest(broken);
     expect(
       r.findings.some((f) => f.rule === "action-permission-resolves"),
     ).toBe(true);
+    // No spurious panel-role-visibility-exists since the listed role is real.
+    expect(
+      r.findings.some((f) => f.rule === "panel-role-visibility-exists"),
+    ).toBe(false);
+  });
+});
+
+describe("validateDashboardManifest — panel-role-visibility-exists (regression — symmetric to nav-role-exists)", () => {
+  test("typo'd role name in panel.role_visibility is an error", () => {
+    const m = baseManifest();
+    const broken: DashboardManifest = {
+      ...m,
+      panels: m.panels.map((p) =>
+        p.id === "memory-approval"
+          ? { ...p, role_visibility: ["typo_role"] }
+          : p,
+      ),
+    };
+    const r = validateDashboardManifest(broken);
+    expect(
+      r.findings.some(
+        (f) =>
+          f.rule === "panel-role-visibility-exists" &&
+          f.message.includes("typo_role"),
+      ),
+    ).toBe(true);
+  });
+
+  test("multiple typos each surface a finding with the path", () => {
+    const m = baseManifest();
+    const broken: DashboardManifest = {
+      ...m,
+      panels: m.panels.map((p) =>
+        p.id === "memory-approval"
+          ? { ...p, role_visibility: ["typo_a", "typo_b"] }
+          : p,
+      ),
+    };
+    const r = validateDashboardManifest(broken);
+    const matches = r.findings.filter(
+      (f) => f.rule === "panel-role-visibility-exists",
+    );
+    expect(matches.length).toBe(2);
+  });
+
+  test("empty role_visibility:[] is treated as `no constraint` — no finding (P3 contract pin)", () => {
+    const m = baseManifest();
+    const updated: DashboardManifest = {
+      ...m,
+      panels: m.panels.map((p) =>
+        p.id === "memory-approval" ? { ...p, role_visibility: [] } : p,
+      ),
+    };
+    const r = validateDashboardManifest(updated);
+    expect(
+      r.findings.some((f) => f.rule === "panel-role-visibility-exists"),
+    ).toBe(false);
+    // The action remains reachable through normal visible_panels.
+    expect(
+      r.findings.some((f) => f.rule === "action-permission-resolves"),
+    ).toBe(false);
+  });
+
+  test("real role name in role_visibility doesn't trigger the rule", () => {
+    const m = baseManifest();
+    const updated: DashboardManifest = {
+      ...m,
+      panels: m.panels.map((p) =>
+        p.id === "memory-approval"
+          ? { ...p, role_visibility: ["lead_estimator"] }
+          : p,
+      ),
+    };
+    const r = validateDashboardManifest(updated);
+    expect(
+      r.findings.some((f) => f.rule === "panel-role-visibility-exists"),
+    ).toBe(false);
   });
 });
 

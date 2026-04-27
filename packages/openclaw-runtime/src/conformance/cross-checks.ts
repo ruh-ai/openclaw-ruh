@@ -98,14 +98,19 @@ function checkSpecVersionAlignment(
  * The pipeline manifest's `dashboard` is a stub referring to the full
  * dashboard manifest. Required fields on both must agree:
  *
- *   - default_landing_panel — error if pipeline's value isn't a real
- *     panel id in the dashboard manifest. Warning if it's a real panel
- *     but doesn't match the dashboard's own default_landing_panel
- *     (the dashboard manifest is authoritative; mismatched stubs cause
- *     load-time confusion when the runtime picks one over the other).
+ *   - default_landing_panel — error in BOTH cases:
+ *       (a) pipeline's value isn't a real panel id in the dashboard, or
+ *       (b) pipeline's value differs from the dashboard's own
+ *           default_landing_panel.
+ *     The substrate cannot predict which the runtime will resolve to,
+ *     and divergent stubs let users land on the wrong panel — that's a
+ *     functional defect, not a style nit. (Earlier revision marked (b)
+ *     as a warning; tightened on review pass.)
  *
  *   - title — warning when they differ (pipeline's stub usually mirrors
- *     the dashboard's title; a mismatch is suspicious but not fatal).
+ *     the dashboard's title, but the pipeline-stub's title can
+ *     legitimately be a deployment-name with the dashboard carrying a
+ *     UI brand-name; cosmetic conventions, not load-bearing).
  */
 function checkDashboardRefAlignment(
   pipeline: PipelineManifest,
@@ -126,10 +131,10 @@ function checkDashboardRefAlignment(
     });
   } else if (refLanding !== dashboard.default_landing_panel) {
     findings.push({
-      severity: "warning",
+      severity: "error",
       source: "cross-artifact",
       rule: "dashboard-default-landing-mismatch",
-      message: `pipeline.dashboard.default_landing_panel "${refLanding}" exists but differs from dashboard.default_landing_panel "${dashboard.default_landing_panel}" — the dashboard's value is authoritative; the runtime may pick either depending on load order`,
+      message: `pipeline.dashboard.default_landing_panel "${refLanding}" differs from dashboard.default_landing_panel "${dashboard.default_landing_panel}" — the substrate cannot predict which the runtime resolves; users could land on the wrong panel`,
       path: "dashboard.default_landing_panel",
       involves: ["pipeline-manifest.dashboard", "dashboard-manifest"],
     });
@@ -140,7 +145,7 @@ function checkDashboardRefAlignment(
       severity: "warning",
       source: "cross-artifact",
       rule: "dashboard-title-mismatch",
-      message: `pipeline.dashboard.title "${pipeline.dashboard.title}" ≠ dashboard.title "${dashboard.title}" — usually the stub mirrors the dashboard's title`,
+      message: `pipeline.dashboard.title "${pipeline.dashboard.title}" ≠ dashboard.title "${dashboard.title}" — usually the stub mirrors the dashboard's title; cosmetic only`,
       path: "dashboard.title",
       involves: ["pipeline-manifest.dashboard", "dashboard-manifest"],
     });

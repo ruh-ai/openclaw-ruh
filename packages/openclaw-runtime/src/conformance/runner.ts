@@ -79,7 +79,17 @@ export function runConformance(input: ConformanceInput): ConformanceReport {
   // — we cannot mark a pipeline conformant without seeing it. The
   // schema makes `dashboard` required on PipelineManifest, so any
   // schema-valid pipeline carries this ref.
-  if (parsedPipeline !== undefined && input.dashboardManifest === undefined) {
+  //
+  // Defensive null-check on `parsedPipeline.dashboard`: if a future
+  // spec relaxes the required-dashboard rule (agentless / dashboardless
+  // pipelines), this guard prevents the rule from throwing while
+  // accessing manifest_path. Today's schema makes the second check a
+  // no-op; the cost is one extra conditional.
+  if (
+    parsedPipeline !== undefined &&
+    parsedPipeline.dashboard !== undefined &&
+    input.dashboardManifest === undefined
+  ) {
     findings.push({
       severity: "error",
       source: "cross-artifact",

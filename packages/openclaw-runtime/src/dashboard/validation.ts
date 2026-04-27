@@ -88,6 +88,7 @@ export function validateDashboardManifest(
   checkRoleVisiblePanelsExist(manifest, findings);
   checkNavigationPanelsExist(manifest, findings);
   checkNavigationVisibleRolesExist(manifest, findings);
+  checkPanelRoleVisibilityExists(manifest, findings);
   checkActionPermissionsResolve(manifest, findings);
 
   return summarise(findings);
@@ -206,6 +207,34 @@ function checkNavigationVisibleRolesExist(
           rule: "nav-role-exists",
           message: `navigation group "${group.label}" references unknown role "${roleName}"`,
           path: `navigation.groups[${i}].visible_to_roles[${j}]`,
+        });
+      }
+    });
+  });
+}
+
+/**
+ * Symmetric to `nav-role-exists` but for per-panel `role_visibility`.
+ * A panel that lists `role_visibility: ["typo_role"]` silently locks
+ * itself to nobody — same defect class as misspelt nav roles.
+ *
+ * Empty `role_visibility: []` is treated as "no constraint" (the panel
+ * is visible to any role whose `visible_panels` includes its id) — this
+ * rule only fires for non-empty arrays containing unknown role names.
+ */
+function checkPanelRoleVisibilityExists(
+  m: DashboardManifest,
+  findings: DashboardValidationFinding[],
+): void {
+  const roleNames = new Set(m.role_visibility.roles.map((r) => r.name));
+  m.panels.forEach((panel, pi) => {
+    panel.role_visibility?.forEach((roleName, ri) => {
+      if (!roleNames.has(roleName)) {
+        findings.push({
+          severity: "error",
+          rule: "panel-role-visibility-exists",
+          message: `panel "${panel.id}" references unknown role "${roleName}" in role_visibility`,
+          path: `panels[${pi}].role_visibility[${ri}]`,
         });
       }
     });
