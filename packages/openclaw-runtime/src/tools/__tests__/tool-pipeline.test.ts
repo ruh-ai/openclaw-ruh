@@ -296,7 +296,7 @@ describe("tool_failed status (H2)", () => {
       return true;
     }
     async call(): Promise<ToolResult<{ reason: string }>> {
-      return { success: false, output: { reason: "intentional" }, error: "structured failure" };
+      return { success: false, output: { reason: "intentional" }, error: "rate limit hit" };
     }
   }
 
@@ -307,9 +307,80 @@ describe("tool_failed status (H2)", () => {
     expect(result.status).toBe("tool_failed");
     if (result.status === "tool_failed") {
       expect(result.result.success).toBe(false);
-      expect(result.result.error).toBe("structured failure");
       expect(result.events.some((e) => e.name === TOOL_EXECUTION_END)).toBe(true);
     }
+  });
+
+  test("tool_failed result is classified — errorCategory + retryable + userMessage on PipelineResult (Phase 1b H1)", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new FailingTool());
+    const result = await executeTool(registry, "fail", {}, baseCtx);
+    expect(result.status).toBe("tool_failed");
+    if (result.status === "tool_failed") {
+      expect(result.errorCategory).toBe("rate_limit");
+      expect(result.retryable).toBe(true);
+      expect(result.userMessage).toContain("Rate limited");
+    }
+  });
+
+  test("tool_failed event payload uses userMessage, not raw error (Phase 1b H2)", async () => {
+    class LeakyTool extends BaseTool<unknown, { ok: false }> {
+      readonly name = "leaky";
+      readonly description = "leaks secrets in error";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      async call(): Promise<ToolResult<{ ok: false }>> {
+        return {
+          success: false,
+          output: { ok: false },
+          error: "rate limit exceeded — token sk_live_secret_abc123",
+        };
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new LeakyTool());
+    const result = await executeTool(registry, "leaky", {}, baseCtx);
+    expect(result.status).toBe("tool_failed");
+    if (result.status !== "tool_failed") return;
+
+    const endEvent = result.events.find((e) => e.name === TOOL_EXECUTION_END);
+    expect(endEvent).toBeDefined();
+    // Event MUST NOT carry the raw error string with the secret
+    const eventValue = endEvent?.value as Record<string, unknown> | undefined;
+    expect(JSON.stringify(eventValue)).not.toContain("sk_live_secret_abc123");
+    // Event SHOULD carry userMessage (sanitized)
+    expect(eventValue?.userMessage).toBeDefined();
+  });
+
+  test("execution_error event uses userMessage, not originalMessage (H2)", async () => {
+    class ThrowingLeaky extends BaseTool<unknown, unknown> {
+      readonly name = "throwing-leaky";
+      readonly description = "throws with secrets";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      async call(): Promise<ToolResult<unknown>> {
+        throw new Error("rate limit exceeded — token sk_live_my_secret_456");
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new ThrowingLeaky());
+    const result = await executeTool(registry, "throwing-leaky", {}, baseCtx);
+    expect(result.status).toBe("execution_error");
+    if (result.status !== "execution_error") return;
+
+    const endEvent = result.events.find((e) => e.name === TOOL_EXECUTION_END);
+    expect(endEvent).toBeDefined();
+    const eventValue = endEvent?.value as Record<string, unknown> | undefined;
+    expect(JSON.stringify(eventValue)).not.toContain("sk_live_my_secret_456");
+    expect(eventValue?.userMessage).toBeDefined();
   });
 });
 
@@ -433,8 +504,15 @@ describe("executeTools (multi-tool)", () => {
     expect(concurrent?.status).toBe("success");
     if (concurrent?.status === "success") {
       expect(concurrent.result.contextModifier).toBeUndefined();
+      // Warning is in the inner result.events (for downstream tool consumers)
       expect(
         concurrent.result.events?.some(
+          (e) => e.name === "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
+        ),
+      ).toBe(true);
+      // AND in the top-level PipelineResult.events (for AG-UI / decision log)
+      expect(
+        concurrent.events.some(
           (e) => e.name === "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
         ),
       ).toBe(true);

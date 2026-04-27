@@ -78,6 +78,12 @@ export function getRetryConfig(
 /**
  * Compute the delay for a given attempt using exponential backoff + jitter.
  * Optional jitterFn lets tests inject deterministic randomness.
+ *
+ * Jitter is added to a base value such that the FINAL delay never exceeds
+ * `maxDelayMs` — the cap is the hard ceiling, not a target that can be
+ * overshot by jitter. We accomplish this by computing the unjittered delay,
+ * subtracting headroom for jitter, and then adding jitter back within that
+ * headroom.
  */
 export function computeDelay(
   config: RetryConfig,
@@ -86,10 +92,13 @@ export function computeDelay(
 ): number {
   if (config.baseDelayMs === 0) return 0;
   const exponentialDelay = config.baseDelayMs * Math.pow(config.backoffFactor, attempt - 1);
-  const capped = Math.min(exponentialDelay, config.maxDelayMs);
-  // 0-25% jitter to prevent thundering herd
-  const jitter = capped * jitterFn() * 0.25;
-  return Math.round(capped + jitter);
+  const ceiling = Math.min(exponentialDelay, config.maxDelayMs);
+  // Reserve up to 20% of the ceiling as the jitter band; the unjittered base
+  // is 80% of the ceiling, so base + jitter ∈ [80%, 100%] of ceiling, never above.
+  const base = ceiling * 0.8;
+  const jitterBand = ceiling * 0.2;
+  const jitter = jitterFn() * jitterBand;
+  return Math.round(base + jitter);
 }
 
 /**
@@ -125,22 +134,42 @@ export interface WithRetryOptions {
     classified: ClassifiedError,
     error: unknown,
   ) => void | Promise<void>;
-  /** Override the sleep function (test seam). */
-  readonly sleep?: (ms: number) => Promise<void>;
+  /** Override the sleep function (test seam). When supplied, the AbortSignal pass-through is the override's responsibility. */
+  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Override the jitter function (test seam). */
   readonly jitter?: () => number;
-  /** Optional abort signal — when aborted, withRetry rejects with the abort reason. */
+  /** Optional abort signal — when aborted, withRetry rejects with the abort reason. The signal interrupts ANY in-progress backoff sleep. */
   readonly signal?: AbortSignal;
 }
 
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
+/**
+ * Default sleep that respects an optional AbortSignal — when the signal fires
+ * mid-delay, the sleep resolves immediately (the caller checks signal.aborted
+ * on the next loop iteration and rejects with the abort reason). Without this,
+ * a 30s rate-limit delay would block abort propagation for the full 30s.
+ */
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
     if (ms <= 0) {
       resolve();
       return;
     }
-    setTimeout(resolve, ms);
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
 
 /**
  * Execute a function with automatic retries based on classified error.
@@ -188,7 +217,7 @@ export async function withRetry<T>(
       }
 
       if (decision.delayMs > 0) {
-        await sleep(decision.delayMs);
+        await sleep(decision.delayMs, options.signal);
       }
     }
   }

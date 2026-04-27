@@ -52,26 +52,29 @@ describe("computeDelay", () => {
     const a2 = computeDelay(config, 2, noJitter);
     const a3 = computeDelay(config, 3, noJitter);
 
-    expect(a1).toBe(1000); // 1000 * 2^0
-    expect(a2).toBe(2000); // 1000 * 2^1
-    expect(a3).toBe(4000); // 1000 * 2^2
+    // Formula: ceiling = base * factor^(attempt-1), capped at maxDelayMs.
+    // With no jitter: result = 0.8 * ceiling.
+    expect(a1).toBe(800); // ceiling 1000, 0.8 * 1000
+    expect(a2).toBe(1600); // ceiling 2000
+    expect(a3).toBe(3200); // ceiling 4000
   });
 
-  test("caps at maxDelayMs", () => {
+  test("caps at maxDelayMs even before jitter", () => {
     const config = { maxAttempts: 10, baseDelayMs: 1000, maxDelayMs: 5000, backoffFactor: 2 };
     const noJitter = () => 0;
-
-    expect(computeDelay(config, 4, noJitter)).toBe(5000); // 1000 * 2^3 = 8000, capped at 5000
-    expect(computeDelay(config, 10, noJitter)).toBe(5000);
+    // ceiling = min(1000 * 2^3, 5000) = 5000; with no jitter → 0.8 * 5000 = 4000
+    expect(computeDelay(config, 4, noJitter)).toBe(4000);
+    expect(computeDelay(config, 10, noJitter)).toBe(4000);
   });
 
-  test("adds 0-25% jitter", () => {
+  test("max jitter never overshoots maxDelayMs", () => {
     const config = { maxAttempts: 5, baseDelayMs: 1000, maxDelayMs: 10000, backoffFactor: 1 };
-    const fullJitter = () => 1; // max 25%
-    const halfJitter = () => 0.5; // 12.5%
+    const fullJitter = () => 1; // band fully consumed
+    const halfJitter = () => 0.5; // half of band
 
-    expect(computeDelay(config, 1, fullJitter)).toBe(1250); // 1000 + 25%
-    expect(computeDelay(config, 1, halfJitter)).toBe(1125); // 1000 + 12.5%
+    // ceiling = 1000; base = 800; jitter band = 200
+    expect(computeDelay(config, 1, fullJitter)).toBe(1000); // 800 + 200
+    expect(computeDelay(config, 1, halfJitter)).toBe(900); // 800 + 100
   });
 });
 
@@ -181,5 +184,45 @@ describe("withRetry", () => {
     await expect(
       withRetry(fn, { sleep: async () => {}, jitter: () => 0, signal: ac.signal }),
     ).rejects.toThrow(/aborted/);
+  });
+
+  test("AbortSignal interrupts a long sleep mid-delay (Phase 1b H3)", async () => {
+    // Use the real defaultSleep (no override) — it should respect the signal.
+    const ac = new AbortController();
+    let calls = 0;
+    const fn = async () => {
+      calls++;
+      if (calls === 1) {
+        // Abort 50ms into what would otherwise be a 30s rate_limit retry sleep
+        setTimeout(() => ac.abort(new Error("user-aborted")), 50);
+        throw new Error("rate limit");
+      }
+      return "ok";
+    };
+    const start = Date.now();
+    await expect(
+      withRetry(fn, {
+        jitter: () => 0,
+        signal: ac.signal,
+        // override config so the test isn't waiting 2s for the first retry
+        overrides: { rate_limit: { maxAttempts: 4, baseDelayMs: 5000, maxDelayMs: 30000, backoffFactor: 2 } },
+      }),
+    ).rejects.toThrow(/aborted/);
+    const elapsed = Date.now() - start;
+    // If abort wasn't honored mid-sleep, we'd wait 5s+. With abort-aware sleep,
+    // we should resolve within ~150ms of the abort firing.
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  test("computeDelay never exceeds maxDelayMs even with maximum jitter (Phase 1b M1)", () => {
+    const config = { maxAttempts: 5, baseDelayMs: 1000, maxDelayMs: 5000, backoffFactor: 2 };
+    const maxJitter = () => 1; // worst-case jitter
+
+    // Attempts 1-10: with backoffFactor=2 the unjittered exponential blows past
+    // the cap; computeDelay should clamp the result, not overshoot.
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const delay = computeDelay(config, attempt, maxJitter);
+      expect(delay).toBeLessThanOrEqual(config.maxDelayMs);
+    }
   });
 });

@@ -44,7 +44,7 @@ import type { ErrorCategory } from "../error/error-taxonomy";
  */
 export type PipelineResult<TOutput = unknown> =
   | { readonly status: "success"; readonly toolName: string; readonly result: ToolResult<TOutput>; readonly events: ReadonlyArray<AgUiCustomEvent> }
-  | { readonly status: "tool_failed"; readonly toolName: string; readonly result: ToolResult<TOutput>; readonly events: ReadonlyArray<AgUiCustomEvent> }
+  | { readonly status: "tool_failed"; readonly toolName: string; readonly result: ToolResult<TOutput>; readonly errorCategory: ErrorCategory; readonly userMessage: string; readonly retryable: boolean; readonly events: ReadonlyArray<AgUiCustomEvent> }
   | { readonly status: "not_found"; readonly toolName: string }
   | { readonly status: "unavailable"; readonly toolName: string; readonly reason: string }
   | { readonly status: "validation_error"; readonly toolName: string; readonly error: string }
@@ -152,6 +152,10 @@ export async function executeTool<TOutput = unknown>(
     // Classify the thrown exception per spec 014 — every error in OpenClaw
     // classifies into exactly one category with retry/recovery guidance.
     const classified = classifyToolError(toolName, err);
+    // Spec 014: originalMessage may contain credentials/internal paths.
+    // The event is forwarded to AG-UI/dashboard — only userMessage is safe.
+    // originalMessage stays in the typed PipelineResult for server-side
+    // logging (decision-log writer in Phase 1d redacts at write time).
     events.push({
       type: "CUSTOM",
       name: TOOL_EXECUTION_END,
@@ -159,7 +163,7 @@ export async function executeTool<TOutput = unknown>(
         toolName,
         executionId,
         success: false,
-        error: classified.originalMessage,
+        userMessage: classified.userMessage,
         errorCategory: classified.category,
         retryable: classified.retryable,
       },
@@ -203,22 +207,45 @@ export async function executeTool<TOutput = unknown>(
     events.push(...result.events);
   }
 
-  // 11. Emit TOOL_EXECUTION_END
-  events.push({
-    type: "CUSTOM",
-    name: TOOL_EXECUTION_END,
-    value: { toolName, executionId, success: result.success, error: result.error },
-  });
-
-  // 12. Distinguish tool_failed (structured app-level failure) from success.
+  // 11. Distinguish tool_failed (structured app-level failure) from success.
+  // When the tool returns success:false, classify the error string per spec 014
+  // so the calling pipeline can apply retry policy and surface a sanitized
+  // userMessage. Spec 014 anti-example forbids tools from classifying their own
+  // errors — the pipeline owns classification.
   if (!result.success) {
+    const classified = classifyToolError(toolName, result.error ?? "tool returned success:false");
+
+    // Emit sanitized TOOL_EXECUTION_END (use userMessage, not raw error)
+    events.push({
+      type: "CUSTOM",
+      name: TOOL_EXECUTION_END,
+      value: {
+        toolName,
+        executionId,
+        success: false,
+        userMessage: classified.userMessage,
+        errorCategory: classified.category,
+        retryable: classified.retryable,
+      },
+    });
+
     return {
       status: "tool_failed",
       toolName,
       result,
+      errorCategory: classified.category,
+      userMessage: classified.userMessage,
+      retryable: classified.retryable,
       events,
     };
   }
+
+  // Success path — emit TOOL_EXECUTION_END
+  events.push({
+    type: "CUSTOM",
+    name: TOOL_EXECUTION_END,
+    value: { toolName, executionId, success: true },
+  });
 
   return {
     status: "success",
@@ -283,31 +310,36 @@ export async function executeTools(
       );
 
       // Strip contextModifier from concurrent results — concurrent tools
-      // are not allowed to return one. We sanitize and emit a warning event.
+      // are not allowed to return one. We sanitize the inner result AND
+      // surface the warning in the PipelineResult.events stream so AG-UI
+      // and the decision log see it at the same level as other lifecycle
+      // events.
       for (const result of batchResults) {
         if (
           (result.status === "success" || result.status === "tool_failed") &&
           result.result.contextModifier
         ) {
+          const warningEvent: AgUiCustomEvent = {
+            type: "CUSTOM",
+            name: "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
+            value: {
+              toolName: result.toolName,
+              reason: "Concurrency-safe tools cannot return contextModifier; modifier ignored.",
+            },
+          };
           const sanitizedResult: ToolResult = {
             success: result.result.success,
             output: result.result.output,
             ...(result.result.error !== undefined ? { error: result.result.error } : {}),
-            events: [
-              ...(result.result.events ?? []),
-              {
-                type: "CUSTOM",
-                name: "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
-                value: {
-                  toolName: result.toolName,
-                  reason: "Concurrency-safe tools cannot return contextModifier; modifier ignored.",
-                },
-              },
-            ],
+            events: [...(result.result.events ?? []), warningEvent],
           };
+          // Surface in top-level events too so consumers reading
+          // PipelineResult.events at the AG-UI/decision-log layer see it.
+          const topLevelEvents = [...result.events, warningEvent];
           results.push({
             ...result,
             result: sanitizedResult as ToolResult<unknown>,
+            events: topLevelEvents,
           });
         } else {
           results.push(result);
