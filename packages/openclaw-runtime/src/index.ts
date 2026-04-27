@@ -29,8 +29,8 @@ export * from "./config";
 // ─── Checkpoint + resume substrate (Phase 1g) ──────────────────────────
 export * from "./checkpoint";
 
+// ─── Lifecycle hooks: registry + runner + capabilities (Phase 1h) ──────
+export * from "./hooks";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
-
-// ─── Phase 1h modules — added in subsequent commits ────────────────────
-// export * from "./hooks";

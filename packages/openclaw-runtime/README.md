@@ -4,7 +4,7 @@ The runtime substrate for OpenClaw pipelines. This package implements the contra
 
 ## Status
 
-`0.1.0` — Phase 1a → 1g landed (tool harness, error taxonomy, output validator, decision log, memory model, config substrate, checkpoint). Phase 1h (hooks) next. Implementation tracks the spec sub-phase by sub-phase; a single Codex (GPT-5.5) validation pass runs after Phase 1 is complete.
+`0.1.0` — Phase 1 complete (1a → 1h: tool harness, error taxonomy, output validator, decision log, memory model, config substrate, checkpoint, lifecycle hooks). Codex (GPT-5.5) adversarial validation pass is the next gate before Phase 2.
 
 ## Spec mapping
 
