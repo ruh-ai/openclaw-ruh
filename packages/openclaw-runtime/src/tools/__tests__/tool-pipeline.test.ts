@@ -4,6 +4,8 @@ import { ToolRegistry } from "../tool-registry";
 import { BaseTool } from "../tool-interface";
 import type { ToolContext, ToolResult, PermissionDecision } from "../tool-interface";
 import { executeTool, executeTools, TOOL_EXECUTION_START, TOOL_EXECUTION_END } from "../tool-pipeline";
+import { DecisionLog, InMemoryDecisionStore } from "../../decision-log";
+import { HookRegistry, HookRunner, VETO } from "../../hooks";
 
 const baseCtx: ToolContext = {
   sandboxId: "sb-1",
@@ -517,5 +519,422 @@ describe("executeTools (multi-tool)", () => {
         ),
       ).toBe(true);
     }
+  });
+});
+
+describe("decision-log emission (Phase 1d)", () => {
+  function ctxWithLog(): {
+    ctx: ToolContext;
+    store: InMemoryDecisionStore;
+    log: DecisionLog;
+  } {
+    const store = new InMemoryDecisionStore();
+    const log = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: "1.0.0-rc.1",
+      store,
+    });
+    return { ctx: { ...baseCtx, decisionLog: log }, store, log };
+  }
+
+  test("happy path emits tool_execution_start + tool_execution_end with chained parent_id", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new HelloTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "hello", { name: "Ada" }, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("tool_execution_end");
+
+    const start = r.entries.find((e) => e.type === "tool_execution_start");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(end?.parent_id).toBe(start?.id);
+    expect((end?.metadata as { success: boolean }).success).toBe(true);
+  });
+
+  test("execution_error emits error_classified + tool_execution_end with chained parent_id", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ThrowingTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "boom", { name: "Ada" }, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("error_classified");
+    expect(types).toContain("tool_execution_end");
+
+    const start = r.entries.find((e) => e.type === "tool_execution_start");
+    const errorClassified = r.entries.find((e) => e.type === "error_classified");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(errorClassified?.parent_id).toBe(start?.id);
+    expect(end?.parent_id).toBe(start?.id);
+    expect((end?.metadata as { success: boolean }).success).toBe(false);
+  });
+
+  test("redaction strips secret from error_classified.original_message_redacted", async () => {
+    class LeakyThrower extends HelloTool {
+      override readonly name: string = "leaky-throw";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        throw new Error("rate limit — Bearer abcdefghij1234567890");
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new LeakyThrower());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "leaky-throw", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const errorClassified = r.entries.find((e) => e.type === "error_classified");
+    const original = (errorClassified?.metadata as {
+      original_message_redacted: string;
+    }).original_message_redacted;
+    expect(original).not.toContain("abcdefghij1234567890");
+    expect(original).toContain("Bearer <REDACTED:credential>");
+  });
+
+  test("tool_failed (success:false) emits tool_execution_end with success:false", async () => {
+    class FailingTool extends BaseTool<unknown, { reason: string }> {
+      readonly name = "fail";
+      readonly description = "always fails";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      async call(): Promise<ToolResult<{ reason: string }>> {
+        return { success: false, output: { reason: "x" }, error: "rate limit hit" };
+      }
+    }
+    const registry = new ToolRegistry();
+    registry.register(new FailingTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "fail", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    // Spec 014/005 regression: tool_failed must also emit error_classified
+    // before tool_execution_end so the audit log captures classification.
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("error_classified");
+    expect(types).toContain("tool_execution_end");
+
+    const errorClassified = r.entries.find((e) => e.type === "error_classified");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(end).toBeDefined();
+    expect((end?.metadata as { success: boolean }).success).toBe(false);
+    expect((end?.metadata as { error_category: string }).error_category).toBe(
+      "rate_limit",
+    );
+    expect((errorClassified?.metadata as { category: string }).category).toBe(
+      "rate_limit",
+    );
+    expect(
+      (errorClassified?.metadata as { retryable: boolean }).retryable,
+    ).toBe(true);
+  });
+
+  test("permission_denied (no approval callback) emits permission_denied", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("permission_denied");
+    // No tool_execution_start / _end when denied at the gate
+    expect(types).not.toContain("tool_execution_start");
+    expect(types).not.toContain("tool_execution_end");
+  });
+
+  test("permission approved emits permission_approved + start + end", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => true,
+    });
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("permission_approved");
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("tool_execution_end");
+  });
+
+  test("output validation failure emits output_validation_failed + tool_execution_end", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new BadOutputTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "bad-output", {}, ctx);
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const types = r.entries.map((e) => e.type);
+    expect(types).toContain("tool_execution_start");
+    expect(types).toContain("output_validation_failed");
+    expect(types).toContain("tool_execution_end");
+
+    const start = r.entries.find((e) => e.type === "tool_execution_start");
+    const validation = r.entries.find((e) => e.type === "output_validation_failed");
+    const end = r.entries.find((e) => e.type === "tool_execution_end");
+    expect(validation?.parent_id).toBe(start?.id);
+    expect(end?.parent_id).toBe(start?.id);
+    expect((end?.metadata as { success: boolean }).success).toBe(false);
+  });
+
+  test("permission denied via approval callback emits permission_denied with requires_approval:false", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new ApprovalTool());
+    const { ctx, store } = ctxWithLog();
+
+    await executeTool(registry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => false,
+    });
+
+    const r = await store.query({ pipeline_id: "pipe-1" });
+    const denied = r.entries.find((e) => e.type === "permission_denied");
+    expect(denied).toBeDefined();
+    expect(
+      (denied?.metadata as { requires_approval: boolean }).requires_approval,
+    ).toBe(false);
+  });
+
+  test("absent decisionLog: existing pipeline behavior unchanged (no emissions, no errors)", async () => {
+    // baseCtx has no decisionLog
+    const registry = new ToolRegistry();
+    registry.register(new HelloTool());
+    const result = await executeTool(registry, "hello", { name: "Ada" }, baseCtx);
+    expect(result.status).toBe("success");
+  });
+});
+
+describe("executeTool — hook integration (Phase 1h regression)", () => {
+  function ctxWithHooks(): {
+    ctx: ToolContext;
+    decisionStore: InMemoryDecisionStore;
+    registry: HookRegistry;
+  } {
+    const decisionStore = new InMemoryDecisionStore();
+    const decisionLog = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: "1.0.0-rc.1",
+      store: decisionStore,
+    });
+    const registry = new HookRegistry();
+    const hooks = new HookRunner({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      sessionId: "ses-1",
+      registry,
+      decisionLog,
+    });
+    return {
+      ctx: { ...baseCtx, decisionLog, hooks },
+      decisionStore,
+      registry,
+    };
+  }
+
+  test("happy path fires pre_tool_execution + post_tool_execution", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new HelloTool());
+    const { ctx, registry: hookRegistry } = ctxWithHooks();
+
+    const order: string[] = [];
+    hookRegistry.register({
+      name: "pre_tool_execution",
+      handler: () => void order.push("pre"),
+    });
+    hookRegistry.register({
+      name: "post_tool_execution",
+      handler: (payload) => {
+        const p = payload as {
+          success: boolean;
+          latency_ms: number;
+          tool_name: string;
+        };
+        order.push(`post:${p.tool_name}:${p.success}`);
+        expect(p.latency_ms).toBeGreaterThanOrEqual(0);
+      },
+    });
+
+    const result = await executeTool(toolRegistry, "hello", { name: "Ada" }, ctx);
+    expect(result.status).toBe("success");
+    expect(order).toEqual(["pre", "post:hello:true"]);
+  });
+
+  test("VETO from pre_tool_execution aborts as permission_denied (Phase 1h §veto)", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new HelloTool());
+    const { ctx, decisionStore, registry: hookRegistry } = ctxWithHooks();
+
+    hookRegistry.register({
+      name: "pre_tool_execution",
+      handler: () => VETO({ reason: "banned by policy" }),
+    });
+
+    const result = await executeTool(toolRegistry, "hello", { name: "Ada" }, ctx);
+    expect(result.status).toBe("permission_denied");
+    if (result.status === "permission_denied") {
+      expect(result.reason).toBe("banned by policy");
+      expect(result.requiresApproval).toBe(false);
+    }
+
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    const denied = r.entries.find(
+      (e) =>
+        e.type === "permission_denied" &&
+        (e.metadata as { vetoed_by_hook?: string }).vetoed_by_hook ===
+          "pre_tool_execution",
+    );
+    expect(denied).toBeDefined();
+  });
+
+  test("VETO short-circuits: tool.call is NOT invoked", async () => {
+    let called = false;
+    class TouchSensor extends HelloTool {
+      override readonly name: string = "touch-sensor";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        called = true;
+        return { success: true, output: { greeting: "" } };
+      }
+    }
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new TouchSensor());
+    const { ctx, registry: hookRegistry } = ctxWithHooks();
+
+    hookRegistry.register({
+      name: "pre_tool_execution",
+      handler: () => VETO({ reason: "no" }),
+    });
+
+    await executeTool(toolRegistry, "touch-sensor", {}, ctx);
+    expect(called).toBe(false);
+  });
+
+  test("tool_approval_required fires before the local approval callback", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new ApprovalTool());
+    const { ctx, registry: hookRegistry } = ctxWithHooks();
+
+    const order: string[] = [];
+    hookRegistry.register({
+      name: "tool_approval_required",
+      handler: () => void order.push("hook"),
+    });
+
+    await executeTool(toolRegistry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => {
+        order.push("callback");
+        return true;
+      },
+    });
+
+    expect(order).toEqual(["hook", "callback"]);
+  });
+
+  test("VETO from tool_approval_required denies without invoking the callback", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new ApprovalTool());
+    const { ctx, decisionStore, registry: hookRegistry } = ctxWithHooks();
+
+    let callbackRan = false;
+    hookRegistry.register({
+      name: "tool_approval_required",
+      handler: () => VETO({ reason: "external policy denied" }),
+    });
+
+    const result = await executeTool(toolRegistry, "needs-approval", {}, ctx, {
+      onApprovalRequired: async () => {
+        callbackRan = true;
+        return true;
+      },
+    });
+
+    expect(result.status).toBe("permission_denied");
+    expect(callbackRan).toBe(false);
+
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    const denied = r.entries.find(
+      (e) =>
+        e.type === "permission_denied" &&
+        (e.metadata as { vetoed_by_hook?: string }).vetoed_by_hook ===
+          "tool_approval_required",
+    );
+    expect(denied).toBeDefined();
+  });
+
+  test("post_tool_execution still fires on the execution_error path", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new ThrowingTool());
+    const { ctx, registry: hookRegistry } = ctxWithHooks();
+
+    let postPayload:
+      | { tool_name: string; success: boolean; error_category?: string }
+      | undefined;
+    hookRegistry.register({
+      name: "post_tool_execution",
+      handler: (p) => {
+        postPayload = p as {
+          tool_name: string;
+          success: boolean;
+          error_category?: string;
+        };
+      },
+    });
+
+    await executeTool(toolRegistry, "boom", {}, ctx);
+    expect(postPayload).toBeDefined();
+    expect(postPayload?.success).toBe(false);
+    expect(postPayload?.tool_name).toBe("boom");
+  });
+
+  test("post_tool_execution fires on the tool_failed (success:false) path", async () => {
+    class StructuredFail extends HelloTool {
+      override readonly name: string = "struct-fail";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        return {
+          success: false,
+          output: { greeting: "" },
+          error: "rate limit hit",
+        };
+      }
+    }
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new StructuredFail());
+    const { ctx, registry: hookRegistry } = ctxWithHooks();
+
+    let fired = false;
+    hookRegistry.register({
+      name: "post_tool_execution",
+      handler: () => {
+        fired = true;
+      },
+    });
+
+    await executeTool(toolRegistry, "struct-fail", {}, ctx);
+    expect(fired).toBe(true);
+  });
+
+  test("absent ctx.hooks: pipeline behaviour unchanged (no errors, no extra emissions)", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(new HelloTool());
+    const result = await executeTool(toolRegistry, "hello", { name: "Ada" }, baseCtx);
+    expect(result.status).toBe("success");
   });
 });

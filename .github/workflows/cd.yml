@@ -59,6 +59,19 @@ jobs:
         run: npx tsc --noEmit
         continue-on-error: true  # Type errors from version drift are non-blocking
 
+      # OpenClaw runtime package
+      - name: OpenClaw runtime — install
+        working-directory: packages/openclaw-runtime
+        run: bun install
+
+      - name: OpenClaw runtime — typecheck
+        working-directory: packages/openclaw-runtime
+        run: bun run typecheck
+
+      - name: OpenClaw runtime — tests
+        working-directory: packages/openclaw-runtime
+        run: bun test
+
   # ── Build & push images to GHCR ───────────────────────────────────────────
   build-push:
     name: Build & push images

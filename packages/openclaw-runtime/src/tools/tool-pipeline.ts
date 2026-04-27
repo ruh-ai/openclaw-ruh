@@ -113,18 +113,113 @@ export async function executeTool<TOutput = unknown>(
   // 5. Permission check
   const permission = tool.checkPermissions(input, ctx);
   if (!permission.allowed) {
-    if (permission.requiresApproval && options?.onApprovalRequired) {
-      const approved = await options.onApprovalRequired(toolName, permission.reason);
-      if (!approved) {
+    if (permission.requiresApproval) {
+      // Spec 013 §veto-handlers: tool_approval_required can replace the
+      // local approval callback with the handler's decision. A VETO from
+      // any handler is final (denied); otherwise the local callback (if
+      // any) decides. If no approval mechanism is configured at all, the
+      // pipeline surfaces requiresApproval: true so the caller knows it
+      // needs to wire one up — the original Phase 1a behaviour.
+      let approvalVetoed = false;
+      let approvalVetoReason = "";
+
+      if (ctx.hooks) {
+        const hookResult = await ctx.hooks.fire("tool_approval_required", {
+          tool_name: toolName,
+          reason: permission.reason,
+          requires_approval: true,
+          execution_mode: ctx.mode,
+          dev_stage: ctx.devStage,
+        });
+        if (hookResult.veto) {
+          approvalVetoed = true;
+          approvalVetoReason = hookResult.veto.reason;
+        }
+      }
+
+      if (approvalVetoed) {
+        if (ctx.decisionLog) {
+          await ctx.decisionLog.emit({
+            type: "permission_denied",
+            description: `Tool "${toolName}" denied by hook veto`,
+            metadata: {
+              tool_name: toolName,
+              reason: approvalVetoReason,
+              requires_approval: false,
+              vetoed_by_hook: "tool_approval_required",
+            },
+          });
+        }
+        return {
+          status: "permission_denied",
+          toolName,
+          reason: approvalVetoReason,
+          requiresApproval: false,
+        };
+      }
+
+      if (options?.onApprovalRequired) {
+        const approved = await options.onApprovalRequired(toolName, permission.reason);
+        if (!approved) {
+          if (ctx.decisionLog) {
+            await ctx.decisionLog.emit({
+              type: "permission_denied",
+              description: `Tool "${toolName}" denied by reviewer`,
+              metadata: {
+                tool_name: toolName,
+                reason: permission.reason,
+                requires_approval: false,
+              },
+            });
+          }
+          return {
+            status: "permission_denied",
+            toolName,
+            reason: permission.reason,
+            requiresApproval: false,
+          };
+        }
+        // Approved — log + fall through to execution
+        if (ctx.decisionLog) {
+          await ctx.decisionLog.emit({
+            type: "permission_approved",
+            description: `Tool "${toolName}" approved by reviewer`,
+            metadata: { tool_name: toolName, reason: permission.reason },
+          });
+        }
+      } else {
+        // No approval mechanism configured — surface requiresApproval:true
+        // so the caller knows the tool needs approval but none was wired.
+        if (ctx.decisionLog) {
+          await ctx.decisionLog.emit({
+            type: "permission_denied",
+            description: `Tool "${toolName}" denied — approval required but no approver configured`,
+            metadata: {
+              tool_name: toolName,
+              reason: permission.reason,
+              requires_approval: true,
+            },
+          });
+        }
         return {
           status: "permission_denied",
           toolName,
           reason: permission.reason,
-          requiresApproval: false,
+          requiresApproval: true,
         };
       }
-      // Approved — fall through to execution
     } else {
+      if (ctx.decisionLog) {
+        await ctx.decisionLog.emit({
+          type: "permission_denied",
+          description: `Tool "${toolName}" denied by policy`,
+          metadata: {
+            tool_name: toolName,
+            reason: permission.reason,
+            requires_approval: permission.requiresApproval,
+          },
+        });
+      }
       return {
         status: "permission_denied",
         toolName,
@@ -134,15 +229,86 @@ export async function executeTool<TOutput = unknown>(
     }
   }
 
-  // 6. Emit TOOL_EXECUTION_START
+  // 5b. pre_tool_execution hook — last gate before the tool runs. A VETO
+  // from any handler aborts with permission_denied (spec 013 §veto-handlers).
+  if (ctx.hooks) {
+    const preResult = await ctx.hooks.fire("pre_tool_execution", {
+      tool_name: toolName,
+      input,
+      execution_mode: ctx.mode,
+      dev_stage: ctx.devStage,
+    });
+    if (preResult.veto) {
+      if (ctx.decisionLog) {
+        await ctx.decisionLog.emit({
+          type: "permission_denied",
+          description: `Tool "${toolName}" vetoed by pre_tool_execution handler`,
+          metadata: {
+            tool_name: toolName,
+            reason: preResult.veto.reason,
+            requires_approval: false,
+            vetoed_by_hook: "pre_tool_execution",
+          },
+        });
+      }
+      return {
+        status: "permission_denied",
+        toolName,
+        reason: preResult.veto.reason,
+        requiresApproval: false,
+      };
+    }
+  }
+
+  // 6. Emit TOOL_EXECUTION_START — both the AG-UI event AND a decision-log entry.
   const events: AgUiCustomEvent[] = [];
   const executionId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startedAtMs = Date.now();
+
+  // post_tool_execution hook — fires at every terminal point. Not veto-able
+  // per spec; observation-only. Helper closes over ctx, toolName, input,
+  // startedAtMs so each return site is one call.
+  const firePost = async (
+    success: boolean,
+    finalResult: ToolResult<TOutput> | null,
+    errorCategory?: ErrorCategory,
+  ): Promise<void> => {
+    if (!ctx.hooks) return;
+    await ctx.hooks.fire("post_tool_execution", {
+      tool_name: toolName,
+      input,
+      result: finalResult,
+      success,
+      latency_ms: Date.now() - startedAtMs,
+      ...(errorCategory !== undefined ? { error_category: errorCategory } : {}),
+    });
+  };
 
   events.push({
     type: "CUSTOM",
     name: TOOL_EXECUTION_START,
     value: { toolName, executionId, readOnly: tool.isReadOnly() },
   });
+
+  // Emit tool_execution_start to the decision log (Phase 1d) if a log is available.
+  // We don't await this — decision emission shouldn't block the tool call.
+  let parentDecisionId: string | undefined;
+  if (ctx.decisionLog) {
+    const startDecision = await ctx.decisionLog.emit({
+      type: "tool_execution_start",
+      description: `Tool "${toolName}" started`,
+      metadata: {
+        tool_name: toolName,
+        execution_id: executionId,
+        read_only: tool.isReadOnly(),
+        destructive: tool.isDestructive(),
+        concurrency_safe: tool.isConcurrencySafe(),
+        mode: ctx.mode,
+        dev_stage: ctx.devStage,
+      },
+    });
+    parentDecisionId = startDecision.id;
+  }
 
   // 7. Execute
   let result: ToolResult<TOutput>;
@@ -155,7 +321,7 @@ export async function executeTool<TOutput = unknown>(
     // Spec 014: originalMessage may contain credentials/internal paths.
     // The event is forwarded to AG-UI/dashboard — only userMessage is safe.
     // originalMessage stays in the typed PipelineResult for server-side
-    // logging (decision-log writer in Phase 1d redacts at write time).
+    // logging (decision-log writer redacts at write time).
     events.push({
       type: "CUSTOM",
       name: TOOL_EXECUTION_END,
@@ -168,6 +334,40 @@ export async function executeTool<TOutput = unknown>(
         retryable: classified.retryable,
       },
     });
+
+    // Emit error_classified + tool_execution_end to the decision log.
+    if (ctx.decisionLog) {
+      await ctx.decisionLog.emit({
+        type: "error_classified",
+        description: `Tool "${toolName}" threw — category: ${classified.category}`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          category: classified.category,
+          retryable: classified.retryable,
+          // The decision log redacts at write time — passing the original is safe
+          // because redaction strips credentials before storage.
+          original_message_redacted: classified.originalMessage,
+          user_message: classified.userMessage,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+      await ctx.decisionLog.emit({
+        type: "tool_execution_end",
+        description: `Tool "${toolName}" failed (${classified.category})`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          success: false,
+          user_message: classified.userMessage,
+          error_category: classified.category,
+          retryable: classified.retryable,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+    }
+
+    await firePost(false, null, classified.category);
     return {
       status: "execution_error",
       toolName,
@@ -191,6 +391,32 @@ export async function executeTool<TOutput = unknown>(
         name: TOOL_EXECUTION_END,
         value: { toolName, executionId, success: false, error: `output_validation: ${errorMsg}` },
       });
+      if (ctx.decisionLog) {
+        await ctx.decisionLog.emit({
+          type: "output_validation_failed",
+          description: `Tool "${toolName}" output failed validation`,
+          metadata: {
+            marker_name: toolName,
+            schema: `${toolName}.outputSchema`,
+            error: errorMsg,
+            raw_redacted: result.output,
+            layer: 1,
+          },
+          ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+        });
+        await ctx.decisionLog.emit({
+          type: "tool_execution_end",
+          description: `Tool "${toolName}" failed output validation`,
+          metadata: {
+            tool_name: toolName,
+            execution_id: executionId,
+            success: false,
+            error: `output_validation: ${errorMsg}`,
+          },
+          ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+        });
+      }
+      await firePost(false, result, "tool_execution_failure");
       return {
         status: "output_validation_error",
         toolName,
@@ -229,6 +455,42 @@ export async function executeTool<TOutput = unknown>(
       },
     });
 
+    if (ctx.decisionLog) {
+      // Spec 014/005: every classification — including the success:false
+      // path — emits error_classified before the tool_execution_end so
+      // the audit log captures category + retryable + redacted-original
+      // alongside the higher-level lifecycle event.
+      await ctx.decisionLog.emit({
+        type: "error_classified",
+        description: `Tool "${toolName}" returned success:false — category: ${classified.category}`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          category: classified.category,
+          retryable: classified.retryable,
+          // The decision log redacts at write time — passing the original
+          // is safe because redaction strips credentials before storage.
+          original_message_redacted: classified.originalMessage,
+          user_message: classified.userMessage,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+      await ctx.decisionLog.emit({
+        type: "tool_execution_end",
+        description: `Tool "${toolName}" returned success:false (${classified.category})`,
+        metadata: {
+          tool_name: toolName,
+          execution_id: executionId,
+          success: false,
+          user_message: classified.userMessage,
+          error_category: classified.category,
+          retryable: classified.retryable,
+        },
+        ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+      });
+    }
+
+    await firePost(false, result, classified.category);
     return {
       status: "tool_failed",
       toolName,
@@ -247,6 +509,20 @@ export async function executeTool<TOutput = unknown>(
     value: { toolName, executionId, success: true },
   });
 
+  if (ctx.decisionLog) {
+    await ctx.decisionLog.emit({
+      type: "tool_execution_end",
+      description: `Tool "${toolName}" completed`,
+      metadata: {
+        tool_name: toolName,
+        execution_id: executionId,
+        success: true,
+      },
+      ...(parentDecisionId !== undefined ? { parent_id: parentDecisionId } : {}),
+    });
+  }
+
+  await firePost(true, result);
   return {
     status: "success",
     toolName,

@@ -14,13 +14,23 @@ export * from "./tools";
 // ─── Error taxonomy + retry + recovery (Phase 1b) ──────────────────────
 export * from "./error";
 
+// ─── Output validator + marker parser + canonical schemas (Phase 1c) ──
+export * from "./parser";
+
+// ─── Decision log + redaction + in-memory store (Phase 1d) ─────────────
+export * from "./decision-log";
+
+// ─── Memory model: tier/lane authority + Memory facade (Phase 1e) ──────
+export * from "./memory";
+
+// ─── Config substrate: versioned multi-dimensional data (Phase 1f) ─────
+export * from "./config";
+
+// ─── Checkpoint + resume substrate (Phase 1g) ──────────────────────────
+export * from "./checkpoint";
+
+// ─── Lifecycle hooks: registry + runner + capabilities (Phase 1h) ──────
+export * from "./hooks";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
-
-// ─── Phase 1c-1h modules — added in subsequent commits ─────────────────
-// export * from "./parser";
-// export * from "./decision-log";
-// export * from "./memory";
-// export * from "./config";
-// export * from "./checkpoint";
-// export * from "./hooks";

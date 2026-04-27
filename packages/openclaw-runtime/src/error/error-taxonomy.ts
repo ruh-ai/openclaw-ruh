@@ -63,7 +63,16 @@ interface PatternRule {
   readonly patterns: ReadonlyArray<string>;
   readonly category: ErrorCategory;
   readonly retryable: boolean;
-  userMessage(original: string): string;
+  /**
+   * Returns the sanitized user-facing message for this category. Crucially
+   * this signature accepts NO arguments — the rule cannot interpolate the
+   * raw error message into userMessage. Raw details belong in
+   * originalMessage and flow through the decision log's write-time
+   * redaction; userMessage is forwarded to AG-UI and must never carry
+   * unredacted operator data. Adding `(original: string)` here would
+   * re-open the same leak path that bit model_refusal in the v1 review.
+   */
+  userMessage(): string;
 }
 
 /**
@@ -113,8 +122,8 @@ const RULES: ReadonlyArray<PatternRule> = [
     ],
     category: "model_refusal",
     retryable: true,
-    userMessage: (msg) =>
-      `The model could not generate a response: ${msg.slice(0, 100)}. Retrying with a simplified prompt.`,
+    userMessage: () =>
+      "The model could not generate a response. Retrying with a simplified prompt.",
   },
   // Gateway timeout — retryable with longer timeout
   {
@@ -203,7 +212,7 @@ export function classifyError(error: unknown): ClassifiedError {
         category: rule.category,
         retryable: rule.retryable,
         originalMessage: errorMsg,
-        userMessage: rule.userMessage(errorMsg),
+        userMessage: rule.userMessage(),
       };
     }
   }
@@ -212,7 +221,12 @@ export function classifyError(error: unknown): ClassifiedError {
     category: "unknown",
     retryable: true,
     originalMessage: errorMsg,
-    userMessage: `An unexpected error occurred: ${errorMsg.slice(0, 120)}`,
+    // Don't embed the raw originalMessage — it may carry secrets or
+    // implementation details that flow to AG-UI before decision-log
+    // redaction runs. The full (redacted) original lives in the decision
+    // log; the operator looks there for details.
+    userMessage:
+      "An unexpected error occurred. See the decision log for details.",
   };
 }
 
@@ -228,7 +242,9 @@ export function classifyToolError(toolName: string, error: unknown): ClassifiedE
       ...base,
       category: "tool_execution_failure",
       toolName,
-      userMessage: `Tool "${toolName}" failed: ${base.originalMessage.slice(0, 120)}`,
+      // Same reason as the `unknown` branch above — never embed raw
+      // originalMessage in the user-facing string.
+      userMessage: `Tool "${toolName}" failed unexpectedly. See the decision log for details.`,
     };
   }
   return { ...base, toolName };
