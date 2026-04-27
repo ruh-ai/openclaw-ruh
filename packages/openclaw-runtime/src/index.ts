@@ -41,5 +41,8 @@ export * from "./sub-agent";
 // ─── Eval task + convergence loop substrate (Phase 2c) ────────────────
 export * from "./eval";
 
+// ─── Pipeline manifest: top-level artifact + cross-validation (Phase 2d) ──
+export * from "./pipeline-manifest";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
