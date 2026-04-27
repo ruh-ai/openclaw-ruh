@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { DecisionLog, InMemoryDecisionStore } from "../../decision-log";
 import { HookRegistry, HookRunner, VETO } from "../../hooks";
 import { InMemoryMemoryStore } from "../in-memory-store";
@@ -698,7 +699,7 @@ describe("Memory — memory_write_review_required VETO (regression)", () => {
     return { memory, registry, decisionStore };
   }
 
-  test("VETO from memory_write_review_required suppresses default memory_write_routed", async () => {
+  test("VETO suppresses memory_write_routed entirely (no non-canonical metadata leaks into the audit trail)", async () => {
     const { memory, registry, decisionStore } = buildWithHooks();
     registry.register({
       name: "memory_write_review_required",
@@ -715,19 +716,23 @@ describe("Memory — memory_write_review_required VETO (regression)", () => {
     });
 
     const r = await decisionStore.query({ pipeline_id: "pipe-1" });
-    const routed = r.entries.find((e) => e.type === "memory_write_routed");
-    expect(routed).toBeDefined();
-    const md = routed?.metadata as {
-      route_strategy: string;
-      routed_to?: string[];
-      vetoed_by_hook_handler?: string;
-      veto_reason?: string;
-    };
-    // Default routing was overridden — no routed_to/channel emitted.
-    expect(md.route_strategy).toBe("hook_replaced");
-    expect(md.routed_to).toBeUndefined();
-    expect(md.veto_reason).toBe("external router took over");
-    expect(md.vetoed_by_hook_handler).toBeDefined();
+    const types = r.entries.map((e) => e.type);
+
+    // Substrate did not actually route — so it does NOT emit memory_write_routed.
+    expect(types).not.toContain("memory_write_routed");
+
+    // The audit trail still records the override via the hook_fired entry
+    // the runner auto-emits, with vetoed_by + veto_reason metadata.
+    const hookFired = r.entries.find(
+      (e) =>
+        e.type === "hook_fired" &&
+        (e.metadata as { hook_name: string }).hook_name ===
+          "memory_write_review_required",
+    );
+    expect(hookFired).toBeDefined();
+    expect(
+      (hookFired?.metadata as { veto_reason: string }).veto_reason,
+    ).toBe("external router took over");
   });
 
   test("VETO does not affect persistence — entry is still flagged", async () => {
@@ -746,7 +751,7 @@ describe("Memory — memory_write_review_required VETO (regression)", () => {
     expect(entry.status).toBe("flagged");
   });
 
-  test("no VETO: default routing emits routed_to + channel", async () => {
+  test("no VETO: default routing emits the canonical { entry_id, routed_to, channel } shape", async () => {
     const { memory, registry, decisionStore } = buildWithHooks();
     registry.register({
       name: "memory_write_review_required",
@@ -765,17 +770,18 @@ describe("Memory — memory_write_review_required VETO (regression)", () => {
 
     const r = await decisionStore.query({ pipeline_id: "pipe-1" });
     const routed = r.entries.find((e) => e.type === "memory_write_routed");
-    const md = routed?.metadata as {
-      route_strategy: string;
-      routed_to?: string[];
-      channel?: string;
-    };
-    expect(md.route_strategy).toBe("default");
+    expect(routed).toBeDefined();
+    const md = routed?.metadata as Record<string, unknown>;
+
+    // Canonical spec-005 shape — exactly these three fields, no extras.
+    expect(Object.keys(md).sort()).toEqual(
+      ["channel", "entry_id", "routed_to"].sort(),
+    );
     expect(md.routed_to).toEqual(["darrow@ecc.com"]);
     expect(md.channel).toBe("email");
   });
 
-  test("VETO on Tier-3 (proposed) also suppresses default routing", async () => {
+  test("VETO on Tier-3 (proposed) also suppresses memory_write_routed", async () => {
     const { memory, registry, decisionStore } = buildWithHooks();
     registry.register({
       name: "memory_write_review_required",
@@ -789,9 +795,127 @@ describe("Memory — memory_write_review_required VETO (regression)", () => {
       content: validContent,
     });
     const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    expect(r.entries.map((e) => e.type)).not.toContain("memory_write_routed");
+  });
+
+  test("bound metadata schema for memory_write_routed survives the VETO path (regression — strict pipelines)", async () => {
+    // Reproduce the scenario from the review: a pipeline binds a strict
+    // Zod schema for memory_write_routed expecting {entry_id, routed_to,
+    // channel}. A VETO from memory_write_review_required must NOT trigger
+    // DecisionMetadataValidationError — because the substrate now
+    // suppresses memory_write_routed entirely on veto.
+    const RoutedSchema = z
+      .object({
+        entry_id: z.string().min(1),
+        routed_to: z.array(z.string().min(1)),
+        channel: z.string().min(1),
+      })
+      .strict();
+
+    const store = new InMemoryMemoryStore();
+    const decisionStore = new InMemoryDecisionStore();
+    const decisionLog = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: SPEC,
+      store: decisionStore,
+      metadataSchemas: [
+        {
+          type: "memory_write_routed",
+          schemaName: "MemoryWriteRoutedMetadata",
+          schema: RoutedSchema,
+        },
+      ],
+    });
+    const registry = new HookRegistry();
+    const hooks = new HookRunner({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      sessionId: "ses-1",
+      registry,
+      decisionLog,
+    });
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => VETO({ reason: "external" }),
+    });
+    const memory = new Memory({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      authority: ECC_AUTHORITY,
+      store,
+      specVersion: SPEC,
+      now: () => 1_700_000_000_000,
+      decisionLog,
+      hooks,
+    });
+
+    // VETO path with bound schema: must NOT throw.
+    await expect(
+      memory.propose({
+        tier: 2,
+        lane: "estimating",
+        source_identity: "scott@ecc.com",
+        source_channel: "email",
+        content: validContent,
+      }),
+    ).resolves.toBeDefined();
+
+    // And no memory_write_routed was emitted (otherwise the strict bound
+    // schema would have rejected it on the way in).
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    expect(r.entries.map((e) => e.type)).not.toContain("memory_write_routed");
+  });
+
+  test("bound metadata schema for memory_write_routed succeeds on the default path", async () => {
+    const RoutedSchema = z
+      .object({
+        entry_id: z.string().min(1),
+        routed_to: z.array(z.string().min(1)),
+        channel: z.string().min(1),
+      })
+      .strict();
+
+    const store = new InMemoryMemoryStore();
+    const decisionStore = new InMemoryDecisionStore();
+    const decisionLog = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: SPEC,
+      store: decisionStore,
+      metadataSchemas: [
+        {
+          type: "memory_write_routed",
+          schemaName: "MemoryWriteRoutedMetadata",
+          schema: RoutedSchema,
+        },
+      ],
+    });
+    const memory = new Memory({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      authority: ECC_AUTHORITY,
+      store,
+      specVersion: SPEC,
+      now: () => 1_700_000_000_000,
+      decisionLog,
+      // no hooks → no veto
+    });
+
+    await expect(
+      memory.propose({
+        tier: 2,
+        lane: "estimating",
+        source_identity: "scott@ecc.com",
+        source_channel: "email",
+        content: validContent,
+      }),
+    ).resolves.toBeDefined();
+
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
     const routed = r.entries.find((e) => e.type === "memory_write_routed");
-    expect(
-      (routed?.metadata as { route_strategy: string }).route_strategy,
-    ).toBe("hook_replaced");
+    expect(routed).toBeDefined();
   });
 });

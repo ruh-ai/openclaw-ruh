@@ -235,11 +235,17 @@ export class Memory {
     // any handler "Replaces the default review routing with the handler's
     // decision." So the hook fires BEFORE the default memory_write_routed
     // decision-log entry is emitted; if any handler vetoes, the substrate
-    // suppresses its default routing emission and emits a tagged audit
-    // entry instead so the trail records that the handler took over.
-    let reviewVeto:
-      | { handler_id: string; reason: string }
-      | undefined;
+    // does NOT emit memory_write_routed at all — the substrate didn't
+    // actually route, so emitting a routing decision would be a lie. The
+    // handoff is captured in the hook_fired decision the runner auto-emits
+    // (carries vetoed_by + veto_reason), so an auditor reconstructs the
+    // override from { memory_write_proposed, hook_fired } without the
+    // substrate inventing a non-canonical memory_write_routed shape.
+    //
+    // This preserves the bindable metadata schema for memory_write_routed
+    // declared in spec 005 — pipelines that bind a strict Zod schema
+    // {entry_id, routed_to, channel} continue to work.
+    let reviewVeto: { handler_id: string; reason: string } | undefined;
     if (
       this.#opts.hooks &&
       (resolution.status === "flagged" || resolution.status === "proposed")
@@ -263,36 +269,19 @@ export class Memory {
 
     if (
       this.#opts.decisionLog &&
+      !reviewVeto &&
       (resolution.status === "flagged" || resolution.status === "proposed")
     ) {
-      if (reviewVeto) {
-        // Handler took over routing. Emit memory_write_routed with the
-        // hook_replaced strategy so the audit trail records the handoff
-        // — but DO NOT carry routed_to/channel, since the substrate did
-        // not actually route.
-        await this.#opts.decisionLog.emit({
-          type: "memory_write_routed",
-          description: `Default routing for entry "${entry.id}" overridden by hook handler ${reviewVeto.handler_id}`,
-          metadata: {
-            entry_id: entry.id,
-            route_strategy: "hook_replaced",
-            vetoed_by_hook_handler: reviewVeto.handler_id,
-            veto_reason: reviewVeto.reason,
-          },
-        });
-      } else {
-        const routed_to = this.#tier1ReviewersFor(req.lane);
-        await this.#opts.decisionLog.emit({
-          type: "memory_write_routed",
-          description: `Routing ${resolution.status} entry "${entry.id}" for review`,
-          metadata: {
-            entry_id: entry.id,
-            route_strategy: "default",
-            routed_to,
-            channel: req.source_channel,
-          },
-        });
-      }
+      const routed_to = this.#tier1ReviewersFor(req.lane);
+      await this.#opts.decisionLog.emit({
+        type: "memory_write_routed",
+        description: `Routing ${resolution.status} entry "${entry.id}" for review`,
+        metadata: {
+          entry_id: entry.id,
+          routed_to,
+          channel: req.source_channel,
+        },
+      });
     }
 
     return entry;
