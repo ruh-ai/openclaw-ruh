@@ -35,5 +35,8 @@ export * from "./hooks";
 // ─── Orchestrator protocol: routing + merge policy + handoff shapes (Phase 2a) ──
 export * from "./orchestrator";
 
+// ─── Sub-agent isolation: scope, agent URI, merge builder (Phase 2b) ──
+export * from "./sub-agent";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
