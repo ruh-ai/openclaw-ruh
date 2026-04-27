@@ -32,5 +32,8 @@ export * from "./checkpoint";
 // ─── Lifecycle hooks: registry + runner + capabilities (Phase 1h) ──────
 export * from "./hooks";
 
+// ─── Orchestrator protocol: routing + merge policy + handoff shapes (Phase 2a) ──
+export * from "./orchestrator";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
