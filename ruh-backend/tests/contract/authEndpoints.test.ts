@@ -6,6 +6,16 @@
 
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import { makeSandboxRecord } from '../helpers/fixtures';
+import {
+  orgsById,
+  memberships,
+  mockGetOrg,
+  mockListOrgs,
+  mockCreateOrg,
+  mockGetMembershipForUserOrg,
+  mockListMembershipsForUser,
+  mockCreateMembership,
+} from '../helpers/contractStoreMocks';
 
 // ── Fake data ────────────────────────────────────────────────────────────────
 
@@ -56,16 +66,18 @@ const mockUpdateUser = mock(async () => makeFakeUser());
 const mockDeleteUser = mock(async () => true);
 
 let usersById = new Map<string, ReturnType<typeof makeFakeUser>>();
-let orgsById = new Map<string, ReturnType<typeof makeFakeOrg>>();
-let memberships: Array<Record<string, unknown>> = [];
 let sessionsByRefreshToken = new Map<string, Record<string, unknown>>();
+
+// orgsById + memberships are imported from contractStoreMocks so that
+// marketplace + auth contract tests share the same mocked orgStore and
+// membershipStore. See helper for the rationale (Bun first-wins).
 
 function withActiveOrgStatus(membership: Record<string, unknown>) {
   return {
     ...membership,
     organizationStatus:
       membership.organizationStatus
-      ?? orgsById.get(String(membership.orgId ?? ''))?.status
+      ?? (orgsById.get(String(membership.orgId ?? '')) as Record<string, unknown> | undefined)?.status
       ?? 'active',
   };
 }
@@ -103,27 +115,9 @@ mock.module('../../src/sessionStore', () => ({
   cleanExpiredSessions: mock(async () => 0),
 }));
 
-const mockCreateOrg = mock(async (name: string, slug: string, kind = 'customer') =>
-  makeFakeOrg({ id: `org-${slug}`, name, slug, kind }),
-);
-const mockGetOrg = mock(async (id: string) => orgsById.get(id) ?? null);
-const mockListOrgs = mock(async () => Array.from(orgsById.values()));
-
-mock.module('../../src/orgStore', () => ({
-  createOrg: mockCreateOrg,
-  getOrg: mockGetOrg,
-  listOrgs: mockListOrgs,
-}));
-
-const mockCreateMembership = mock(async () => null);
-const mockListMembershipsForUser = mock(async () => []);
-const mockGetMembershipForUserOrg = mock(async () => null);
-
-mock.module('../../src/organizationMembershipStore', () => ({
-  createMembership: mockCreateMembership,
-  listMembershipsForUser: mockListMembershipsForUser,
-  getMembershipForUserOrg: mockGetMembershipForUserOrg,
-}));
+// orgStore + organizationMembershipStore mocks live in
+// tests/helpers/contractStoreMocks.ts; mockCreateOrg / mockGetOrg / etc. are
+// imported above and their implementations set in beforeEach below.
 
 const mockEnsureAuthIdentity = mock(async (userId: string, provider: string, subject: string) => ({
   id: `ident-${provider}-${subject}`,
@@ -212,8 +206,12 @@ beforeEach(() => {
   const baseUser = makeFakeUser();
   const baseOrg = makeFakeOrg({ id: 'org-001', slug: 'contract-org', name: 'Contract Org', kind: 'customer' });
   usersById = new Map([[baseUser.id, baseUser]]);
-  orgsById = new Map([[baseOrg.id, baseOrg]]);
-  memberships = [];
+  // Reset shared contract-store state. Both maps/arrays are imported from
+  // contractStoreMocks; we mutate in-place rather than reassign so the
+  // wired-up mock closures retain the same identity.
+  orgsById.clear();
+  orgsById.set(baseOrg.id, baseOrg);
+  memberships.length = 0;
   sessionsByRefreshToken = new Map();
 
   mockGetUserByEmail.mockImplementation(async (email: string) =>

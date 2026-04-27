@@ -11,6 +11,11 @@ process.env.JWT_REFRESH_SECRET =
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { makeSandboxRecord } from "../helpers/fixtures";
 import { signAccessToken } from "../../src/auth/tokens";
+import {
+  orgsById,
+  memberships,
+  resetContractStores,
+} from "../helpers/contractStoreMocks";
 
 // ── Fake data ────────────────────────────────────────────────────────────────
 
@@ -84,33 +89,9 @@ mock.module("../../src/marketplaceStore", () => ({
   getInstall: mock(async () => null),
 }));
 
-mock.module("../../src/orgStore", () => ({
-  getOrg: mock(async (id: string) => ({
-    id,
-    name: "Globex",
-    slug: "globex",
-    kind: "customer",
-    plan: "free",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  })),
-}));
-
-mock.module("../../src/organizationMembershipStore", () => ({
-  getMembershipForUserOrg: mock(async (userId: string, orgId: string) => ({
-    id: "membership-001",
-    orgId,
-    userId,
-    role: "employee",
-    status: "active",
-    organizationName: "Globex",
-    organizationSlug: "globex",
-    organizationKind: "customer",
-    organizationPlan: "free",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  })),
-}));
+// orgStore + organizationMembershipStore mocks live in
+// tests/helpers/contractStoreMocks.ts. The customer org + membership for
+// /my/installed-listings tests are seeded in beforeEach below.
 
 // Required by app.ts — same pattern as existing contract tests
 mock.module("../../src/store", () => ({
@@ -181,6 +162,34 @@ beforeEach(() => {
       listing: makeFakeListing(),
     },
   ]);
+
+  // Seed the shared org + membership state for requireActiveCustomerOrg.
+  // /my/installed-listings checks the user's active customer org and a
+  // valid membership; without these the route 403s.
+  resetContractStores();
+  orgsById.set("org-customer-001", {
+    id: "org-customer-001",
+    name: "Globex",
+    slug: "globex",
+    kind: "customer",
+    plan: "free",
+    status: "active",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  memberships.push({
+    id: "membership-001",
+    orgId: "org-customer-001",
+    userId: "usr-customer-001",
+    role: "employee",
+    status: "active",
+    organizationName: "Globex",
+    organizationSlug: "globex",
+    organizationKind: "customer",
+    organizationPlan: "free",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
 });
 
 function customerToken() {
