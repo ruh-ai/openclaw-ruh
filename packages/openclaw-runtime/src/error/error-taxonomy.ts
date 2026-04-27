@@ -212,7 +212,12 @@ export function classifyError(error: unknown): ClassifiedError {
     category: "unknown",
     retryable: true,
     originalMessage: errorMsg,
-    userMessage: `An unexpected error occurred: ${errorMsg.slice(0, 120)}`,
+    // Don't embed the raw originalMessage — it may carry secrets or
+    // implementation details that flow to AG-UI before decision-log
+    // redaction runs. The full (redacted) original lives in the decision
+    // log; the operator looks there for details.
+    userMessage:
+      "An unexpected error occurred. See the decision log for details.",
   };
 }
 
@@ -228,7 +233,9 @@ export function classifyToolError(toolName: string, error: unknown): ClassifiedE
       ...base,
       category: "tool_execution_failure",
       toolName,
-      userMessage: `Tool "${toolName}" failed: ${base.originalMessage.slice(0, 120)}`,
+      // Same reason as the `unknown` branch above — never embed raw
+      // originalMessage in the user-facing string.
+      userMessage: `Tool "${toolName}" failed unexpectedly. See the decision log for details.`,
     };
   }
   return { ...base, toolName };

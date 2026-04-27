@@ -190,12 +190,19 @@ export function createStreamingParser(options: StreamingParserOptions): Streamin
       return processBatch(result);
     },
     flush() {
-      // Synthesise a closing `/>` to give the tokenizer a chance to complete a
-      // mid-tag buffered token. If the buffer wasn't actually a tag, the
-      // tokenizer just discards it.
-      const result = feedDelta(state, "/>");
-      state = result.state;
-      return processBatch(result);
+      if (state.buffer.length === 0) return [];
+
+      const raw = state.buffer;
+      diagnostics.push({
+        type: "output_validation_failed",
+        markerName: markerNameFromIncomplete(raw),
+        schema: "<incomplete>",
+        error: "Incomplete marker at end of stream.",
+        raw,
+        layer: 2,
+      });
+      state = { buffer: "", bufferOffset: state.bufferOffset + raw.length };
+      return [];
     },
     drainDiagnostics() {
       const out = diagnostics.slice();
@@ -203,6 +210,10 @@ export function createStreamingParser(options: StreamingParserOptions): Streamin
       return out;
     },
   };
+}
+
+function markerNameFromIncomplete(raw: string): string {
+  return raw.match(/^<([a-zA-Z_][\w-]*)/)?.[1] ?? "<incomplete-marker>";
 }
 
 // ─── Convenience: parse a complete text non-streaming ─────────────────

@@ -61,6 +61,15 @@ export class ConfigDocAlreadyExistsError extends Error {
   }
 }
 
+export class ConfigSchemaNotBoundError extends Error {
+  constructor(public readonly doc_id: string) {
+    super(
+      `config doc "${doc_id}" exists in the store but no entry schema is bound to the facade — call bindEntrySchema(doc_id, schema) first (typically from the adapter that loaded the doc on startup)`,
+    );
+    this.name = "ConfigSchemaNotBoundError";
+  }
+}
+
 export class ConfigEntryValidationError extends Error {
   constructor(
     public readonly doc_id: string,
@@ -113,6 +122,29 @@ export class Config {
 
   constructor(opts: ConfigOptions) {
     this.#opts = opts;
+  }
+
+  /**
+   * Bind an entry schema to an already-persisted doc.
+   *
+   * `registerDoc` populates the schema map implicitly when it writes v1.
+   * Adapters that load existing docs from a persistent store on startup
+   * (filesystem, Postgres) need a way to re-attach the schema to the
+   * facade without re-registering the doc — otherwise `commit` finds the
+   * manifest in the store but no schema in the in-memory map and throws
+   * `ConfigDocNotFoundError`.
+   *
+   * Idempotent: calling bindEntrySchema with the same doc + same schema
+   * twice is a no-op. A different schema replaces the prior binding —
+   * adapters that hot-swap schemas across runtime restarts can use this.
+   */
+  bindEntrySchema<TEntry>(doc_id: string, entrySchema: ZodType<TEntry>): void {
+    this.#entrySchemas.set(doc_id, entrySchema as ZodType<unknown>);
+  }
+
+  /** Inspection helper — true iff a schema is currently bound for this doc. */
+  hasEntrySchema(doc_id: string): boolean {
+    return this.#entrySchemas.has(doc_id);
   }
 
   /**
@@ -206,7 +238,10 @@ export class Config {
 
     const schema = this.#entrySchemas.get(input.doc_id);
     if (!schema) {
-      throw new ConfigDocNotFoundError(input.doc_id);
+      // Manifest exists in the store but the facade has no schema bound.
+      // Adapters that load existing docs on startup must call
+      // bindEntrySchema(doc_id, schema) for each — see method docs.
+      throw new ConfigSchemaNotBoundError(input.doc_id);
     }
 
     const issues = this.#validateEntries(input.doc_id, schema, input.data);

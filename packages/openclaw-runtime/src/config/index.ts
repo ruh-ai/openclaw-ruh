@@ -31,6 +31,7 @@ export {
   ConfigAuthorityError,
   ConfigDocNotFoundError,
   ConfigDocAlreadyExistsError,
+  ConfigSchemaNotBoundError,
   ConfigEntryValidationError,
   ConfigLookupError,
 } from "./config";

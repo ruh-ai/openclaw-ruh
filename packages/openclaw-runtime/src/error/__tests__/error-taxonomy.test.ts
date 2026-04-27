@@ -81,6 +81,14 @@ describe("classifyError", () => {
     expect(a.userMessage).toContain("unexpected error");
   });
 
+  test("unknown: userMessage does NOT embed raw originalMessage (regression — would leak secrets to AG-UI)", () => {
+    const c = classifyError("disk full token=opaquesecretvalue1234567890");
+    expect(c.category).toBe("unknown");
+    expect(c.originalMessage).toContain("opaquesecretvalue1234567890");
+    expect(c.userMessage).not.toContain("opaquesecretvalue1234567890");
+    expect(c.userMessage).not.toContain("disk full");
+  });
+
   test("preserves original message and produces a sanitized userMessage", () => {
     const c = classifyError("API error: 401 — secret token sk_live_abc123 used");
     expect(c.originalMessage).toContain("sk_live_abc123"); // preserved for server-side debugging
@@ -107,6 +115,16 @@ describe("classifyToolError", () => {
     expect(result.category).toBe("tool_execution_failure");
     expect(result.toolName).toBe("workspace-write");
     expect(result.userMessage).toContain("workspace-write");
+  });
+
+  test("tool_execution_failure userMessage does NOT embed raw originalMessage (regression — would leak secrets to AG-UI)", () => {
+    const result = classifyToolError(
+      "workspace-write",
+      new Error("disk full token=opaquesecretvalue1234567890"),
+    );
+    expect(result.userMessage).not.toContain("opaquesecretvalue1234567890");
+    expect(result.userMessage).not.toContain("disk full");
+    expect(result.originalMessage).toContain("opaquesecretvalue1234567890");
   });
 
   test("preserves classification for known patterns and adds toolName", () => {

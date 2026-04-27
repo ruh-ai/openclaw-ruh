@@ -299,11 +299,20 @@ function clampTtl(ttl_ms: number): number {
 }
 
 /**
- * Compatibility check for resume: same major + same minor (patch may
- * differ). Per spec 100, minor versions are additive within a major; a
- * pipeline running on a newer minor can resume a checkpoint from an older
- * minor as long as both share major. Major-version differences are not
- * compatible — the runtime starts fresh.
+ * Compatibility check for resume per spec 100 §versioning.
+ *
+ * Minor versions are additive within a major: a newer-minor runtime can
+ * read older-minor checkpoints (forward compatibility). The reverse —
+ * an older-minor runtime reading a newer-minor checkpoint — is rejected
+ * because the checkpoint may carry fields the runtime doesn't know how
+ * to interpret. Major-version differences are always rejected.
+ *
+ * Patch and prerelease differences are always compatible.
+ *
+ *  checkpoint = 1.0.0, current = 1.0.5  → true  (same minor, patch newer)
+ *  checkpoint = 1.0.0, current = 1.1.0  → true  (current minor newer)
+ *  checkpoint = 1.1.0, current = 1.0.0  → false (current minor older)
+ *  checkpoint = 1.0.0, current = 2.0.0  → false (major differs)
  */
 export function isSpecVersionCompatible(
   checkpointVersion: string,
@@ -313,7 +322,8 @@ export function isSpecVersionCompatible(
   const cur = parseSemver(currentVersion);
   if (!cp || !cur) return false;
   if (cp.major !== cur.major) return false;
-  if (cp.minor !== cur.minor) return false;
+  // Forward compat only: current must be >= checkpoint at minor.
+  if (cur.minor < cp.minor) return false;
   return true;
 }
 

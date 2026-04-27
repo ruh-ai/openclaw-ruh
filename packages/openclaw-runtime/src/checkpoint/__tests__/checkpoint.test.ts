@@ -230,12 +230,20 @@ describe("isSpecVersionCompatible", () => {
     expect(isSpecVersionCompatible("1.0.0", "1.0.0-rc.2")).toBe(true);
   });
 
-  test("different minor incompatible (per spec — minor adds optional fields, but checkpoint contracts pin minor)", () => {
-    expect(isSpecVersionCompatible("1.0.0", "1.1.0")).toBe(false);
+  test("forward-compat: current minor >= checkpoint minor is allowed", () => {
+    // A 1.0 checkpoint should resume under a 1.1 runtime (additive minors).
+    expect(isSpecVersionCompatible("1.0.0", "1.1.0")).toBe(true);
+    expect(isSpecVersionCompatible("1.0.5", "1.2.0")).toBe(true);
+  });
+
+  test("backward-incompat: current minor < checkpoint minor is rejected", () => {
+    // A 1.1 checkpoint may carry fields a 1.0 runtime can't interpret.
+    expect(isSpecVersionCompatible("1.1.0", "1.0.0")).toBe(false);
   });
 
   test("different major incompatible", () => {
     expect(isSpecVersionCompatible("1.0.0", "2.0.0")).toBe(false);
+    expect(isSpecVersionCompatible("2.0.0", "1.9.0")).toBe(false);
   });
 
   test("malformed versions return false rather than throw", () => {

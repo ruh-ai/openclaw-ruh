@@ -140,13 +140,21 @@ describe("createStreamingParser — diagnostics (spec 015 silent-drop forbidden)
 });
 
 describe("createStreamingParser — flush", () => {
-  test("flush drains buffer at end of stream", () => {
+  test("flush reports a truncated marker instead of synthesizing completion", () => {
     const parser = createStreamingParser({ registry: makeRegistry() });
     parser.feed('<test id="x" count="1"');
-    // No closing yet — flush completes the tag
+
     const flushed = parser.flush();
-    expect(flushed).toHaveLength(1);
-    expect(flushed[0]?.value).toEqual({ id: "x", count: 1 });
+    expect(flushed).toHaveLength(0);
+
+    const diagnostics = parser.drainDiagnostics();
+    expect(diagnostics).toHaveLength(1);
+    const diagnostic = diagnostics[0];
+    expect(diagnostic?.type).toBe("output_validation_failed");
+    if (diagnostic?.type === "output_validation_failed") {
+      expect(diagnostic.markerName).toBe("test");
+      expect(diagnostic.error).toContain("Incomplete marker");
+    }
   });
 
   test("flush is safe when buffer is empty", () => {

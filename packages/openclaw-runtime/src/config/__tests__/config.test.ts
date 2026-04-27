@@ -8,6 +8,7 @@ import {
   ConfigDocNotFoundError,
   ConfigEntryValidationError,
   ConfigLookupError,
+  ConfigSchemaNotBoundError,
 } from "../config";
 import { InMemoryConfigStore } from "../in-memory-store";
 import type { DocManifest } from "../types";
@@ -336,6 +337,93 @@ describe("Config.commit", () => {
     // Try to overwrite v1 directly through the store — adapter should refuse.
     const env = await store.getVersion("labor-rates", 1);
     await expect(store.setVersion("labor-rates", env!)).rejects.toThrow(/immutable/);
+  });
+});
+
+describe("Config — facade-restart / persistent-store reload (regression)", () => {
+  test("commit on a doc that exists in the store but has no schema bound throws ConfigSchemaNotBoundError", async () => {
+    // Simulate a runtime restart: persistent store has the manifest from a
+    // prior session, but a fresh Config facade has no entry schema bound.
+    const store = new InMemoryConfigStore();
+    const seedConfig = new Config({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      store,
+      specVersion: SPEC,
+    });
+    await seedConfig.registerDoc(
+      LABOR_MANIFEST,
+      LaborRateSchema,
+      initialRates,
+      "darrow@ecc.com",
+      "v1",
+    );
+
+    // Restart: same store, fresh facade, NO bindEntrySchema yet.
+    const reloaded = new Config({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      store,
+      specVersion: SPEC,
+    });
+    expect(await reloaded.hasDoc("labor-rates")).toBe(true);
+    expect(reloaded.hasEntrySchema("labor-rates")).toBe(false);
+
+    await expect(
+      reloaded.commit({
+        doc_id: "labor-rates",
+        committed_by: "darrow@ecc.com",
+        summary: "post-reload commit",
+        data: initialRates,
+      }),
+    ).rejects.toBeInstanceOf(ConfigSchemaNotBoundError);
+  });
+
+  test("bindEntrySchema lets commit succeed after reload", async () => {
+    const store = new InMemoryConfigStore();
+    const seedConfig = new Config({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      store,
+      specVersion: SPEC,
+    });
+    await seedConfig.registerDoc(
+      LABOR_MANIFEST,
+      LaborRateSchema,
+      initialRates,
+      "darrow@ecc.com",
+      "v1",
+    );
+
+    const reloaded = new Config({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      store,
+      specVersion: SPEC,
+    });
+    reloaded.bindEntrySchema("labor-rates", LaborRateSchema);
+    expect(reloaded.hasEntrySchema("labor-rates")).toBe(true);
+
+    const v = await reloaded.commit({
+      doc_id: "labor-rates",
+      committed_by: "darrow@ecc.com",
+      summary: "post-reload commit",
+      data: initialRates,
+    });
+    expect(v).toBe(2);
+  });
+
+  test("bindEntrySchema is idempotent and supports schema replacement", async () => {
+    const store = new InMemoryConfigStore();
+    const config = new Config({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      store,
+      specVersion: SPEC,
+    });
+    config.bindEntrySchema("labor-rates", LaborRateSchema);
+    config.bindEntrySchema("labor-rates", LaborRateSchema); // idempotent
+    expect(config.hasEntrySchema("labor-rates")).toBe(true);
   });
 });
 

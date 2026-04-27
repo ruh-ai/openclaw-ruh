@@ -44,6 +44,31 @@ describe("feedDelta — basic extraction", () => {
   });
 });
 
+describe("feedDelta — multiline + tab whitespace at name/attr boundary (regression)", () => {
+  test("newline between name and attrs parses the marker", () => {
+    const result = feedDelta(
+      createTokenizerState(),
+      '<plan_skill\n  id="x" name="Y"/>',
+    );
+    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens[0]?.name).toBe("plan_skill");
+    expect(result.tokens[0]?.attributes).toEqual({ id: "x", name: "Y" });
+  });
+
+  test("tab between name and attrs parses the marker", () => {
+    const result = feedDelta(createTokenizerState(), '<x\tk="v"/>');
+    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens[0]?.name).toBe("x");
+    expect(result.tokens[0]?.attributes.k).toBe("v");
+  });
+
+  test("multiple whitespace characters between name and attrs collapse", () => {
+    const result = feedDelta(createTokenizerState(), '<x   \n\t  k="v"/>');
+    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens[0]?.attributes.k).toBe("v");
+  });
+});
+
 describe("feedDelta — escape handling", () => {
   test("decodes backslash-escaped quotes inside double quotes", () => {
     const result = feedDelta(createTokenizerState(), '<x quote="say \\"hi\\""/>');
@@ -115,6 +140,17 @@ describe("feedDelta — robustness", () => {
       "<not_self_closing>content</not_self_closing>",
     );
     expect(result.tokens).toHaveLength(0);
+  });
+
+  test("does not let prose with a marker-like fragment swallow a later valid marker", () => {
+    const result = feedDelta(
+      createTokenizerState(),
+      'When you see <plan_skill, parse it. Later <think_step step="planning" status="started"/>',
+    );
+
+    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens[0]?.name).toBe("think_step");
+    expect(result.tokens[0]?.attributes).toEqual({ step: "planning", status: "started" });
   });
 
   test("handles bare < that never closes (carries in buffer indefinitely)", () => {

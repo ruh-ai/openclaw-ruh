@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DecisionLog, InMemoryDecisionStore } from "../../decision-log";
+import { HookRegistry, HookRunner } from "../../hooks";
 import { InMemoryMemoryStore } from "../in-memory-store";
 import {
   Memory,
@@ -7,7 +8,7 @@ import {
   MemoryNotFoundError,
   MemoryReviewError,
 } from "../memory";
-import type { MemoryAuthority } from "../types";
+import type { MemoryAuthority, MemoryEntry } from "../types";
 
 const SPEC = "1.0.0-rc.1";
 
@@ -497,5 +498,170 @@ describe("Memory — works without decisionLog (optional handle)", () => {
       content: validContent,
     });
     expect(entry.tier).toBe(1);
+  });
+});
+
+describe("Memory — memory_write_review_required hook (regression)", () => {
+  function buildWithHooks() {
+    const store = new InMemoryMemoryStore();
+    const decisionStore = new InMemoryDecisionStore();
+    const decisionLog = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: SPEC,
+      store: decisionStore,
+    });
+    const registry = new HookRegistry();
+    const hooks = new HookRunner({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      sessionId: "ses-1",
+      registry,
+      decisionLog,
+    });
+    const memory = new Memory({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      authority: ECC_AUTHORITY,
+      store,
+      specVersion: SPEC,
+      now: () => 1_700_000_000_000,
+      decisionLog,
+      hooks,
+    });
+    return { memory, registry, decisionStore };
+  }
+
+  test("Tier-2 propose fires memory_write_review_required with pending_entry + routed_to + channel", async () => {
+    const { memory, registry } = buildWithHooks();
+    const calls: Array<{
+      pending_entry: MemoryEntry;
+      routed_to: ReadonlyArray<string>;
+      channel: string;
+    }> = [];
+    registry.register({
+      name: "memory_write_review_required",
+      handler: (payload) => {
+        calls.push(
+          payload as {
+            pending_entry: MemoryEntry;
+            routed_to: ReadonlyArray<string>;
+            channel: string;
+          },
+        );
+      },
+    });
+
+    const entry = await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.pending_entry.id).toBe(entry.id);
+    expect(calls[0]?.routed_to).toEqual(["darrow@ecc.com"]);
+    expect(calls[0]?.channel).toBe("email");
+  });
+
+  test("Tier-3 propose also fires memory_write_review_required", async () => {
+    const { memory, registry } = buildWithHooks();
+    let fired = false;
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => {
+        fired = true;
+      },
+    });
+    await memory.propose({
+      tier: 3,
+      lane: "estimating",
+      source_identity: "jim@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    expect(fired).toBe(true);
+  });
+
+  test("Tier-1 propose does NOT fire the review hook", async () => {
+    const { memory, registry } = buildWithHooks();
+    let fired = false;
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => {
+        fired = true;
+      },
+    });
+    await memory.propose({
+      tier: 1,
+      lane: "estimating",
+      source_identity: "darrow@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    expect(fired).toBe(false);
+  });
+
+  test("auto-downgrade to Tier-2 still fires the review hook", async () => {
+    const { memory, registry } = buildWithHooks();
+    let fired = false;
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => {
+        fired = true;
+      },
+    });
+    // Matt is only Tier-2 in estimating; Tier-1 declared → auto-downgrade.
+    await memory.propose({
+      tier: 1,
+      lane: "estimating",
+      source_identity: "matt@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    expect(fired).toBe(true);
+  });
+
+  test("confirm fires memory_write_confirmed", async () => {
+    const { memory, registry } = buildWithHooks();
+    const calls: Array<{ entry_id: string; reviewer_identity: string }> = [];
+    registry.register({
+      name: "memory_write_confirmed",
+      handler: (p) =>
+        void calls.push(p as { entry_id: string; reviewer_identity: string }),
+    });
+    const e = await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    await memory.confirm(e.id, "darrow@ecc.com");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.entry_id).toBe(e.id);
+    expect(calls[0]?.reviewer_identity).toBe("darrow@ecc.com");
+  });
+
+  test("reject fires memory_write_rejected with reason", async () => {
+    const { memory, registry } = buildWithHooks();
+    const calls: Array<{ reason: string }> = [];
+    registry.register({
+      name: "memory_write_rejected",
+      handler: (p) => void calls.push(p as { reason: string }),
+    });
+    const e = await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    await memory.reject(e.id, "darrow@ecc.com", "out-of-date");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.reason).toBe("out-of-date");
   });
 });

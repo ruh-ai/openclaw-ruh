@@ -24,6 +24,7 @@
  */
 
 import type { DecisionLog } from "../decision-log/log";
+import type { HookRunner } from "../hooks/runner";
 import { resolveEffectiveTier } from "./authority";
 import {
   AttestedMemoryWriteRequestSchema,
@@ -90,6 +91,14 @@ export interface MemoryOptions {
   readonly now?: () => number;
   /** When provided, every memory state transition emits a decision-log entry. */
   readonly decisionLog?: DecisionLog;
+  /**
+   * When provided, Tier-2 and Tier-3 writes also fire the
+   * `memory_write_review_required` hook so pipeline integrations (email,
+   * Teams, webhook) can route the entry to a Tier-1 reviewer. Without a
+   * hook runner the substrate still emits decision-log entries — the
+   * audit trail is preserved — but no external review path is invoked.
+   */
+  readonly hooks?: HookRunner;
 }
 
 // ─── Memory class ─────────────────────────────────────────────────────
@@ -231,6 +240,24 @@ export class Memory {
       }
     }
 
+    // Tier-2 / Tier-3 → fire memory_write_review_required so pipeline
+    // integrations (email card to Darrow, Teams adaptive card, webhook)
+    // can route approval. The hook fires AFTER persistence + decision-log
+    // emission so handlers see the entry's stored shape, not a
+    // pre-persistence draft. Decision-log emission is the audit trail;
+    // the hook is the integration point.
+    if (
+      this.#opts.hooks &&
+      (resolution.status === "flagged" || resolution.status === "proposed")
+    ) {
+      const routed_to = this.#tier1ReviewersFor(req.lane);
+      await this.#opts.hooks.fire("memory_write_review_required", {
+        pending_entry: entry,
+        routed_to,
+        channel: req.source_channel,
+      });
+    }
+
     return entry;
   }
 
@@ -267,6 +294,12 @@ export class Memory {
         },
       });
     }
+    if (this.#opts.hooks) {
+      await this.#opts.hooks.fire("memory_write_confirmed", {
+        entry_id: id,
+        reviewer_identity: reviewer,
+      });
+    }
     return updated;
   }
 
@@ -299,6 +332,13 @@ export class Memory {
           reviewer_identity: reviewer,
           reason,
         },
+      });
+    }
+    if (this.#opts.hooks) {
+      await this.#opts.hooks.fire("memory_write_rejected", {
+        entry_id: id,
+        reviewer_identity: reviewer,
+        reason,
       });
     }
     return updated;

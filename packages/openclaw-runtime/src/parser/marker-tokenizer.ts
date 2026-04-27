@@ -59,6 +59,7 @@ export function feedDelta(state: TokenizerState, delta: string): FeedResult {
   const tokens: MarkerToken[] = [];
 
   let lastConsumed = 0;
+  let incompleteStart: number | null = null;
   let i = 0;
 
   while (i < text.length) {
@@ -67,8 +68,36 @@ export function feedDelta(state: TokenizerState, delta: string): FeedResult {
       continue;
     }
 
-    // Found a `<` — scan forward for a complete self-closing tag.
-    let j = i + 1;
+    // Found a `<` — first prove it can start a marker. Prose such as
+    // "<plan_skill, parse it" must not swallow the next real marker.
+    const nameStart = i + 1;
+    const firstNameChar = text[nameStart];
+    if (firstNameChar === undefined) {
+      incompleteStart = i;
+      break;
+    }
+    if (!isNameStart(firstNameChar)) {
+      i++;
+      continue;
+    }
+
+    let nameEnd = nameStart + 1;
+    while (nameEnd < text.length && isNameChar(text[nameEnd] ?? "")) {
+      nameEnd++;
+    }
+
+    const delimiter = text[nameEnd];
+    if (delimiter === undefined) {
+      incompleteStart = i;
+      break;
+    }
+    if (delimiter !== "/" && delimiter !== ">" && !/\s/.test(delimiter)) {
+      i = nameEnd;
+      continue;
+    }
+
+    // Candidate marker — scan forward for a complete self-closing tag.
+    let j = nameEnd;
     let inQuote = false;
     let quoteChar = "";
     let completed = false;
@@ -115,18 +144,17 @@ export function feedDelta(state: TokenizerState, delta: string): FeedResult {
     if (completed || abandoned) continue;
 
     // Reached end of text mid-tag — stop scanning, keep this tag in buffer.
+    incompleteStart = i;
     break;
   }
 
-  // Carry forward whatever's after the last fully-consumed boundary.
-  // If there's a `<` past lastConsumed, keep from there (incomplete tag).
-  // Otherwise drop the whole prefix.
-  const lastOpenTag = text.lastIndexOf("<", text.length - 1);
+  // Carry forward only a proven incomplete marker candidate. Invalid marker-like
+  // prose is discarded so later valid markers can still be extracted.
   let newBuffer: string;
   let newOffset: number;
-  if (lastOpenTag >= lastConsumed && lastOpenTag !== -1) {
-    newBuffer = text.slice(lastOpenTag);
-    newOffset = state.bufferOffset + lastOpenTag;
+  if (incompleteStart !== null && incompleteStart >= lastConsumed) {
+    newBuffer = text.slice(incompleteStart);
+    newOffset = state.bufferOffset + incompleteStart;
   } else {
     newBuffer = "";
     newOffset = state.bufferOffset + text.length;
@@ -143,20 +171,33 @@ export function feedDelta(state: TokenizerState, delta: string): FeedResult {
 const NAME_PATTERN = /^[a-zA-Z_][\w-]*$/;
 const ATTR_PATTERN = /(\w+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g;
 
+function isNameStart(ch: string): boolean {
+  return /^[a-zA-Z_]$/.test(ch);
+}
+
+function isNameChar(ch: string): boolean {
+  return /^[\w-]$/.test(ch);
+}
+
 function parseMarker(raw: string, offset: number): MarkerToken | null {
   // raw is `<name attrs.../>`. Strip wrappers.
   const inner = raw.slice(1, -2).trim();
-  const spaceIdx = inner.indexOf(" ");
+  // Split on the first run of whitespace (space, tab, newline) — the
+  // tokenizer accepts any whitespace at the name/attr boundary, so this
+  // must too. Splitting on a literal " " was a bug: a marker like
+  // `<plan_skill\nid=.../>` would put the newline + everything after it
+  // into `name`, fail NAME_PATTERN, and silently drop the marker.
+  const wsMatch = /\s+/.exec(inner);
 
   let name: string;
   let attrStr: string;
 
-  if (spaceIdx === -1) {
+  if (!wsMatch) {
     name = inner;
     attrStr = "";
   } else {
-    name = inner.slice(0, spaceIdx);
-    attrStr = inner.slice(spaceIdx + 1);
+    name = inner.slice(0, wsMatch.index);
+    attrStr = inner.slice(wsMatch.index + wsMatch[0].length);
   }
 
   if (!NAME_PATTERN.test(name)) return null;
