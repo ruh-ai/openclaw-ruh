@@ -20,6 +20,8 @@
 
 import type { OpenClawTool, ToolContext, ToolResult, AgUiCustomEvent } from "./tool-interface";
 import type { ToolRegistry } from "./tool-registry";
+import { classifyToolError } from "../error/error-taxonomy";
+import type { ErrorCategory } from "../error/error-taxonomy";
 
 // ─── Pipeline result ───────────────────────────────────────────────────
 
@@ -48,7 +50,7 @@ export type PipelineResult<TOutput = unknown> =
   | { readonly status: "validation_error"; readonly toolName: string; readonly error: string }
   | { readonly status: "output_validation_error"; readonly toolName: string; readonly error: string; readonly events: ReadonlyArray<AgUiCustomEvent> }
   | { readonly status: "permission_denied"; readonly toolName: string; readonly reason: string; readonly requiresApproval: boolean }
-  | { readonly status: "execution_error"; readonly toolName: string; readonly error: string; readonly events: ReadonlyArray<AgUiCustomEvent> };
+  | { readonly status: "execution_error"; readonly toolName: string; readonly error: string; readonly errorCategory: ErrorCategory; readonly userMessage: string; readonly retryable: boolean; readonly events: ReadonlyArray<AgUiCustomEvent> };
 
 export interface PipelineOptions {
   /**
@@ -147,16 +149,28 @@ export async function executeTool<TOutput = unknown>(
   try {
     result = (await tool.call(input, ctx)) as ToolResult<TOutput>;
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    // Classify the thrown exception per spec 014 — every error in OpenClaw
+    // classifies into exactly one category with retry/recovery guidance.
+    const classified = classifyToolError(toolName, err);
     events.push({
       type: "CUSTOM",
       name: TOOL_EXECUTION_END,
-      value: { toolName, executionId, success: false, error: errorMsg },
+      value: {
+        toolName,
+        executionId,
+        success: false,
+        error: classified.originalMessage,
+        errorCategory: classified.category,
+        retryable: classified.retryable,
+      },
     });
     return {
       status: "execution_error",
       toolName,
-      error: errorMsg,
+      error: classified.originalMessage,
+      errorCategory: classified.category,
+      userMessage: classified.userMessage,
+      retryable: classified.retryable,
       events,
     };
   }

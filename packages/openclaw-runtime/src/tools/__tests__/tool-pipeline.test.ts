@@ -154,6 +154,37 @@ describe("executeTool", () => {
     expect(result.events.some((e) => e.name === TOOL_EXECUTION_END)).toBe(true);
   });
 
+  test("execution_error includes errorCategory + retryable from classifier (Phase 1b)", async () => {
+    class RateLimitedTool extends HelloTool {
+      override readonly name: string = "rate-limited-tool";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        throw new Error("rate limit exceeded by upstream");
+      }
+    }
+    registry.register(new RateLimitedTool());
+    const result = await executeTool(registry, "rate-limited-tool", {}, baseCtx);
+    expect(result.status).toBe("execution_error");
+    if (result.status !== "execution_error") return;
+    expect(result.errorCategory).toBe("rate_limit");
+    expect(result.retryable).toBe(true);
+    expect(result.userMessage).toContain("Rate limited");
+  });
+
+  test("execution_error classifies unknown errors as tool_execution_failure", async () => {
+    class WeirdTool extends HelloTool {
+      override readonly name: string = "weird-tool";
+      override async call(): Promise<ToolResult<{ greeting: string }>> {
+        throw new Error("strange unexpected condition");
+      }
+    }
+    registry.register(new WeirdTool());
+    const result = await executeTool(registry, "weird-tool", {}, baseCtx);
+    expect(result.status).toBe("execution_error");
+    if (result.status !== "execution_error") return;
+    expect(result.errorCategory).toBe("tool_execution_failure");
+    expect(result.userMessage).toContain("weird-tool");
+  });
+
   test("unavailable in wrong stage", async () => {
     registry.register(new StageOnlyTool());
     const result = await executeTool(registry, "stage-only", {}, { ...baseCtx, devStage: "drafted" });
