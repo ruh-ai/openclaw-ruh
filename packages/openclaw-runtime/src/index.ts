@@ -23,10 +23,12 @@ export * from "./decision-log";
 // ─── Memory model: tier/lane authority + Memory facade (Phase 1e) ──────
 export * from "./memory";
 
+// ─── Config substrate: versioned multi-dimensional data (Phase 1f) ─────
+export * from "./config";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
 
-// ─── Phase 1f-1h modules — added in subsequent commits ─────────────────
-// export * from "./config";
+// ─── Phase 1g-1h modules — added in subsequent commits ─────────────────
 // export * from "./checkpoint";
 // export * from "./hooks";
