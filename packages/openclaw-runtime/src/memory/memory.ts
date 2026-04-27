@@ -224,38 +224,75 @@ export class Memory {
           ...(resolution.downgraded ? { downgrade_reason: resolution.reason } : {}),
         },
       });
+    }
 
-      // Tier-2 / Tier-3 → emit memory_write_routed with the recipient list.
-      if (resolution.status === "flagged" || resolution.status === "proposed") {
+    // Tier-2 / Tier-3 → fire memory_write_review_required so pipeline
+    // integrations (email card to Darrow, Teams adaptive card, webhook)
+    // can route approval. The hook fires AFTER persistence so handlers
+    // see the entry's stored shape, not a pre-persistence draft.
+    //
+    // Per spec 013 §veto-handlers, this hook is veto-able: a VETO from
+    // any handler "Replaces the default review routing with the handler's
+    // decision." So the hook fires BEFORE the default memory_write_routed
+    // decision-log entry is emitted; if any handler vetoes, the substrate
+    // suppresses its default routing emission and emits a tagged audit
+    // entry instead so the trail records that the handler took over.
+    let reviewVeto:
+      | { handler_id: string; reason: string }
+      | undefined;
+    if (
+      this.#opts.hooks &&
+      (resolution.status === "flagged" || resolution.status === "proposed")
+    ) {
+      const routed_to = this.#tier1ReviewersFor(req.lane);
+      const hookResult = await this.#opts.hooks.fire(
+        "memory_write_review_required",
+        {
+          pending_entry: entry,
+          routed_to,
+          channel: req.source_channel,
+        },
+      );
+      if (hookResult.veto) {
+        reviewVeto = {
+          handler_id: hookResult.veto.handler_id,
+          reason: hookResult.veto.reason,
+        };
+      }
+    }
+
+    if (
+      this.#opts.decisionLog &&
+      (resolution.status === "flagged" || resolution.status === "proposed")
+    ) {
+      if (reviewVeto) {
+        // Handler took over routing. Emit memory_write_routed with the
+        // hook_replaced strategy so the audit trail records the handoff
+        // — but DO NOT carry routed_to/channel, since the substrate did
+        // not actually route.
+        await this.#opts.decisionLog.emit({
+          type: "memory_write_routed",
+          description: `Default routing for entry "${entry.id}" overridden by hook handler ${reviewVeto.handler_id}`,
+          metadata: {
+            entry_id: entry.id,
+            route_strategy: "hook_replaced",
+            vetoed_by_hook_handler: reviewVeto.handler_id,
+            veto_reason: reviewVeto.reason,
+          },
+        });
+      } else {
         const routed_to = this.#tier1ReviewersFor(req.lane);
         await this.#opts.decisionLog.emit({
           type: "memory_write_routed",
           description: `Routing ${resolution.status} entry "${entry.id}" for review`,
           metadata: {
             entry_id: entry.id,
+            route_strategy: "default",
             routed_to,
             channel: req.source_channel,
           },
         });
       }
-    }
-
-    // Tier-2 / Tier-3 → fire memory_write_review_required so pipeline
-    // integrations (email card to Darrow, Teams adaptive card, webhook)
-    // can route approval. The hook fires AFTER persistence + decision-log
-    // emission so handlers see the entry's stored shape, not a
-    // pre-persistence draft. Decision-log emission is the audit trail;
-    // the hook is the integration point.
-    if (
-      this.#opts.hooks &&
-      (resolution.status === "flagged" || resolution.status === "proposed")
-    ) {
-      const routed_to = this.#tier1ReviewersFor(req.lane);
-      await this.#opts.hooks.fire("memory_write_review_required", {
-        pending_entry: entry,
-        routed_to,
-        channel: req.source_channel,
-      });
     }
 
     return entry;

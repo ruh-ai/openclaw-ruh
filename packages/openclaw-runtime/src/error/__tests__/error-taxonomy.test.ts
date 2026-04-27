@@ -3,6 +3,7 @@ import {
   classifyError,
   classifyToolError,
   ERROR_CATEGORIES,
+  type ErrorCategory,
 } from "../error-taxonomy";
 
 describe("classifyError", () => {
@@ -87,6 +88,41 @@ describe("classifyError", () => {
     expect(c.originalMessage).toContain("opaquesecretvalue1234567890");
     expect(c.userMessage).not.toContain("opaquesecretvalue1234567890");
     expect(c.userMessage).not.toContain("disk full");
+  });
+
+  test("model_refusal: userMessage does NOT embed raw originalMessage (regression — content_filter leak)", () => {
+    const c = classifyError("content_filter token=opaquesecretvalue1234567890");
+    expect(c.category).toBe("model_refusal");
+    expect(c.originalMessage).toContain("opaquesecretvalue1234567890");
+    expect(c.userMessage).not.toContain("opaquesecretvalue1234567890");
+    expect(c.userMessage).not.toContain("content_filter");
+  });
+
+  test("every classifier branch refuses to embed the raw error in userMessage", () => {
+    // One realistic-looking secret that should never appear in userMessage
+    // regardless of which category fires. Each input is matched on a known
+    // pattern in the rule set; the secret is appended as ambient noise.
+    const SECRET = "opaquesecretvalue1234567890";
+    type Case = { input: string; category: ErrorCategory };
+    const cases: ReadonlyArray<Case> = [
+      { input: `401 unauthorized ${SECRET}`, category: "auth_error" },
+      { input: `context_length exceeded ${SECRET}`, category: "context_too_long" },
+      { input: `rate_limit hit ${SECRET}`, category: "rate_limit" },
+      { input: `content_filter ${SECRET}`, category: "model_refusal" },
+      { input: `gateway timeout ${SECRET}`, category: "gateway_timeout" },
+      { input: `503 service unavailable ${SECRET}`, category: "sandbox_unavailable" },
+      { input: `manifest drift ${SECRET}`, category: "manifest_invalid" },
+      { input: `permission denied ${SECRET}`, category: "permission_denied" },
+      { input: `parse error invalid ${SECRET}`, category: "malformed_response" },
+      { input: `econnrefused ${SECRET}`, category: "network_error" },
+      { input: `untyped error ${SECRET}`, category: "unknown" },
+    ];
+    for (const c of cases) {
+      const r = classifyError(c.input);
+      expect(r.category).toBe(c.category);
+      expect(r.originalMessage).toContain(SECRET);
+      expect(r.userMessage).not.toContain(SECRET);
+    }
   });
 
   test("preserves original message and produces a sanitized userMessage", () => {

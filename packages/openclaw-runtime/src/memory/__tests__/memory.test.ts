@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DecisionLog, InMemoryDecisionStore } from "../../decision-log";
-import { HookRegistry, HookRunner } from "../../hooks";
+import { HookRegistry, HookRunner, VETO } from "../../hooks";
 import { InMemoryMemoryStore } from "../in-memory-store";
 import {
   Memory,
@@ -663,5 +663,135 @@ describe("Memory — memory_write_review_required hook (regression)", () => {
     await memory.reject(e.id, "darrow@ecc.com", "out-of-date");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.reason).toBe("out-of-date");
+  });
+});
+
+describe("Memory — memory_write_review_required VETO (regression)", () => {
+  function buildWithHooks() {
+    const store = new InMemoryMemoryStore();
+    const decisionStore = new InMemoryDecisionStore();
+    const decisionLog = new DecisionLog({
+      pipeline_id: "pipe-1",
+      agent_id: "agent-1",
+      session_id: "ses-1",
+      spec_version: SPEC,
+      store: decisionStore,
+    });
+    const registry = new HookRegistry();
+    const hooks = new HookRunner({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      sessionId: "ses-1",
+      registry,
+      decisionLog,
+    });
+    const memory = new Memory({
+      pipelineId: "pipe-1",
+      agentId: "agent-1",
+      authority: ECC_AUTHORITY,
+      store,
+      specVersion: SPEC,
+      now: () => 1_700_000_000_000,
+      decisionLog,
+      hooks,
+    });
+    return { memory, registry, decisionStore };
+  }
+
+  test("VETO from memory_write_review_required suppresses default memory_write_routed", async () => {
+    const { memory, registry, decisionStore } = buildWithHooks();
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => VETO({ reason: "external router took over" }),
+      label: "external-router",
+    });
+
+    await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    const routed = r.entries.find((e) => e.type === "memory_write_routed");
+    expect(routed).toBeDefined();
+    const md = routed?.metadata as {
+      route_strategy: string;
+      routed_to?: string[];
+      vetoed_by_hook_handler?: string;
+      veto_reason?: string;
+    };
+    // Default routing was overridden — no routed_to/channel emitted.
+    expect(md.route_strategy).toBe("hook_replaced");
+    expect(md.routed_to).toBeUndefined();
+    expect(md.veto_reason).toBe("external router took over");
+    expect(md.vetoed_by_hook_handler).toBeDefined();
+  });
+
+  test("VETO does not affect persistence — entry is still flagged", async () => {
+    const { memory, registry } = buildWithHooks();
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => VETO({ reason: "x" }),
+    });
+    const entry = await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    expect(entry.status).toBe("flagged");
+  });
+
+  test("no VETO: default routing emits routed_to + channel", async () => {
+    const { memory, registry, decisionStore } = buildWithHooks();
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => {
+        // Observation-only — no veto.
+      },
+    });
+
+    await memory.propose({
+      tier: 2,
+      lane: "estimating",
+      source_identity: "scott@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    const routed = r.entries.find((e) => e.type === "memory_write_routed");
+    const md = routed?.metadata as {
+      route_strategy: string;
+      routed_to?: string[];
+      channel?: string;
+    };
+    expect(md.route_strategy).toBe("default");
+    expect(md.routed_to).toEqual(["darrow@ecc.com"]);
+    expect(md.channel).toBe("email");
+  });
+
+  test("VETO on Tier-3 (proposed) also suppresses default routing", async () => {
+    const { memory, registry, decisionStore } = buildWithHooks();
+    registry.register({
+      name: "memory_write_review_required",
+      handler: () => VETO({ reason: "router took over" }),
+    });
+    await memory.propose({
+      tier: 3,
+      lane: "estimating",
+      source_identity: "jim@ecc.com",
+      source_channel: "email",
+      content: validContent,
+    });
+    const r = await decisionStore.query({ pipeline_id: "pipe-1" });
+    const routed = r.entries.find((e) => e.type === "memory_write_routed");
+    expect(
+      (routed?.metadata as { route_strategy: string }).route_strategy,
+    ).toBe("hook_replaced");
   });
 });
