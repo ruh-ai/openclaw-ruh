@@ -94,15 +94,6 @@ The runtime fires hooks at these named moments. The list is closed in v1 — add
 | `checkpoint_resumed` | A session resumed from a checkpoint | `{ checkpoint_id, session_id }` |
 | `checkpoint_drift_detected` | Resume found workspace drift | `{ checkpoint_id, divergent_files }` |
 
-### Milestones (since [016](016-milestone-tracking.md))
-
-| Hook name | Fired when | Payload |
-|---|---|---|
-| `milestone_evaluated` | A periodic milestone evaluation produced a verdict | `MilestoneEvidence` shape — milestone_id, metric_value, target, passed, denominator + numerator breakdowns |
-| `milestone_missed` | First miss at trigger time, OR a previously-passing milestone now fails | `{ milestone_id, prior_status, current_value, target }` |
-| `milestone_signoff_required` | A routine estimate completed; awaiting lead-estimator sign-off | `{ session_id, milestone_id, deliverables_count }` |
-| `milestone_exit_ramp_triggered` | Customer-initiated exit; runtime computed refund | `{ milestone_id, refund_usd, computation_trace }` |
-
 ### Custom
 
 | Hook name | Fired when | Payload |
@@ -194,7 +185,7 @@ Some hooks have an obvious default capability profile. The runtime auto-applies 
 |---|---|
 | `error_classified`, `retry_decided`, `recovery_applied` | `decision_log_emit`, `publish_metric` |
 | `tool_approval_required`, `memory_write_review_required` | `send_email`, `send_teams_card`, `external_approval_gate` |
-| `eval_iteration_complete`, `milestone_evaluated` | `egress_http` (telemetry export), `publish_metric` |
+| `eval_iteration_complete` | `egress_http` (telemetry export), `publish_metric` |
 | `output_validation_failed` | `decision_log_emit`, `publish_metric` |
 | `*` (all others) | `decision_log_emit` only |
 

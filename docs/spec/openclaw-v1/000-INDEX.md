@@ -71,7 +71,6 @@ Out of scope for v1 (deferred to later versions):
 | Section | Title | Status |
 |---|---|---|
 | [010](010-dashboard-panels.md) | Dashboard panel registration — data sources, actions, role visibility | ✅ done |
-| [016](016-milestone-tracking.md) | Milestone tracking — performance KPIs, exit ramps, refund formulas | ✅ done |
 
 ### Part E — Meta
 
@@ -178,7 +177,7 @@ The criterion for v1.1 inclusion was: **the issue does not block ECC go-live, bu
 
 2. **Memory metadata field-name inconsistency between 004 and 005.** 005 uses `downgrade_reason`; 004 uses `reason`. 004 also references `requested_tier` as preserved on the entry, but `MemoryEntry` schema has `additionalProperties: false` and no such field. Fix: rename one to match, add `requested_tier` to MemoryEntry, align metadata shape across both sections.
 
-3. **`decision_metadata_schemas` examples reference schemas that don't exist.** `openclaw-v1:ToolExecutionEndMetadata`, `openclaw-v1:MemoryWriteProposedMetadata`, and `milestone.schema.json#/$defs/ExitRampTriggeredMetadata` are referenced as `schema_ref` strings but never defined. Fix: define each as `$defs` in their respective schema files.
+3. **`decision_metadata_schemas` examples reference schemas that don't exist.** `openclaw-v1:ToolExecutionEndMetadata` and `openclaw-v1:MemoryWriteProposedMetadata` are referenced as `schema_ref` strings but never defined. Fix: define each as `$defs` in their respective schema files.
 
 4. **Hook capability sandboxing is decorative without runtime enforcement.** The capability model in 013 is correct as a *contract*, but:
    - Per-hook default profiles omit required capability parameters (allowed_hosts, from, to_pattern, namespace)

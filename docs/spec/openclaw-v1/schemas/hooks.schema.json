@@ -43,11 +43,7 @@
         "output_validation_failed",
         "checkpoint_created",
         "checkpoint_resumed",
-        "checkpoint_drift_detected",
-        "milestone_evaluated",
-        "milestone_missed",
-        "milestone_signoff_required",
-        "milestone_exit_ramp_triggered"
+        "checkpoint_drift_detected"
       ]
     },
     "VetoableHookName": {

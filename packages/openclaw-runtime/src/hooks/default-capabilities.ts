@@ -44,7 +44,6 @@ export const DEFAULT_CAPABILITY_KINDS: Readonly<
 
   // Telemetry export
   eval_iteration_complete: ["egress_http", "publish_metric"],
-  milestone_evaluated: ["egress_http", "publish_metric"],
 
   // Output validation
   output_validation_failed: ["decision_log_emit", "publish_metric"],

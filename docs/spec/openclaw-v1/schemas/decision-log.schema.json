@@ -54,9 +54,6 @@
         "config_commit",
         "hook_fired", "hook_failed",
         "checkpoint_created", "checkpoint_resumed", "checkpoint_drift_detected",
-        "milestone_classification", "milestone_reclassification",
-        "milestone_autonomy_evaluated", "milestone_evaluated", "milestone_missed",
-        "milestone_signoff_recorded", "milestone_exit_ramp_triggered",
         "custom"
       ]
     },

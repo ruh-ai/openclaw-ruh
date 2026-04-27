@@ -185,7 +185,6 @@ The ECC Exteriors Estimator (see `work/projects/ecc-construction/ECC_DEV_TEAM_ON
 - **200-project recursive training loop** — estimate → compare to ECC actual → reflect → rewrite skill file → re-run → converge to <tolerance → eval task format and convergence loop must support skill-file mutation, not just prompt iteration
 - **10 typed deliverables per estimate** — Master Package, Takeoff Report, Cost Breakdown, Gap Analysis, RFQ Packets, Decision Log, QA Checklist, Proposal Narrative, PPTX, Source Assessment → output validator section must support deliverable schemas and dashboard panels for each
 - **Tenant-bounded deployment** — Lenovo Windows box, no egress, Anthropic Premium passed through → runtime contract must support single-tenant, on-prem, server-side checkpoint persistence
-- **M6 milestone** — 75% routine estimates autonomous within 6 months of go-live, with refund clause if missed → conformance + eval suite must support measurable autonomous-completion-rate dashboards
 
 Every section in the spec is reviewed against ECC's needs. If the spec can't express ECC, the spec is wrong. If ECC can't run on the spec, the spec needs evolving — but every other pipeline benefits from the evolution.
 
