@@ -36,6 +36,7 @@ jobs:
         working-directory: ruh-backend
         run: |
           cd ../packages/logger && bun install && cd -
+          cd ../packages/openclaw-runtime && bun install && cd -
           bun install
 
       - name: Backend — typecheck
