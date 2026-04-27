@@ -11,6 +11,7 @@ import cookieParser from 'cookie-parser';
 import { authRouter } from './authRoutes';
 import { marketplaceRouter } from './marketplaceRoutes';
 import { createCostRouter } from './costRoutes';
+import { createConformanceRouter } from './conformanceRoutes';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -217,6 +218,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRouter);
 app.use('/api/marketplace', marketplaceRouter);
 app.use('/api/agents/:agentId', createCostRouter());
+app.use('/api/conformance', createConformanceRouter());
 
 // In-memory store for active creation streams (shared registry, exported for test cleanup)
 import { streams as _sharedStreams, type StreamEntry } from './streamRegistry';

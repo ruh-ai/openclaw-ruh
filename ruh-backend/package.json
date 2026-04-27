@@ -30,6 +30,7 @@
     "@opentelemetry/sdk-trace-base": "^1.25.0",
     "@opentelemetry/semantic-conventions": "^1.25.0",
     "@ruh/logger": "file:../packages/logger",
+    "@ruh/openclaw-runtime": "file:../packages/openclaw-runtime",
     "axios": "^1.7.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
