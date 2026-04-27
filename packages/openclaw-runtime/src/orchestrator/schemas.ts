@@ -54,16 +54,25 @@ const MatchComparisonSchema = z.enum(["<", "<=", "==", "!=", ">=", ">"]);
  * MatchClause — `additionalProperties: true` per spec so pipelines may
  * pass through fields a custom matcher consumes. The substrate validates
  * the well-known fields and lets the custom matcher own the rest.
+ *
+ * `.passthrough()` is load-bearing here: a plain `z.object(...)` strips
+ * unknown keys at parse time, which means after a manifest is parsed a
+ * custom matcher would see an empty bag instead of e.g. `tenant_tier`.
+ * This was a real bug in the round-1 implementation.
  */
-export const MatchClauseSchema = z.object({
-  stage: z.string().optional(),
-  message_kind: z.string().optional(),
-  input_has: z.array(z.string()).optional(),
-  regions: z.array(z.string().regex(KEBAB_CASE)).optional(),
-  agent_status: z.record(z.string(), MatchAgentStatusSchema).optional(),
-  decision_count: z.record(MatchComparisonSchema, z.number().int()).optional(),
-  custom: z.string().optional(),
-});
+export const MatchClauseSchema = z
+  .object({
+    stage: z.string().optional(),
+    message_kind: z.string().optional(),
+    input_has: z.array(z.string()).optional(),
+    regions: z.array(z.string().regex(KEBAB_CASE)).optional(),
+    agent_status: z.record(z.string(), MatchAgentStatusSchema).optional(),
+    decision_count: z
+      .record(MatchComparisonSchema, z.number().int())
+      .optional(),
+    custom: z.string().optional(),
+  })
+  .passthrough();
 
 const _matchCheck: z.infer<typeof MatchClauseSchema> extends MatchClause
   ? true
@@ -171,7 +180,24 @@ export const HandoffContextSchema = z
     upstream_results: z.record(z.string(), z.unknown()).optional(),
     config_filter: z.record(z.string(), z.unknown()).optional(),
     memory_lanes: z.array(z.string().regex(KEBAB_CASE)).optional(),
-    workspace_scope: z.string().min(1),
+    /**
+     * Workspace-relative path. Absolute paths and scheme prefixes
+     * (file://, http://, etc.) are rejected at parse time — they would
+     * lexically normalize to the root and broaden access to the entire
+     * workspace.
+     */
+    workspace_scope: z
+      .string()
+      .min(1)
+      .refine((s) => !/^\//.test(s), {
+        message: "workspace_scope must not be absolute (no leading /)",
+      })
+      .refine((s) => !/^[a-zA-Z]:[\\/]/.test(s) && !s.startsWith("\\\\"), {
+        message: "workspace_scope must not be a Windows absolute path",
+      })
+      .refine((s) => !/^[a-zA-Z][a-zA-Z0-9+.-]*:(\/\/)?/.test(s), {
+        message: "workspace_scope must not carry a scheme prefix (file://, http://, ...)",
+      }),
     deadline: z.string().datetime({ offset: true }).optional(),
   })
   .strict();

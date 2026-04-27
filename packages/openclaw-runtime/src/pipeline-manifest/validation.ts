@@ -22,6 +22,8 @@
  *   - Checksum matches the recomputed pipeline state
  */
 
+import { isSpecVersionCompatible } from "../checkpoint/checkpoint";
+import { SPEC_VERSION as RUNTIME_SPEC_VERSION } from "../spec-version";
 import { PipelineManifestSchema } from "./schemas";
 import type { PipelineManifest } from "./types";
 
@@ -72,6 +74,7 @@ export function validatePipelineManifest(input: unknown): ValidationReport {
 
   // Cross-validation rules — only run when schema parse succeeds, since
   // they assume well-formed input.
+  checkSpecVersionCompat(manifest, findings);
   checkSingleOrchestrator(manifest, findings);
   checkOrchestratorExistence(manifest, findings);
   checkRoutingSpecialistsExist(manifest, findings);
@@ -108,6 +111,25 @@ export class PipelineManifestInvalidError extends Error {
 }
 
 // ─── Individual rule checks ───────────────────────────────────────────
+
+function checkSpecVersionCompat(
+  m: PipelineManifest,
+  findings: ValidationFinding[],
+): void {
+  // Per spec 011 §validation rules: "Spec version compatible —
+  // spec_version is supported by the runtime." The substrate enforces
+  // forward-compatibility per spec 100: same major required, runtime's
+  // minor must be ≥ manifest's minor (an older substrate can't reliably
+  // parse fields a newer minor added).
+  if (!isSpecVersionCompatible(m.spec_version, RUNTIME_SPEC_VERSION)) {
+    findings.push({
+      severity: "error",
+      rule: "spec-version-compatible",
+      message: `manifest spec_version "${m.spec_version}" is incompatible with substrate "${RUNTIME_SPEC_VERSION}" (forward-compat: same major + substrate minor ≥ manifest minor)`,
+      path: "spec_version",
+    });
+  }
+}
 
 function checkSingleOrchestrator(
   m: PipelineManifest,
@@ -199,10 +221,15 @@ function checkRoutingSpecialistsExist(
       });
     }
     if (rule.then && !ids.has(rule.then)) {
+      // Per spec 006 §routing-rules, `then` is the specialist run after
+      // this rule completes — it MUST be an agent id, not a skill name.
+      // (Earlier draft tolerated this as a warning so unknown skill
+      // references didn't error; the spec is unambiguous so we tighten
+      // to an error and the manifest fails validation.)
       findings.push({
-        severity: "warning",
+        severity: "error",
         rule: "routing-then-exists",
-        message: `routing.then references "${rule.then}" — not in agents[]; if this is a skill name, ensure your runtime resolves it`,
+        message: `routing.then references unknown specialist "${rule.then}"`,
         path: `${path}.then`,
       });
     }

@@ -19,6 +19,23 @@ import type {
   HookScope,
   RegisteredHook,
 } from "./types";
+import { isVetoableHook } from "./types";
+
+/**
+ * Thrown when a registration is structurally inconsistent — the
+ * substrate refuses to register a handler that can't honor its
+ * capability surface (e.g. fire_and_forget on a vetoable hook).
+ */
+export class HookRegistrationError extends Error {
+  readonly category = "manifest_invalid" as const;
+  constructor(
+    public readonly hookName: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HookRegistrationError";
+  }
+}
 
 let __id_counter = 0;
 
@@ -48,13 +65,27 @@ export class HookRegistry {
    * to remove (rare — sessions auto-clear on close).
    */
   register<TPayload = unknown>(input: RegisterInput<TPayload>): string {
+    const fireMode: HookFireMode = input.fire_mode ?? "sync";
+
+    // Defensive: a vetoable hook registered fire_and_forget is
+    // structurally broken — the runner cannot honor a VETO from a
+    // handler whose return value it never awaits. Reject loudly at
+    // registration so the misconfiguration surfaces in manifest load,
+    // not silently at runtime when a handler returns VETO into the void.
+    if (fireMode === "fire_and_forget" && isVetoableHook(input.name)) {
+      throw new HookRegistrationError(
+        input.name,
+        `vetoable hook "${input.name}" cannot be registered as fire_and_forget — VETO returns from FaF handlers are unobservable; use fire_mode:"sync" or split the integration into two handlers (one sync vetoer + one FaF observer)`,
+      );
+    }
+
     const id = nextId();
     const scope: HookScope = input.scope ?? "pipeline";
     const record: RegisteredHook = {
       id,
       name: input.name,
       handler: input.handler as HookHandler,
-      fire_mode: input.fire_mode ?? "sync",
+      fire_mode: fireMode,
       scope,
       capabilities: input.capabilities ?? [],
       ...(input.label !== undefined ? { label: input.label } : {}),

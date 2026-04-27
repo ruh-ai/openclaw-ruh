@@ -44,7 +44,7 @@ export {
 } from "./schemas";
 
 export type { RegisterInput } from "./registry";
-export { HookRegistry } from "./registry";
+export { HookRegistry, HookRegistrationError } from "./registry";
 
 export type { HookRunnerOptions } from "./runner";
 export { HookRunner } from "./runner";

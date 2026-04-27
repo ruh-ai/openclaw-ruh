@@ -81,6 +81,37 @@ function baseManifest(): PipelineManifest {
   };
 }
 
+describe("validatePipelineManifest — spec_version compatibility (regression)", () => {
+  test("future major rejected with rule=spec-version-compatible", () => {
+    const m = { ...baseManifest(), spec_version: "999.0.0" };
+    const r = validatePipelineManifest(m);
+    expect(r.ok).toBe(false);
+    expect(
+      r.findings.some(
+        (f) =>
+          f.rule === "spec-version-compatible" &&
+          f.path === "spec_version" &&
+          f.message.includes("999.0.0"),
+      ),
+    ).toBe(true);
+  });
+
+  test("future minor (within same major) rejected — substrate cannot parse newer minor fields", () => {
+    const m = { ...baseManifest(), spec_version: "1.99.0" };
+    const r = validatePipelineManifest(m);
+    expect(r.ok).toBe(false);
+    expect(
+      r.findings.some((f) => f.rule === "spec-version-compatible"),
+    ).toBe(true);
+  });
+
+  test("same major.minor accepted (patch + prerelease may differ)", () => {
+    const m = { ...baseManifest(), spec_version: "1.0.42" };
+    const r = validatePipelineManifest(m);
+    expect(r.findings.some((f) => f.rule === "spec-version-compatible")).toBe(false);
+  });
+});
+
 describe("validatePipelineManifest — happy path", () => {
   test("canonical manifest passes with zero errors + zero warnings", () => {
     const r = validatePipelineManifest(baseManifest());
@@ -206,22 +237,39 @@ describe("validatePipelineManifest — routing specialists", () => {
     ).toBe(true);
   });
 
-  test("then chain emits a warning when not in agents (might be a skill)", () => {
+  test("unknown then-chain specialist is an error (spec 006 — `then` is a specialist id)", () => {
     const m = {
       ...baseManifest(),
       routing: {
         rules: [
-          { match: { stage: "x" }, specialist: "intake", then: "some-skill" },
+          { match: { stage: "x" }, specialist: "intake", then: "ghost-then" },
         ],
         fallback: "orchestrator",
       },
     };
     const r = validatePipelineManifest(m);
+    expect(r.ok).toBe(false);
     expect(
       r.findings.some(
-        (f) => f.rule === "routing-then-exists" && f.severity === "warning",
+        (f) =>
+          f.rule === "routing-then-exists" &&
+          f.severity === "error" &&
+          f.message.includes("ghost-then"),
       ),
     ).toBe(true);
+  });
+
+  test("then-chain that resolves to a real agent passes", () => {
+    const m = {
+      ...baseManifest(),
+      routing: {
+        rules: [
+          { match: { stage: "x" }, specialist: "intake", then: "orchestrator" },
+        ],
+        fallback: "orchestrator",
+      },
+    };
+    expect(validatePipelineManifest(m).ok).toBe(true);
   });
 });
 

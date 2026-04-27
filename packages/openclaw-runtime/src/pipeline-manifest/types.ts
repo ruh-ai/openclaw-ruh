@@ -17,6 +17,7 @@
 
 import type { ConvergenceLoopConfig } from "../eval/types";
 import type { DocIndexEntry, ImportJob } from "../config/types";
+import type { DecisionType } from "../decision-log/types";
 import type { MemoryAuthority } from "../memory/types";
 import type {
   FailurePolicy,
@@ -130,19 +131,28 @@ export interface RuntimeRequirements {
 // ─── Hook + decision-metadata refs (manifest-bound shapes) ────────────
 
 /**
- * Reference shape — the substrate's `hooks` module already defines
- * HookManifestEntry. We re-define here as a structural type to keep the
- * pipeline-manifest module's surface coherent without forcing every
- * caller through the hooks module.
+ * Reference shape — the substrate's `hooks` module owns the canonical
+ * shapes for hook names and capabilities. The schema validators reuse
+ * `HookNameSchema` and `HookCapabilitySchema` from there so a typo'd
+ * name (`not_a_hook`) or a malformed capability (`{ kind: "made_up" }`)
+ * fails parse instead of registering an inert hook.
+ *
+ * `name` is typed as `string` here even though Zod's `HookNameSchema`
+ * narrows to canonical | custom: at parse time, because the inferred
+ * type is plain `string` (the schema uses `.refine`, not a discriminated
+ * literal union).
  */
+import type { HookCapability } from "../hooks/types";
+export type { HookCapability, HookName } from "../hooks/types";
+
 export interface HookHandlerRegistration {
-  /** Canonical hook name OR `custom:<ns>:<event>`. */
+  /** Canonical hook name OR `custom:<ns>:<event>` (validated at parse). */
   readonly name: string;
   /** Workspace-relative path to the handler module. */
   readonly handler: string;
   readonly fire_mode?: "sync" | "fire_and_forget";
-  /** When omitted, the runtime applies per-hook defaults (loose mode). */
-  readonly capabilities?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+  /** Validated against the canonical 7 capability kinds at parse time. */
+  readonly capabilities?: ReadonlyArray<HookCapability>;
 }
 
 export type HookCapabilityMode = "strict" | "loose";
@@ -161,10 +171,16 @@ export interface CustomHookDeclaration {
  * resolves them into `DecisionMetadataSchemaBinding` at load time.
  */
 export interface ManifestDecisionMetadataBinding {
-  /** DecisionType from spec 005. Keep loose at the manifest layer. */
-  readonly type: string;
+  /** Must be a canonical DecisionType from spec 005. */
+  readonly type: DecisionType;
   /** Schema reference: `openclaw-v1:<Name>` or `schemas/<file>.json[#/$defs/Type]`. */
   readonly schema_ref: string;
+  /**
+   * Optional spec-version floor: the binding only applies when the
+   * runtime's spec version ≥ this value. Useful for additive metadata
+   * shapes that landed in a later minor.
+   */
+  readonly spec_version_min?: string;
 }
 
 // ─── Output validator config (referenced from manifest) ───────────────

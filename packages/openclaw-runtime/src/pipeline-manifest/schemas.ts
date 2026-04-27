@@ -20,6 +20,11 @@ import {
   OrchestratorRefSchema,
   RoutingRulesSchema,
 } from "../orchestrator/schemas";
+import {
+  HookCapabilitySchema,
+  HookFireModeSchema,
+  HookNameSchema,
+} from "../hooks/schemas";
 import type {
   AgentRef,
   CustomHookDeclaration,
@@ -186,14 +191,20 @@ void _runtimeCheck;
 
 // ─── HookHandlerRegistration / CustomHookDeclaration ──────────────────
 
-const HOOK_NAME = /^([a-z][a-z0-9_]*|custom:[a-z0-9_-]+:[a-z0-9_-]+(:[a-z0-9_-]+)*)$/;
-
+/**
+ * Reuses HookNameSchema / HookFireModeSchema / HookCapabilitySchema from
+ * the hooks module so the manifest validator stays in sync with the
+ * runtime. The previous round had a broad regex for the name and an
+ * untyped record for capabilities, which let typo'd hook names and
+ * malformed capability shapes pass validation only to fail (or worse,
+ * silently no-op) at runtime.
+ */
 export const HookHandlerRegistrationSchema = z
   .object({
-    name: z.string().regex(HOOK_NAME),
+    name: HookNameSchema,
     handler: z.string().min(1),
-    fire_mode: z.enum(["sync", "fire_and_forget"]).optional(),
-    capabilities: z.array(z.record(z.string(), z.unknown())).optional(),
+    fire_mode: HookFireModeSchema.optional(),
+    capabilities: z.array(HookCapabilitySchema).optional(),
   })
   .strict();
 
@@ -218,10 +229,18 @@ export const HookCapabilityModeSchema = z.enum(["strict", "loose"]);
 
 // ─── Decision metadata schema binding (manifest layer) ────────────────
 
+import { DecisionTypeSchema } from "../decision-log/schemas";
+
 export const ManifestDecisionMetadataBindingSchema = z
   .object({
-    type: z.string(),
+    /** Canonical DecisionType from spec 005 — narrowed to prevent typos. */
+    type: DecisionTypeSchema,
     schema_ref: z.string().min(1),
+    /** Optional spec_version floor (semver). Round-1 .strict() rejected this; spec 005 permits it. */
+    spec_version_min: z
+      .string()
+      .regex(SEM_VER, "must be semver (M.m.p[-prerelease])")
+      .optional(),
   })
   .strict();
 

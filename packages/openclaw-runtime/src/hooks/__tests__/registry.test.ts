@@ -1,6 +1,62 @@
 import { describe, expect, test } from "bun:test";
 import { HookRegistry } from "../registry";
 
+describe("HookRegistry — vetoable + fire_and_forget rejection (regression)", () => {
+  test("vetoable hook registered as fire_and_forget throws HookRegistrationError", async () => {
+    const reg = new HookRegistry();
+    const { HookRegistrationError } = await import("../registry");
+    expect(() =>
+      reg.register({
+        name: "memory_write_review_required",
+        fire_mode: "fire_and_forget",
+        handler: () => {},
+      }),
+    ).toThrow(HookRegistrationError);
+  });
+
+  test("error carries .category=manifest_invalid + the hook name", async () => {
+    const reg = new HookRegistry();
+    const { HookRegistrationError } = await import("../registry");
+    let err: unknown;
+    try {
+      reg.register({
+        name: "pre_tool_execution",
+        fire_mode: "fire_and_forget",
+        handler: () => {},
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(HookRegistrationError);
+    if (err instanceof HookRegistrationError) {
+      expect(err.category).toBe("manifest_invalid");
+      expect(err.hookName).toBe("pre_tool_execution");
+    }
+  });
+
+  test("vetoable hook registered SYNC works fine (no rejection)", () => {
+    const reg = new HookRegistry();
+    expect(() =>
+      reg.register({
+        name: "tool_approval_required",
+        fire_mode: "sync",
+        handler: () => {},
+      }),
+    ).not.toThrow();
+  });
+
+  test("non-vetoable hook registered FaF works fine (no rejection)", () => {
+    const reg = new HookRegistry();
+    expect(() =>
+      reg.register({
+        name: "post_tool_execution",
+        fire_mode: "fire_and_forget",
+        handler: () => {},
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("HookRegistry — register / unregister", () => {
   test("register returns an id; list reflects it", () => {
     const reg = new HookRegistry();

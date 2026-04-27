@@ -181,6 +181,38 @@ describe("HookHandlerRegistrationSchema", () => {
       }).success,
     ).toBe(false);
   });
+
+  test("typo'd hook name rejected (regression — round-1 broad regex accepted it)", () => {
+    expect(
+      HookHandlerRegistrationSchema.safeParse({
+        name: "not_a_hook",
+        handler: "x",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("malformed capability rejected (regression — round-1 took z.record(string,unknown))", () => {
+    expect(
+      HookHandlerRegistrationSchema.safeParse({
+        name: "session_start",
+        handler: "x",
+        capabilities: [{ kind: "made_up" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  test("well-formed canonical capability kinds accepted", () => {
+    expect(
+      HookHandlerRegistrationSchema.safeParse({
+        name: "memory_write_review_required",
+        handler: "x",
+        capabilities: [
+          { kind: "decision_log_emit" },
+          { kind: "send_email", from: "x@y", to_pattern: "*@y" },
+        ],
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe("CustomHookDeclarationSchema", () => {
@@ -201,13 +233,42 @@ describe("CustomHookDeclarationSchema", () => {
 });
 
 describe("ManifestDecisionMetadataBindingSchema", () => {
-  test("valid binding", () => {
+  test("valid binding for canonical DecisionType", () => {
     expect(
       ManifestDecisionMetadataBindingSchema.safeParse({
         type: "tool_execution_end",
         schema_ref: "openclaw-v1:ToolExecutionEndMetadata",
       }).success,
     ).toBe(true);
+  });
+
+  test("rejects arbitrary type strings (regression — round-1 accepted any string)", () => {
+    expect(
+      ManifestDecisionMetadataBindingSchema.safeParse({
+        type: "tool_execution_made_up",
+        schema_ref: "x",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("accepts optional spec_version_min (regression — round-1 .strict() rejected it)", () => {
+    expect(
+      ManifestDecisionMetadataBindingSchema.safeParse({
+        type: "milestone_evaluated",
+        schema_ref: "milestone.schema.json#/$defs/MilestoneEvidence",
+        spec_version_min: "1.1.0",
+      }).success,
+    ).toBe(true);
+  });
+
+  test("rejects malformed spec_version_min", () => {
+    expect(
+      ManifestDecisionMetadataBindingSchema.safeParse({
+        type: "tool_execution_end",
+        schema_ref: "x",
+        spec_version_min: "v1",
+      }).success,
+    ).toBe(false);
   });
 });
 

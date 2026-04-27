@@ -97,6 +97,26 @@ describe("MatchClauseSchema", () => {
       MatchClauseSchema.safeParse({ stage: "x", customField: 42 }).success,
     ).toBe(true);
   });
+
+  test("custom-matcher fields are PRESERVED on parse (regression — round-1 stripped them)", () => {
+    const r = MatchClauseSchema.parse({
+      custom: "matchers/tenant.ts",
+      tenant_tier: "gold",
+      region_class: "metro",
+    });
+    expect((r as Record<string, unknown>).tenant_tier).toBe("gold");
+    expect((r as Record<string, unknown>).region_class).toBe("metro");
+  });
+
+  test("nested custom field shapes (objects, arrays) survive parse", () => {
+    const r = MatchClauseSchema.parse({
+      custom: "matchers/x.ts",
+      meta: { weight: 0.7, tags: ["a", "b"] },
+    });
+    const meta = (r as { meta?: { weight: number; tags: string[] } }).meta;
+    expect(meta?.weight).toBe(0.7);
+    expect(meta?.tags).toEqual(["a", "b"]);
+  });
 });
 
 describe("FanOutSpecSchema", () => {
@@ -295,6 +315,27 @@ describe("HandoffContextSchema + OrchestratorHandoffSchema + OrchestratorResultS
       HandoffContextSchema.safeParse({ workspace_scope: "deliverables/" })
         .success,
     ).toBe(true);
+  });
+
+  test("HandoffContext rejects absolute workspace_scope (regression)", () => {
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "/" }).success,
+    ).toBe(false);
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "/etc" }).success,
+    ).toBe(false);
+  });
+
+  test("HandoffContext rejects Windows-absolute workspace_scope", () => {
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "C:\\evil" }).success,
+    ).toBe(false);
+  });
+
+  test("HandoffContext rejects scheme-prefixed workspace_scope", () => {
+    expect(
+      HandoffContextSchema.safeParse({ workspace_scope: "file:///etc" }).success,
+    ).toBe(false);
   });
 
   test("OrchestratorHandoff requires ULID parent_decision_id", () => {

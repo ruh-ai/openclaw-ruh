@@ -25,3 +25,5 @@ export { InMemoryDecisionStore } from "./in-memory-store";
 
 export type { DecisionLogOptions, DecisionMetadataSchemaBinding } from "./log";
 export { DecisionLog, DecisionMetadataValidationError, ulid } from "./log";
+
+export { DecisionTypeSchema } from "./schemas";

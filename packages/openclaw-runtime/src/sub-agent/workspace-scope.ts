@@ -29,7 +29,8 @@ export type ScopeViolationReason =
   | "scheme_prefix"
   | "control_chars"
   | "escapes_workspace"
-  | "outside_scope";
+  | "outside_scope"
+  | "scope_invalid";
 
 export type ScopeCheckResult =
   | { readonly outcome: "allow"; readonly normalizedPath: string }
@@ -52,7 +53,17 @@ export function checkScope(
   requestedPath: string,
   workspaceScope: string,
 ): ScopeCheckResult {
-  // Rule 1 — absolute paths
+  // Validate the SCOPE first. A malformed scope (absolute, scheme-
+  // prefixed, traversal-escaping) would otherwise normalize to the
+  // empty root and silently broaden access to the entire workspace —
+  // the round-1 implementation had this bug. A scope of "/" or
+  // "file://x" must reject every check, not allow everything.
+  const scopeError = validateScopeString(workspaceScope);
+  if (scopeError) {
+    return { outcome: "reject", reason: scopeError, details: "workspace_scope is malformed" };
+  }
+
+  // Rule 1 — absolute requested paths
   if (isAbsolute(requestedPath)) {
     return { outcome: "reject", reason: "absolute_path" };
   }
@@ -61,7 +72,7 @@ export function checkScope(
     return { outcome: "reject", reason: "scheme_prefix" };
   }
   // NUL + control chars (defence in depth — these break filesystem APIs)
-  if (hasControlChars(requestedPath) || hasControlChars(workspaceScope)) {
+  if (hasControlChars(requestedPath)) {
     return { outcome: "reject", reason: "control_chars" };
   }
 
@@ -74,7 +85,10 @@ export function checkScope(
 
   const normalizedScope = lexicalNormalize(workspaceScope) ?? "";
 
-  // Empty scope = workspace root. Anything inside the workspace is in scope.
+  // Empty scope = workspace root. Anything inside the workspace is in
+  // scope. Note: we only reach here AFTER `validateScopeString` confirmed
+  // the original scope was empty by intent (zero-length string), not
+  // by accident of normalization swallowing slashes.
   if (normalizedScope === "") {
     return { outcome: "allow", normalizedPath: normalized };
   }
@@ -85,6 +99,24 @@ export function checkScope(
   }
 
   return { outcome: "allow", normalizedPath: normalized };
+}
+
+/**
+ * Validate the scope itself before it's used as the containment baseline.
+ * Returns the violation reason or `undefined` when the scope is well-formed.
+ *
+ * Empty string is valid — that means "the entire workspace is in scope"
+ * (privileged / orchestrator-level use only).
+ */
+function validateScopeString(scope: string): ScopeViolationReason | undefined {
+  if (scope === "") return undefined; // empty scope is valid (workspace root)
+  if (isAbsolute(scope)) return "scope_invalid";
+  if (hasSchemePrefix(scope)) return "scope_invalid";
+  if (hasControlChars(scope)) return "control_chars";
+  // A scope that lexically resolves above its own root (e.g., "../etc")
+  // is meaningless — there's no containment baseline.
+  if (lexicalNormalize(scope) === undefined) return "scope_invalid";
+  return undefined;
 }
 
 /**

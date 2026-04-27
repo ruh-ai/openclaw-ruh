@@ -6,7 +6,7 @@
  * Spec target: docs/spec/openclaw-v1/ at version `1.0.0-rc.1`.
  */
 
-export const SPEC_VERSION = "1.0.0-rc.1" as const;
+export { SPEC_VERSION } from "./spec-version";
 
 // ─── Tool harness (Phase 1a) ───────────────────────────────────────────
 export * from "./tools";
