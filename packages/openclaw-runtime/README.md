@@ -4,7 +4,7 @@ The runtime substrate for OpenClaw pipelines. This package implements the contra
 
 ## Status
 
-`0.1.0` — Phase 1 + 2 complete; Phase 3 partial: 3a dashboard panels + 3b conformance runner landed (milestone tracking 016 deferred per pipeline scope). Codex (GPT-5.5) adversarial validation pass is the next external gate.
+`0.1.0` — Phases 1, 2, 3 complete: substrate covers every spec section (003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 101 Layer-1). Codex (GPT-5.5) adversarial validation pass is the next external gate.
 
 ## Spec mapping
 

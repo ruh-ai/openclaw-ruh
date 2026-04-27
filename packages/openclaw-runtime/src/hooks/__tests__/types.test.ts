@@ -17,7 +17,6 @@ describe("CANONICAL_HOOK_NAMES + isCanonicalHookName", () => {
     expect(CANONICAL_HOOK_NAMES).toContain("post_tool_execution");
     expect(CANONICAL_HOOK_NAMES).toContain("memory_write_review_required");
     expect(CANONICAL_HOOK_NAMES).toContain("checkpoint_drift_detected");
-    expect(CANONICAL_HOOK_NAMES).toContain("milestone_evaluated");
   });
 
   test("isCanonicalHookName matches every name in the array", () => {

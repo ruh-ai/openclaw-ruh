@@ -333,9 +333,6 @@ export const PipelineManifestSchema = z
     eval_suite_ref: z.string().min(1),
     convergence_loop: ConvergenceLoopConfigSchema.optional(),
 
-    // Milestones — opaque at the substrate (spec 016)
-    milestones: z.record(z.string(), z.unknown()).optional(),
-
     // Audit + observability
     decision_metadata_schemas: z
       .array(ManifestDecisionMetadataBindingSchema)

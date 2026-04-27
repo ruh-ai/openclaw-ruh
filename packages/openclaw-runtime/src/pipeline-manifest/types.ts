@@ -10,9 +10,9 @@
  * memory, config, eval, hooks, decision-log) reuse those types directly.
  *
  * For modules NOT yet substrate-implemented (output-validator config,
- * pipeline retry overrides, custom-hook declarations, milestones,
- * dashboard refs) the substrate ships minimal local shapes that match
- * the spec's JSON Schema. They can move to dedicated modules later.
+ * pipeline retry overrides, custom-hook declarations, dashboard refs)
+ * the substrate ships minimal local shapes that match the spec's JSON
+ * Schema. They can move to dedicated modules later.
  */
 
 import type { ConvergenceLoopConfig } from "../eval/types";
@@ -245,9 +245,6 @@ export interface PipelineManifest {
   // Verification
   readonly eval_suite_ref: string;
   readonly convergence_loop?: ConvergenceLoopConfig;
-
-  // Milestones (spec 016 — out of substrate scope; carried as opaque object)
-  readonly milestones?: Readonly<Record<string, unknown>>;
 
   // Audit + observability
   readonly decision_metadata_schemas?: ReadonlyArray<ManifestDecisionMetadataBinding>;

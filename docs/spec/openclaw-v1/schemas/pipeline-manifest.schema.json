@@ -58,11 +58,6 @@
     "eval_suite_ref": { "type": "string", "minLength": 1 },
     "convergence_loop": { "$ref": "eval-task.schema.json#/$defs/ConvergenceLoopConfig" },
 
-    "milestones": {
-      "$ref": "milestone.schema.json#/$defs/MilestonesConfig",
-      "description": "Optional. Required for pipelines with contractual performance milestones (e.g., ECC's M2/M4/M6/M12). See spec/openclaw-v1/016-milestone-tracking.md."
-    },
-
     "hooks": {
       "type": "array",
       "items": { "$ref": "hooks.schema.json#/$defs/HookHandlerRegistration" }

@@ -287,8 +287,8 @@ describe("ManifestDecisionMetadataBindingSchema", () => {
   test("accepts optional spec_version_min (regression — round-1 .strict() rejected it)", () => {
     expect(
       ManifestDecisionMetadataBindingSchema.safeParse({
-        type: "milestone_evaluated",
-        schema_ref: "milestone.schema.json#/$defs/MilestoneEvidence",
+        type: "tool_execution_end",
+        schema_ref: "openclaw-v1:ToolExecutionEndMetadata",
         spec_version_min: "1.1.0",
       }).success,
     ).toBe(true);

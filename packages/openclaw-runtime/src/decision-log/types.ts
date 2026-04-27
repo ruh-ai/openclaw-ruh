@@ -57,14 +57,6 @@ export type DecisionType =
   | "checkpoint_created"
   | "checkpoint_resumed"
   | "checkpoint_drift_detected"
-  // Milestones (since spec section 016)
-  | "milestone_classification"
-  | "milestone_reclassification"
-  | "milestone_autonomy_evaluated"
-  | "milestone_evaluated"
-  | "milestone_missed"
-  | "milestone_signoff_recorded"
-  | "milestone_exit_ramp_triggered"
   // Custom (pipeline-defined)
   | "custom";
 
@@ -108,13 +100,6 @@ export const DECISION_TYPES: ReadonlyArray<DecisionType> = [
   "checkpoint_created",
   "checkpoint_resumed",
   "checkpoint_drift_detected",
-  "milestone_classification",
-  "milestone_reclassification",
-  "milestone_autonomy_evaluated",
-  "milestone_evaluated",
-  "milestone_missed",
-  "milestone_signoff_recorded",
-  "milestone_exit_ramp_triggered",
   "custom",
 ];
 

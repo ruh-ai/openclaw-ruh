@@ -60,12 +60,7 @@ export type CanonicalHookName =
   // Checkpoint
   | "checkpoint_created"
   | "checkpoint_resumed"
-  | "checkpoint_drift_detected"
-  // Milestones
-  | "milestone_evaluated"
-  | "milestone_missed"
-  | "milestone_signoff_required"
-  | "milestone_exit_ramp_triggered";
+  | "checkpoint_drift_detected";
 
 export const CANONICAL_HOOK_NAMES: ReadonlyArray<CanonicalHookName> = [
   "session_start",
@@ -95,10 +90,6 @@ export const CANONICAL_HOOK_NAMES: ReadonlyArray<CanonicalHookName> = [
   "checkpoint_created",
   "checkpoint_resumed",
   "checkpoint_drift_detected",
-  "milestone_evaluated",
-  "milestone_missed",
-  "milestone_signoff_required",
-  "milestone_exit_ramp_triggered",
 ];
 
 /**
