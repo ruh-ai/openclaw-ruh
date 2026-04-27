@@ -1880,3 +1880,43 @@ Related: [[SPEC-admin-billing-control-plane]], [[015-admin-panel]], [[005-data-m
   - Creates a generic entitlement override for admin support workflows.
 
 All billing admin routes are `requireAuth` + `requireRole('admin')` and emit both audit events and billing-event records.
+
+---
+
+## Conformance
+
+OpenClaw v1 spec conformance check. Thin adapter over `@ruh/openclaw-runtime`'s `runConformance()` — the substrate is authoritative on validation rules; this endpoint is just the HTTP entry point.
+
+### `POST /api/conformance/check`
+Validate a pipeline manifest, a dashboard manifest, or both against OpenClaw spec v1.
+
+**Auth:** `requireAuth` (any logged-in user).
+
+**Body:**
+```json
+{
+  "pipelineManifest": { ... },   // optional
+  "dashboardManifest": { ... }   // optional
+}
+```
+At least one of the two fields must be present.
+
+**Response (`200`):**
+```json
+{
+  "spec_version": "1.0.0-rc.1",
+  "report": {
+    "ok": true,
+    "errors": 0,
+    "warnings": 0,
+    "findings": []
+  }
+}
+```
+
+`report.findings[]` items carry `severity`, `source`, `rule`, `message`, optional `path`, and `involves[]`. See [`packages/openclaw-runtime/src/conformance/types.ts`](../../packages/openclaw-runtime/src/conformance/types.ts) for the full shape.
+
+**Error semantics (substrate-driven):**
+- A malformed manifest is a *finding* in the report (`200` with `ok: false`), not a `400`. The response always carries the report so callers can show every actionable defect in one pass.
+- A pipeline supplied alone (without its dashboard manifest) surfaces `dashboard-manifest-required` per spec 101 — partial conformance is non-conformance.
+- Only the request-shape error (neither field provided) returns `400`.
