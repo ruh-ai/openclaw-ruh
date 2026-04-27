@@ -161,4 +161,96 @@ describe("crossCheckDeclaration", () => {
 
     expect(mismatches.some((m) => m.field === "available_stages")).toBe(true);
   });
+
+  test("flags runtime null when declaration restricts stages (H5)", () => {
+    // MyTool has availableStages = null (all stages); declaration restricts.
+    const declaration = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        stages: ["drafted", "validated"],
+      },
+    };
+    const parsed = parseToolDeclaration(declaration);
+    if (!parsed.ok) throw new Error("declaration should parse");
+    const mismatches = crossCheckDeclaration(parsed.declaration, new MyTool());
+    expect(mismatches.some((m) => m.field === "available_stages")).toBe(true);
+    const stageMismatch = mismatches.find((m) => m.field === "available_stages");
+    expect(stageMismatch?.runtime).toBe(null);
+  });
+
+  test("flags runtime null when declaration restricts modes (H5)", () => {
+    const declaration = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        modes: ["agent", "copilot"],
+      },
+    };
+    const parsed = parseToolDeclaration(declaration);
+    if (!parsed.ok) throw new Error("declaration should parse");
+    const mismatches = crossCheckDeclaration(parsed.declaration, new MyTool());
+    expect(mismatches.some((m) => m.field === "available_modes")).toBe(true);
+  });
+});
+
+describe("ToolDeclarationSchema strictness (H6, H7)", () => {
+  test("rejects unknown fields at the top level", () => {
+    const bad = { ...validDeclaration, hax: "extra" };
+    const result = parseToolDeclaration(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects unknown fields inside permissions", () => {
+    const bad = {
+      ...validDeclaration,
+      permissions: { ...validDeclaration.permissions, sneaky: true },
+    };
+    const result = parseToolDeclaration(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects duplicate stages", () => {
+    const bad = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        stages: ["drafted", "drafted"],
+      },
+    };
+    const result = parseToolDeclaration(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects duplicate modes", () => {
+    const bad = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        modes: ["agent", "agent"],
+      },
+    };
+    const result = parseToolDeclaration(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  test("accepts AgentDevStage values; rejects copilot phase names like plan/build/review (H7)", () => {
+    const accept = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        stages: ["drafted", "validated", "tested", "shipped", "running", "paused", "archived"],
+      },
+    };
+    expect(parseToolDeclaration(accept).ok).toBe(true);
+
+    const reject = {
+      ...validDeclaration,
+      permissions: {
+        ...validDeclaration.permissions,
+        stages: ["plan"], // not an AgentDevStage value
+      },
+    };
+    expect(parseToolDeclaration(reject).ok).toBe(false);
+  });
 });

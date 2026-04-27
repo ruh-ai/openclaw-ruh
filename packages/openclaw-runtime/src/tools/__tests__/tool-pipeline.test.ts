@@ -91,11 +91,17 @@ class SequentialMutator extends BaseTool<unknown, { ok: true }> {
 }
 
 class CtxMirror extends BaseTool<unknown, { mode: string }> {
-  readonly name = "ctx-mirror";
-  readonly description = "Reflects ctx.mode.";
-  readonly version = "0.1.0";
-  readonly specVersion = "1.0.0-rc.1";
+  readonly name: string = "ctx-mirror";
+  readonly description: string = "Reflects ctx.mode.";
+  readonly version: string = "0.1.0";
+  readonly specVersion: string = "1.0.0-rc.1";
   readonly inputSchema = z.object({});
+
+  // Read-only so the new BaseTool default permission policy doesn't gate this
+  // mirror — it just observes ctx and emits, never mutates state.
+  override isReadOnly() {
+    return true;
+  }
 
   async call(_input: unknown, ctx: ToolContext): Promise<ToolResult<{ mode: string }>> {
     return { success: true, output: { mode: ctx.mode } };
@@ -187,6 +193,95 @@ describe("executeTool", () => {
   });
 });
 
+describe("BaseTool default permissions (H1)", () => {
+  test("read-only tool is allowed by default", async () => {
+    class ReadTool extends BaseTool<unknown, unknown> {
+      readonly name = "read";
+      readonly description = "ro";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      async call(): Promise<ToolResult<unknown>> {
+        return { success: true, output: {} };
+      }
+    }
+    const tool = new ReadTool();
+    expect(tool.checkPermissions({}, baseCtx).allowed).toBe(true);
+  });
+
+  test("destructive tool requires approval in any mode", async () => {
+    class DestructiveTool extends BaseTool<unknown, unknown> {
+      readonly name = "del";
+      readonly description = "destroy";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isDestructive() {
+        return true;
+      }
+      async call(): Promise<ToolResult<unknown>> {
+        return { success: true, output: {} };
+      }
+    }
+    const tool = new DestructiveTool();
+    const decision = tool.checkPermissions({}, { ...baseCtx, mode: "agent" });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.requiresApproval).toBe(true);
+    }
+  });
+
+  test("write-capable (non-destructive) is gated in build/test/ship modes", async () => {
+    class WriteTool extends BaseTool<unknown, unknown> {
+      readonly name = "write";
+      readonly description = "writes";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      async call(): Promise<ToolResult<unknown>> {
+        return { success: true, output: {} };
+      }
+    }
+    const tool = new WriteTool();
+    expect(tool.checkPermissions({}, { ...baseCtx, mode: "build" }).allowed).toBe(false);
+    expect(tool.checkPermissions({}, { ...baseCtx, mode: "test" }).allowed).toBe(false);
+    expect(tool.checkPermissions({}, { ...baseCtx, mode: "ship" }).allowed).toBe(false);
+    expect(tool.checkPermissions({}, { ...baseCtx, mode: "agent" }).allowed).toBe(true);
+    expect(tool.checkPermissions({}, { ...baseCtx, mode: "copilot" }).allowed).toBe(true);
+  });
+});
+
+describe("tool_failed status (H2)", () => {
+  class FailingTool extends BaseTool<unknown, { reason: string }> {
+    readonly name = "fail";
+    readonly description = "always fails";
+    readonly version = "0.1.0";
+    readonly specVersion = "1.0.0-rc.1";
+    readonly inputSchema = z.object({});
+    override isReadOnly() {
+      return true;
+    }
+    async call(): Promise<ToolResult<{ reason: string }>> {
+      return { success: false, output: { reason: "intentional" }, error: "structured failure" };
+    }
+  }
+
+  test("tool returning success:false yields tool_failed status, not success", async () => {
+    const registry = new ToolRegistry();
+    registry.register(new FailingTool());
+    const result = await executeTool(registry, "fail", {}, baseCtx);
+    expect(result.status).toBe("tool_failed");
+    if (result.status === "tool_failed") {
+      expect(result.result.success).toBe(false);
+      expect(result.result.error).toBe("structured failure");
+      expect(result.events.some((e) => e.name === TOOL_EXECUTION_END)).toBe(true);
+    }
+  });
+});
+
 describe("executeTools (multi-tool)", () => {
   let registry: ToolRegistry;
 
@@ -229,5 +324,89 @@ describe("executeTools (multi-tool)", () => {
 
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.status === "success")).toBe(true);
+  });
+
+  test("queue order preserved: sequential mutator before concurrent batch propagates ctx (H3)", async () => {
+    // mutator (sequential) flips mode → "build"; then a concurrent ctx-mirror
+    // run should see mode === "build", not the original.
+    class ConcurrentMirror extends CtxMirror {
+      override readonly name: string = "concurrent-mirror";
+      override isReadOnly() {
+        return true;
+      }
+      override isConcurrencySafe() {
+        return true;
+      }
+    }
+    registry.register(new ConcurrentMirror());
+
+    const results = await executeTools(
+      registry,
+      [
+        { toolName: "mutator", input: {} },
+        { toolName: "concurrent-mirror", input: {} },
+      ],
+      baseCtx,
+    );
+
+    expect(results).toHaveLength(2);
+    const mirror = results[1];
+    expect(mirror?.status).toBe("success");
+    if (mirror?.status === "success") {
+      expect((mirror.result.output as { mode: string }).mode).toBe("build");
+    }
+  });
+
+  test("concurrent tools that return contextModifier have it stripped + warning emitted (H4)", async () => {
+    class BadConcurrentMutator extends BaseTool<unknown, { ok: true }> {
+      readonly name = "bad-concurrent-mutator";
+      readonly description = "concurrency-safe but returns modifier";
+      readonly version = "0.1.0";
+      readonly specVersion = "1.0.0-rc.1";
+      readonly inputSchema = z.object({});
+      override isReadOnly() {
+        return true;
+      }
+      override isConcurrencySafe() {
+        return true;
+      }
+      async call(): Promise<ToolResult<{ ok: true }>> {
+        return {
+          success: true,
+          output: { ok: true },
+          contextModifier: { mode: "build" },
+        };
+      }
+    }
+    registry.register(new BadConcurrentMutator());
+
+    const results = await executeTools(
+      registry,
+      [
+        { toolName: "bad-concurrent-mutator", input: {} },
+        { toolName: "ctx-mirror", input: {} },
+      ],
+      baseCtx,
+    );
+
+    expect(results).toHaveLength(2);
+    // Concurrent tool's contextModifier was stripped — the next sequential
+    // tool sees the ORIGINAL mode (agent), not the modifier's "build".
+    const mirror = results[1];
+    expect(mirror?.status).toBe("success");
+    if (mirror?.status === "success") {
+      expect((mirror.result.output as { mode: string }).mode).toBe("agent");
+    }
+    // The concurrent tool's result should now have NO contextModifier
+    const concurrent = results[0];
+    expect(concurrent?.status).toBe("success");
+    if (concurrent?.status === "success") {
+      expect(concurrent.result.contextModifier).toBeUndefined();
+      expect(
+        concurrent.result.events?.some(
+          (e) => e.name === "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
+        ),
+      ).toBe(true);
+    }
   });
 });

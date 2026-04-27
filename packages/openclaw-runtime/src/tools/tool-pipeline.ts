@@ -23,8 +23,26 @@ import type { ToolRegistry } from "./tool-registry";
 
 // ─── Pipeline result ───────────────────────────────────────────────────
 
+/**
+ * The pipeline distinguishes:
+ *   - 'success'        — pipeline ran cleanly AND tool returned success:true
+ *   - 'tool_failed'    — pipeline ran cleanly BUT tool returned success:false
+ *                         (structured app-level failure, not an exception)
+ *   - 'execution_error' — tool threw an exception during call()
+ *   - 'validation_error' — input failed inputSchema
+ *   - 'output_validation_error' — output failed outputSchema
+ *   - 'permission_denied' — checkPermissions denied (with or without approval gate)
+ *   - 'unavailable'    — tool not available in current stage or mode
+ *   - 'not_found'      — tool not registered
+ *
+ * Forcing 'tool_failed' as a separate status prevents the foot-gun where
+ * downstream code treats `status === "success"` as "the operation worked"
+ * when actually the tool reported a structured failure. Callers MUST handle
+ * both 'success' and 'tool_failed' explicitly.
+ */
 export type PipelineResult<TOutput = unknown> =
   | { readonly status: "success"; readonly toolName: string; readonly result: ToolResult<TOutput>; readonly events: ReadonlyArray<AgUiCustomEvent> }
+  | { readonly status: "tool_failed"; readonly toolName: string; readonly result: ToolResult<TOutput>; readonly events: ReadonlyArray<AgUiCustomEvent> }
   | { readonly status: "not_found"; readonly toolName: string }
   | { readonly status: "unavailable"; readonly toolName: string; readonly reason: string }
   | { readonly status: "validation_error"; readonly toolName: string; readonly error: string }
@@ -178,6 +196,16 @@ export async function executeTool<TOutput = unknown>(
     value: { toolName, executionId, success: result.success, error: result.error },
   });
 
+  // 12. Distinguish tool_failed (structured app-level failure) from success.
+  if (!result.success) {
+    return {
+      status: "tool_failed",
+      toolName,
+      result,
+      events,
+    };
+  }
+
   return {
     status: "success",
     toolName,
@@ -194,9 +222,16 @@ export interface ToolCall {
 }
 
 /**
- * Execute multiple tools, running concurrency-safe tools in parallel and
- * non-concurrent tools sequentially. Per spec 003, only sequential calls
- * may apply contextModifier; concurrent calls cannot.
+ * Execute multiple tools while preserving queue order. Adjacent runs of
+ * concurrency-safe tools fan out in parallel; non-concurrent tools run
+ * one at a time. Per spec 003: only sequential (non-concurrent) calls
+ * may apply contextModifier — concurrent tools that return one have it
+ * stripped from the returned result with a warning event.
+ *
+ * Order matters: a concurrent run that follows a sequential `mode`
+ * mutation MUST see the mutated mode, not the original. We honour that
+ * by walking calls in declared order and grouping adjacent concurrency-
+ * safe calls into a parallel batch.
  */
 export async function executeTools(
   registry: ToolRegistry,
@@ -204,37 +239,79 @@ export async function executeTools(
   ctx: ToolContext,
   options?: PipelineOptions,
 ): Promise<ReadonlyArray<PipelineResult>> {
-  const concurrent: ToolCall[] = [];
-  const sequential: ToolCall[] = [];
-
-  for (const call of calls) {
-    const tool = registry.get(call.toolName);
-    if (tool && tool.isConcurrencySafe()) {
-      concurrent.push(call);
-    } else {
-      sequential.push(call);
-    }
-  }
-
   const results: PipelineResult[] = [];
-
-  // Concurrent fan-out
-  if (concurrent.length > 0) {
-    const parallelResults = await Promise.all(
-      concurrent.map((c) => executeTool(registry, c.toolName, c.input, ctx, options)),
-    );
-    results.push(...parallelResults);
-  }
-
-  // Sequential — apply contextModifier as we go
   let currentCtx: ToolContext = ctx;
-  for (const call of sequential) {
+
+  let i = 0;
+  while (i < calls.length) {
+    const call = calls[i];
+    if (!call) {
+      i++;
+      continue;
+    }
+    const tool = registry.get(call.toolName);
+
+    // Group adjacent concurrency-safe tools into a parallel batch.
+    if (tool && tool.isConcurrencySafe()) {
+      const batch: ToolCall[] = [call];
+      let j = i + 1;
+      while (j < calls.length) {
+        const next = calls[j];
+        if (!next) break;
+        const nextTool = registry.get(next.toolName);
+        if (!nextTool || !nextTool.isConcurrencySafe()) break;
+        batch.push(next);
+        j++;
+      }
+
+      const batchResults = await Promise.all(
+        batch.map((c) => executeTool(registry, c.toolName, c.input, currentCtx, options)),
+      );
+
+      // Strip contextModifier from concurrent results — concurrent tools
+      // are not allowed to return one. We sanitize and emit a warning event.
+      for (const result of batchResults) {
+        if (
+          (result.status === "success" || result.status === "tool_failed") &&
+          result.result.contextModifier
+        ) {
+          const sanitizedResult: ToolResult = {
+            success: result.result.success,
+            output: result.result.output,
+            ...(result.result.error !== undefined ? { error: result.result.error } : {}),
+            events: [
+              ...(result.result.events ?? []),
+              {
+                type: "CUSTOM",
+                name: "CONCURRENT_CONTEXT_MODIFIER_STRIPPED",
+                value: {
+                  toolName: result.toolName,
+                  reason: "Concurrency-safe tools cannot return contextModifier; modifier ignored.",
+                },
+              },
+            ],
+          };
+          results.push({
+            ...result,
+            result: sanitizedResult as ToolResult<unknown>,
+          });
+        } else {
+          results.push(result);
+        }
+      }
+
+      i = j;
+      continue;
+    }
+
+    // Non-concurrent: run one, apply contextModifier, advance.
     const result = await executeTool(registry, call.toolName, call.input, currentCtx, options);
     results.push(result);
 
     if (result.status === "success" && result.result.contextModifier) {
       currentCtx = { ...currentCtx, ...result.result.contextModifier };
     }
+    i++;
   }
 
   return results;

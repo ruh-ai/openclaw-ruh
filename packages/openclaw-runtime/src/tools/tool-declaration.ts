@@ -16,34 +16,45 @@ import type { AgentDevStage, ExecutionMode } from "../types/lifecycle";
 
 // ─── Permission config (mirrors schemas/tool.schema.json#PermissionConfig) ─
 
+/**
+ * Stage vocabulary for tool declarations matches AgentDevStage from the
+ * runtime types (spec 002 lifecycle states). The earlier port carried
+ * additional copilot-phase names (plan/build/review/...) — those belong
+ * to the copilot UI flow, not the agent lifecycle, and have been removed.
+ */
+const StageEnum = z.enum([
+  "drafted",
+  "validated",
+  "tested",
+  "shipped",
+  "running",
+  "paused",
+  "archived",
+]);
+
+const ModeEnum = z.enum(["agent", "copilot", "build", "test", "ship"]);
+
 const PermissionConfigSchema = z
   .object({
-    stages: z
-      .array(
-        z.enum([
-          "drafted",
-          "validated",
-          "tested",
-          "shipped",
-          "running",
-          "plan",
-          "build",
-          "review",
-          "test",
-          "ship",
-          "reflect",
-        ]),
-      )
-      .optional(),
-    modes: z.array(z.enum(["agent", "copilot", "build", "test", "ship"])).optional(),
+    stages: z.array(StageEnum).optional(),
+    modes: z.array(ModeEnum).optional(),
     read_only: z.boolean(),
     destructive: z.boolean(),
     concurrency_safe: z.boolean(),
     requires_approval: z.boolean().optional(),
   })
+  .strict()
   .refine((v) => !(v.read_only && v.destructive), {
     message: "A tool cannot be both read_only and destructive.",
-  });
+  })
+  .refine(
+    (v) => !v.stages || new Set(v.stages).size === v.stages.length,
+    { message: "stages must be unique" },
+  )
+  .refine(
+    (v) => !v.modes || new Set(v.modes).size === v.modes.length,
+    { message: "modes must be unique" },
+  );
 
 export type PermissionConfig = z.infer<typeof PermissionConfigSchema>;
 
@@ -66,21 +77,25 @@ const ToolKindSchema = z.union([
 
 // ─── Tool declaration ──────────────────────────────────────────────────
 
-const CredentialRefSchema = z.object({
-  ref: z.string().min(1),
-  schema_ref: z.string().optional(),
-});
+const CredentialRefSchema = z
+  .object({
+    ref: z.string().min(1),
+    schema_ref: z.string().optional(),
+  })
+  .strict();
 
-export const ToolDeclarationSchema = z.object({
-  id: z.string().regex(/^[a-z][a-z0-9-]*$/),
-  spec_version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$/),
-  name: z.string().min(1),
-  description: z.string().min(1),
-  tool_kind: ToolKindSchema,
-  permissions: PermissionConfigSchema,
-  credentials: CredentialRefSchema.optional(),
-  config: z.record(z.string(), z.unknown()).optional(),
-});
+export const ToolDeclarationSchema = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9-]*$/),
+    spec_version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$/),
+    name: z.string().min(1),
+    description: z.string().min(1),
+    tool_kind: ToolKindSchema,
+    permissions: PermissionConfigSchema,
+    credentials: CredentialRefSchema.optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
 
 export type ToolDeclaration = z.infer<typeof ToolDeclarationSchema>;
 
@@ -147,36 +162,58 @@ export function crossCheckDeclaration(
     });
   }
 
-  // Stages: declaration's `stages` field is a subset constraint. If declared, the
-  // runtime's availableStages must be either null (broader) or a subset.
+  // Stages: declaration's `stages` field is a subset constraint. The runtime
+  // is only conformant if its availableStages is a non-strict subset of the
+  // declaration. Three failure cases:
+  //   1. Runtime null while declaration is restricted (runtime allows ALL,
+  //      declaration only some) → mismatch (runtime broader)
+  //   2. Runtime list contains stages NOT in the declared list → mismatch
+  //   3. Both null OR runtime is a subset → ok
   const declaredStages = declaration.permissions.stages;
-  if (declaredStages && tool.availableStages !== null) {
-    const runtimeSet = new Set<AgentDevStage>(tool.availableStages);
-    const onlyInRuntime = tool.availableStages.filter(
-      (s) => !declaredStages.includes(s as (typeof declaredStages)[number]),
-    );
-    if (onlyInRuntime.length > 0) {
+  if (declaredStages) {
+    if (tool.availableStages === null) {
       mismatches.push({
         field: "available_stages",
         declared: declaredStages,
-        runtime: Array.from(runtimeSet),
-        message: `Tool "${tool.name}" runtime availableStages includes ${onlyInRuntime.join(", ")} not in declaration.`,
+        runtime: null,
+        message: `Tool "${tool.name}" runtime availableStages is null (all stages) but declaration restricts to ${declaredStages.join(", ")}.`,
       });
+    } else {
+      const onlyInRuntime = tool.availableStages.filter(
+        (s) => !declaredStages.includes(s as (typeof declaredStages)[number]),
+      );
+      if (onlyInRuntime.length > 0) {
+        mismatches.push({
+          field: "available_stages",
+          declared: declaredStages,
+          runtime: Array.from(new Set<AgentDevStage>(tool.availableStages)),
+          message: `Tool "${tool.name}" runtime availableStages includes ${onlyInRuntime.join(", ")} not in declaration.`,
+        });
+      }
     }
   }
 
   const declaredModes = declaration.permissions.modes;
-  if (declaredModes && tool.availableModes !== null) {
-    const onlyInRuntime = tool.availableModes.filter(
-      (m) => !declaredModes.includes(m as ExecutionMode),
-    );
-    if (onlyInRuntime.length > 0) {
+  if (declaredModes) {
+    if (tool.availableModes === null) {
       mismatches.push({
         field: "available_modes",
         declared: declaredModes,
-        runtime: Array.from(tool.availableModes),
-        message: `Tool "${tool.name}" runtime availableModes includes ${onlyInRuntime.join(", ")} not in declaration.`,
+        runtime: null,
+        message: `Tool "${tool.name}" runtime availableModes is null (all modes) but declaration restricts to ${declaredModes.join(", ")}.`,
       });
+    } else {
+      const onlyInRuntime = tool.availableModes.filter(
+        (m) => !declaredModes.includes(m as ExecutionMode),
+      );
+      if (onlyInRuntime.length > 0) {
+        mismatches.push({
+          field: "available_modes",
+          declared: declaredModes,
+          runtime: Array.from(tool.availableModes),
+          message: `Tool "${tool.name}" runtime availableModes includes ${onlyInRuntime.join(", ")} not in declaration.`,
+        });
+      }
     }
   }
 

@@ -132,7 +132,38 @@ export abstract class BaseTool<TInput = unknown, TOutput = unknown>
 
   abstract call(input: TInput, ctx: ToolContext): Promise<ToolResult<TOutput>>;
 
-  checkPermissions(_input: TInput, _ctx: ToolContext): PermissionDecision {
+  /**
+   * Default permission policy from spec 003 — driven by the flag methods + mode.
+   *
+   * - isReadOnly() && agent/copilot mode → allowed
+   * - isReadOnly() && build/test/ship → allowed (read-only is always safe)
+   * - isDestructive() → always requires approval (agent mode included; the runtime
+   *   may still bypass via mode-specific allowlists, but the default is "needs approval")
+   * - non-read-only, non-destructive (write-capable but reversible) → allowed in agent
+   *   and copilot modes, requires approval in build/test/ship modes
+   *
+   * Concrete tools override this when they need finer-grained policy (e.g.,
+   * sandbox-exec with a per-command allowlist).
+   */
+  checkPermissions(_input: TInput, ctx: ToolContext): PermissionDecision {
+    if (this.isReadOnly()) {
+      return { allowed: true };
+    }
+    if (this.isDestructive()) {
+      return {
+        allowed: false,
+        reason: `Tool "${this.name}" is destructive and requires approval.`,
+        requiresApproval: true,
+      };
+    }
+    // Write-capable but not destructive: allowed at runtime; gated in build/test/ship.
+    if (ctx.mode === "build" || ctx.mode === "test" || ctx.mode === "ship") {
+      return {
+        allowed: false,
+        reason: `Tool "${this.name}" writes state and requires approval in "${ctx.mode}" mode.`,
+        requiresApproval: true,
+      };
+    }
     return { allowed: true };
   }
 
