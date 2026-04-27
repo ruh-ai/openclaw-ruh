@@ -4,7 +4,7 @@ The runtime substrate for OpenClaw pipelines. This package implements the contra
 
 ## Status
 
-`0.1.0` — Phase 1 complete (1a → 1h) + Phase 2 complete (2a orchestrator, 2b sub-agent, 2c eval task, 2d pipeline manifest). Substrate now covers every spec section in Phases 1+2+3 of the OpenClaw v1 spec. Codex (GPT-5.5) adversarial validation pass is the next external gate.
+`0.1.0` — Phase 1 + 2 complete; Phase 3 partial: 3a dashboard panels + 3b conformance runner landed (milestone tracking 016 deferred per pipeline scope). Codex (GPT-5.5) adversarial validation pass is the next external gate.
 
 ## Spec mapping
 
@@ -17,11 +17,13 @@ The runtime substrate for OpenClaw pipelines. This package implements the contra
 | 007 Sub-agent | `src/sub-agent/` (Phase 2b) |
 | 008 Eval task | `src/eval/` (Phase 2c) |
 | 009 Config substrate | `src/config/` (Phase 1f) |
+| 010 Dashboard panels | `src/dashboard/` (Phase 3a) |
 | 011 Pipeline manifest | `src/pipeline-manifest/` (Phase 2d) |
 | 012 Checkpoint | `src/checkpoint/` (Phase 1g) |
 | 013 Hooks | `src/hooks/` (Phase 1h) |
 | 014 Error taxonomy | `src/error/` (Phase 1b) |
 | 015 Output validator | `src/parser/` (Phase 1c) |
+| 101 Conformance | `src/conformance/` (Phase 3b — Layer-1 slice) |
 
 ## Running tests
 
