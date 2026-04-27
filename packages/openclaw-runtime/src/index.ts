@@ -26,9 +26,11 @@ export * from "./memory";
 // ─── Config substrate: versioned multi-dimensional data (Phase 1f) ─────
 export * from "./config";
 
+// ─── Checkpoint + resume substrate (Phase 1g) ──────────────────────────
+export * from "./checkpoint";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
 
-// ─── Phase 1g-1h modules — added in subsequent commits ─────────────────
-// export * from "./checkpoint";
+// ─── Phase 1h modules — added in subsequent commits ────────────────────
 // export * from "./hooks";
