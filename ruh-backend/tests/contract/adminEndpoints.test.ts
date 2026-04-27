@@ -88,7 +88,25 @@ mock.module('../../src/sessionStore', () => ({
   getSessionByRefreshToken: mock(async () => null),
   deleteSession: mock(async () => {}),
   deleteUserSessions: mock(async () => {}),
+  // Required by /api/auth/switch-org. Bun's mock.module is process-global and
+  // first-wins — this file loads before authEndpoints alphabetically, so its
+  // mock is authoritative. Omitting this method left switch-org throwing
+  // `setActiveOrgId is not a function` at runtime.
+  setActiveOrgId: mock(async () => null),
   cleanExpiredSessions: mock(async () => 0),
+}));
+
+// accountLockoutStore is unmocked in every contract test. Without this,
+// /api/auth/login's failure path falls through to the real implementation,
+// which calls withConn → adminEndpoints' mockWithConn (the first-wins db
+// mock) → the INSERT INTO account_lockouts SQL doesn't match any if-branch
+// in mockWithConn → empty rows → undefined row.attempt_count → 500 instead
+// of the intended 401. Mocking the store here gives every contract test a
+// safe default.
+mock.module('../../src/accountLockoutStore', () => ({
+  getLockout: mock(async () => null),
+  recordFailedAttempt: mock(async () => ({ attemptCount: 1, locked: false })),
+  clearLockout: mock(async () => {}),
 }));
 
 mock.module('../../src/agentStore', () => ({
