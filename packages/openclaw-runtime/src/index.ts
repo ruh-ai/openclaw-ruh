@@ -6,7 +6,7 @@
  * Spec target: docs/spec/openclaw-v1/ at version `1.0.0-rc.1`.
  */
 
-export const SPEC_VERSION = "1.0.0-rc.1" as const;
+export { SPEC_VERSION } from "./spec-version";
 
 // ─── Tool harness (Phase 1a) ───────────────────────────────────────────
 export * from "./tools";
@@ -31,6 +31,18 @@ export * from "./checkpoint";
 
 // ─── Lifecycle hooks: registry + runner + capabilities (Phase 1h) ──────
 export * from "./hooks";
+
+// ─── Orchestrator protocol: routing + merge policy + handoff shapes (Phase 2a) ──
+export * from "./orchestrator";
+
+// ─── Sub-agent isolation: scope, agent URI, merge builder (Phase 2b) ──
+export * from "./sub-agent";
+
+// ─── Eval task + convergence loop substrate (Phase 2c) ────────────────
+export * from "./eval";
+
+// ─── Pipeline manifest: top-level artifact + cross-validation (Phase 2d) ──
+export * from "./pipeline-manifest";
 
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";

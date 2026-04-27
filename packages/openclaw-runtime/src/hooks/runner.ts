@@ -173,19 +173,48 @@ export class HookRunner {
     ret: HookHandlerReturn,
   ): void {
     if (!isVetoResult(ret)) return;
-    if (isVetoableHook(name)) return;
     if (!this.#opts.decisionLog) return;
-    void this.#opts.decisionLog.emit({
-      type: "hook_failed",
-      description: `handler "${rec.label ?? rec.id}" returned VETO from non-veto hook "${name}" — ignored`,
-      metadata: {
-        hook_name: name,
-        handler_id: rec.id,
-        error: "veto_returned_from_non_veto_hook",
-        veto_reason: ret.reason,
-        scope: rec.scope,
-        fire_mode: rec.fire_mode,
-      },
-    });
+
+    // Two cases the runner cannot honor a VETO and must surface as a
+    // hook_failed:
+    //   1. Non-vetoable hook returned VETO  → spec ignores VETO; warn.
+    //   2. Vetoable hook in fire_and_forget mode → registry should have
+    //      rejected this at register time, but if some adapter bypassed
+    //      register, the FaF path can't surface VETO since the calling
+    //      pipeline never awaited the handler. Emit hook_failed so the
+    //      misconfiguration is visible.
+    const vetoable = isVetoableHook(name);
+    const faf = rec.fire_mode === "fire_and_forget";
+    if (!vetoable) {
+      void this.#opts.decisionLog.emit({
+        type: "hook_failed",
+        description: `handler "${rec.label ?? rec.id}" returned VETO from non-veto hook "${name}" — ignored`,
+        metadata: {
+          hook_name: name,
+          handler_id: rec.id,
+          error: "veto_returned_from_non_veto_hook",
+          veto_reason: ret.reason,
+          scope: rec.scope,
+          fire_mode: rec.fire_mode,
+        },
+      });
+      return;
+    }
+    if (faf) {
+      void this.#opts.decisionLog.emit({
+        type: "hook_failed",
+        description: `handler "${rec.label ?? rec.id}" returned VETO from fire_and_forget hook "${name}" — unobservable, dropped`,
+        metadata: {
+          hook_name: name,
+          handler_id: rec.id,
+          error: "veto_returned_from_fire_and_forget_handler",
+          veto_reason: ret.reason,
+          scope: rec.scope,
+          fire_mode: rec.fire_mode,
+        },
+      });
+      return;
+    }
+    // Vetoable + sync — handled in the sync branch of fire(); nothing to do here.
   }
 }

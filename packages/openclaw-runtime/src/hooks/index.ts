@@ -22,6 +22,7 @@ export {
   CANONICAL_HOOK_NAMES,
   VETOABLE_HOOK_NAMES,
   HOOK_CAPABILITY_KINDS,
+  CUSTOM_HOOK_NAME_PATTERN,
   isCustomHookName,
   isCanonicalHookName,
   isVetoableHook,
@@ -44,7 +45,7 @@ export {
 } from "./schemas";
 
 export type { RegisterInput } from "./registry";
-export { HookRegistry } from "./registry";
+export { HookRegistry, HookRegistrationError } from "./registry";
 
 export type { HookRunnerOptions } from "./runner";
 export { HookRunner } from "./runner";
