@@ -4106,6 +4106,56 @@ const SHIP_STEPS: ShipStepConfig[] = [
   { id: "github", label: "Push to GitHub", description: "Export agent template to a GitHub repository", icon: Github },
 ];
 
+/**
+ * Run the v1 spec conformance check against the agent's pipeline manifest.
+ * Returns a list of human-readable error messages — empty array means the
+ * manifest is conformant (or absent, which we treat as a non-blocking soft
+ * skip until Path B requires it).
+ *
+ * Path A tolerates the substrate's `dashboard-manifest-required` finding
+ * because we don't emit a dashboard manifest yet. Path B will remove that
+ * filter once the dashboard side ships.
+ */
+async function runDeployConformanceCheck(
+  agentSandboxId: string | null,
+  apiBase: string,
+): Promise<string[]> {
+  if (!agentSandboxId) return [];
+  try {
+    const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+    const manifestJson = await readWorkspaceFile(
+      agentSandboxId,
+      ".openclaw/plan/pipeline-manifest.json",
+    );
+    if (!manifestJson) {
+      // No manifest yet — Plan stage didn't emit one. Soft skip rather
+      // than block: the loud signal is missing manifest, not a malformed
+      // one. Path B will turn this into a hard block.
+      console.warn("[ship-conformance] No pipeline-manifest.json — skipping conformance check");
+      return [];
+    }
+    const manifest = JSON.parse(manifestJson) as unknown;
+    const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+    const res = await fetchBackendWithAuth(`${apiBase}/api/conformance/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pipelineManifest: manifest }),
+    });
+    if (!res.ok) {
+      console.warn(`[ship-conformance] /api/conformance/check returned ${res.status}; skipping`);
+      return [];
+    }
+    type Finding = { severity: "error" | "warning"; rule: string; message: string };
+    const data = (await res.json()) as { report: { findings: Finding[] } };
+    return data.report.findings
+      .filter((f) => f.severity === "error" && f.rule !== "dashboard-manifest-required")
+      .map((f) => `[${f.rule}] ${f.message}`);
+  } catch (err) {
+    console.warn("[ship-conformance] check failed; deploying anyway:", err);
+    return [];
+  }
+}
+
 // ─── Feature-mode Merge stage (replaces Ship when on a feature branch) ────
 
 function StageMerge({ agentId, branchName, featureTitle, agentName }: {
@@ -4273,6 +4323,25 @@ function StageShip({
     setGithubError(null);
     setSaveError(null);
     setStepStatuses({ save: "pending", deploy: "pending", github: "pending" });
+
+    // Step 0: Validate the pipeline manifest against the OpenClaw v1 spec via
+    // the substrate's runConformance(). Path A scope: only the pipeline
+    // manifest is emitted today, so we expect (and tolerate) the
+    // `dashboard-manifest-required` finding. Path B will emit the dashboard
+    // manifest and remove that exception.
+    const conformanceErrors = await runDeployConformanceCheck(
+      store.agentSandboxId,
+      API_BASE,
+    );
+    if (conformanceErrors.length > 0) {
+      setSaveError(
+        `Pipeline manifest is not v1-conformant — fix these before deploy:\n - ${conformanceErrors.join("\n - ")}`,
+      );
+      setStepStatuses((prev) => ({ ...prev, save: "failed" }));
+      store.setDeployStatus("failed");
+      setDeploying(false);
+      return;
+    }
 
     // Step 1: Save agent
     setStepStatuses((prev) => ({ ...prev, save: "running" }));
