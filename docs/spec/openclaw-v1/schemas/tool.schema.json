@@ -65,10 +65,10 @@
         "stages": {
           "type": "array",
           "items": {
-            "enum": ["drafted", "validated", "tested", "shipped", "running", "plan", "build", "review", "test", "ship", "reflect"]
+            "enum": ["drafted", "validated", "tested", "shipped", "running", "paused", "archived"]
           },
           "uniqueItems": true,
-          "description": "Lifecycle stages where this tool may be invoked. Omit or null = all stages."
+          "description": "Lifecycle stages where this tool may be invoked. Values match the AgentDevStage enum from spec section 002 (lifecycle states). Omit or null = all stages. The earlier draft mixed copilot phase names (plan/build/review/test/ship/reflect) with lifecycle stages — those have been removed; copilot phases are not stages."
         },
         "modes": {
           "type": "array",
