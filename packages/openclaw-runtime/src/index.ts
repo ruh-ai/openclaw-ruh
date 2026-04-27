@@ -20,11 +20,13 @@ export * from "./parser";
 // ─── Decision log + redaction + in-memory store (Phase 1d) ─────────────
 export * from "./decision-log";
 
+// ─── Memory model: tier/lane authority + Memory facade (Phase 1e) ──────
+export * from "./memory";
+
 // ─── Lifecycle types ──────────────────────────────────────────────────
 export type { AgentDevStage, PipelineDevStage, ExecutionMode, SubAgentStatus } from "./types";
 
-// ─── Phase 1e-1h modules — added in subsequent commits ─────────────────
-// export * from "./memory";
+// ─── Phase 1f-1h modules — added in subsequent commits ─────────────────
 // export * from "./config";
 // export * from "./checkpoint";
 // export * from "./hooks";
