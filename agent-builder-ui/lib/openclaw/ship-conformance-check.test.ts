@@ -10,6 +10,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   runDeployConformanceCheckWithDeps,
+  strictReadWorkspaceFile,
   type ShipConformanceDeps,
 } from "./ship-conformance-check";
 
@@ -246,5 +247,121 @@ describe("runDeployConformanceCheck — sandbox readiness", () => {
     // Empty workspace read on a real sandbox id → skipped (Path A)
     const out = await runDeployConformanceCheckWithDeps("any-sandbox", API_BASE, deps);
     expect(out).toEqual({ status: "skipped" });
+  });
+});
+
+// ─── strictReadWorkspaceFile — the production wrapper's strict reader ───
+
+describe("strictReadWorkspaceFile — distinguishes 404 from infra failure", () => {
+  const MANIFEST_PATH = ".openclaw/plan/pipeline-manifest.json";
+  const COPILOT_RE = /\/workspace-copilot\/file\?/;
+  const MAIN_RE = /\/workspace\/file\?/;
+
+  // Helper: wire a fake fetchAuth that maps URL pattern → response.
+  function fakeFetch(routes: { copilot?: () => Response; main?: () => Response }) {
+    return mock(async (url: string) => {
+      if (COPILOT_RE.test(url) && routes.copilot) return routes.copilot();
+      if (MAIN_RE.test(url) && routes.main) return routes.main();
+      throw new Error(`fakeFetch: no route for ${url}`);
+    });
+  }
+
+  test("copilot 200 → returns content (does not fall back to main)", async () => {
+    const mainSpy = mock(async () => new Response("should not be called", { status: 500 }));
+    const fetchAuth = mock(async (url: string) => {
+      if (COPILOT_RE.test(url)) return jsonResponse({ content: "manifest body" });
+      return mainSpy(url);
+    });
+    const result = await strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth);
+    expect(result).toBe("manifest body");
+    expect(mainSpy).not.toHaveBeenCalled();
+  });
+
+  test("copilot 404 + main 200 → returns main content", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () => new Response("missing", { status: 404 }),
+      main: () => jsonResponse({ content: "merged body" }),
+    });
+    const result = await strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth);
+    expect(result).toBe("merged body");
+  });
+
+  test("copilot 404 + main 404 → returns null (legitimate Path A skip)", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () => new Response("missing", { status: 404 }),
+      main: () => new Response("missing", { status: 404 }),
+    });
+    const result = await strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth);
+    expect(result).toBeNull();
+  });
+
+  test("copilot 401 → throws (does NOT fall back, does NOT silently skip — P1 fix)", async () => {
+    const mainSpy = mock(async () => jsonResponse({ content: "should not see this" }));
+    const fetchAuth = mock(async (url: string) => {
+      if (COPILOT_RE.test(url)) return new Response("unauthorized", { status: 401 });
+      return mainSpy(url);
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/HTTP 401/);
+    expect(mainSpy).not.toHaveBeenCalled();
+  });
+
+  test("copilot 500 → throws (P1 fix — server error must not be silenced)", async () => {
+    const fetchAuth = mock(async () => new Response("internal error", { status: 500 }));
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  test("copilot 404 + main 401 → throws (P1 fix — auth drop on fallback path)", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () => new Response("missing", { status: 404 }),
+      main: () => new Response("unauthorized", { status: 401 }),
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/workspace read.*HTTP 401/);
+  });
+
+  test("copilot 404 + main 503 → throws (P1 fix — backend outage on fallback)", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () => new Response("missing", { status: 404 }),
+      main: () => new Response("unavailable", { status: 503 }),
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/HTTP 503/);
+  });
+
+  test("200 with non-JSON body → throws", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () =>
+        new Response("<html>500 error</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/non-JSON/);
+  });
+
+  test("200 with content: undefined → throws (malformed backend response)", async () => {
+    const fetchAuth = fakeFetch({
+      copilot: () => jsonResponse({ path: MANIFEST_PATH }), // missing content
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/no content string/);
+  });
+
+  test("network error during copilot read → throws", async () => {
+    const fetchAuth = mock(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await expect(
+      strictReadWorkspaceFile(SANDBOX, MANIFEST_PATH, API_BASE, fetchAuth),
+    ).rejects.toThrow(/ECONNREFUSED/);
   });
 });

@@ -44,6 +44,21 @@ interface ConformanceFinding {
  * Dependencies — injected so the gate is testable without hitting the real
  * workspace or backend. Production callers use the default in
  * `runDeployConformanceCheck`.
+ *
+ * `readWorkspaceFile` contract is **strict** (different from the shared
+ * `workspace-writer.ts` helper):
+ *   - returns content string when the file exists
+ *   - returns null **only** when the backend reports 404 (legitimate absence)
+ *   - throws on any other failure — auth (401/403), server (5xx), malformed
+ *     response, network error, parse error
+ *
+ * The strictness matters: the shared `readWorkspaceFile` in
+ * `workspace-writer.ts` collapses every non-OK response and parse error to
+ * null. That's fine for UI display callers (missing file and backend outage
+ * render the same "no content" empty state), but it's wrong for a deploy
+ * gate. If we cannot tell the difference between "manifest absent" (Path A
+ * soft-skip) and "validator could not run" (must block), the gate becomes
+ * theater — a 401 mid-deploy would silently bypass conformance.
  */
 export interface ShipConformanceDeps {
   readWorkspaceFile: (sandboxId: string, path: string) => Promise<string | null>;
@@ -56,8 +71,15 @@ export interface ShipConformanceDeps {
 // ─── Public API ───────────────────────────────────────────────────────────
 
 /**
- * Production entry point — wires the real workspace reader + auth-aware
- * fetch into the testable core below.
+ * Production entry point — wires a **strict** workspace reader (404 → null,
+ * everything else → throw) and an auth-aware fetch into the testable core.
+ *
+ * The strict reader is intentionally NOT the shared `readWorkspaceFile` in
+ * `workspace-writer.ts`. That helper collapses every error to null so UI
+ * callers can render a uniform "no content" state. Reusing it here would
+ * let a 401 or 5xx during the workspace read silently look like a missing
+ * manifest, which the gate then treats as the Path A soft-skip — and the
+ * deploy proceeds without ever validating.
  */
 export async function runDeployConformanceCheck(
   agentSandboxId: string | null,
@@ -65,13 +87,85 @@ export async function runDeployConformanceCheck(
 ): Promise<ConformanceCheckOutcome> {
   if (!agentSandboxId) return { status: "skipped" };
 
-  const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
   const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+  const fetchAuth = (url: string, init?: RequestInit) =>
+    fetchBackendWithAuth(url, init);
 
   return runDeployConformanceCheckWithDeps(agentSandboxId, apiBase, {
-    readWorkspaceFile,
-    fetchBackend: (url, init) => fetchBackendWithAuth(url, init),
+    readWorkspaceFile: (sandboxId, path) =>
+      strictReadWorkspaceFile(sandboxId, path, apiBase, fetchAuth),
+    fetchBackend: (url, init) => fetchAuth(url, init),
   });
+}
+
+/**
+ * Strict workspace read for the conformance gate.
+ *
+ * Tries the copilot workspace first (where Plan-complete writes), falls
+ * back to the main workspace (where the build merge step copies it).
+ *
+ * Return contract:
+ *   - `string` — file content
+ *   - `null` — backend returned 404 from BOTH copilot and main workspace
+ *     (file genuinely doesn't exist anywhere yet)
+ *   - throws — any other condition (auth failure, 5xx, malformed JSON,
+ *     network error, missing `content` field on a 200 response). The
+ *     gate's caller catches and converts to `{ status: "blocked" }`.
+ *
+ * Exported for direct unit testing — callers should use
+ * `runDeployConformanceCheck`, not this directly.
+ */
+export async function strictReadWorkspaceFile(
+  sandboxId: string,
+  path: string,
+  apiBase: string,
+  fetchAuth: (url: string, init?: RequestInit) => Promise<Response>,
+): Promise<string | null> {
+  const enc = encodeURIComponent(path);
+
+  // Copilot workspace
+  const copilotUrl = `${apiBase}/api/sandboxes/${sandboxId}/workspace-copilot/file?path=${enc}`;
+  const copilotRes = await fetchAuth(copilotUrl);
+  if (copilotRes.ok) {
+    return extractContent(copilotRes, "workspace-copilot", path);
+  }
+  if (copilotRes.status !== 404) {
+    throw new Error(
+      `workspace-copilot read for "${path}" returned HTTP ${copilotRes.status}`,
+    );
+  }
+
+  // Fall back to main workspace
+  const mainUrl = `${apiBase}/api/sandboxes/${sandboxId}/workspace/file?path=${enc}`;
+  const mainRes = await fetchAuth(mainUrl);
+  if (mainRes.status === 404) return null; // legitimately absent in both
+  if (!mainRes.ok) {
+    throw new Error(
+      `workspace read for "${path}" returned HTTP ${mainRes.status}`,
+    );
+  }
+  return extractContent(mainRes, "workspace", path);
+}
+
+async function extractContent(
+  res: Response,
+  source: string,
+  path: string,
+): Promise<string> {
+  let data: { content?: unknown };
+  try {
+    data = (await res.json()) as { content?: unknown };
+  } catch (err) {
+    throw new Error(
+      `${source} read for "${path}" returned non-JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (typeof data.content !== "string") {
+    throw new Error(
+      `${source} read for "${path}" returned 200 but no content string`,
+    );
+  }
+  return data.content;
 }
 
 /**

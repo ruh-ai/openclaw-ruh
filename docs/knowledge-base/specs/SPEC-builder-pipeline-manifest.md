@@ -49,7 +49,7 @@ Pure function. No I/O, no LLM calls. Inputs:
 | `agentName`, `agentDescription` | copilot store `name` + `description` |
 | `plan` | `ArchitecturePlan` from copilot store |
 | `operatorIdentity` | optional; defaults to `'operator'` |
-| `llmProvider` + `llmModel` | optional; appear in `runtime.llm_providers` when both supplied |
+| `llmProvider` + `llmModel` | optional; populate `runtime.llm_providers[0]` when both supplied. **When omitted, the builder defaults to a single `{ provider: "anthropic", model: "claude-opus-4-7", via: "tenant-proxy" }` entry** to keep the manifest schema-valid (the substrate's `RuntimeRequirements.llm_providers` requires a non-empty array). Path B replaces this default with the real per-agent selection once the agent record carries provider/model through to Plan-complete. |
 | `tenancy`, `egress` | optional; default `'dedicated'` / `'open'` |
 | `devStage` | optional; default `'drafted'` |
 
@@ -93,21 +93,50 @@ gate surfaces a missing/invalid manifest loudly.
 
 `StageShip` in
 `agent-builder-ui/app/(platform)/agents/create/_components/copilot/LifecycleStepRenderer.tsx`
-runs `runDeployConformanceCheck()` as the first action in
-`handleDeploy`, before the Save step. The helper:
+calls `runDeployConformanceCheck()` (from
+`agent-builder-ui/lib/openclaw/ship-conformance-check.ts`) as the first
+action in `handleDeploy`, before the Save step. The gate returns a
+discriminated outcome:
 
-1. Reads `.openclaw/plan/pipeline-manifest.json` from the copilot workspace
+- `{ status: "ok" }` — manifest validates, deploy proceeds
+- `{ status: "skipped" }` — manifest absent in workspace (Path A
+  soft-skip; Path B will harden into a block)
+- `{ status: "blocked", reasons: string[] }` — deploy MUST NOT proceed.
+  Used both for substrate-reported errors AND for any infrastructure
+  failure that prevented validation from running.
+
+Internally the gate:
+
+1. Reads `.openclaw/plan/pipeline-manifest.json` via
+   `strictReadWorkspaceFile()` — copilot workspace first, falling back to
+   main workspace
 2. POSTs to `/api/conformance/check` with `{ pipelineManifest }`
 3. Filters out the substrate's `dashboard-manifest-required` finding
    (Path A doesn't emit a dashboard manifest yet — Path B will)
 4. Returns the remaining error messages
 
-If any errors remain, `handleDeploy` aborts with `setSaveError(...)`
-listing every blocking finding. No Save / Deploy / GitHub work runs.
+The gate **fails closed** on every infrastructure failure path:
 
-If the manifest file isn't found at all, the gate is a soft skip with a
-console warning. Path B will turn this into a hard block once manifest
-emission is on the critical path.
+| Failure | Outcome |
+|---|---|
+| Workspace read returns 404 in copilot AND main | `skipped` (legit absence) |
+| Workspace read returns 401/403 (auth dropped) | `blocked` |
+| Workspace read returns 5xx | `blocked` |
+| Workspace returns 200 with non-JSON body | `blocked` |
+| Workspace returns 200 with no `content` field | `blocked` |
+| Manifest JSON parse fails | `blocked` |
+| `/api/conformance/check` network failure | `blocked` |
+| `/api/conformance/check` returns non-OK status | `blocked` |
+| Conformance response not JSON / missing `report.findings[]` | `blocked` |
+| Substrate reports any error finding (excl. `dashboard-manifest-required`) | `blocked` |
+
+The gate intentionally does NOT use the shared
+`workspace-writer.ts::readWorkspaceFile` helper. That helper collapses
+every error to `null` so UI display callers can render a uniform "no
+content" state. Reusing it here would let a 401 or 5xx mid-deploy
+silently look like a missing manifest, which the gate would then treat
+as a soft-skip — bypassing conformance without the operator ever
+knowing.
 
 ### Authoring contract
 
@@ -132,7 +161,8 @@ This contract is intentionally narrow:
   - exactly one Tier-1 memory_authority row with the operator identity
   - operator identity defaults to `'operator'` when not supplied
   - integrations become `runtime.required_integrations`; omitted when empty
-  - `llm_providers` empty when provider/model not supplied
+  - `llm_providers` defaults to `[{anthropic, claude-opus-4-7, tenant-proxy}]` when provider/model not supplied (substrate requires non-empty array)
+  - default-emit (no llm args) round-trips through `runConformance()` with no fatal findings — regression pin for the P1 review finding
   - tenancy/egress/dev_stage defaults + overrides
   - `subAgents` ignored — Path A still emits single-agent (regression pin)
   - hooks / custom_hooks / config_docs / imports / merge_policy empty
