@@ -54,6 +54,50 @@ describe("normalizePlan — subAgents (B2 marker target)", () => {
     const plan = normalizePlan({});
     expect(plan.subAgents).toEqual([]);
   });
+
+  test("preserves architect-emitted type (specialist/monitor/orchestrator) — regression for P2 review finding", () => {
+    const plan = normalizePlan({
+      subAgents: [
+        { id: "intake", name: "Intake", type: "specialist", skills: [], trigger: "", autonomy: "fully_autonomous" },
+        { id: "watchdog", name: "Watchdog", type: "monitor", skills: [], trigger: "", autonomy: "report_only" },
+        { id: "sub-orch", name: "Sub Orch", type: "orchestrator", skills: [], trigger: "", autonomy: "requires_approval" },
+        { id: "default", name: "Default", skills: [], trigger: "" }, // type omitted → fallback
+      ],
+    });
+    expect(plan.subAgents.map((a) => a.type)).toEqual([
+      "specialist",
+      "monitor",
+      "orchestrator",
+      "worker",
+    ]);
+  });
+
+  test("preserves architect-emitted autonomy (fully_autonomous/report_only) — regression for P2 review finding", () => {
+    const plan = normalizePlan({
+      subAgents: [
+        { id: "auto", name: "Auto", skills: [], trigger: "", autonomy: "fully_autonomous" },
+        { id: "report", name: "Report", skills: [], trigger: "", autonomy: "report_only" },
+        { id: "approve", name: "Approve", skills: [], trigger: "", autonomy: "requires_approval" },
+        { id: "default", name: "Default", skills: [], trigger: "" }, // autonomy omitted → fallback
+      ],
+    });
+    expect(plan.subAgents.map((a) => a.autonomy)).toEqual([
+      "fully_autonomous",
+      "report_only",
+      "requires_approval",
+      "requires_approval",
+    ]);
+  });
+
+  test("invalid type/autonomy values fall back to safe defaults", () => {
+    const plan = normalizePlan({
+      subAgents: [
+        { id: "bad", name: "Bad", skills: [], trigger: "", type: "boss", autonomy: "yolo" },
+      ],
+    });
+    expect(plan.subAgents[0]?.type).toBe("worker");
+    expect(plan.subAgents[0]?.autonomy).toBe("requires_approval");
+  });
 });
 
 describe("normalizePlan — memoryAuthority (B4 marker target)", () => {
@@ -118,5 +162,66 @@ describe("normalizePlan — memoryAuthority (B4 marker target)", () => {
       ],
     });
     expect(plan.memoryAuthority).toBeUndefined();
+  });
+
+  // ── Lane format coercion (P1 review fix) ─────────────────────────────
+  test("snake_case lane is coerced to kebab-case (regression for P1 — substrate rejects snake_case)", () => {
+    const plan = normalizePlan({
+      memoryAuthority: [
+        { tier: 1, lane: "customer_success", writers: ["cs@example.com"] },
+        { tier: 1, lane: "field_ops", writers: ["ops@example.com"] },
+      ],
+    });
+    expect(plan.memoryAuthority?.map((r) => r.lane)).toEqual([
+      "customer-success",
+      "field-ops",
+    ]);
+  });
+
+  test("uppercase + camelCase + mixed-case lane all coerced to kebab-case", () => {
+    const plan = normalizePlan({
+      memoryAuthority: [
+        { tier: 1, lane: "CustomerSuccess", writers: ["cs@example.com"] },
+      ],
+    });
+    // toLowerCase happens but no underscore split → "customersuccess"
+    expect(plan.memoryAuthority?.[0]?.lane).toBe("customersuccess");
+  });
+
+  test("trailing/leading hyphens and double hyphens coerced", () => {
+    const plan = normalizePlan({
+      memoryAuthority: [
+        { tier: 1, lane: "-customer__success-", writers: ["cs@example.com"] },
+      ],
+    });
+    expect(plan.memoryAuthority?.[0]?.lane).toBe("customer-success");
+  });
+
+  test("lanes that cannot be coerced to kebab-case are dropped", () => {
+    const plan = normalizePlan({
+      memoryAuthority: [
+        // Spaces in middle, leading digit — neither passes KEBAB_CASE
+        { tier: 1, lane: "customer success team", writers: ["a@b.com"] },
+        { tier: 1, lane: "1st-priority", writers: ["a@b.com"] },
+        // Valid one to confirm filter selectivity
+        { tier: 1, lane: "valid_lane", writers: ["a@b.com"] },
+      ],
+    });
+    expect(plan.memoryAuthority).toEqual([
+      { tier: 1, lane: "valid-lane", writers: ["a@b.com"] },
+    ]);
+  });
+
+  test("kebab-case lane is preserved as-is", () => {
+    const plan = normalizePlan({
+      memoryAuthority: [
+        { tier: 1, lane: "estimating", writers: ["d@ecc.com"] },
+        { tier: 1, lane: "customer-success", writers: ["cs@ecc.com"] },
+      ],
+    });
+    expect(plan.memoryAuthority?.map((r) => r.lane)).toEqual([
+      "estimating",
+      "customer-success",
+    ]);
   });
 });

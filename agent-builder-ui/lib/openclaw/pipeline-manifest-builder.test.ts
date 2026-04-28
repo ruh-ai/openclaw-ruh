@@ -469,4 +469,37 @@ describe("buildPipelineManifest — plan.memoryAuthority elicitation (Path B Sli
     );
     expect(fatal).toEqual([]);
   });
+
+  test("normalizePlan-coerced kebab lanes pass runConformance() end-to-end (P1 regression)", async () => {
+    // Confirms the fix at the integration layer: when the architect
+    // emits snake_case (which it sometimes does despite the prompt),
+    // plan-formatter coerces to kebab-case BEFORE the manifest is
+    // built, so substrate validation accepts the result. Earlier the
+    // raw snake_case made it into manifest.memory_authority and the
+    // Ship gate blocked deploy with a "lane must be kebab-case" error.
+    const { normalizePlan } = await import("./plan-formatter");
+    const plan = normalizePlan({
+      ...basePlan(),
+      memoryAuthority: [
+        // Substrate enforces "every lane with Tier-2/3 writers also has a
+        // Tier-1 writer" — fixture satisfies that for both lanes.
+        { tier: 1, lane: "customer_success", writers: ["cs-lead@example.com"] },
+        { tier: 1, lane: "field_ops", writers: ["ops-lead@example.com"] },
+        { tier: 2, lane: "field_ops", writers: ["ops-helper@example.com"] },
+      ],
+    });
+    const manifest = buildPipelineManifest(baseArgs({ plan }));
+    const report = runConformance({ pipelineManifest: manifest });
+    const fatal = report.findings.filter(
+      (f) => f.severity === "error" && f.rule !== "dashboard-manifest-required",
+    );
+    expect(fatal).toEqual([]);
+    // Sanity: the manifest carries the COERCED lanes, not the raw input.
+    const m = manifest as { memory_authority: ReadonlyArray<{ lane: string }> };
+    expect(m.memory_authority.map((r) => r.lane)).toEqual([
+      "customer-success",
+      "field-ops",
+      "field-ops",
+    ]);
+  });
 });

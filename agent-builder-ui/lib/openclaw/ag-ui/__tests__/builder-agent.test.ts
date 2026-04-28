@@ -1001,6 +1001,15 @@ describe("PLAN_SYSTEM_INSTRUCTION — multi-agent + memory authority elicitation
     expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/single-operator agents/);
   });
 
+  test("documents lane format as kebab-case, NOT snake_case (regression for P1 review finding)", () => {
+    // The substrate's memory schema enforces /^[a-z][a-z0-9-]*$/ on lane.
+    // The prompt previously said "snake_case" which produced lanes like
+    // `customer_success` that failed Ship-time conformance. Pin the
+    // corrected guidance.
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("kebab-case");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("/^[a-z][a-z0-9-]*$/");
+  });
+
   test("registers PLAN_SUB_AGENTS and PLAN_MEMORY_AUTHORITY in CustomEventName", () => {
     expect(CustomEventName.PLAN_SUB_AGENTS).toBe("plan_sub_agents");
     expect(CustomEventName.PLAN_MEMORY_AUTHORITY).toBe("plan_memory_authority");

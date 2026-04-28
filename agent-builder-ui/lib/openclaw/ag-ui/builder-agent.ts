@@ -354,7 +354,7 @@ Emit ONLY when the TRD/PRD names specific identities authoritative on specific d
 
 Each entry is one (tier, lane, writers) row matching the OpenClaw v1 memory model:
 - \`tier\`: \`1\` (authoritative — overrides lower tiers), \`2\` (trusted — can write but tier-1 wins on conflict), or \`3\` (proposing — write requires confirmation)
-- \`lane\`: snake_case domain identifier (\`estimating\`, \`business\`, \`operations\`, etc.)
+- \`lane\`: **kebab-case** domain identifier — lowercase letters, digits, and hyphens only (\`estimating\`, \`business\`, \`customer-success\`, \`field-ops\`). Must match \`/^[a-z][a-z0-9-]*$/\`. Underscores, uppercase, and spaces are rejected by the substrate; the builder normalizes underscore-to-hyphen on parse but other invalid characters fail conformance at Ship time.
 - \`writers\`: identity strings (emails, role names) authorised at that (tier, lane)
 
 If no named authorities exist, leave authority empty and DO NOT emit. The manifest will fall back to a single Tier-1 \`main\` lane row with the operator as writer.
