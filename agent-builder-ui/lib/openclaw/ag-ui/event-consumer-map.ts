@@ -493,6 +493,14 @@ function consumePlanEnvVars(value: unknown, deps: ConsumerDeps): void {
   consumePlanSection(value, deps, CustomEventName.PLAN_ENV_VARS, "envVars", "envVars", "envvars");
 }
 
+function consumePlanSubAgents(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_SUB_AGENTS, "subAgents", "subAgents", "subagents");
+}
+
+function consumePlanMemoryAuthority(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(value, deps, CustomEventName.PLAN_MEMORY_AUTHORITY, "memoryAuthority", "memoryAuthority", "memory");
+}
+
 function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE);
   if (!deps.coPilotStore) return;
@@ -633,6 +641,8 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.PLAN_API_ENDPOINTS]: consumePlanApiEndpoints,
   [CustomEventName.PLAN_DASHBOARD_PAGES]: consumePlanDashboardPages,
   [CustomEventName.PLAN_ENV_VARS]: consumePlanEnvVars,
+  [CustomEventName.PLAN_SUB_AGENTS]: consumePlanSubAgents,
+  [CustomEventName.PLAN_MEMORY_AUTHORITY]: consumePlanMemoryAuthority,
   [CustomEventName.PLAN_COMPLETE]: consumePlanComplete,
   [CustomEventName.EMPLOYEE_REVEAL]: consumeEmployeeReveal,
 };

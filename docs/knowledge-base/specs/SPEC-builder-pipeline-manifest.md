@@ -27,10 +27,26 @@ trivial orchestrator, one Tier-1 memory_authority row in a generic
 id, operator as the writer). Empty `subAgents` preserves the Path A
 single-agent shape exactly.
 
-Path B Slice 2 (architect's Plan instruction extended to elicit fleets),
-Slice 3 (Build pipeline decomposed across sub-agents), and Slice 4
-(real per-role memory authority captured in Think/Plan) follow as
-separate PRs.
+**Path B Slice 2 (shipped)** — architect's Plan instruction now elicits
+fleets. The `PLAN_SYSTEM_INSTRUCTION` includes a new `<plan_sub_agents>`
+section that the architect emits ONLY when the TRD describes a workflow
+needing separate specialist agents. `extractPlanMarkers` parses the
+emission, `consumePlanSubAgents` routes it into the architecture plan's
+`subAgents` field via `updateArchitecturePlanSection`, and Slice 1's
+manifest builder picks it up automatically.
+
+**Path B Slice 4 (shipped)** — per-role memory authority captured from
+the TRD. The architect emits `<plan_memory_authority>` ONLY when the TRD
+names domain authorities (e.g., ECC's "Darrow is the lead estimator").
+Each row carries `tier` (1/2/3), `lane` (snake_case domain), and
+`writers[]` (identity strings). When elicited, the manifest carries the
+rows verbatim; when absent, the manifest falls back to the previous
+default (one Tier-1 'main' lane row with the operator as writer, plus
+one row per sub-agent for fleets).
+
+Path B Slice 3 (Build pipeline decomposed across sub-agents) follows
+as a separate PR — until then, fleet manifests are structurally valid
+but the per-sub-agent file trees they reference don't exist yet.
 
 ## Related Notes
 
@@ -97,9 +113,45 @@ the Path A shape:
 - **`failure_policy`**: `{ <sa.id>: 'retry-then-escalate' }` per sub-agent. Path B Slice 2 will let the architect override per-agent.
 - **`memory_authority`**: `[{tier:1, lane:'main', writers:[operator]}, ...{tier:1, lane:'<sa.id>', writers:[operator]}]`. Each sub-agent gets its own lane so writes from one specialist don't overwrite another's. Operator stays the only writer until Path B Slice 4 captures real per-role identity.
 
-`plan.subAgents` is parsed by [`plan-formatter.ts`](../../../agent-builder-ui/lib/openclaw/plan-formatter.ts) as `SubAgentConfig[]` — id, name, description, type, skills, trigger, autonomy. Today the architect's Plan instruction does not yet elicit them; Path B Slice 2 lands the prompt change that makes the architect actually emit fleets when scope demands it.
+`plan.subAgents` is parsed by [`plan-formatter.ts`](../../../agent-builder-ui/lib/openclaw/plan-formatter.ts) as `SubAgentConfig[]` — id, name, description, type, skills, trigger, autonomy. **As of Slice 2** the architect's Plan instruction elicits sub-agents when the TRD describes a workflow needing separate specialists.
 
-### Path B Slice 1 caveat
+### Path B Slice 2 — `<plan_sub_agents>` marker (architect emits fleets)
+
+`PLAN_SYSTEM_INSTRUCTION` now includes a sub-agents section. The architect emits ONLY when the TRD describes a multi-specialist workflow:
+
+```
+<plan_sub_agents subAgents='[{"id":"intake","name":"Intake","description":"Parse RFP","type":"specialist","skills":["parse-rfp"],"trigger":"intake","autonomy":"fully_autonomous"}]'/>
+```
+
+**Single-agent guardrail in the prompt:** *"Most agents are single-agent — leave subAgents empty and DO NOT emit this marker."* The instruction explicitly resists turning everything into a fleet.
+
+Wiring:
+- `PLAN_SUB_AGENTS_RE` regex in `extractPlanMarkers` (alongside `plan_skills`, `plan_workflow`, etc.)
+- `CustomEventName.PLAN_SUB_AGENTS = "plan_sub_agents"`
+- `consumePlanSubAgents` calls the existing `consumePlanSection` helper, routing the parsed array into `architecturePlan.subAgents` via `updateArchitecturePlanSection`
+- The Slice 1 manifest builder picks it up automatically — no further plumbing required
+
+### Path B Slice 4 — `<plan_memory_authority>` marker (per-role authority)
+
+Same emission pattern, different domain. The architect emits ONLY when the TRD names domain authorities:
+
+```
+<plan_memory_authority memoryAuthority='[{"tier":1,"lane":"estimating","writers":["darrow@ecc.com"]},{"tier":1,"lane":"business","writers":["matt@ecc.com"]},{"tier":3,"lane":"estimating","writers":["regional-1@ecc.com"]}]'/>
+```
+
+**Single-operator guardrail in the prompt:** *"Do NOT make up authority figures; do NOT emit this marker for single-operator agents."*
+
+`plan-formatter.ts::normalizeMemoryAuthority`:
+- Validates each row (tier ∈ {1,2,3}, non-empty lane, non-empty writers)
+- Drops malformed rows silently rather than failing the whole plan
+- Returns `undefined` (NOT empty array) when nothing parseable is present, so the manifest builder distinguishes "elicited but empty" from "not emitted"
+
+`pipeline-manifest-builder.ts`:
+- When `plan.memoryAuthority` is non-empty, manifest carries the rows verbatim
+- When absent or empty, falls back to Slice 1's default (one Tier-1 'main' lane row with operator + one row per sub-agent)
+- Substrate's `MemoryAuthorityRow` shape and `ArchitecturePlanMemoryAuthorityRow` are structurally compatible — the rows pass through without translation
+
+### Path B Slice 1 caveat (unchanged)
 
 The emitted manifest is structurally valid for fleets, but the
 per-sub-agent file trees the manifest references (`agents/intake/`,
@@ -216,14 +268,38 @@ This contract is intentionally narrow:
   - sub-agents NEVER carry `is_orchestrator: true`
   - `routing.rules` emitted only for sub-agents with non-empty trigger; rest fall through to fallback
   - `failure_policy` carries one entry per sub-agent (default `retry-then-escalate`)
-  - `memory_authority` carries one row per agent (main + each sub-agent), operator as writer in every row
-  - multi-agent manifest passes `runConformance()` with no fatal findings (regression pin for fleet emission)
+  - `memory_authority` carries one row per agent (main + each sub-agent), operator as writer in every row (when no elicited authority)
+  - multi-agent manifest passes `runConformance()` with no fatal findings
 
-## Out of scope (Path B Slices 2-4 and beyond)
+  Path B Slice 4 — elicited memory authority:
+  - elicited authority is passed through verbatim in declaration order
+  - default fallback when `plan.memoryAuthority` is undefined OR empty array
+  - elicited authority overrides per-sub-agent default rows (fleet pipeline)
+  - manifest with multi-tier elicited authority passes `runConformance()`
 
-- **Slice 2** — Architect's Plan instruction extended to elicit fleets. Today the architect leaves `plan.subAgents` empty; this module emits the right manifest IF subAgents are populated.
+- `agent-builder-ui/lib/openclaw/plan-formatter.test.ts`:
+  - subAgents normalized from architect's structured emission
+  - subAgents accepted as string-shorthand with synthesized ids
+  - missing subAgents → empty array
+  - memoryAuthority normalized from a multi-tier emission, order preserved
+  - missing memoryAuthority → undefined (manifest fallback path)
+  - empty array memoryAuthority → undefined (treated as "not emitted")
+  - rows with missing tier / out-of-range tier / no lane / no writers dropped
+  - non-string writers filtered out at the row level
+  - all-rows-invalid → undefined (no empty array leaks through)
+
+- `agent-builder-ui/lib/openclaw/ag-ui/__tests__/builder-agent.test.ts`:
+  - `PLAN_SYSTEM_INSTRUCTION` instructs architect to emit `<plan_sub_agents>` ONLY for fleets (single-agent guardrail in the text)
+  - `PLAN_SYSTEM_INSTRUCTION` instructs architect to emit `<plan_memory_authority>` ONLY when TRD names authorities (don't-make-up guardrail)
+  - `CustomEventName.PLAN_SUB_AGENTS` and `PLAN_MEMORY_AUTHORITY` registered
+
+- `agent-builder-ui/lib/openclaw/ag-ui/__tests__/event-consumer-map.test.ts`:
+  - `dispatchCustomEvent('plan_sub_agents', …)` updates `architecturePlan.subAgents`
+  - `dispatchCustomEvent('plan_memory_authority', …)` updates `architecturePlan.memoryAuthority`
+
+## Out of scope (Path B Slice 3 and beyond)
+
 - **Slice 3** — Build pipeline decomposed across sub-agents. The emitted manifest references per-sub-agent file trees (`agents/intake/`, etc.) that don't exist until Slice 3 lands the per-specialist sub-builds.
-- **Slice 4** — Real per-role memory authority captured in Think/Plan (Darrow → estimating, Matt → business, etc.). Today every authority row has the operator as the writer.
 - Dashboard manifest emission so `runConformance()` validates the pair
 - Routing rules richer than stage-match (sequential `specialists`, `fan_out`, `then` chains)
 - `merge_policy` rules when fleets actually need cross-specialist merging

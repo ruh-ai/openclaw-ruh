@@ -3,7 +3,7 @@
  * as readable markdown for workspace persistence.
  */
 
-import type { ApiEndpoint, ArchitecturePlan, DashboardPageComponent, DiscoveryDocuments } from "./types";
+import type { ApiEndpoint, ArchitecturePlan, ArchitecturePlanMemoryAuthorityRow, DashboardPageComponent, DiscoveryDocuments } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -43,6 +43,31 @@ function integrationMethod(value: unknown): "mcp" | "api" | "cli" {
 function triggerType(value: unknown): "cron" | "webhook" | "manual" {
   const type = asString(value, "manual").toLowerCase();
   return type === "cron" || type === "webhook" ? type : "manual";
+}
+
+/**
+ * Normalize the architect's `<plan_memory_authority>` emission into typed
+ * rows. Returns `undefined` (NOT empty array) when nothing parseable is
+ * present so the manifest builder can fall back to its default
+ * single-Tier-1-main-lane shape rather than emit an empty authority list
+ * (which would fail substrate schema validation).
+ */
+function normalizeMemoryAuthority(
+  raw: unknown,
+): ArchitecturePlanMemoryAuthorityRow[] | undefined {
+  const rows = asArray(raw)
+    .map((entry): ArchitecturePlanMemoryAuthorityRow | null => {
+      const row = asRecord(entry);
+      const tierRaw = row.tier;
+      const tier: 1 | 2 | 3 | null =
+        tierRaw === 1 || tierRaw === 2 || tierRaw === 3 ? tierRaw : null;
+      const lane = asString(row.lane);
+      const writers = asStringArray(row.writers);
+      if (tier === null || !lane || writers.length === 0) return null;
+      return { tier, lane, writers };
+    })
+    .filter((r): r is ArchitecturePlanMemoryAuthorityRow => r !== null);
+  return rows.length > 0 ? rows : undefined;
 }
 
 function dashboardComponentType(value: string): DashboardPageComponent["type"] {
@@ -225,6 +250,7 @@ export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
         autonomy: "requires_approval" as const,
       };
     }),
+    memoryAuthority: normalizeMemoryAuthority(raw.memoryAuthority),
     missionControl: (raw.missionControl ?? null) as ArchitecturePlan["missionControl"],
     dataSchema: dataSchemaTables.length > 0 ? { tables: dataSchemaTables } : null,
     apiEndpoints,

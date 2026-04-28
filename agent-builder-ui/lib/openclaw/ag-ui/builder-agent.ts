@@ -335,6 +335,32 @@ Common patterns:
 - Report/summary skills → daily or weekly
 - Health check skills → every 5-15 minutes
 
+### Sub-agents (only when the workflow needs MULTIPLE specialized agents)
+Most agents are single-agent — leave \`subAgents\` empty and DO NOT emit this marker. Emit it ONLY when the TRD describes a workflow that genuinely needs separate specialist agents coordinated by an orchestrator (e.g., "intake → takeoff → pricing → narrative" with each phase owned by its own specialist).
+
+Heuristic for fleet vs single-agent:
+- One agent doing several things in sequence → SINGLE-AGENT (use skills, not sub-agents)
+- Different agents with different SOULs/skills coordinated by an orchestrator → FLEET (emit sub-agents)
+- Each sub-agent should map to a meaningful workflow phase or specialist domain
+
+For each sub-agent emit \`id\` (kebab-case), \`name\`, \`description\` (one sentence), \`type\` (\`worker\` | \`specialist\` | \`monitor\`), \`skills\` (skill ids the sub-agent owns), \`trigger\` (the orchestrator stage that routes to it — typically the sub-agent's own id), \`autonomy\` (\`fully_autonomous\` | \`requires_approval\` | \`report_only\`).
+
+The main orchestrator does NOT appear in this list — it is implicit. Skills NOT assigned to any sub-agent stay on the main orchestrator.
+
+Emit: \`<plan_sub_agents subAgents='[{"id":"intake","name":"Intake","description":"Parse RFP into structured requirements","type":"specialist","skills":["parse-rfp"],"trigger":"intake","autonomy":"fully_autonomous"}]'/>\`
+
+### Memory authority (only when the TRD names domain authorities)
+Emit ONLY when the TRD/PRD names specific identities authoritative on specific domains (e.g., "Darrow Rogers is the lead estimator and his estimates are final"). Do NOT make up authority figures; do NOT emit this marker for single-operator agents.
+
+Each entry is one (tier, lane, writers) row matching the OpenClaw v1 memory model:
+- \`tier\`: \`1\` (authoritative — overrides lower tiers), \`2\` (trusted — can write but tier-1 wins on conflict), or \`3\` (proposing — write requires confirmation)
+- \`lane\`: snake_case domain identifier (\`estimating\`, \`business\`, \`operations\`, etc.)
+- \`writers\`: identity strings (emails, role names) authorised at that (tier, lane)
+
+If no named authorities exist, leave authority empty and DO NOT emit. The manifest will fall back to a single Tier-1 \`main\` lane row with the operator as writer.
+
+Emit: \`<plan_memory_authority memoryAuthority='[{"tier":1,"lane":"estimating","writers":["darrow@ecc.com"]},{"tier":1,"lane":"business","writers":["matt@ecc.com"]},{"tier":3,"lane":"estimating","writers":["regional-estimator-1@ecc.com","regional-estimator-2@ecc.com"]}]'/>\`
+
 ### Environment Variables (required)
 List all runtime variables with real names from the TRD. For every variable include:
 \`key\`, \`label\`, \`description\`, \`required\`, \`inputType\`, \`group\`, and \`populationStrategy\`.
@@ -802,6 +828,8 @@ const PLAN_DATA_SCHEMA_RE = /<plan_data_schema\s+dataSchema='(\{[\s\S]*?\})'\s*\
 const PLAN_API_ENDPOINTS_RE = /<plan_api_endpoints\s+apiEndpoints='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_DASHBOARD_PAGES_RE = /<plan_dashboard_pages\s+dashboardPages='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_ENV_VARS_RE = /<plan_env_vars\s+envVars='(\[[\s\S]*?\])'\s*\/>/g;
+const PLAN_SUB_AGENTS_RE = /<plan_sub_agents\s+subAgents='(\[[\s\S]*?\])'\s*\/>/g;
+const PLAN_MEMORY_AUTHORITY_RE = /<plan_memory_authority\s+memoryAuthority='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_COMPLETE_RE = /<plan_complete\s*\/>/g;
 
 function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
@@ -819,6 +847,8 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
     { re: PLAN_API_ENDPOINTS_RE, name: "plan_api_endpoints", key: "apiEndpoints" },
     { re: PLAN_DASHBOARD_PAGES_RE, name: "plan_dashboard_pages", key: "dashboardPages" },
     { re: PLAN_ENV_VARS_RE, name: "plan_env_vars", key: "envVars" },
+    { re: PLAN_SUB_AGENTS_RE, name: "plan_sub_agents", key: "subAgents" },
+    { re: PLAN_MEMORY_AUTHORITY_RE, name: "plan_memory_authority", key: "memoryAuthority" },
   ];
 
   for (const { re, name, key } of jsonMarkers) {

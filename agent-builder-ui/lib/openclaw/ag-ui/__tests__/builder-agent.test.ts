@@ -984,3 +984,25 @@ describe("REFINE_SYSTEM_INSTRUCTION", () => {
     expect(REFINE_SYSTEM_INSTRUCTION).toContain("current agent");
   });
 });
+
+describe("PLAN_SYSTEM_INSTRUCTION — multi-agent + memory authority elicitation (B2 + B4)", () => {
+  test("instructs the architect to emit <plan_sub_agents> ONLY for fleets", () => {
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("<plan_sub_agents");
+    // Single-agent agents must NOT trigger sub-agent emission. The
+    // instruction makes that explicit so the prompt change does not
+    // accidentally turn single-agent flows into fleets.
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/Most agents are single-agent/);
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/leave .*subAgents.* empty/);
+  });
+
+  test("instructs the architect to emit <plan_memory_authority> ONLY when TRD names authorities", () => {
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("<plan_memory_authority");
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/Do NOT make up authority figures/);
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/single-operator agents/);
+  });
+
+  test("registers PLAN_SUB_AGENTS and PLAN_MEMORY_AUTHORITY in CustomEventName", () => {
+    expect(CustomEventName.PLAN_SUB_AGENTS).toBe("plan_sub_agents");
+    expect(CustomEventName.PLAN_MEMORY_AUTHORITY).toBe("plan_memory_authority");
+  });
+});

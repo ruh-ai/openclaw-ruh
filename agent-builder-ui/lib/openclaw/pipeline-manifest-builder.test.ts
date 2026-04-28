@@ -377,3 +377,96 @@ describe("buildPipelineManifest — multi-agent fleet (Path B Slice 1)", () => {
     expect(fatal).toEqual([]);
   });
 });
+
+// ─── Path B Slice 4 — memory authority elicitation ──────────────────────────
+
+describe("buildPipelineManifest — plan.memoryAuthority elicitation (Path B Slice 4)", () => {
+  test("when plan.memoryAuthority is supplied, manifest passes it through verbatim", () => {
+    // Mirrors what the architect would emit for ECC's TRD when Darrow,
+    // Matt, and regional estimators are named as authorities.
+    const plan = basePlan();
+    plan.memoryAuthority = [
+      { tier: 1, lane: "estimating", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "business", writers: ["matt@ecc.com"] },
+      { tier: 2, lane: "estimating", writers: ["scott@ecc.com"] },
+      { tier: 3, lane: "estimating", writers: ["regional-1@ecc.com", "regional-2@ecc.com"] },
+    ];
+
+    const m = buildPipelineManifest(baseArgs({ plan })) as {
+      memory_authority: ReadonlyArray<{ tier: number; lane: string; writers: ReadonlyArray<string> }>;
+    };
+
+    // Manifest authority equals the elicited authority (verbatim, in order).
+    expect(m.memory_authority).toEqual(plan.memoryAuthority);
+  });
+
+  test("default fallback when plan.memoryAuthority is undefined (single-operator pipeline)", () => {
+    // No memoryAuthority field → fall back to Path A default (one Tier-1
+    // 'main' lane row with the operator as writer).
+    const m = buildPipelineManifest(
+      baseArgs({ operatorIdentity: "ops@example.com" }),
+    ) as {
+      memory_authority: ReadonlyArray<{ tier: number; lane: string; writers: ReadonlyArray<string> }>;
+    };
+    expect(m.memory_authority).toEqual([
+      { tier: 1, lane: "main", writers: ["ops@example.com"] },
+    ]);
+  });
+
+  test("default fallback when plan.memoryAuthority is empty array (architect emitted but no entries)", () => {
+    // An empty array should be treated identically to undefined — the
+    // substrate requires non-empty memory_authority, and "no authorities
+    // named" should land on the same fallback.
+    const plan = basePlan();
+    plan.memoryAuthority = [];
+    const m = buildPipelineManifest(baseArgs({ plan })) as {
+      memory_authority: ReadonlyArray<{ tier: number; lane: string }>;
+    };
+    expect(m.memory_authority).toHaveLength(1);
+    expect(m.memory_authority[0]?.lane).toBe("main");
+  });
+
+  test("elicited authority overrides per-sub-agent default rows (fleet pipeline)", () => {
+    // Without elicitation, a fleet emits one row per sub-agent (lane=id).
+    // With elicitation, the architect's authority shape replaces all of
+    // that — tested via subAgents present + memoryAuthority supplied.
+    const plan = basePlan();
+    plan.subAgents = [
+      {
+        id: "intake",
+        name: "Intake",
+        description: "",
+        type: "specialist",
+        skills: [],
+        trigger: "intake",
+        autonomy: "fully_autonomous",
+      },
+    ];
+    plan.memoryAuthority = [
+      { tier: 1, lane: "estimating", writers: ["darrow@ecc.com"] },
+    ];
+
+    const m = buildPipelineManifest(baseArgs({ plan })) as {
+      memory_authority: ReadonlyArray<{ tier: number; lane: string; writers: ReadonlyArray<string> }>;
+    };
+    // No 'main' or 'intake' fallback rows — elicited authority wins.
+    expect(m.memory_authority).toEqual([
+      { tier: 1, lane: "estimating", writers: ["darrow@ecc.com"] },
+    ]);
+  });
+
+  test("manifest with elicited multi-tier authority passes runConformance()", () => {
+    const plan = basePlan();
+    plan.memoryAuthority = [
+      { tier: 1, lane: "estimating", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "business", writers: ["matt@ecc.com"] },
+      { tier: 3, lane: "estimating", writers: ["regional-1@ecc.com"] },
+    ];
+    const manifest = buildPipelineManifest(baseArgs({ plan }));
+    const report = runConformance({ pipelineManifest: manifest });
+    const fatal = report.findings.filter(
+      (f) => f.severity === "error" && f.rule !== "dashboard-manifest-required",
+    );
+    expect(fatal).toEqual([]);
+  });
+});
