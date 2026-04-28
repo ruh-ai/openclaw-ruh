@@ -14,12 +14,23 @@ workspace alongside `architecture.json`. The Ship stage validates that
 manifest against the OpenClaw v1 spec via `POST /api/conformance/check`
 before deploy, blocking on substrate-level errors.
 
-This is **Path A** of the multi-step plan to make the builder produce
-v1-conformant artifacts. Path A scope is **single-agent pipelines only**
-— `len(agents) === 1`, trivial orchestrator, one Tier-1 memory_authority
-row in a generic `main` lane. Multi-agent fleets (Path B) extend the
-`agents[]` shape and elicit role-based memory authority; tracked
-separately.
+**Path A (shipped)** — single-agent pipelines: `len(agents) === 1`,
+trivial orchestrator, one Tier-1 memory_authority row in a generic
+`main` lane.
+
+**Path B Slice 1 (shipped)** — multi-agent fleet emission: when
+`plan.subAgents` is populated, the manifest grows into a fleet shape —
+`agents[]` carries the main orchestrator plus one entry per sub-agent,
+`routing.rules` are derived from each sub-agent's trigger,
+`failure_policy` defaults to `retry-then-escalate` per sub-agent, and
+`memory_authority` gets one Tier-1 row per sub-agent (lane = sub-agent
+id, operator as the writer). Empty `subAgents` preserves the Path A
+single-agent shape exactly.
+
+Path B Slice 2 (architect's Plan instruction extended to elicit fleets),
+Slice 3 (Build pipeline decomposed across sub-agents), and Slice 4
+(real per-role memory authority captured in Think/Plan) follow as
+separate PRs.
 
 ## Related Notes
 
@@ -56,9 +67,9 @@ Pure function. No I/O, no LLM calls. Inputs:
 Output is a JSON object that matches the substrate's `PipelineManifest`
 schema (`packages/openclaw-runtime/src/pipeline-manifest/types.ts`).
 
-### Path A shape (single-agent)
+### Path A shape (single-agent — `plan.subAgents` empty)
 
-- `agents`: exactly one entry — `{ id: 'main', path: 'agents/main/', is_orchestrator: true }`
+- `agents`: exactly one entry — `{ id: 'main', path: 'agents/main/', role: 'Single-agent pipeline', is_orchestrator: true }`
 - `orchestrator.skills`: mirrors `plan.skills[].id`
 - `routing`: `{ rules: [], fallback: 'main' }`
 - `memory_authority`: `[{ tier: 1, lane: 'main', writers: [operator] }]`
@@ -69,9 +80,34 @@ schema (`packages/openclaw-runtime/src/pipeline-manifest/types.ts`).
 - `output_validator`: minimum substrate-acceptable shape with `layers: ['marker']`
 - `checksum`: `sha256:<64 zeros>` placeholder; deploy recomputes the real digest
 
-`plan.subAgents` is intentionally ignored in Path A — the manifest stays
-single-agent. A regression test pins this so Path B's lift into
-`agents[]` lands as a deliberate change.
+### Path B Slice 1 shape (fleet — `plan.subAgents` non-empty)
+
+When the architect populates `plan.subAgents`, the manifest grows from
+the Path A shape:
+
+- **`agents`** = `[main, ...subAgents]`:
+  - main flips its role from `'Single-agent pipeline'` to `'Pipeline orchestrator'`; `is_orchestrator: true` stays.
+  - Each sub-agent contributes one entry: `{ id: sa.id, path: 'agents/<sa.id>/', version, role: sa.description || sa.name }`.
+  - Sub-agents NEVER carry `is_orchestrator: true` — the substrate pins exactly one orchestrator per pipeline; main owns it.
+- **`routing.rules`**: one rule per sub-agent with a non-empty `trigger`:
+  ```json
+  { "match": { "stage": "<sa.trigger>" }, "specialist": "<sa.id>" }
+  ```
+  Sub-agents with empty triggers fall through to `routing.fallback` (`'main'`).
+- **`failure_policy`**: `{ <sa.id>: 'retry-then-escalate' }` per sub-agent. Path B Slice 2 will let the architect override per-agent.
+- **`memory_authority`**: `[{tier:1, lane:'main', writers:[operator]}, ...{tier:1, lane:'<sa.id>', writers:[operator]}]`. Each sub-agent gets its own lane so writes from one specialist don't overwrite another's. Operator stays the only writer until Path B Slice 4 captures real per-role identity.
+
+`plan.subAgents` is parsed by [`plan-formatter.ts`](../../../agent-builder-ui/lib/openclaw/plan-formatter.ts) as `SubAgentConfig[]` — id, name, description, type, skills, trigger, autonomy. Today the architect's Plan instruction does not yet elicit them; Path B Slice 2 lands the prompt change that makes the architect actually emit fleets when scope demands it.
+
+### Path B Slice 1 caveat
+
+The emitted manifest is structurally valid for fleets, but the
+per-sub-agent file trees the manifest references (`agents/intake/`,
+`agents/takeoff/`, etc.) are NOT generated until Path B Slice 3 lands
+the build-pipeline decomposition. Today the manifest can be validated
+end-to-end through `runConformance()` (and is, in tests), but a real
+multi-agent build still produces a single-agent file tree. Don't ship a
+fleet pipeline through the Ship gate until Slice 3.
 
 ### Emission point
 
@@ -155,27 +191,41 @@ This contract is intentionally narrow:
 ## Tests
 
 - `agent-builder-ui/lib/openclaw/pipeline-manifest-builder.test.ts`:
-  - canonical shape passes `runConformance()` with no fatal findings
+
+  Substrate conformance + derivation rules:
+  - canonical (single-agent) shape passes `runConformance()` with no fatal findings
   - id derivation (kebab-case from agent name, fallback to `'pipeline'`)
   - `orchestrator.skills` mirrors `plan.skills[].id`
-  - exactly one Tier-1 memory_authority row with the operator identity
+  - exactly one Tier-1 memory_authority row with the operator identity (single-agent)
   - operator identity defaults to `'operator'` when not supplied
   - integrations become `runtime.required_integrations`; omitted when empty
   - `llm_providers` defaults to `[{anthropic, claude-opus-4-7, tenant-proxy}]` when provider/model not supplied (substrate requires non-empty array)
-  - default-emit (no llm args) round-trips through `runConformance()` with no fatal findings — regression pin for the P1 review finding
+  - default-emit (no llm args) round-trips through `runConformance()` with no fatal findings
   - tenancy/egress/dev_stage defaults + overrides
-  - `subAgents` ignored — Path A still emits single-agent (regression pin)
-  - hooks / custom_hooks / config_docs / imports / merge_policy empty
   - checksum carries `sha256:<64-hex>` placeholder
   - generated_at is stable when supplied
 
-## Out of scope (Path B and beyond)
+  Single-agent shape (Path A preserved):
+  - empty `subAgents` → exactly one agent with role `'Single-agent pipeline'`
+  - empty `subAgents` → empty `routing.rules`, empty `failure_policy`, single memory row in `'main'` lane
+  - hooks / custom_hooks / config_docs / imports / merge_policy empty
 
-- Multi-agent `agents[]` extension when `plan.subAgents.length > 0`
-- Memory model elicitation (per-role authority captured in Think/Plan)
+  Multi-agent fleet (Path B Slice 1):
+  - `agents[]` = main orchestrator + one entry per sub-agent (declaration order preserved)
+  - main role flips from `'Single-agent pipeline'` to `'Pipeline orchestrator'` when fleet emerges
+  - sub-agents NEVER carry `is_orchestrator: true`
+  - `routing.rules` emitted only for sub-agents with non-empty trigger; rest fall through to fallback
+  - `failure_policy` carries one entry per sub-agent (default `retry-then-escalate`)
+  - `memory_authority` carries one row per agent (main + each sub-agent), operator as writer in every row
+  - multi-agent manifest passes `runConformance()` with no fatal findings (regression pin for fleet emission)
+
+## Out of scope (Path B Slices 2-4 and beyond)
+
+- **Slice 2** — Architect's Plan instruction extended to elicit fleets. Today the architect leaves `plan.subAgents` empty; this module emits the right manifest IF subAgents are populated.
+- **Slice 3** — Build pipeline decomposed across sub-agents. The emitted manifest references per-sub-agent file trees (`agents/intake/`, etc.) that don't exist until Slice 3 lands the per-specialist sub-builds.
+- **Slice 4** — Real per-role memory authority captured in Think/Plan (Darrow → estimating, Matt → business, etc.). Today every authority row has the operator as the writer.
 - Dashboard manifest emission so `runConformance()` validates the pair
-- Routing rules, merge policy, failure policy when fleets need them
-- Backend-side conformance gate at `POST /api/agents/:id/ship` (today
-  the gate is frontend-only)
-- Real checksum computation at deploy time over the resolved pipeline
-  state (placeholder for now)
+- Routing rules richer than stage-match (sequential `specialists`, `fan_out`, `then` chains)
+- `merge_policy` rules when fleets actually need cross-specialist merging
+- Backend-side conformance gate at `POST /api/agents/:id/ship` (today the gate is frontend-only)
+- Real checksum computation at deploy time over the resolved pipeline state (placeholder for now)

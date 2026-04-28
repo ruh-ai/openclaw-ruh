@@ -218,38 +218,31 @@ describe("buildPipelineManifest — derivation rules", () => {
   });
 });
 
-describe("buildPipelineManifest — Path A scope", () => {
-  test("emits exactly one agent (single-agent pipelines today)", () => {
+describe("buildPipelineManifest — single-agent shape (Path A preserved)", () => {
+  test("empty subAgents → exactly one agent", () => {
     const m = buildPipelineManifest(baseArgs()) as {
-      agents: ReadonlyArray<{ id: string; is_orchestrator?: boolean }>;
+      agents: ReadonlyArray<{ id: string; is_orchestrator?: boolean; role: string }>;
     };
     expect(m.agents).toHaveLength(1);
     expect(m.agents[0]?.id).toBe("main");
     expect(m.agents[0]?.is_orchestrator).toBe(true);
+    expect(m.agents[0]?.role).toBe("Single-agent pipeline");
   });
 
-  test("ignores plan.subAgents — Path B will lift them into agents[] (regression pin)", () => {
-    const plan = basePlan();
-    plan.subAgents = [
-      {
-        id: "specialist-a",
-        name: "Specialist A",
-        description: "",
-        type: "specialist",
-        skills: [],
-        trigger: "",
-        autonomy: "fully_autonomous",
-      },
-    ];
-    const m = buildPipelineManifest(baseArgs({ plan })) as {
-      agents: ReadonlyArray<unknown>;
+  test("empty subAgents → routing.rules empty, failure_policy empty, single memory row", () => {
+    const m = buildPipelineManifest(baseArgs()) as {
+      routing: { rules: ReadonlyArray<unknown>; fallback: string };
+      failure_policy: Record<string, string>;
+      memory_authority: ReadonlyArray<{ lane: string }>;
     };
-    // Path A intentionally still emits a single-agent manifest. Once Path B
-    // lands, this test should be replaced with the multi-agent expectation.
-    expect(m.agents).toHaveLength(1);
+    expect(m.routing.rules).toEqual([]);
+    expect(m.routing.fallback).toBe("main");
+    expect(m.failure_policy).toEqual({});
+    expect(m.memory_authority).toHaveLength(1);
+    expect(m.memory_authority[0]?.lane).toBe("main");
   });
 
-  test("hooks, custom_hooks, config_docs, imports, merge_policy are empty for Path A", () => {
+  test("hooks, custom_hooks, config_docs, imports, merge_policy are empty", () => {
     const m = buildPipelineManifest(baseArgs()) as {
       hooks: ReadonlyArray<unknown>;
       custom_hooks: ReadonlyArray<unknown>;
@@ -262,5 +255,125 @@ describe("buildPipelineManifest — Path A scope", () => {
     expect(m.config_docs).toEqual([]);
     expect(m.imports).toEqual([]);
     expect(m.merge_policy).toEqual([]);
+  });
+});
+
+describe("buildPipelineManifest — multi-agent fleet (Path B Slice 1)", () => {
+  function planWithSubAgents() {
+    const plan = basePlan();
+    plan.subAgents = [
+      {
+        id: "intake",
+        name: "Intake",
+        description: "Parse RFP into structured requirements",
+        type: "specialist",
+        skills: ["parse-rfp"],
+        trigger: "intake",
+        autonomy: "fully_autonomous",
+      },
+      {
+        id: "takeoff",
+        name: "Takeoff",
+        description: "Compute material quantities from photos + drawings",
+        type: "specialist",
+        skills: ["read-photos", "compute-takeoff"],
+        trigger: "takeoff",
+        autonomy: "requires_approval",
+      },
+      {
+        id: "narrator",
+        name: "Narrator",
+        description: "",
+        type: "worker",
+        skills: ["compose-narrative"],
+        trigger: "", // intentionally empty — should fall through to fallback
+        autonomy: "fully_autonomous",
+      },
+    ];
+    return plan;
+  }
+
+  test("agents[] = main orchestrator + one entry per sub-agent (in declaration order)", () => {
+    const m = buildPipelineManifest(baseArgs({ plan: planWithSubAgents() })) as {
+      agents: ReadonlyArray<{ id: string; is_orchestrator?: boolean; role: string; path: string }>;
+    };
+    expect(m.agents).toHaveLength(4);
+    expect(m.agents[0]).toEqual({
+      id: "main",
+      path: "agents/main/",
+      version: "0.1.0",
+      role: "Pipeline orchestrator",
+      is_orchestrator: true,
+    });
+    expect(m.agents[1]).toEqual({
+      id: "intake",
+      path: "agents/intake/",
+      version: "0.1.0",
+      role: "Parse RFP into structured requirements",
+    });
+    // Sub-agents must NOT carry is_orchestrator: true — the substrate
+    // pins exactly one orchestrator per pipeline.
+    expect(m.agents[1]?.is_orchestrator).toBeUndefined();
+    expect(m.agents[3]?.role).toBe("Narrator"); // empty description falls back to name
+  });
+
+  test("main agent role flips from 'Single-agent pipeline' to 'Pipeline orchestrator' when fleet emerges", () => {
+    const single = buildPipelineManifest(baseArgs()) as { agents: ReadonlyArray<{ role: string }> };
+    expect(single.agents[0]?.role).toBe("Single-agent pipeline");
+
+    const fleet = buildPipelineManifest(
+      baseArgs({ plan: planWithSubAgents() }),
+    ) as { agents: ReadonlyArray<{ role: string }> };
+    expect(fleet.agents[0]?.role).toBe("Pipeline orchestrator");
+  });
+
+  test("routing.rules emitted only for sub-agents with non-empty trigger; rest fall through to fallback", () => {
+    const m = buildPipelineManifest(baseArgs({ plan: planWithSubAgents() })) as {
+      routing: {
+        rules: ReadonlyArray<{ match: { stage: string }; specialist: string }>;
+        fallback: string;
+      };
+    };
+    expect(m.routing.rules).toEqual([
+      { match: { stage: "intake" }, specialist: "intake" },
+      { match: { stage: "takeoff" }, specialist: "takeoff" },
+    ]);
+    // narrator (empty trigger) intentionally absent from rules
+    expect(m.routing.fallback).toBe("main");
+  });
+
+  test("failure_policy carries one entry per sub-agent (default retry-then-escalate)", () => {
+    const m = buildPipelineManifest(baseArgs({ plan: planWithSubAgents() })) as {
+      failure_policy: Record<string, string>;
+    };
+    expect(m.failure_policy).toEqual({
+      intake: "retry-then-escalate",
+      takeoff: "retry-then-escalate",
+      narrator: "retry-then-escalate",
+    });
+  });
+
+  test("memory_authority: one row per agent — main + each sub-agent — operator as writer", () => {
+    const m = buildPipelineManifest(
+      baseArgs({ plan: planWithSubAgents(), operatorIdentity: "darrow@ecc.com" }),
+    ) as {
+      memory_authority: ReadonlyArray<{ tier: number; lane: string; writers: ReadonlyArray<string> }>;
+    };
+    expect(m.memory_authority).toHaveLength(4);
+    expect(m.memory_authority).toEqual([
+      { tier: 1, lane: "main", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "intake", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "takeoff", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "narrator", writers: ["darrow@ecc.com"] },
+    ]);
+  });
+
+  test("multi-agent manifest passes runConformance() with no fatal findings", () => {
+    const manifest = buildPipelineManifest(baseArgs({ plan: planWithSubAgents() }));
+    const report = runConformance({ pipelineManifest: manifest });
+    const fatal = report.findings.filter(
+      (f) => f.severity === "error" && f.rule !== "dashboard-manifest-required",
+    );
+    expect(fatal).toEqual([]);
   });
 });
