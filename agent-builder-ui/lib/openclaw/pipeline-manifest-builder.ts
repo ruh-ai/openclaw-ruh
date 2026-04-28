@@ -165,18 +165,28 @@ export function buildPipelineManifest(args: BuildPipelineManifestArgs): unknown 
     failurePolicy[sa.id] = "retry-then-escalate";
   }
 
-  // Memory authority — one row per agent. Each sub-agent gets its own lane
-  // (kebab-case from sub-agent id) so writes from one specialist don't
-  // overwrite another's. Operator remains the writer in every row; real
-  // per-role identity (Darrow → estimating, etc.) is Path B Slice 4.
-  const memoryAuthority = [
-    { tier: 1 as const, lane: memoryLane, writers: [operator] },
-    ...subAgents.map((sa) => ({
-      tier: 1 as const,
-      lane: sa.id,
-      writers: [operator],
-    })),
-  ];
+  // Memory authority — Path B Slice 4 wired here.
+  //
+  // When the architect's `<plan_memory_authority>` marker populated
+  // `plan.memoryAuthority` (the TRD/PRD named domain authorities), we
+  // pass those rows through verbatim. Real per-role identity:
+  // Darrow→Tier1-Estimating, Matt→Tier1-Business, regional estimators→Tier3.
+  //
+  // When it's absent (single-operator pipelines, or fleet pipelines whose
+  // TRDs didn't name authorities), fall back to the previous default:
+  // one Tier-1 row in 'main' lane plus one row per sub-agent (lane = sub-
+  // agent id), all with the operator as the only writer. This preserves
+  // the Path A + B-Slice-1 behavior.
+  const memoryAuthority = args.plan.memoryAuthority && args.plan.memoryAuthority.length > 0
+    ? args.plan.memoryAuthority
+    : [
+        { tier: 1 as const, lane: memoryLane, writers: [operator] },
+        ...subAgents.map((sa) => ({
+          tier: 1 as const,
+          lane: sa.id,
+          writers: [operator],
+        })),
+      ];
 
   return {
     // Identity

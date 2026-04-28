@@ -24,6 +24,12 @@ function createMockDeps(overrides?: Partial<ConsumerDeps>): ConsumerDeps {
       setArchitecturePlan: mock(() => {}),
       setPlanStatus: mock(() => {}),
       setBuildStatus: mock(() => {}),
+      // Plan-section update path used by consumePlanSubAgents /
+      // consumePlanMemoryAuthority and the existing plan section
+      // consumers.
+      setPlanStep: mock(() => {}),
+      pushPlanActivity: mock(() => {}),
+      updateArchitecturePlanSection: mock(() => {}),
       devStage: "think",
     },
     commitBuilderMetadata: mock(() => {}),
@@ -374,5 +380,57 @@ describe("dispatchCustomEvent", () => {
     const applied = traces.filter((t) => t.status === "applied");
     expect(received.length).toBeGreaterThan(0);
     expect(applied.length).toBeGreaterThan(0);
+  });
+
+  // ── B2: plan_sub_agents routing ────────────────────────────────────────
+  test("dispatches plan_sub_agents → updates architecture plan's subAgents section", () => {
+    const deps = createMockDeps();
+    const subAgents = [
+      {
+        id: "intake",
+        name: "Intake",
+        description: "",
+        type: "specialist",
+        skills: [],
+        trigger: "intake",
+        autonomy: "fully_autonomous",
+      },
+    ];
+
+    const handled = dispatchCustomEvent(
+      CustomEventName.PLAN_SUB_AGENTS,
+      { subAgents },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.coPilotStore!.updateArchitecturePlanSection).toHaveBeenCalledWith(
+      "subAgents",
+      subAgents,
+    );
+    expect(deps.coPilotStore!.setPlanStep).toHaveBeenCalledWith("subagents");
+    expect(deps.coPilotStore!.pushPlanActivity).toHaveBeenCalled();
+  });
+
+  // ── B4: plan_memory_authority routing ──────────────────────────────────
+  test("dispatches plan_memory_authority → updates architecture plan's memoryAuthority section", () => {
+    const deps = createMockDeps();
+    const memoryAuthority = [
+      { tier: 1, lane: "estimating", writers: ["darrow@ecc.com"] },
+      { tier: 1, lane: "business", writers: ["matt@ecc.com"] },
+    ];
+
+    const handled = dispatchCustomEvent(
+      CustomEventName.PLAN_MEMORY_AUTHORITY,
+      { memoryAuthority },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.coPilotStore!.updateArchitecturePlanSection).toHaveBeenCalledWith(
+      "memoryAuthority",
+      memoryAuthority,
+    );
+    expect(deps.coPilotStore!.setPlanStep).toHaveBeenCalledWith("memory");
   });
 });

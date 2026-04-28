@@ -114,6 +114,10 @@ export const CustomEventName = {
   PLAN_DASHBOARD_PAGES: "plan_dashboard_pages",
   /** Plan environment variables decision. */
   PLAN_ENV_VARS: "plan_env_vars",
+  /** Plan sub-agents decision (multi-agent fleet definition; empty for single-agent). */
+  PLAN_SUB_AGENTS: "plan_sub_agents",
+  /** Plan memory authority decision (per-role tier/lane writers; empty for single-operator pipelines). */
+  PLAN_MEMORY_AUTHORITY: "plan_memory_authority",
   /** All plan decisions emitted — plan is complete. */
   PLAN_COMPLETE: "plan_complete",
   // ── Checkpoint pause event (Think/Plan checkpoints) ──

@@ -310,6 +310,22 @@ export interface VectorCollection {
   retrievalUse?: string;
 }
 
+/**
+ * One row in the pipeline's memory authority table. Mirrors the substrate's
+ * `MemoryAuthorityRow` shape — kept structurally compatible so the manifest
+ * builder can pass these through verbatim. Tier semantics:
+ *   1 — authoritative; this writer's writes override lower tiers
+ *   2 — trusted; can write but tier-1 wins on conflict
+ *   3 — proposing; write requires confirmation by a higher tier
+ */
+export interface ArchitecturePlanMemoryAuthorityRow {
+  tier: 1 | 2 | 3;
+  /** snake_case domain identifier (e.g., "estimating", "business"). */
+  lane: string;
+  /** Identity strings authorised to write at this (tier, lane). */
+  writers: string[];
+}
+
 export interface ArchitecturePlan {
   skills: ArchitecturePlanSkill[];
   workflow: ArchitecturePlanWorkflow;
@@ -318,6 +334,14 @@ export interface ArchitecturePlan {
   channels: string[];
   envVars: ArchitecturePlanEnvVar[];
   subAgents: SubAgentConfig[];
+  /**
+   * Per-role memory authority rows. Optional — populated by the architect's
+   * `<plan_memory_authority>` marker only when the TRD names domain
+   * authorities (e.g., ECC's Darrow → Tier-1 Estimating). When absent, the
+   * pipeline-manifest-builder falls back to a single Tier-1 'main' lane row
+   * with the operator as writer (Path A semantics).
+   */
+  memoryAuthority?: ArchitecturePlanMemoryAuthorityRow[];
   missionControl: MissionControlConfig | null;
   /** Full SOUL.md content — when present with skillMd, enables instant deploy. */
   soulContent?: string;

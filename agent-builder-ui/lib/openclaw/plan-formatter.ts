@@ -3,7 +3,7 @@
  * as readable markdown for workspace persistence.
  */
 
-import type { ApiEndpoint, ArchitecturePlan, DashboardPageComponent, DiscoveryDocuments } from "./types";
+import type { ApiEndpoint, ArchitecturePlan, ArchitecturePlanMemoryAuthorityRow, DashboardPageComponent, DiscoveryDocuments } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -43,6 +43,96 @@ function integrationMethod(value: unknown): "mcp" | "api" | "cli" {
 function triggerType(value: unknown): "cron" | "webhook" | "manual" {
   const type = asString(value, "manual").toLowerCase();
   return type === "cron" || type === "webhook" ? type : "manual";
+}
+
+/**
+ * Validate the architect's `<plan_sub_agents>` `type` emission. Falls back
+ * to `"worker"` when the value is missing or not one of the four allowed
+ * sub-agent kinds. Earlier the normalizer hardcoded every object-shaped
+ * sub-agent to `"worker"`, dropping the architect's `specialist`/`monitor`
+ * decision — fixed here so a recovered plan matches what was emitted.
+ */
+function normalizeSubAgentType(
+  raw: unknown,
+): "worker" | "orchestrator" | "monitor" | "specialist" {
+  if (raw === "worker" || raw === "orchestrator" || raw === "monitor" || raw === "specialist") {
+    return raw;
+  }
+  return "worker";
+}
+
+/**
+ * Validate the architect's `<plan_sub_agents>` `autonomy` emission. Falls
+ * back to `"requires_approval"` (the safest default) when missing or
+ * invalid. Same reasoning as `normalizeSubAgentType` — earlier the
+ * normalizer dropped the architect's autonomy decision.
+ */
+function normalizeSubAgentAutonomy(
+  raw: unknown,
+): "fully_autonomous" | "requires_approval" | "report_only" {
+  if (raw === "fully_autonomous" || raw === "requires_approval" || raw === "report_only") {
+    return raw;
+  }
+  return "requires_approval";
+}
+
+/**
+ * Substrate's lane format requirement (mirrors `KEBAB_CASE` in
+ * `packages/openclaw-runtime/src/memory/schemas.ts`).
+ */
+const LANE_KEBAB_CASE = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * Coerce a lane string into kebab-case if possible. The architect's prompt
+ * asks for kebab-case but accepts either snake_case or kebab-case in
+ * practice — the LLM doesn't always honor the exact format. We fix the
+ * common case (underscores → hyphens, uppercase → lowercase, trim) so a
+ * "customer_success" emission becomes "customer-success" before it hits
+ * the manifest. Lanes that still don't match `LANE_KEBAB_CASE` after this
+ * coercion (e.g., spaces, leading digits, special characters) are
+ * dropped — the substrate would reject them at Ship time, and a silent
+ * conformance error is worse than dropping the row.
+ */
+function normalizeLane(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const coerced = trimmed
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return LANE_KEBAB_CASE.test(coerced) ? coerced : null;
+}
+
+/**
+ * Normalize the architect's `<plan_memory_authority>` emission into typed
+ * rows. Returns `undefined` (NOT empty array) when nothing parseable is
+ * present so the manifest builder can fall back to its default
+ * single-Tier-1-main-lane shape rather than emit an empty authority list
+ * (which would fail substrate schema validation).
+ *
+ * Lane format: substrate requires `KEBAB_CASE = /^[a-z][a-z0-9-]*$/`.
+ * Common architect slips (snake_case `customer_success`, mixed case
+ * `CustomerSuccess`, trailing hyphens) are coerced via `normalizeLane`.
+ * Anything still invalid after coercion is dropped at the row level.
+ */
+function normalizeMemoryAuthority(
+  raw: unknown,
+): ArchitecturePlanMemoryAuthorityRow[] | undefined {
+  const rows = asArray(raw)
+    .map((entry): ArchitecturePlanMemoryAuthorityRow | null => {
+      const row = asRecord(entry);
+      const tierRaw = row.tier;
+      const tier: 1 | 2 | 3 | null =
+        tierRaw === 1 || tierRaw === 2 || tierRaw === 3 ? tierRaw : null;
+      const laneRaw = asString(row.lane);
+      const lane = laneRaw ? normalizeLane(laneRaw) : null;
+      const writers = asStringArray(row.writers);
+      if (tier === null || !lane || writers.length === 0) return null;
+      return { tier, lane, writers };
+    })
+    .filter((r): r is ArchitecturePlanMemoryAuthorityRow => r !== null);
+  return rows.length > 0 ? rows : undefined;
 }
 
 function dashboardComponentType(value: string): DashboardPageComponent["type"] {
@@ -219,12 +309,13 @@ export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
         id: asString(agent.id, slugifyValue(name, `sub-agent-${index + 1}`)),
         name,
         description: asString(agent.description, name),
-        type: "worker" as const,
+        type: normalizeSubAgentType(agent.type),
         skills: asStringArray(agent.skills),
         trigger: asString(agent.trigger),
-        autonomy: "requires_approval" as const,
+        autonomy: normalizeSubAgentAutonomy(agent.autonomy),
       };
     }),
+    memoryAuthority: normalizeMemoryAuthority(raw.memoryAuthority),
     missionControl: (raw.missionControl ?? null) as ArchitecturePlan["missionControl"],
     dataSchema: dataSchemaTables.length > 0 ? { tables: dataSchemaTables } : null,
     apiEndpoints,
