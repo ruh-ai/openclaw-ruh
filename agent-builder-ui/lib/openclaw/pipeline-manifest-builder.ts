@@ -79,6 +79,14 @@ export function buildPipelineManifest(args: BuildPipelineManifestArgs): unknown 
   // can run. Empty when the agent uses no external tools.
   const requiredIntegrations = args.plan.integrations.map((i) => i.toolId);
 
+  // The substrate's RuntimeRequirements.llm_providers requires a non-empty
+  // array; an empty list fails schema parse with a minItems error. When the
+  // caller doesn't supply an explicit provider/model (e.g. the agent record
+  // hasn't surfaced its model selection through to Plan-complete yet), fall
+  // back to the platform default. Path B will read the actual provider/model
+  // from the agent record once memory + identity capture is wired through
+  // Think/Plan; for now the default keeps the manifest schema-valid and the
+  // Ship gate honest.
   const llmProviders =
     args.llmProvider && args.llmModel
       ? [
@@ -88,7 +96,14 @@ export function buildPipelineManifest(args: BuildPipelineManifestArgs): unknown 
             via: "tenant-proxy" as const,
           },
         ]
-      : [];
+      : [
+          {
+            // Matches the platform default in CLAUDE.md (Anthropic via tenant proxy).
+            provider: "anthropic" as const,
+            model: "claude-opus-4-7",
+            via: "tenant-proxy" as const,
+          },
+        ];
 
   return {
     // Identity

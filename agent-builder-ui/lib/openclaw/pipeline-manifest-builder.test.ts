@@ -142,14 +142,42 @@ describe("buildPipelineManifest — derivation rules", () => {
     expect(m.runtime.required_integrations).toBeUndefined();
   });
 
-  test("llm_providers is empty when provider/model not supplied (caller wires it later)", () => {
+  test("llm_providers defaults to anthropic+claude-opus-4-7 when caller does not supply provider/model", () => {
+    // Empty llm_providers fails the substrate's schema (minItems(1)). The
+    // builder defaults to the platform's CLAUDE.md baseline so the manifest
+    // is always schema-valid even when the caller hasn't plumbed the agent's
+    // explicit model selection through yet. Path B will replace this default
+    // with the real per-agent selection.
     const args = baseArgs();
     const m = buildPipelineManifest({
       ...args,
       llmProvider: undefined,
       llmModel: undefined,
-    }) as { runtime: { llm_providers: ReadonlyArray<unknown> } };
-    expect(m.runtime.llm_providers).toEqual([]);
+    }) as {
+      runtime: {
+        llm_providers: ReadonlyArray<{ provider: string; model: string; via: string }>;
+      };
+    };
+    expect(m.runtime.llm_providers).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-7", via: "tenant-proxy" },
+    ]);
+  });
+
+  test("default-emit (no llm args) passes runConformance() — regression for P1 review finding", () => {
+    // Mirrors the production call site in event-consumer-map's
+    // emitPipelineManifest — name + description + plan only, no llm args.
+    // Before the fix, this manifest failed runConformance with a schema
+    // error at runtime.llm_providers (minItems).
+    const manifest = buildPipelineManifest({
+      agentName: baseArgs().agentName,
+      agentDescription: baseArgs().agentDescription,
+      plan: basePlan(),
+    });
+    const report = runConformance({ pipelineManifest: manifest });
+    const fatal = report.findings.filter(
+      (f) => f.severity === "error" && f.rule !== "dashboard-manifest-required",
+    );
+    expect(fatal).toEqual([]);
   });
 
   test("default tenancy is 'dedicated' and egress 'open' (overridable for on-prem)", () => {

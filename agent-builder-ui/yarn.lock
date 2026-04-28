@@ -2507,6 +2507,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ruh/openclaw-runtime@file:../packages/openclaw-runtime::locator=agent-builder-ui%40workspace%3A.":
+  version: 0.1.0
+  resolution: "@ruh/openclaw-runtime@file:../packages/openclaw-runtime#../packages/openclaw-runtime::hash=a02041&locator=agent-builder-ui%40workspace%3A."
+  dependencies:
+    zod: "npm:^3.23.0"
+  checksum: 10c0/a0fda63f96ea2eef252515a9a6677ce7e45225d5cac69a3b53353321952c1cdca9dfe1a038c4a3df26d2071aeadc40d3e56292acd172b06c47d0baaa0a833d59
+  languageName: node
+  linkType: hard
+
 "@standard-schema/utils@npm:^0.3.0":
   version: 0.3.0
   resolution: "@standard-schema/utils@npm:0.3.0"
@@ -3234,6 +3243,7 @@ __metadata:
     "@radix-ui/react-switch": "npm:^1.2.2"
     "@radix-ui/react-tabs": "npm:^1.1.4"
     "@radix-ui/react-tooltip": "npm:^1.1.8"
+    "@ruh/openclaw-runtime": "file:../packages/openclaw-runtime"
     "@tailwindcss/postcss": "npm:^4"
     "@tailwindcss/typography": "npm:^0.5.16"
     "@tanstack/react-query": "npm:^5.74.2"
@@ -8450,7 +8460,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^3.22.4, zod@npm:^3.24.2":
+"zod@npm:^3.22.4, zod@npm:^3.23.0, zod@npm:^3.24.2":
   version: 3.25.76
   resolution: "zod@npm:3.25.76"
   checksum: 10c0/5718ec35e3c40b600316c5b4c5e4976f7fee68151bc8f8d90ec18a469be9571f072e1bbaace10f1e85cf8892ea12d90821b200e980ab46916a6166a4260a983c
