@@ -11,6 +11,39 @@ import type { ArchitecturePlan } from "./scaffoldTemplates";
 export type SpecialistType = "scaffold" | "identity" | "database" | "backend" | "skills" | "dashboard" | "verify";
 
 /**
+ * Path B Slice 3 — when the pipeline is a multi-agent fleet, identity and
+ * skills specialists run once PER agent. Each run is parameterized with a
+ * `TargetAgent` describing which agent's files it's writing.
+ *
+ * Single-agent pipelines (no `plan.subAgents`) call the prompts WITHOUT a
+ * target — the existing root-path behavior is preserved exactly.
+ *
+ * Pipeline-level specialists (database, backend, dashboard, verify, scaffold)
+ * never receive a target — their outputs are shared across all agents in the
+ * fleet (one db schema, one HTTP service, one dashboard, etc.).
+ */
+export interface TargetAgent {
+  /** kebab-case agent id — `'main'` for the orchestrator, sub-agent's id otherwise. */
+  readonly id: string;
+  /** Human-readable name for prompt context. */
+  readonly name: string;
+  /** Role description for prompt context (`'Pipeline orchestrator'` or sub-agent's description). */
+  readonly role: string;
+  /** Skill ids this agent owns. Used to filter `plan.skills` for the skills specialist. */
+  readonly skills: ReadonlyArray<string>;
+  /** True only for the main agent — never for sub-agents. */
+  readonly isOrchestrator: boolean;
+}
+
+/**
+ * Workspace path prefix for an agent's per-agent files. Empty for single-agent
+ * (root paths). Trailing slash included so callers can do `${prefix}SOUL.md`.
+ */
+function targetPathPrefix(target: TargetAgent | undefined): string {
+  return target ? `agents/${target.id}/` : "";
+}
+
+/**
  * Determine which specialists should run based on plan content.
  */
 export function getRequiredSpecialists(plan: ArchitecturePlan): SpecialistType[] {
@@ -42,39 +75,62 @@ export function isV3Build(plan: ArchitecturePlan | null | undefined): boolean {
 
 // ─── Identity Specialist ─────────────────────────────────────────────────────
 
-export function buildIdentityPrompt(plan: ArchitecturePlan, agentName: string): string {
+export function buildIdentityPrompt(
+  plan: ArchitecturePlan,
+  agentName: string,
+  target?: TargetAgent,
+): string {
+  const prefix = targetPathPrefix(target);
+  // Filter the visible skill list for the prompt:
+  //   - With target → only the skills this agent owns (better focus, smaller prompt)
+  //   - No target → all plan skills (single-agent: all skills belong to this one agent)
+  const visibleSkills = target
+    ? plan.skills.filter((s) => target.skills.includes(s.id))
+    : plan.skills;
+  const fleetContext = target
+    ? `\nThis pipeline is a multi-agent fleet. You are writing identity for a SINGLE agent within it:
+- Agent id: ${target.id}
+- Agent name: ${target.name}
+- Role: ${target.role}
+- ${target.isOrchestrator ? "This is the PIPELINE ORCHESTRATOR — it routes work to sub-agents." : "This is a SPECIALIST — it owns a focused domain and is invoked by the orchestrator."}
+- Skills owned by this agent: ${visibleSkills.map((s) => s.name).join(", ") || "(none — pure routing)"}
+
+Write identity files SCOPED TO THIS AGENT, not the pipeline as a whole.\n`
+    : "";
+
   return `[SPECIALIST: Identity Writer]
 
-You are writing the identity files for the "${agentName}" agent.
+You are writing the identity files for the "${agentName}" agent.${fleetContext}
 
 First, read the architecture plan:
 \`\`\`bash
 cat ~/.openclaw/workspace/.openclaw/plan/architecture.json
 \`\`\`
 
-Then write these files to the workspace:
+Then write these files to the workspace${target ? ` under \`${prefix}\`` : ""}:
 
-1. **SOUL.md** — The agent's personality, mission, behavior rules, and workflow.
+1. **${prefix}SOUL.md** — The agent's personality, mission, behavior rules, and workflow.
    Include: who the agent is, their tone, their expertise, what they do and don't do.
 
-2. **AGENTS.md** — The agent manifest with skill inventory, tool connections, triggers, and workflow.
+2. **${prefix}AGENTS.md** — The agent manifest with skill inventory, tool connections, triggers, and workflow.
 
-3. **IDENTITY.md** — A brief identity card: name, role, primary users, key capabilities.
+3. **${prefix}IDENTITY.md** — A brief identity card: name, role, primary users, key capabilities.
 
 Write each file using:
 \`\`\`bash
-cat > ~/.openclaw/workspace/SOUL.md << 'ENDSOUL'
+mkdir -p ~/.openclaw/workspace/${prefix.replace(/\/$/, "")}
+cat > ~/.openclaw/workspace/${prefix}SOUL.md << 'ENDSOUL'
 [content]
 ENDSOUL
 \`\`\`
 
 After writing all 3 files, confirm with:
 \`\`\`json
-{"type": "specialist_done", "specialist": "identity", "files": ["SOUL.md", "AGENTS.md", "IDENTITY.md"]}
+{"type": "specialist_done", "specialist": "identity", "files": ["${prefix}SOUL.md", "${prefix}AGENTS.md", "${prefix}IDENTITY.md"]}
 \`\`\`
 
-Agent name: ${agentName}
-Skills: ${plan.skills.map((s) => s.name).join(", ")}
+Agent name: ${agentName}${target ? ` (writing files for sub-agent: ${target.name})` : ""}
+Skills: ${visibleSkills.map((s) => s.name).join(", ") || "(none)"}
 Channels: ${plan.channels.join(", ") || "none"}
 `;
 }
@@ -209,22 +265,42 @@ After writing all files, confirm:
 
 // ─── Skill Specialist (OpenClaw SKILL.md format) ────────────────────────────
 
-export function buildSkillHandlerPrompt(plan: ArchitecturePlan): string {
-  const skillList = plan.skills.map((s) => {
+export function buildSkillHandlerPrompt(
+  plan: ArchitecturePlan,
+  target?: TargetAgent,
+): string {
+  const prefix = targetPathPrefix(target);
+  // Path B Slice 3.2: when scoped to a sub-agent, ONLY emit skills the
+  // sub-agent owns (per the architect's `<plan_sub_agents>` skill assignment).
+  // For single-agent (no target) the prompt covers all plan.skills.
+  const skillsForThisAgent = target
+    ? plan.skills.filter((s) => target.skills.includes(s.id))
+    : plan.skills;
+
+  const skillList = skillsForThisAgent.map((s) => {
     const env = s.envVars.length ? s.envVars.join(", ") : "none";
     return `- ${s.id}: ${s.description} (env: ${env})`;
-  }).join("\n");
+  }).join("\n") || "(none — this agent has no skills to write)";
+
+  const fleetContext = target
+    ? `\nThis pipeline is a multi-agent fleet. You are writing skills for a SINGLE agent within it:
+- Agent id: ${target.id}
+- Agent name: ${target.name}
+- ${target.isOrchestrator ? "This is the PIPELINE ORCHESTRATOR." : "This is a SPECIALIST sub-agent."}
+
+Skill files for this agent live under \`${prefix}skills/<skill-id>/SKILL.md\`. Skills owned by OTHER agents in this fleet are out of scope — DO NOT write them.\n`
+    : "";
 
   return `[SPECIALIST: Skill Builder — OpenClaw SKILL.md format]
 
-You are writing OpenClaw skills as **SKILL.md** files. These are markdown files that the agent LLM reads and follows as instructions. The agent is an LLM — it reads the SKILL.md to understand what to do, then uses its tools (bash, file I/O, API calls) to execute the skill.
+You are writing OpenClaw skills as **SKILL.md** files. These are markdown files that the agent LLM reads and follows as instructions. The agent is an LLM — it reads the SKILL.md to understand what to do, then uses its tools (bash, file I/O, API calls) to execute the skill.${fleetContext}
 
 Read the plan:
 \`\`\`bash
 cat ~/.openclaw/workspace/.openclaw/plan/architecture.json
 \`\`\`
 
-Skills to implement:
+Skills to implement${target ? ` (scoped to ${target.id})` : ""}:
 ${skillList}
 
 ## SKILL.md Format
@@ -320,17 +396,17 @@ Return a formatted list of leads with contact details, or a clear message if no 
 
 ## Writing Skills
 
-Write each skill:
+Write each skill${target ? ` under \`${prefix}skills/\`` : ""}:
 \`\`\`bash
-mkdir -p ~/.openclaw/workspace/skills/<skill-id>
-cat > ~/.openclaw/workspace/skills/<skill-id>/SKILL.md << 'ENDSKILL'
+mkdir -p ~/.openclaw/workspace/${prefix}skills/<skill-id>
+cat > ~/.openclaw/workspace/${prefix}skills/<skill-id>/SKILL.md << 'ENDSKILL'
 [SKILL.md content with frontmatter + markdown]
 ENDSKILL
 \`\`\`
 
 After writing ALL skills, confirm:
 \`\`\`json
-{"type": "specialist_done", "specialist": "skills", "files": ["skills/<id>/SKILL.md", ...]}
+{"type": "specialist_done", "specialist": "skills", "files": ["${prefix}skills/<id>/SKILL.md", ...]}
 \`\`\`
 `;
 }
@@ -429,13 +505,19 @@ export function getSpecialistPrompt(
   type: SpecialistType,
   plan: ArchitecturePlan,
   agentName: string,
+  target?: TargetAgent,
 ): string {
   switch (type) {
     case "scaffold": return ""; // Scaffold is deterministic (no LLM) — handled by build-orchestrator
-    case "identity": return buildIdentityPrompt(plan, agentName);
+    // Per-agent specialists (Path B Slice 3) — accept target.
+    case "identity": return buildIdentityPrompt(plan, agentName, target);
+    case "skills": return buildSkillHandlerPrompt(plan, target);
+    // Pipeline-level specialists — `target` is intentionally ignored.
+    // Database schemas, HTTP backends, and dashboards are shared across
+    // every agent in the fleet (one DB, one service, one UI), so per-agent
+    // decomposition does NOT apply here.
     case "database": return buildDatabasePrompt(plan);
     case "backend": return buildBackendPrompt(plan);
-    case "skills": return buildSkillHandlerPrompt(plan);
     case "dashboard": return buildDashboardPrompt(plan);
     case "verify": return buildVerificationPrompt();
   }

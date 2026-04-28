@@ -38,15 +38,27 @@ manifest builder picks it up automatically.
 **Path B Slice 4 (shipped)** — per-role memory authority captured from
 the TRD. The architect emits `<plan_memory_authority>` ONLY when the TRD
 names domain authorities (e.g., ECC's "Darrow is the lead estimator").
-Each row carries `tier` (1/2/3), `lane` (snake_case domain), and
+Each row carries `tier` (1/2/3), `lane` (kebab-case domain), and
 `writers[]` (identity strings). When elicited, the manifest carries the
 rows verbatim; when absent, the manifest falls back to the previous
 default (one Tier-1 'main' lane row with the operator as writer, plus
 one row per sub-agent for fleets).
 
-Path B Slice 3 (Build pipeline decomposed across sub-agents) follows
-as a separate PR — until then, fleet manifests are structurally valid
-but the per-sub-agent file trees they reference don't exist yet.
+**Path B Slice 3 (shipped)** — Build pipeline decomposes across sub-agents.
+When the architect emitted a fleet, the **identity** and **skills**
+specialists run once per agent (main orchestrator + each sub-agent). Each
+run targets `agents/<id>/SOUL.md`, `agents/<id>/AGENTS.md`,
+`agents/<id>/skills/<skill-id>/SKILL.md` etc. instead of root paths. The
+main orchestrator owns skills NOT claimed by any sub-agent; sub-agents
+own the skills the architect assigned via `<plan_sub_agents>.skills[]`.
+Pipeline-level specialists (database, backend, dashboard, verify, scaffold)
+stay shared — one DB schema, one HTTP service, one dashboard for the
+whole fleet. Single-agent pipelines (`subAgents` empty) preserve the
+existing root-level paths exactly.
+
+After Slice 3, fleet pipelines build end-to-end through the platform.
+The remaining gap to ECC is customer-side assets (Darrow's interview,
+photos, rates tables) — not platform work.
 
 ## Related Notes
 
@@ -151,15 +163,43 @@ Same emission pattern, different domain. The architect emits ONLY when the TRD n
 - When absent or empty, falls back to Slice 1's default (one Tier-1 'main' lane row with operator + one row per sub-agent)
 - Substrate's `MemoryAuthorityRow` shape and `ArchitecturePlanMemoryAuthorityRow` are structurally compatible — the rows pass through without translation
 
-### Path B Slice 1 caveat (unchanged)
+### Path B Slice 3 — Build pipeline decomposition
 
-The emitted manifest is structurally valid for fleets, but the
-per-sub-agent file trees the manifest references (`agents/intake/`,
-`agents/takeoff/`, etc.) are NOT generated until Path B Slice 3 lands
-the build-pipeline decomposition. Today the manifest can be validated
-end-to-end through `runConformance()` (and is, in tests), but a real
-multi-agent build still produces a single-agent file tree. Don't ship a
-fleet pipeline through the Ship gate until Slice 3.
+Implementation lives in `ruh-backend/src/agentBuild.ts` and
+`ruh-backend/src/specialistPrompts.ts`. Frontend
+`agent-builder-ui/lib/openclaw/build-orchestrator.ts` is vestigial and
+not on the production path — it is intentionally NOT updated.
+
+`getAgentTargets(plan, agentName)`:
+- Returns `null` for single-agent (`plan.subAgents` empty) — preserves
+  the existing one-task-per-specialist shape exactly.
+- Returns `[{id:'main', isOrchestrator:true, …}, ...{from each sub-agent}]`
+  for fleets.
+- Main orchestrator owns the skills NOT claimed by any sub-agent.
+
+`runAgentBuild` builds a `plannedTasks` list. For each pipeline-level
+specialist (database, backend, dashboard, verify, scaffold) it adds one
+entry. For each per-agent specialist (identity, skills) it adds one
+entry per `TargetAgent` when fleet, one entry without target for
+single-agent.
+
+`BuildManifestTask.targetAgentId` is set on per-agent runs, absent for
+pipeline-level. `findTask(specialist, targetId?)` matches on both fields
+so multiple identity tasks (`identity-main`, `identity-intake`,
+`identity-takeoff`) coexist in a single manifest without colliding.
+
+`expectedFilesForSpecialist(specialist, plan, target?)` routes per-agent
+specialists under `agents/<id>/` and filters skills by
+`target.skills.includes(s.id)`. Pipeline-level specialists ignore the
+target argument.
+
+Both prompt builders (`buildIdentityPrompt`, `buildSkillHandlerPrompt`)
+gain an optional `target` parameter:
+- Without target: existing single-agent prompt (root paths, all skills).
+- With target: prompt explicitly states the agent's id, role, and
+  whether it's the orchestrator or a specialist; instructs the LLM to
+  write files at `agents/<id>/`; for skills, restricts to the target's
+  owned skills.
 
 ### Emission point
 
@@ -297,9 +337,28 @@ This contract is intentionally narrow:
   - `dispatchCustomEvent('plan_sub_agents', …)` updates `architecturePlan.subAgents`
   - `dispatchCustomEvent('plan_memory_authority', …)` updates `architecturePlan.memoryAuthority`
 
-## Out of scope (Path B Slice 3 and beyond)
+- `ruh-backend/tests/unit/agentBuildFleet.test.ts` (Path B Slice 3):
+  - `getAgentTargets` returns `null` for single-agent, `[main, ...subs]` for fleet
+  - main orchestrator owns skills NOT claimed by any sub-agent
+  - sub-agent role falls back from description → name when description empty
+  - `expectedFilesForSpecialist` returns root paths when no target (single-agent regression pin)
+  - `expectedFilesForSpecialist` routes identity to `agents/<id>/SOUL.md` (et al.) with target
+  - `expectedFilesForSpecialist` filters skills to `target.skills` AND uses `agents/<id>/skills/` prefix
+  - pipeline-level specialists (database, backend) ignore target
+  - identity prompt distinguishes `PIPELINE ORCHESTRATOR` from `SPECIALIST` based on `target.isOrchestrator`
+  - skills prompt scoped to a target excludes other agents' skills
+  - identity + skills prompts unchanged when no target supplied (single-agent regression pins)
+  - database + backend prompts identical with/without target
 
-- **Slice 3** — Build pipeline decomposed across sub-agents. The emitted manifest references per-sub-agent file trees (`agents/intake/`, etc.) that don't exist until Slice 3 lands the per-specialist sub-builds.
+## Out of scope (beyond Path B)
+
+- **Backend-side conformance gate** at `POST /api/agents/:id/ship` — today the gate is frontend-only.
+- **Real checksum** computation at deploy time over the resolved pipeline state — currently a placeholder.
+- **Dashboard manifest emission** so the conformance gate validates the pair instead of filtering `dashboard-manifest-required`.
+- **Routing rules richer than stage-match** — sequential `specialists`, parallel `fan_out`, `then` chains.
+- **`merge_policy` rules** for cross-specialist merging in fleets.
+- **Per-sub-agent failure policy** — today every sub-agent gets `retry-then-escalate`. Future slice could let the architect override per-agent.
+- **Cross-agent integration tests** that actually boot a fleet sandbox and verify the orchestrator routes correctly.
 - Dashboard manifest emission so `runConformance()` validates the pair
 - Routing rules richer than stage-match (sequential `specialists`, `fan_out`, `then` chains)
 - `merge_policy` rules when fleets actually need cross-specialist merging
