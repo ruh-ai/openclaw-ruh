@@ -97,6 +97,7 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-remove-tauri-desktop-app]] — Removes the deprecated Tauri wrapper and makes `ruh_app` the only native client path
 - [[SPEC-gateway-tool-events]] — Structured sandbox tool events let chat UIs react to live tool execution with workspace/tab updates
 - [[SPEC-agent-builder-session-token-hardening]] — Agent Builder auth moves to HttpOnly cookies plus a same-origin BFF so browser JS never handles bearer tokens
+- [[SPEC-builder-pipeline-manifest]] — Builder derives a v1-conformant pipeline-manifest.json from each completed ArchitecturePlan; Ship gates deploy on `POST /api/conformance/check`
 - [[SPEC-agent-builder-auth-gate]] — Builder pages fail closed behind middleware and session-bootstrap redirects while token hardening remains a follow-on
 - [[SPEC-agent-builder-bridge-auth]] — `/api/openclaw` validates the caller session server-side and rejects cross-site bridge requests before gateway access
 - [[SPEC-web-security-headers]] — Browser-facing apps emit baseline CSP, anti-framing, nosniff, referrer, and permissions headers with HTTPS-only edge HSTS

@@ -82,6 +82,9 @@ interface CoPilotStoreLike {
   // when the architect skipped the structured markers.
   agentSandboxId: string | null;
   architecturePlan: ArchitecturePlan | null;
+  // Agent identity — read by emitPipelineManifest to derive manifest fields.
+  name: string;
+  description: string;
 }
 
 // ─── Drop warning helper ───────────────────────────────────────────────────
@@ -506,12 +509,18 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   const hasUsablePlan = (plan: ArchitecturePlan | null | undefined): boolean =>
     Boolean(plan && ((plan.skills?.length ?? 0) > 0 || (plan.workflow?.steps?.length ?? 0) > 0));
 
+  const sandboxId = store.agentSandboxId;
+
   // If a real plan is already in the store (e.g. from architecture_plan_ready
   // or complete incremental markers), leave it alone. A partial object with no
   // skills/workflow is not usable for Build and should still recover from disk.
-  if (hasUsablePlan(store.architecturePlan)) return;
+  if (hasUsablePlan(store.architecturePlan)) {
+    // Plan is already in store — derive the v1-conformant pipeline manifest
+    // from it now so Build/Ship can find it on disk alongside architecture.json.
+    if (sandboxId) void emitPipelineManifest(sandboxId, store.architecturePlan!, store);
+    return;
+  }
 
-  const sandboxId = store.agentSandboxId;
   if (!sandboxId) {
     store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
     tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
@@ -529,10 +538,21 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
         }
         return;
       }
-      if (hasUsablePlan(store.architecturePlan)) return;
+      if (hasUsablePlan(store.architecturePlan)) {
+        // Plan was filled in by another race; still emit the manifest derived
+        // from whatever is now in the store.
+        await emitPipelineManifest(sandboxId, store.architecturePlan!, store);
+        return;
+      }
       const parsed = JSON.parse(planJson) as Record<string, unknown>;
-      store.setArchitecturePlan(normalizePlan(parsed));
+      const plan = normalizePlan(parsed);
+      store.setArchitecturePlan(plan);
       tracer.apply("copilot-store", "CUSTOM", "plan_complete:recovered_from_disk");
+      // Derive + persist the v1-conformant pipeline manifest from the loaded
+      // plan. Failures here should not block plan recovery — the manifest
+      // is still derivable later, and Ship's conformance gate will surface
+      // the gap loudly.
+      await emitPipelineManifest(sandboxId, plan, store);
     } catch {
       if (!hasUsablePlan(store.architecturePlan)) {
         store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
@@ -540,6 +560,48 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
       }
     }
   })();
+}
+
+/**
+ * Derive a v1-conformant pipeline-manifest.json from the current
+ * ArchitecturePlan + agent metadata and write it to
+ * `.openclaw/plan/pipeline-manifest.json` in the agent's workspace.
+ *
+ * Pure derivation — no LLM calls. The architect produces the
+ * ArchitecturePlan; this turns it into the substrate-validated artifact
+ * the Ship-stage conformance gate consumes.
+ *
+ * Failures are logged but never thrown — the plan is still usable for
+ * Build, and the Ship gate will report a missing-manifest error
+ * loudly if something went wrong here.
+ */
+async function emitPipelineManifest(
+  sandboxId: string,
+  plan: ArchitecturePlan,
+  store: CoPilotStoreLike,
+): Promise<void> {
+  try {
+    const { buildPipelineManifest } = await import("@/lib/openclaw/pipeline-manifest-builder");
+    const { writeWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+    const manifest = buildPipelineManifest({
+      agentName: store.name || "Untitled Pipeline",
+      agentDescription: store.description || "",
+      plan,
+    });
+    const written = await writeWorkspaceFile(
+      sandboxId,
+      ".openclaw/plan/pipeline-manifest.json",
+      JSON.stringify(manifest, null, 2),
+    );
+    if (written) {
+      tracer.apply("copilot-store", "CUSTOM", "plan_complete:pipeline_manifest_written");
+    } else {
+      tracer.apply("copilot-store", "CUSTOM", "plan_complete:pipeline_manifest_write_failed");
+    }
+  } catch (err) {
+    console.warn("[event-consumer-map] Failed to emit pipeline-manifest.json:", err);
+    tracer.apply("copilot-store", "CUSTOM", "plan_complete:pipeline_manifest_write_failed");
+  }
 }
 
 // ─── Consumer registry ──────────────────────────────────────────────────────
