@@ -14,7 +14,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { generateScaffoldFiles, normalizePlan, staleScaffoldFilesForPlan, type ArchitecturePlan } from './scaffoldTemplates';
-import { getSpecialistPrompt, getRequiredSpecialists, type SpecialistType } from './specialistPrompts';
+import { getSpecialistPrompt, getRequiredSpecialists, type SpecialistType, type TargetAgent } from './specialistPrompts';
 import { mergeWorkspaceCopilotToMain, writeWorkspaceFile, writeWorkspaceFiles } from './workspaceWriter';
 import { buildHomeFileWriteCommand, dockerExec, getContainerName, shellQuote } from './docker';
 import { gatewayUrlAndHeaders } from './utils';
@@ -47,6 +47,13 @@ interface BuildManifestTask {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /**
+   * Path B Slice 3: when this task is a per-agent specialist run (identity
+   * or skills in a fleet pipeline), the agent it targets. Absent for
+   * pipeline-level specialists (database, backend, dashboard, verify) and
+   * for single-agent pipelines.
+   */
+  targetAgentId?: string;
 }
 
 interface BuildManifest {
@@ -511,18 +518,68 @@ function routeGroupsForPlan(plan: ArchitecturePlan): string[] {
   }));
 }
 
-function expectedFilesForSpecialist(specialist: string, plan: ArchitecturePlan): string[] {
+/**
+ * Path B Slice 3 — when the architect emitted a multi-agent fleet
+ * (`plan.subAgents.length > 0`), produce one `TargetAgent` per agent in
+ * the fleet (main orchestrator + each sub-agent). Returns `null` for
+ * single-agent pipelines, signalling the caller to keep the existing
+ * specialist-runs-once-at-root-paths behavior.
+ *
+ * The main orchestrator's owned skills are everything in `plan.skills` NOT
+ * claimed by any sub-agent. This mirrors how the architect's prompt
+ * positions the orchestrator: it owns the routing + any general-purpose
+ * skills, and delegates domain-specific work to specialist sub-agents.
+ */
+export function getAgentTargets(plan: ArchitecturePlan, agentName: string): TargetAgent[] | null {
+  const subAgents = plan.subAgents ?? [];
+  if (subAgents.length === 0) return null;
+  const claimedSkills = new Set<string>(subAgents.flatMap((sa) => sa.skills ?? []));
+  const mainSkills = plan.skills
+    .filter((s) => !claimedSkills.has(s.id))
+    .map((s) => s.id);
+  return [
+    {
+      id: 'main',
+      name: agentName,
+      role: 'Pipeline orchestrator',
+      skills: mainSkills,
+      isOrchestrator: true,
+    },
+    ...subAgents.map((sa) => ({
+      id: sa.id,
+      name: sa.name,
+      role: sa.description?.trim() || sa.name,
+      skills: sa.skills ?? [],
+      isOrchestrator: false,
+    })),
+  ];
+}
+
+export function expectedFilesForSpecialist(
+  specialist: string,
+  plan: ArchitecturePlan,
+  target?: TargetAgent,
+): string[] {
+  // Path B Slice 3: per-agent specialists (identity, skills) write under
+  // `agents/<id>/`. Pipeline-level specialists ignore the target. Single-
+  // agent (no target) keeps the legacy root-level paths.
+  const prefix = target ? `agents/${target.id}/` : '';
   switch (specialist) {
     case 'identity':
-      return ['SOUL.md', 'AGENTS.md', 'IDENTITY.md'];
+      return [`${prefix}SOUL.md`, `${prefix}AGENTS.md`, `${prefix}IDENTITY.md`];
     case 'database':
       return plan.dataSchema?.tables?.length
         ? ['db/migrations/001_initial.sql', 'db/types.ts', 'db/seed.ts', 'db/migrate.ts']
         : [];
     case 'backend':
       return routeGroupsForPlan(plan).map((group) => `backend/routes/${group}.ts`);
-    case 'skills':
-      return plan.skills.map((skill) => `skills/${skill.id}/SKILL.md`);
+    case 'skills': {
+      // Per-agent: filter to owned skills only; root-level: all plan skills.
+      const ownedSkills = target
+        ? plan.skills.filter((s) => target.skills.includes(s.id))
+        : plan.skills;
+      return ownedSkills.map((skill) => `${prefix}skills/${skill.id}/SKILL.md`);
+    }
     default:
       return [];
   }
@@ -548,8 +605,9 @@ async function reconcileSpecialistFiles(
   specialist: string,
   plan: ArchitecturePlan,
   reportedFiles: string[],
+  target?: TargetAgent,
 ): Promise<{ files: string[]; missing: string[] }> {
-  const expected = expectedFilesForSpecialist(specialist, plan);
+  const expected = expectedFilesForSpecialist(specialist, plan, target);
   const existing = await existingWorkspaceFiles(sandboxId, expected);
   const files = uniqueStrings([...reportedFiles, ...existing]);
   const missing = expected.filter((path) => !existing.includes(path));
@@ -569,12 +627,14 @@ async function executeSpecialist(
   agentName: string,
   task: BuildManifestTask,
   signal?: AbortSignal,
+  target?: TargetAgent,
 ): Promise<SpecialistResult> {
   const events: BuildEvent[] = [];
   task.status = 'running';
   task.startedAt = new Date().toISOString();
+  if (target) task.targetAgentId = target.id;
   events.push({ type: 'task_start', specialist });
-  events.push({ type: 'status', message: `Running ${specialist} specialist...` });
+  events.push({ type: 'status', message: `Running ${specialist} specialist${target ? ` for ${target.id}` : ''}...` });
 
   // Dashboard is handled by scaffold — skip LLM call
   if (specialist === 'dashboard') {
@@ -584,7 +644,7 @@ async function executeSpecialist(
     return { events, files: [] };
   }
 
-  const prompt = getSpecialistPrompt(specialist as SpecialistType, plan, agentName);
+  const prompt = getSpecialistPrompt(specialist as SpecialistType, plan, agentName, target);
   if (!prompt) {
     task.status = 'done';
     task.completedAt = new Date().toISOString();
@@ -592,26 +652,34 @@ async function executeSpecialist(
     return { events, files: [] };
   }
 
-  const preexisting = await reconcileSpecialistFiles(sandboxId, specialist, plan, []);
+  const preexisting = await reconcileSpecialistFiles(sandboxId, specialist, plan, [], target);
   if (preexisting.missing.length === 0 && preexisting.files.length > 0) {
     task.files = preexisting.files;
     task.status = 'done';
     task.completedAt = new Date().toISOString();
-    events.push({ type: 'status', message: `${specialist} files already exist; skipping specialist call.` });
+    events.push({ type: 'status', message: `${specialist}${target ? ` (${target.id})` : ''} files already exist; skipping specialist call.` });
     events.push({ type: 'task_complete', specialist, files: preexisting.files });
     return { events, files: preexisting.files };
   }
 
-  // Fix 2: Chunk skills if > 3 to avoid single-point timeout
-  if (specialist === 'skills' && plan.skills.length > 3) {
-    return executeChunkedSkills(sandboxId, plan, agentName, task, signal);
+  // Fix 2: Chunk skills if > 3 to avoid single-point timeout. The chunking
+  // operates on the skills owned by THIS specialist run — for fleets this
+  // is the target's owned skills only; for single-agent it's all plan
+  // skills (existing behavior).
+  if (specialist === 'skills') {
+    const ownedSkills = target
+      ? plan.skills.filter((s) => target.skills.includes(s.id))
+      : plan.skills;
+    if (ownedSkills.length > 3) {
+      return executeChunkedSkills(sandboxId, plan, agentName, task, signal, target);
+    }
   }
 
   try {
     const result = await callSpecialist(sandboxId, prompt, undefined, signal);
-    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, result.files);
+    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, result.files, target);
     if (reconciled.missing.length > 0) {
-      throw new Error(`${specialist} did not produce expected file(s): ${reconciled.missing.join(', ')}`);
+      throw new Error(`${specialist}${target ? ` (${target.id})` : ''} did not produce expected file(s): ${reconciled.missing.join(', ')}`);
     }
     task.files = reconciled.files;
     task.status = 'done';
@@ -620,7 +688,7 @@ async function executeSpecialist(
     return { events, files: reconciled.files };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, []);
+    const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, [], target);
     if (reconciled.missing.length === 0 && reconciled.files.length > 0) {
       task.files = reconciled.files;
       task.status = 'done';
@@ -645,34 +713,45 @@ async function executeChunkedSkills(
   agentName: string,
   task: BuildManifestTask,
   signal?: AbortSignal,
+  target?: TargetAgent,
 ): Promise<SpecialistResult> {
   const events: BuildEvent[] = [];
+  if (target) task.targetAgentId = target.id;
   const CHUNK_SIZE = 3;
-  const chunks = chunkArray(plan.skills, CHUNK_SIZE);
+  // For per-agent runs, chunk only the skills this agent owns. For
+  // single-agent (no target), chunk all plan skills as before.
+  const ownedSkills = target
+    ? plan.skills.filter((s) => target.skills.includes(s.id))
+    : plan.skills;
+  const chunks = chunkArray(ownedSkills, CHUNK_SIZE);
   const allFiles: string[] = [];
 
-  const preexisting = await reconcileSpecialistFiles(sandboxId, 'skills', plan, []);
+  const preexisting = await reconcileSpecialistFiles(sandboxId, 'skills', plan, [], target);
   if (preexisting.missing.length === 0 && preexisting.files.length > 0) {
     task.files = preexisting.files;
     task.status = 'done';
     task.completedAt = new Date().toISOString();
-    events.push({ type: 'status', message: 'Skill files already exist; skipping skill specialist calls.' });
+    events.push({ type: 'status', message: `Skill files${target ? ` for ${target.id}` : ''} already exist; skipping skill specialist calls.` });
     events.push({ type: 'task_complete', specialist: 'skills', files: preexisting.files });
     return { events, files: preexisting.files };
   }
 
-  events.push({ type: 'status', message: `Building ${plan.skills.length} skills in ${chunks.length} chunks...` });
+  events.push({ type: 'status', message: `Building ${ownedSkills.length} skills${target ? ` for ${target.id}` : ''} in ${chunks.length} chunks...` });
 
   for (let i = 0; i < chunks.length; i++) {
     if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
 
     const chunk = chunks[i];
     const skillIds = chunk.map((s) => s.id).join(', ');
-    events.push({ type: 'status', message: `Skills chunk ${i + 1}/${chunks.length}: ${skillIds}` });
+    events.push({ type: 'status', message: `Skills chunk ${i + 1}/${chunks.length}${target ? ` (${target.id})` : ''}: ${skillIds}` });
 
-    // Build a scoped plan with only the chunk's skills
+    // Build a scoped plan with only the chunk's skills. The skills prompt
+    // additionally filters by target.skills, so the chunk effectively
+    // describes (skills_in_chunk ∩ target_owns) — but since the chunk
+    // already comes from `ownedSkills`, every skill in the chunk is
+    // already owned by the target.
     const scopedPlan = { ...plan, skills: chunk };
-    const prompt = getSpecialistPrompt('skills' as SpecialistType, scopedPlan, agentName);
+    const prompt = getSpecialistPrompt('skills' as SpecialistType, scopedPlan, agentName, target);
     if (!prompt) continue;
 
     try {
@@ -688,7 +767,7 @@ async function executeChunkedSkills(
     }
   }
 
-  const reconciled = await reconcileSpecialistFiles(sandboxId, 'skills', plan, allFiles);
+  const reconciled = await reconcileSpecialistFiles(sandboxId, 'skills', plan, allFiles, target);
   task.files = reconciled.files;
   task.status = reconciled.missing.length === 0 ? 'done' : 'failed';
   task.completedAt = new Date().toISOString();
@@ -723,17 +802,58 @@ export async function* runAgentBuild(
   }
 
   const specialists = getRequiredSpecialists(plan);
-  const allTasks = ['scaffold', ...specialists, 'verify'];
 
+  // Path B Slice 3: when the architect emitted a fleet, identity and skills
+  // run once PER agent (main + sub-agents). Other specialists (database,
+  // backend, dashboard, verify) stay pipeline-level. agentTargets is null
+  // for single-agent — preserves the existing one-task-per-specialist shape.
+  const agentTargets = getAgentTargets(plan, agentName);
+  const isFleet = agentTargets !== null;
+
+  // Build the per-specialist task list. Identity and skills multiply when
+  // a fleet is present; everything else stays single-instance.
+  type PlannedTask = { specialist: string; target?: TargetAgent };
+  const plannedTasks: PlannedTask[] = [{ specialist: 'scaffold' }];
+  for (const spec of specialists) {
+    const isPerAgent = spec === 'identity' || spec === 'skills';
+    if (isFleet && isPerAgent) {
+      for (const target of agentTargets!) {
+        plannedTasks.push({ specialist: spec, target });
+      }
+    } else {
+      plannedTasks.push({ specialist: spec });
+    }
+  }
+  plannedTasks.push({ specialist: 'verify' });
+
+  // Stable, unique task ids — `${specialist}-${targetId-or-base}-${index}`
+  // so multiple identity tasks (e.g., identity-main, identity-intake) don't
+  // collide on lookup. Plain `${spec}-${Date.now()}` would have all per-
+  // agent identity tasks share a millisecond-bucketed timestamp.
+  const baseTime = Date.now();
   const manifest: BuildManifest = {
     version: 3,
     agentName,
     createdAt: new Date().toISOString(),
     plan: '.openclaw/plan/architecture.json',
-    tasks: allTasks.map((s) => ({ id: `${s}-${Date.now()}`, specialist: s, status: 'pending' as const, files: [] })),
+    tasks: plannedTasks.map((p, i) => ({
+      id: `${p.specialist}${p.target ? `-${p.target.id}` : ''}-${baseTime}-${i}`,
+      specialist: p.specialist,
+      status: 'pending' as const,
+      files: [],
+      ...(p.target ? { targetAgentId: p.target.id } : {}),
+    })),
   };
 
-  const findTask = (s: string) => manifest.tasks.find((t) => t.specialist === s);
+  // Total used for progress reporting.
+  const allTasks = plannedTasks;
+
+  // Lookup is keyed on (specialist, targetAgentId?). Specialists without a
+  // target (scaffold, database, backend, dashboard, verify) match the
+  // single task with that specialist; per-agent specialists (identity,
+  // skills in a fleet) require the targetAgentId to disambiguate.
+  const findTask = (s: string, targetId?: string) =>
+    manifest.tasks.find((t) => t.specialist === s && t.targetAgentId === targetId);
   let completed = 0;
   const setupStepsForReport: Array<{ name: string; ok: boolean; optional?: boolean; output?: string; skipped?: boolean }> = [];
   const servicesForReport: Array<{ name: string; healthy: boolean; optional?: boolean; port?: number }> = [];
@@ -806,17 +926,33 @@ export async function* runAgentBuild(
     // lane, so parallel HTTP calls just queue up and cause contention/timeouts.
     // The parallelBuild flag is accepted but currently has no effect on specialist
     // execution order — it will be enabled when the gateway supports concurrent lanes.
-    for (const specialist of specialists) {
+    //
+    // Path B Slice 3: identity and skills now multiply per-agent when a fleet
+    // was emitted by the architect. We iterate over the planned-tasks list
+    // (which already encodes the per-target multiplication) instead of
+    // walking `specialists` and calling each once.
+    for (const planned of plannedTasks) {
+      // Skip scaffold (handled in Phase 1) and verify (handled in Phase 5).
+      if (planned.specialist === 'scaffold' || planned.specialist === 'verify') continue;
       checkCancelled();
 
-      const task = findTask(specialist)!;
-      yield { type: 'task_start', specialist };
-      yield { type: 'status', message: `Running ${specialist} specialist...` };
-      const result = await executeSpecialist(sandboxId, specialist, plan, agentName, task, signal);
+      const task = findTask(planned.specialist, planned.target?.id)!;
+      const targetSuffix = planned.target ? ` (${planned.target.id})` : '';
+      yield { type: 'task_start', specialist: planned.specialist };
+      yield { type: 'status', message: `Running ${planned.specialist}${targetSuffix} specialist...` };
+      const result = await executeSpecialist(
+        sandboxId,
+        planned.specialist,
+        plan,
+        agentName,
+        task,
+        signal,
+        planned.target,
+      );
 
       for (const evt of result.events) {
         if (evt.type === 'task_start') continue;
-        if (evt.type === 'status' && evt.message === `Running ${specialist} specialist...`) continue;
+        if (evt.type === 'status' && evt.message?.startsWith(`Running ${planned.specialist}`)) continue;
         yield evt;
       }
 

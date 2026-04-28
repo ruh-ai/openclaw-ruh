@@ -21,7 +21,22 @@ export interface ArchitecturePlan {
   triggers: Array<{ type: string; name?: string; schedule?: string; every?: string; cron?: string; skillId?: string; message?: string; config?: Record<string, unknown> }>;
   channels: string[];
   envVars: ArchitecturePlanEnvVar[];
-  subAgents: Array<{ id: string; name: string }>;
+  /**
+   * Sub-agents emitted by the architect's `<plan_sub_agents>` marker.
+   * Empty for single-agent pipelines. The build pipeline (agentBuild.ts)
+   * uses `id`, `name`, `description`, and `skills` to decompose the
+   * identity + skills specialists per agent. Other fields are carried for
+   * future use (e.g., per-agent failure policy in Slice 5).
+   */
+  subAgents: Array<{
+    id: string;
+    name: string;
+    description: string;
+    type: "worker" | "orchestrator" | "monitor" | "specialist";
+    skills: string[];
+    trigger: string;
+    autonomy: "fully_autonomous" | "requires_approval" | "report_only";
+  }>;
   missionControl: unknown;
   soulContent?: string;
   dataSchema?: DataSchema | null;
@@ -202,11 +217,43 @@ export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
     }),
     subAgents: asArray(raw.subAgents).map((rawAgent, index) => {
       if (typeof rawAgent === "string") {
-        return { id: slugifyValue(rawAgent, `sub-agent-${index + 1}`), name: rawAgent };
+        return {
+          id: slugifyValue(rawAgent, `sub-agent-${index + 1}`),
+          name: rawAgent,
+          description: rawAgent,
+          type: "worker" as const,
+          skills: [] as string[],
+          trigger: "",
+          autonomy: "requires_approval" as const,
+        };
       }
       const agent = asRecord(rawAgent);
       const name = asString(agent.name, `Sub Agent ${index + 1}`);
-      return { id: asString(agent.id, slugifyValue(name, `sub-agent-${index + 1}`)), name };
+      const rawType = asString(agent.type, "worker");
+      const type =
+        rawType === "worker" || rawType === "specialist" ||
+        rawType === "monitor" || rawType === "orchestrator"
+          ? (rawType as "worker" | "specialist" | "monitor" | "orchestrator")
+          : ("worker" as const);
+      const rawAutonomy = asString(agent.autonomy, "requires_approval");
+      const autonomy =
+        rawAutonomy === "fully_autonomous" ||
+        rawAutonomy === "requires_approval" ||
+        rawAutonomy === "report_only"
+          ? (rawAutonomy as "fully_autonomous" | "requires_approval" | "report_only")
+          : ("requires_approval" as const);
+      const skills = asArray(agent.skills)
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .map((s) => s.trim());
+      return {
+        id: asString(agent.id, slugifyValue(name, `sub-agent-${index + 1}`)),
+        name,
+        description: asString(agent.description, name),
+        type,
+        skills,
+        trigger: asString(agent.trigger),
+        autonomy,
+      };
     }),
     missionControl: raw.missionControl ?? null,
     soulContent: raw.soulContent as string | undefined,
