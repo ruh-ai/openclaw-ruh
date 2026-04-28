@@ -2,20 +2,36 @@
  * pipeline-manifest-builder.ts — derive a v1-conformant pipeline manifest
  * from a builder ArchitecturePlan + agent metadata.
  *
- * Pure function. No I/O, no LLM calls. The architect produces ArchitecturePlan
- * (single-agent shape today); this module emits a `pipeline-manifest.json`
- * that the OpenClaw v1 spec recognises so the runtime substrate's
- * `runConformance()` can validate before deploy.
+ * Pure function. No I/O, no LLM calls. The architect produces
+ * ArchitecturePlan; this module emits a `pipeline-manifest.json` that the
+ * OpenClaw v1 spec recognises so the runtime substrate's `runConformance()`
+ * can validate before deploy.
  *
- * Path A scope (single-agent first):
- *   - len(agents) == 1, role: "Single-agent pipeline", is_orchestrator: true
+ * Path A (shipped) — single-agent pipelines:
+ *   - `len(agents) == 1`, role: "Single-agent pipeline", is_orchestrator: true
  *   - trivial routing (no rules, fallback: "main")
  *   - one Tier-1 memory_authority row in a generic "main" lane
  *   - empty hooks/custom_hooks/config_docs/imports
  *
- * Multi-agent fleets (Path B) extend this — when ArchitecturePlan.subAgents
- * is populated, this module today still emits a single-agent manifest with a
- * console warning. The fleet shape lands in a follow-up PR.
+ * Path B Slice 1 (this PR) — multi-agent fleet emission:
+ *   - When `plan.subAgents.length > 0`, manifest grows:
+ *       * `agents[]` = [main orchestrator] + one entry per sub-agent
+ *       * `routing.rules` derived from each sub-agent's `trigger`
+ *       * `failure_policy` row per sub-agent (default `retry-then-escalate`)
+ *       * one Tier-1 memory_authority row per sub-agent (lane = sub-agent id)
+ *   - Single-agent shape (empty subAgents) is unchanged from Path A
+ *   - Operator is still the only writer in every authority row;
+ *     per-role identity capture is Path B Slice 4
+ *
+ * Out of scope for this slice (Path B Slices 2/3/4):
+ *   - Architect's Plan instruction does not yet ELICIT sub-agents — this
+ *     module emits the right manifest IF subAgents are populated, but
+ *     today the architect leaves them empty
+ *   - Build pipeline does not yet decompose across sub-agents — the
+ *     emitted manifest is structurally valid but the per-sub-agent file
+ *     trees the manifest references won't be generated until B3
+ *   - Real per-role memory authority (Darrow-Tier1-Estimating, etc.)
+ *     captured in Think/Plan — Path B Slice 4
  *
  * Spec reference: docs/spec/openclaw-v1/011-pipeline-manifest.md
  * Substrate types: packages/openclaw-runtime/src/pipeline-manifest/types.ts
@@ -105,6 +121,63 @@ export function buildPipelineManifest(args: BuildPipelineManifestArgs): unknown 
           },
         ];
 
+  // ── Sub-agent lift (Path B Slice 1) ──────────────────────────────────
+  // When the architect populated `plan.subAgents`, the manifest becomes a
+  // multi-agent fleet: main orchestrator + one entry per sub-agent. Empty
+  // subAgents preserves the Path A single-agent shape exactly.
+  const subAgents = args.plan.subAgents ?? [];
+  const isFleet = subAgents.length > 0;
+
+  const mainAgent = {
+    id: mainAgentId,
+    path: `agents/${mainAgentId}/`,
+    version,
+    role: isFleet ? "Pipeline orchestrator" : "Single-agent pipeline",
+    is_orchestrator: true,
+  };
+
+  const subAgentEntries = subAgents.map((sa) => ({
+    id: sa.id,
+    path: `agents/${sa.id}/`,
+    version,
+    // Sub-agents NEVER carry is_orchestrator: true (substrate enforces
+    // exactly one orchestrator per pipeline; main owns it).
+    role: sa.description?.trim() || sa.name,
+  }));
+
+  const agents = [mainAgent, ...subAgentEntries];
+
+  // Routing rules — one per sub-agent that declared a non-empty trigger.
+  // Sub-agents without triggers fall through to the orchestrator (`fallback`).
+  // The architect's `trigger` field maps directly to MatchClause.stage.
+  const routingRules = subAgents
+    .filter((sa) => typeof sa.trigger === "string" && sa.trigger.trim().length > 0)
+    .map((sa) => ({
+      match: { stage: sa.trigger.trim() },
+      specialist: sa.id,
+    }));
+
+  // Failure policy per sub-agent. `retry-then-escalate` is the safe default
+  // for unknown specialists; per-agent customisation lands in Path B Slice 2
+  // when the architect can express failure intent.
+  const failurePolicy: Record<string, "abort" | "skip" | "retry-then-escalate" | "retry-then-skip" | "manual-review"> = {};
+  for (const sa of subAgents) {
+    failurePolicy[sa.id] = "retry-then-escalate";
+  }
+
+  // Memory authority — one row per agent. Each sub-agent gets its own lane
+  // (kebab-case from sub-agent id) so writes from one specialist don't
+  // overwrite another's. Operator remains the writer in every row; real
+  // per-role identity (Darrow → estimating, etc.) is Path B Slice 4.
+  const memoryAuthority = [
+    { tier: 1 as const, lane: memoryLane, writers: [operator] },
+    ...subAgents.map((sa) => ({
+      tier: 1 as const,
+      lane: sa.id,
+      writers: [operator],
+    })),
+  ];
+
   return {
     // Identity
     id,
@@ -113,27 +186,17 @@ export function buildPipelineManifest(args: BuildPipelineManifestArgs): unknown 
     name: args.agentName,
     description: args.agentDescription,
 
-    // Composition (single-agent shape)
-    agents: [
-      {
-        id: mainAgentId,
-        path: `agents/${mainAgentId}/`,
-        version,
-        role: "Single-agent pipeline",
-        is_orchestrator: true,
-      },
-    ],
+    // Composition — single-agent (Path A) or fleet (Path B Slice 1)
+    agents,
     orchestrator: { agent_id: mainAgentId, skills: orchestratorSkills },
 
     // Routing & coordination
-    routing: { rules: [], fallback: mainAgentId },
-    failure_policy: {},
+    routing: { rules: routingRules, fallback: mainAgentId },
+    failure_policy: failurePolicy,
     merge_policy: [],
 
     // Memory & config
-    memory_authority: [
-      { tier: 1, lane: memoryLane, writers: [operator] },
-    ],
+    memory_authority: memoryAuthority,
     config_docs: [],
     imports: [],
 
