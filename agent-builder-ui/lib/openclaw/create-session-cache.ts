@@ -143,7 +143,7 @@ export function shouldWaitForRouteAgentBeforeCacheRestore({
   return Boolean(editingAgentId && !hasAgentRecord && !isRouteAgentHydrated);
 }
 
-const DEV_STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+const DEV_STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
 
 function resolvePersistedForgeStage(agent: SavedAgent | null): AgentDevStage | null {
   if (!agent) return null;
@@ -168,6 +168,27 @@ function restorePersistedLifecycle(
   merged.thinkRunId = null;
   merged.planRunId = null;
   merged.buildRunId = null;
+}
+
+function normalizedIdentityValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function cacheIdentityBelongsToDifferentAgent(
+  agent: SavedAgent,
+  cachedCoPilot: Partial<CoPilotState>,
+): boolean {
+  const cachedName = normalizedIdentityValue(cachedCoPilot.name);
+  const cachedDescription = normalizedIdentityValue(cachedCoPilot.description);
+  if (!cachedName && !cachedDescription) return false;
+
+  const persistedName = normalizedIdentityValue(agent.name);
+  const persistedDescription = normalizedIdentityValue(agent.description);
+
+  return Boolean(
+    (cachedName && persistedName && cachedName !== persistedName)
+      || (cachedDescription && persistedDescription && cachedDescription !== persistedDescription),
+  );
 }
 
 export function shouldReconcileToPersistedForgeStage({
@@ -215,6 +236,9 @@ export function buildResumedCoPilotSeed(
 ): Partial<CoPilotState> {
   const persistedSeed = agent ? createCoPilotSeedFromAgent(agent) : {};
   if (!cachedCoPilot) return persistedSeed;
+  if (agent && cacheIdentityBelongsToDifferentAgent(agent, cachedCoPilot)) {
+    return persistedSeed;
+  }
 
   // Merge cache over persisted seed, but never let empty-string cache values
   // for identity fields overwrite real agent data. This prevents a stale cache

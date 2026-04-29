@@ -112,6 +112,8 @@ export const CustomEventName = {
   PLAN_API_ENDPOINTS: "plan_api_endpoints",
   /** Plan dashboard pages decision. */
   PLAN_DASHBOARD_PAGES: "plan_dashboard_pages",
+  /** Plan dashboard prototype gate. */
+  PLAN_DASHBOARD_PROTOTYPE: "plan_dashboard_prototype",
   /** Plan environment variables decision. */
   PLAN_ENV_VARS: "plan_env_vars",
   /** Plan sub-agents decision (multi-agent fleet definition; empty for single-agent). */
@@ -207,6 +209,30 @@ export interface PlanApiEndpointsPayload {
 
 export interface PlanDashboardPagesPayload {
   dashboardPages: Array<{ path: string; title: string; description: string; components: Array<{ type: string; title: string; dataSource: string }> }>;
+}
+
+export interface PlanDashboardPrototypePayload {
+  dashboardPrototype: {
+    summary: string;
+    primaryUsers: string[];
+    workflows: Array<{
+      id: string;
+      name: string;
+      steps: string[];
+      requiredActions: string[];
+      successCriteria: string[];
+    }>;
+    pages: Array<{
+      path: string;
+      title: string;
+      purpose: string;
+      supportsWorkflows: string[];
+      requiredActions: string[];
+      acceptanceCriteria: string[];
+    }>;
+    revisionPrompts: string[];
+    approvalChecklist: string[];
+  };
 }
 
 export interface PlanEnvVarsPayload {

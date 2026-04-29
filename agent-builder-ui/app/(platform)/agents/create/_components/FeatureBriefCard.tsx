@@ -16,6 +16,7 @@ interface FeatureBriefCardProps {
 const STAGE_STATUS: Record<string, { label: string; color: string }> = {
   think:   { label: "Analyzing...",        color: "var(--primary)" },
   plan:    { label: "Requirements ready",  color: "var(--success)" },
+  prototype: { label: "Prototype ready",   color: "var(--success)" },
   build:   { label: "Planned",             color: "var(--success)" },
   review:  { label: "Built",               color: "var(--success)" },
   test:    { label: "Under review",        color: "var(--primary)" },

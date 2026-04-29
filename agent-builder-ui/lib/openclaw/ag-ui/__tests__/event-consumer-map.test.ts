@@ -335,7 +335,16 @@ describe("dispatchCustomEvent", () => {
     const deps = createMockDeps();
 
     const handled = dispatchCustomEvent("architecture_plan_ready", {
-      plan: { skills: [], workflow: { steps: [] }, integrations: [], triggers: [], channels: [], envVars: [], subAgents: [], missionControl: null },
+      plan: {
+        skills: [{ id: "s1", name: "S1", description: "D", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "s1" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+      },
     }, deps);
 
     expect(handled).toBe(true);
@@ -432,5 +441,47 @@ describe("dispatchCustomEvent", () => {
       memoryAuthority,
     );
     expect(deps.coPilotStore!.setPlanStep).toHaveBeenCalledWith("memory");
+  });
+
+  test("dispatches plan_dashboard_prototype → updates architecture plan's dashboardPrototype section", () => {
+    const deps = createMockDeps();
+    const dashboardPrototype = {
+      summary: "ECC estimating workspace",
+      primaryUsers: ["Estimator"],
+      workflows: [
+        {
+          id: "lead-review",
+          name: "Lead Review",
+          steps: ["Review blockers", "Approve estimate"],
+          requiredActions: ["approve_estimate"],
+          successCriteria: ["Approvals are blocked until assumptions are answered"],
+        },
+      ],
+      pages: [
+        {
+          path: "/projects/:projectId/review",
+          title: "Lead Review",
+          purpose: "Approve or return the estimate package.",
+          supportsWorkflows: ["lead-review"],
+          requiredActions: ["approve_estimate"],
+          acceptanceCriteria: ["Shows all open blockers before approval"],
+        },
+      ],
+      revisionPrompts: ["Would ECC approve estimates from this screen?"],
+      approvalChecklist: ["User reviewed the dashboard prototype"],
+    };
+
+    const handled = dispatchCustomEvent(
+      CustomEventName.PLAN_DASHBOARD_PROTOTYPE,
+      { dashboardPrototype },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.coPilotStore!.updateArchitecturePlanSection).toHaveBeenCalledWith(
+      "dashboardPrototype",
+      dashboardPrototype,
+    );
+    expect(deps.coPilotStore!.setPlanStep).toHaveBeenCalledWith("dashboard");
   });
 });

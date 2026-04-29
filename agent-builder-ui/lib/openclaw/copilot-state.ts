@@ -96,10 +96,30 @@ export type PlanSubStep = "idle" | "skills" | "workflow" | "data" | "api" | "das
 
 export interface PlanActivityItem {
   id: string;
-  type: "skills" | "workflow" | "data_schema" | "api_endpoints" | "dashboard_pages" | "env_vars" | "complete";
+  type: "skills" | "workflow" | "data_schema" | "api_endpoints" | "dashboard_pages" | "dashboard_prototype" | "env_vars" | "complete";
   label: string;
   count: number;
   timestamp: number;
+}
+
+export function hasUsableArchitecturePlan(plan: ArchitecturePlan | null | undefined): boolean {
+  return Boolean(
+    plan
+      && ((plan.skills?.length ?? 0) > 0 || (plan.workflow?.steps?.length ?? 0) > 0),
+  );
+}
+
+export function hasRequiredDashboardPrototype(plan: ArchitecturePlan | null | undefined): boolean {
+  if (!plan || (plan.dashboardPages?.length ?? 0) === 0) return true;
+  const prototype = plan.dashboardPrototype;
+  const workflows = Array.isArray(prototype?.workflows) ? prototype.workflows : [];
+  const pages = Array.isArray(prototype?.pages) ? prototype.pages : [];
+  return Boolean(
+    prototype
+      && prototype.summary
+      && workflows.length > 0
+      && pages.length > 0,
+  );
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -481,6 +501,10 @@ const STAGE_STATUS_RESET: Partial<Record<AgentDevStage, Partial<CoPilotState>>> 
     userTriggeredBuild: false,
     buildRunId: null,
   },
+  prototype: {
+    userTriggeredBuild: false,
+    buildRunId: null,
+  },
   build: {
     buildStatus: "idle" as StageStatus,
     buildActivity: [] as BuildActivityItem[],
@@ -731,7 +755,12 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
       case "think":
         return hasThinkDocuments(state) && (state.thinkStatus === "approved" || state.thinkStatus === "done");
       case "plan":
-        return state.planStatus === "approved" || state.planStatus === "done";
+        return (state.planStatus === "approved" || state.planStatus === "done")
+          && hasUsableArchitecturePlan(state.architecturePlan)
+          && hasRequiredDashboardPrototype(state.architecturePlan);
+      case "prototype":
+        return hasUsableArchitecturePlan(state.architecturePlan)
+          && hasRequiredDashboardPrototype(state.architecturePlan);
       case "build":
         return state.buildStatus === "done";
       case "test":
@@ -758,7 +787,12 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
         case "think":
           return hasThinkDocuments(state) && (state.thinkStatus === "approved" || state.thinkStatus === "done");
         case "plan":
-          return state.planStatus === "approved" || state.planStatus === "done";
+          return (state.planStatus === "approved" || state.planStatus === "done")
+            && hasUsableArchitecturePlan(state.architecturePlan)
+            && hasRequiredDashboardPrototype(state.architecturePlan);
+        case "prototype":
+          return hasUsableArchitecturePlan(state.architecturePlan)
+            && hasRequiredDashboardPrototype(state.architecturePlan);
         case "build":
           return state.buildStatus === "done";
         case "test":

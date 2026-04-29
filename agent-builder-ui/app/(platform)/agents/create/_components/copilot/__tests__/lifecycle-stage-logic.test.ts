@@ -17,7 +17,7 @@ import { create } from "zustand";
 
 // ─── Types (mirrored from @/lib/openclaw/types) ───────────────────────────
 
-type AgentDevStage = "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
+type AgentDevStage = "think" | "plan" | "prototype" | "build" | "review" | "test" | "ship" | "reflect";
 type StageStatus = "idle" | "generating" | "building" | "running" | "approved" | "done" | "failed";
 type EvalTaskStatus = "pending" | "running" | "pass" | "fail" | "manual";
 
@@ -30,7 +30,7 @@ interface EvalTask {
 }
 
 const AGENT_DEV_STAGES: AgentDevStage[] = [
-  "think", "plan", "build", "review", "test", "ship", "reflect",
+  "think", "plan", "prototype", "build", "review", "test", "ship", "reflect",
 ];
 
 // ─── Inline implementations from LifecycleStepRenderer.tsx ───────────────
@@ -65,6 +65,8 @@ function isLifecycleStageDone(
         return statuses.thinkStatus === "approved" || statuses.thinkStatus === "done";
       case "plan":
         return statuses.planStatus === "approved" || statuses.planStatus === "done";
+      case "prototype":
+        return getStageIndex(currentStage) > getStageIndex("prototype");
       case "build":
         return statuses.buildStatus === "done";
       case "review":
@@ -93,6 +95,7 @@ function getStageInputPlaceholder(
   switch (devStage) {
     case "think": return "Describe what your agent should do...";
     case "plan": return "Waiting for architecture plan...";
+    case "prototype": return "Review the dashboard prototype or request changes...";
     case "build": return "Build in progress — you can refine requirements here...";
     case "review": return "Ask the architect to modify skills, tools, or triggers...";
     case "test": return "Review test results or ask questions...";
@@ -395,7 +398,7 @@ describe("getStageInputPlaceholder", () => {
   });
 
   test("each stage has a unique placeholder", () => {
-    const stages = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+    const stages = ["think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
     const placeholders = stages.map(s => getStageInputPlaceholder(s, true, "X"));
     const unique = new Set(placeholders);
     expect(unique.size).toBe(stages.length);

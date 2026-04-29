@@ -78,6 +78,7 @@ export function buildBuilderChatSuggestions(input: BuildBuilderChatSuggestionsIn
         suggestion("Tighten SOUL", `Tighten ${trimmedName}'s SOUL, heartbeat, and deployment rules for this use case: ${mission}`, "revise"),
       ];
     case "plan":
+    case "prototype":
     case "build":
       return [
         suggestion("Design Architecture", `Design the architecture and workflow for ${trimmedName}: ${mission}`),
@@ -125,7 +126,15 @@ function buildStageAwareSuggestions({
     return [
       suggestion("Split Skill", "Split the selected skill into smaller focused skills.", "revise"),
       suggestion("Remove Integration", "Remove unnecessary external integrations from the plan.", "revise"),
-      suggestion("Approve Plan", "Approve this plan and start Build.", "approve"),
+      suggestion("Approve Plan", "Approve this plan and review the dashboard prototype.", "approve"),
+    ];
+  }
+
+  if (stageContext.stage === "prototype") {
+    return [
+      suggestion("Revise Prototype", "Revise the dashboard prototype based on this feedback: ", "revise"),
+      suggestion("Check ECC Workflow", "Check the prototype against the estimator review workflow and missing actions.", "revise"),
+      suggestion("Approve Prototype", "Approve this dashboard prototype and start Build.", "approve"),
     ];
   }
 
@@ -173,6 +182,7 @@ function buildFeatureSuggestions(devStage: AgentDevStage | undefined, ctx: Featu
         suggestion("Design Feature", `I want to add a new feature to ${agent}: "${ctx.title}". ${ctx.description ? ctx.description + " " : ""}The agent currently has ${ctx.baselineAgent.skillCount} skills (${skills}). Design the feature requirements: what new skills, tools, and configuration are needed.`),
       ];
     case "plan":
+    case "prototype":
     case "build":
       return [
         suggestion("Plan New Skills", `What new skills and tools does ${agent} need for "${ctx.title}"?`),

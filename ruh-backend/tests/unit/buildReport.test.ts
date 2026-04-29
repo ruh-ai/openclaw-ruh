@@ -36,4 +36,21 @@ describe("summarizeBuildReport", () => {
 
     expect(report.readiness).toBe("test-ready");
   });
+
+  test("does not block Review when only verification specialist fails", () => {
+    const report = summarizeBuildReport({
+      manifestTasks: [
+        { specialist: "backend", status: "done" },
+        { specialist: "verify", status: "failed", error: "Specialist stream timed out after 180s" },
+      ],
+      setup: [{ name: "migrate", ok: true, optional: false }],
+      services: [{ name: "backend", healthy: true }],
+      verification: { status: "failed", checks: [] },
+    });
+
+    expect(report.readiness).toBe("test-ready");
+    expect(report.blockers).toEqual([]);
+    expect(report.warnings[0]).toContain("Verification incomplete");
+    expect(report.checks.find((check) => check.name === "build:verify")?.status).toBe("warning");
+  });
 });

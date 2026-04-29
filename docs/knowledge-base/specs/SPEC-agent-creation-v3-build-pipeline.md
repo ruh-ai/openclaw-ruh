@@ -23,7 +23,7 @@ Replaces the original single-prompt, markdown-only build phase with a workspace-
 - [[SPEC-real-agent-evaluation]] — Test stage evaluation harness (downstream consumer)
 - [[SPEC-copilot-config-workspace]] — Co-Pilot workspace layout
 - [[SPEC-agent-discovery-doc-persistence]] — PRD/TRD persistence contract
-- [[SPEC-agent-creation-lifecycle]] — Full 7-stage lifecycle reference (Think through Reflect)
+- [[SPEC-agent-creation-lifecycle]] — Full 8-stage lifecycle reference (Think through Reflect)
 
 ## Problem
 
@@ -151,6 +151,7 @@ interface ArchitecturePlan {
   dataSchema: DataSchema;                // PostgreSQL tables + relations
   apiEndpoints: ApiEndpoint[];           // Express routes for each skill
   dashboardPages: DashboardPage[];       // React pages with widgets
+  dashboardPrototype?: DashboardPrototypeSpec; // Required if dashboardPages is non-empty; includes workflows, actions, pipeline, artifacts
   vectorCollections: VectorCollection[]; // RAG collections (if needed)
 }
 ```
@@ -202,6 +203,8 @@ At Plan approval, write the plan to the workspace:
 
 The Build phase reads these files. It does NOT receive the plan via chat prompt.
 
+`dashboardPrototype` is part of the Build contract, not only a frontend review artifact. Server-side Build must preserve it when writing the main workspace plan, and must merge the approved value from `creation_session.coPilot.architecturePlan.dashboardPrototype` if an older `.openclaw/plan/architecture.json` was written before the prototype stage existed. The deterministic dashboard scaffold then renders workflow steps, required actions, pipeline steps, generated artifacts, page acceptance criteria, revision prompts, and approval checklist content into the generated dashboard pages so the preview matches the reviewed prototype. It also generates seeded sandbox API state and mutation routes for the prototype actions, so the built dashboard can create/reset demo work, advance the pipeline, generate/approve/revise artifacts, resolve blockers, and run QA before deeper integration specialists replace the demo implementations. The Prototype UI uses the same fields to simulate create/run/review/approve flows before any Build specialist writes dashboard files.
+
 #### 2.4 Plan validation
 
 Before marking Plan as approved, validate:
@@ -209,6 +212,8 @@ Before marking Plan as approved, validate:
 - [ ] Every skill has at least one API endpoint that serves it
 - [ ] Every API endpoint references at least one data schema table
 - [ ] Every dashboard page references at least one API endpoint
+- [ ] Every dashboard plan has an approved prototype spec with user workflows, required actions, pipeline/artifact tracking when the dashboard creates work, and acceptance checks
+- [ ] Every planned fleet has `subAgents[]` entries that match the TRD Sub-Agent Ownership section
 - [ ] Every integration has required env vars defined
 - [ ] Every trigger references an existing skill or endpoint
 - [ ] The dependency graph is acyclic
@@ -460,7 +465,7 @@ Every aspect of this spec should be validated against the Google Ads agent creat
 - Validation agent: detects missing files, broken migrations
 
 ### E2E tests
-- Full create flow: Think -> Plan -> Build -> Review -> Ship
+- Full create flow: Think -> Plan -> Prototype -> Build -> Review -> Ship
 - Build progress UI shows per-task status
 - Failed task retry without full rebuild
 - Shipped GitHub repo has all expected files

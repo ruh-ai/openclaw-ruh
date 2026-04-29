@@ -23,11 +23,13 @@ mock.module("uuid", () => ({
 }));
 
 mock.module("@/lib/openclaw/copilot-state", () => ({
+  hasRequiredDashboardPrototype: () => true,
+  hasUsableArchitecturePlan: () => true,
   useCoPilotStore: () => ({
     state: { phase: "think", skills: [], tools: [], triggers: [], improvements: [] },
     actions: {},
   }),
-  PHASE_ORDER: ["think", "plan", "build", "review", "test", "ship", "reflect"],
+  PHASE_ORDER: ["think", "plan", "prototype", "build", "review", "test", "ship", "reflect"],
 }));
 
 // Mirror every export from lib/openclaw/copilot-flow.ts so module-graph

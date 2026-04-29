@@ -1,4 +1,4 @@
-# SPEC: Agent Creation Lifecycle — Full 7-Stage Reference
+# SPEC: Agent Creation Lifecycle — Full 8-Stage Reference
 
 [[000-INDEX|← Index]] | [[008-agent-builder-ui]] | [[SPEC-agent-creation-v3-build-pipeline]] | [[SPEC-real-agent-evaluation]] | [[011-key-flows]]
 
@@ -8,7 +8,7 @@ implemented
 
 ## Summary
 
-The agent creation flow in `agent-builder-ui` follows a 7-stage development lifecycle: **Think → Plan → Build → Review → Test → Ship → Reflect**. Each stage has a hard gate — the user must approve before advancing. This spec documents what happens at each stage in detail: user interactions, system behavior, API calls, state management, and container lifecycle.
+The agent creation flow in `agent-builder-ui` follows an 8-stage development lifecycle after Reveal: **Think → Plan → Prototype → Build → Review → Test → Ship → Reflect**. Each stage has a hard gate — the user must approve before advancing. This spec documents what happens at each stage in detail: user interactions, system behavior, API calls, state management, and container lifecycle.
 
 ## Related Notes
 
@@ -31,7 +31,7 @@ The agent creation flow in `agent-builder-ui` follows a 7-stage development life
 ### State Machine
 
 ```
-AgentDevStage = "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect"
+AgentDevStage = "think" | "plan" | "prototype" | "build" | "review" | "test" | "ship" | "reflect"
 ```
 
 Each stage has a `StageStatus`:
@@ -133,7 +133,8 @@ I'd like you to revise this. Add a step for Google Ads account linking.
 
 `RequestChangesButton` (at `_components/copilot/RequestChangesButton.tsx`) — reusable ghost button that opens an inline textarea. Rendered in:
 - `StepDiscovery` — one per PRD/TRD doc + one per section (section-targeted via `PRD#<heading>`)
-- `StagePlan` — one "Ask architect to revise plan" next to "Approve & Start Build"
+- `StagePlan` — one "Ask architect to revise plan" next to "Approve Plan & Review Prototype"
+- `StagePrototype` — prototype review surface with "Request Changes" and "Approve Prototype & Start Build"
 
 ### Prop flow
 
@@ -273,8 +274,9 @@ Decisions produced:
 3. **Data Schema** — SQLite tables with columns, types, indexes
 4. **API Endpoints** — Method, path, description, response shapes
 5. **Dashboard Pages** — Page paths, component types (`metric-cards`, `data-table`, `line-chart`, etc.), data sources
-6. **Environment Variables** — All required env vars with labels, types, groups, population strategies
-7. **Build Dependencies** — Dependency graph between plan artifacts (v4)
+6. **Dashboard Prototype** — Required when dashboard pages exist; maps pages to operator workflows, mutating actions, pipeline tracking, generated artifacts, review prompts, and acceptance checks
+7. **Environment Variables** — All required env vars with labels, types, groups, population strategies
+8. **Build Dependencies** — Dependency graph between plan artifacts (v4)
 
 ### System Instruction
 
@@ -295,6 +297,7 @@ Decisions produced:
 - `<plan_data_schema dataSchema='...'/>`
 - `<plan_api_endpoints apiEndpoints='[...]'/>`
 - `<plan_dashboard_pages dashboardPages='[...]'/>`
+- `<plan_dashboard_prototype dashboardPrototype='{...}'/>`
 - `<plan_env_vars envVars='[...]'/>`
 - `<plan_complete/>`
 
@@ -323,6 +326,7 @@ interface ArchitecturePlan {
   dataSchema?: DataSchema | null;
   apiEndpoints?: ApiEndpoint[];
   dashboardPages?: DashboardPage[];
+  dashboardPrototype?: DashboardPrototypeSpec;
   vectorCollections?: VectorCollection[];
   buildDependencies?: BuildDependency[];
   soulContent?: string;
@@ -332,16 +336,44 @@ interface ArchitecturePlan {
 ### User Interaction
 
 - Review architecture plan sections as they stream in
+- For dashboard agents, review the Dashboard Prototype Gate summary and the Sub-Agent Ownership section when present
+- If the prototype does not match the estimator workflow, use `Request Changes` in Plan to ask the architect to revise the dashboard design
 - Edit skill definitions, env vars, etc. before approving
-- Approve plan to advance to Build
+- Approve plan to advance to Prototype
 
 ### Gate Condition
 
 `planStatus === "approved" || planStatus === "done"`
 
+When `architecturePlan.dashboardPages.length > 0`, Plan also requires `architecturePlan.dashboardPrototype` with a summary plus at least one workflow and page. Operational dashboards should also include `actions`, `pipeline`, `artifacts`, and `emptyState` so Prototype can simulate real work before Build. The UI disables `Approve Plan & Review Prototype` and `copilot-state.ts` blocks stage advancement until the required prototype exists.
+
 ---
 
-## Stage 3: Build
+## Stage 3: Prototype
+
+**Purpose:** Review the dashboard prototype before any Build specialists run.
+
+### What Happens
+
+`StagePrototype` renders a frontend-only prototype from `architecturePlan.dashboardPages`, `architecturePlan.dashboardPrototype`, and `architecturePlan.subAgents`. It shows page navigation, mock dashboard components, workflow steps, required actions, pipeline tracking, generated artifacts, approval/revision controls, acceptance checks, revision prompts, and sub-agent ownership. Prototype interactions are simulated in local UI state: the operator can create a sample work item, run or advance the planned pipeline, simulate blockers, and approve or request revision on generated artifacts. No dashboard files are generated and no preview server is started in this stage.
+
+### User Interaction
+
+- Switch between planned dashboard pages
+- Inspect the workflow/action/checklist fit for ECC estimator work
+- Simulate creating an estimate or work item
+- Run the planned pipeline and inspect generated artifacts
+- Approve artifacts or request revision before accepting the dashboard design
+- Use `Request Changes` to revise `architecture.json` through the architect
+- Click `Approve Prototype & Start Build` only when the prototype is acceptable
+
+### Gate Condition
+
+Prototype requires a usable architecture plan and, when dashboard pages exist, a valid `dashboardPrototype`. Build starts only from this stage.
+
+---
+
+## Stage 4: Build
 
 **Purpose:** Generate all agent files from the approved architecture plan.
 
@@ -349,7 +381,7 @@ interface ArchitecturePlan {
 
 The v4 build orchestrator (`build-orchestrator.ts`) is the sole build path. It:
 
-1. Reads the architecture plan (from workspace `architecture.json` or in-memory fallback)
+1. Reads the architecture plan (from workspace `architecture.json` or in-memory fallback), merging the approved `dashboardPrototype` from the persisted Co-Pilot session if the workspace plan is stale
 2. Determines which specialists are needed
 3. Executes them in dependency order
 4. Writes `build-manifest.json` on every status change (live tracking)
@@ -451,7 +483,7 @@ Failed tasks can be retried via `retryFailedTasks()`.
 
 ---
 
-## Stage 4: Review
+## Stage 5: Review
 
 **Purpose:** Inspect all configuration before deployment.
 
@@ -486,7 +518,7 @@ A comprehensive read-only summary of everything assembled:
 
 ---
 
-## Stage 5: Test
+## Stage 6: Test
 
 **Purpose:** Run evaluations against the real agent container.
 
@@ -599,7 +631,7 @@ interface SkillMutation {
 
 ---
 
-## Stage 6: Ship
+## Stage 7: Ship
 
 **Purpose:** Deploy the agent and optionally push to GitHub.
 
@@ -659,7 +691,7 @@ type ShipStepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 ---
 
-## Stage 7: Reflect
+## Stage 8: Reflect
 
 **Purpose:** Post-deployment build summary.
 
@@ -755,6 +787,8 @@ Think/Plan outputs survive page refresh via workspace files:
 
 `CoPilotLayout.tsx` rehydrates from workspace on mount via `readWorkspaceFile()`.
 
+Stage promotion via `PATCH /api/agents/{id}/forge/stage` also refreshes `creation_session.coPilot` with the committed lifecycle stage and prior-stage approvals. This keeps backend `forge_stage` and the durable Co-Pilot resume snapshot aligned even if the frontend autosave debounce does not fire after a gate transition.
+
 ### Draft Autosave
 
 The Co-Pilot store auto-saves draft state to the backend via `saveAgentDraft()`. Page remount rehydrates from backend truth plus local cache per [[SPEC-agent-create-session-resume]].
@@ -775,6 +809,7 @@ When the user clicks `Back`, the target stage and all downstream stages are rese
 const STAGE_STATUS_RESET = {
   think: { thinkStatus: "idle", thinkActivity: [], researchFindings: [], ... },
   plan:  { planStatus: "idle", planActivity: [], ... },
+  prototype: { userTriggeredBuild: false, buildRunId: null },
   build: { buildStatus: "idle", buildActivity: [], agentSandboxId: null, ... },
   test:  { evalStatus: "idle" },
   ship:  { deployStatus: "idle" },
@@ -787,6 +822,7 @@ const STAGE_STATUS_RESET = {
 function isLifecycleStageDone(stage, maxUnlockedDevStage, statuses) {
   think:   thinkStatus === "approved" || "done"
   plan:    planStatus === "approved" || "done"
+  prototype: currentStage index > prototype index
   build:   buildStatus === "done"
   review:  currentStage index > review index
   test:    evalStatus === "done" || currentStage index > test index

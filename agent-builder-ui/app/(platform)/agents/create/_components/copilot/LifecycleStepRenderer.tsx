@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * LifecycleStepRenderer — renders the 7-stage agent development lifecycle.
+ * LifecycleStepRenderer — renders the agent development lifecycle.
  *
- * Think → Plan → Build → Review → Test → Ship → Reflect
+ * Think → Plan → Prototype → Build → Review → Test → Ship → Reflect
  *
  * Each stage has a hard gate — user must approve before advancing.
  * Replaces the old WizardStepRenderer for the copilot mode.
@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import { useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem, type PlanActivityItem } from "@/lib/openclaw/copilot-state";
+import { hasRequiredDashboardPrototype, hasUsableArchitecturePlan, useCoPilotStore, type CoPilotState, type CoPilotActions, type BuildActivityItem, type BuildProgress, type ThinkActivityItem, type PlanActivityItem } from "@/lib/openclaw/copilot-state";
 import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { BranchDiffPanel } from "../BranchDiffPanel";
 import { FeatureBriefCard } from "../FeatureBriefCard";
@@ -56,6 +56,7 @@ import {
   Layers,
   Target,
   UserCheck,
+  LayoutDashboard,
 } from "lucide-react";
 import type {
   ArchitecturePlan,
@@ -79,6 +80,8 @@ import { MeetYourEmployee } from "../MeetYourEmployee";
 import { ArtifactActionBar } from "./ArtifactActionBar";
 import { BuildReportPanel } from "./BuildReportPanel";
 import { approveManualEvalTasks, resolveEvalReviewState, resolveReviewSkillNodes } from "@/lib/openclaw/copilot-flow";
+import { buildDashboardPrototypeViewModel, type DashboardPrototypePageModel } from "@/lib/openclaw/dashboard-prototype";
+import { shouldApplyWorkspaceRehydration } from "@/lib/openclaw/workspace-rehydration";
 
 export { getTestStageContainerState } from "@/lib/openclaw/test-stage-readiness";
 
@@ -88,6 +91,7 @@ const STAGE_META: Record<AgentDevStage, { label: string; icon: typeof Lightbulb;
   reveal: { label: "Meet", icon: UserCheck, description: "Meet your digital employee" },
   think: { label: "Think", icon: Lightbulb, description: "Define requirements (PRD + TRD)" },
   plan: { label: "Plan", icon: Map, description: "Lock architecture" },
+  prototype: { label: "Prototype", icon: LayoutDashboard, description: "Review dashboard prototype" },
   build: { label: "Build", icon: Hammer, description: "Create skills & config" },
   review: { label: "Review", icon: ClipboardCheck, description: "Inspect configuration" },
   test: { label: "Test", icon: FlaskConical, description: "Run evaluations" },
@@ -99,6 +103,7 @@ const FEATURE_STAGE_META: Record<AgentDevStage, { label: string; description: st
   reveal:  { label: "Meet",           description: "Meet your digital employee" },
   think:   { label: "Discover",       description: "Analyze feature requirements" },
   plan:    { label: "Plan Changes",   description: "Design the delta" },
+  prototype: { label: "Prototype",    description: "Review the dashboard delta" },
   build:   { label: "Build Feature",  description: "Create new skills & config" },
   review:  { label: "Review Diff",    description: "Inspect branch changes" },
   test:    { label: "Test Feature",   description: "Validate new capabilities" },
@@ -147,6 +152,8 @@ export function isLifecycleStageDone(
         return statuses.thinkStatus === "approved" || statuses.thinkStatus === "done";
       case "plan":
         return statuses.planStatus === "approved" || statuses.planStatus === "done";
+      case "prototype":
+        return getStageIndex(currentStage) > getStageIndex("prototype");
       case "build":
         return statuses.buildStatus === "done";
       case "review":
@@ -1223,7 +1230,7 @@ function PlanActivityPanel({
     // Derive from last activity event
     const lastType = planActivity[planActivity.length - 1].type;
     const typeMap: Record<string, number> = {
-      skills: 1, workflow: 2, data_schema: 3, api_endpoints: 3, dashboard_pages: 4, env_vars: 4, complete: 5,
+      skills: 1, workflow: 2, data_schema: 3, api_endpoints: 3, dashboard_pages: 4, dashboard_prototype: 4, env_vars: 4, complete: 5,
     };
     activeMilestone = typeMap[lastType] ?? 0;
   } else {
@@ -1349,7 +1356,7 @@ function PlanActivityPanel({
           planActivity.map((item) => {
             const iconMap: Record<string, typeof Zap> = {
               skills: Zap, workflow: GitBranch, data_schema: Database,
-              api_endpoints: Wrench, dashboard_pages: Compass, env_vars: Lock, complete: Target,
+              api_endpoints: Wrench, dashboard_pages: Compass, dashboard_prototype: ClipboardCheck, env_vars: Lock, complete: Target,
             };
             const Icon = iconMap[item.type] ?? Compass;
             return (
@@ -1617,6 +1624,7 @@ export function getStageInputPlaceholder(devStage: string | undefined, isBuilder
     switch (devStage) {
       case "think": return "Describe the feature you want to add...";
       case "plan": return "Ask about the feature architecture...";
+      case "prototype": return "Review the prototype or request design changes...";
       case "build": return "Feature build in progress...";
       case "review": return "Ask about changes or request modifications...";
       case "test": return "Review feature test results...";
@@ -1628,6 +1636,7 @@ export function getStageInputPlaceholder(devStage: string | undefined, isBuilder
   switch (devStage) {
     case "think": return "Describe what your agent should do...";
     case "plan": return "Waiting for architecture plan...";
+    case "prototype": return "Review the dashboard prototype or request changes...";
     case "build": return "Build in progress — you can refine requirements here...";
     case "review": return "Ask the architect to modify skills, tools, or triggers...";
     case "test": return "Review test results or ask questions...";
@@ -1645,6 +1654,7 @@ interface LifecycleStepRendererProps {
   isCompleting?: boolean;
   onDiscoveryComplete?: () => void;
   onPlanApproved?: () => void;
+  onPrototypeApproved?: () => void;
   onRetryBuild?: () => void;
   onCancelBuild?: () => void;
   onDone?: () => void;
@@ -1664,6 +1674,7 @@ export function LifecycleStepRenderer({
   isCompleting = false,
   onDiscoveryComplete,
   onPlanApproved,
+  onPrototypeApproved,
   onRetryBuild,
   onCancelBuild,
   onDone,
@@ -1854,6 +1865,13 @@ export function LifecycleStepRenderer({
             store={store}
             onPlanApproved={onPlanApproved}
             onRequestArtifactChange={onRequestArtifactChange}
+            artifactActions={artifactActions}
+          />
+        )}
+        {devStage === "prototype" && (
+          <StagePrototype
+            store={store}
+            onPrototypeApproved={onPrototypeApproved}
             artifactActions={artifactActions}
           />
         )}
@@ -2079,7 +2097,9 @@ function StageThinkPlaceholder({
   // can show the full PRD/TRD with tabs, editing, and the original approval UI.
   const hasWorkspaceDocs = store.prdPath && store.trdPath;
   const [loadingDocs, setLoadingDocs] = useState(false);
-  const hydratedRef = useRef(false);
+  const hydratedKeyRef = useRef<string | null>(null);
+  const effectiveSandboxKey = sandboxId || store.agentSandboxId || "";
+  const hydrationKey = `${effectiveSandboxKey}:${store.prdPath ?? ""}:${store.trdPath ?? ""}`;
 
   useEffect(() => {
     if (
@@ -2087,10 +2107,11 @@ function StageThinkPlaceholder({
       hasWorkspaceDocs &&
       !store.discoveryDocuments &&
       !loadingDocs &&
-      !hydratedRef.current
+      hydratedKeyRef.current !== hydrationKey
     ) {
-      hydratedRef.current = true;
+      hydratedKeyRef.current = hydrationKey;
       setLoadingDocs(true);
+      let cancelled = false;
 
       // Read PRD and TRD from the workspace and parse into DiscoveryDocuments
       import("@/lib/openclaw/workspace-writer").then(({ readWorkspaceFile }) => {
@@ -2101,6 +2122,16 @@ function StageThinkPlaceholder({
           readWorkspaceFile(effectiveSandboxId, store.prdPath!),
           readWorkspaceFile(effectiveSandboxId, store.trdPath!),
         ]).then(([prdContent, trdContent]) => {
+          if (
+            cancelled
+            || !shouldApplyWorkspaceRehydration({
+              requestedSandboxId: effectiveSandboxId,
+              currentSandboxId: useCoPilotStore.getState().agentSandboxId,
+            })
+          ) {
+            return;
+          }
+
           if (prdContent && trdContent) {
             // Parse markdown into sections (split by ## headings)
             const parseSections = (md: string) => {
@@ -2135,8 +2166,12 @@ function StageThinkPlaceholder({
           setLoadingDocs(false);
         }).catch(() => setLoadingDocs(false));
       }).catch(() => setLoadingDocs(false));
+
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [store.thinkStatus, hasWorkspaceDocs, store.discoveryDocuments, loadingDocs, sandboxId, store.agentSandboxId, store.prdPath, store.trdPath, store]);
+  }, [store.thinkStatus, hasWorkspaceDocs, store.discoveryDocuments, loadingDocs, sandboxId, store.agentSandboxId, store.prdPath, store.trdPath, hydrationKey, store]);
 
   // While generating, show the animated Think activity panel instead of a
   // static "Preparing documents..." text box.
@@ -2204,6 +2239,7 @@ function StagePlan({
     dataSchema: rawPlan.dataSchema ?? null,
     apiEndpoints: rawPlan.apiEndpoints ?? [],
     dashboardPages: rawPlan.dashboardPages ?? [],
+    dashboardPrototype: rawPlan.dashboardPrototype,
     vectorCollections: rawPlan.vectorCollections ?? [],
   } : null;
 
@@ -2257,7 +2293,32 @@ function StagePlan({
   }
 
   const planTarget: ArtifactTarget = { kind: "plan", path: ".openclaw/plan/architecture.json" };
-  const canApprovePlan = status === "ready" || status === "done" || status === "approved";
+  const dashboardPrototype = plan.dashboardPrototype ? {
+    ...plan.dashboardPrototype,
+    summary: plan.dashboardPrototype.summary ?? "",
+    primaryUsers: plan.dashboardPrototype.primaryUsers ?? [],
+    workflows: (plan.dashboardPrototype.workflows ?? []).map((workflow) => ({
+      ...workflow,
+      steps: workflow.steps ?? [],
+      requiredActions: workflow.requiredActions ?? [],
+      successCriteria: workflow.successCriteria ?? [],
+    })),
+    pages: (plan.dashboardPrototype.pages ?? []).map((page) => ({
+      ...page,
+      supportsWorkflows: page.supportsWorkflows ?? [],
+      requiredActions: page.requiredActions ?? [],
+      acceptanceCriteria: page.acceptanceCriteria ?? [],
+    })),
+    revisionPrompts: plan.dashboardPrototype.revisionPrompts ?? [],
+    approvalChecklist: plan.dashboardPrototype.approvalChecklist ?? [],
+  } : null;
+  const dashboardPrototypeReady = hasRequiredDashboardPrototype({
+    ...plan,
+    dashboardPrototype: dashboardPrototype ?? undefined,
+  });
+  const planUsable = hasUsableArchitecturePlan(plan);
+  const dashboardPrototypeRequired = (plan.dashboardPages?.length ?? 0) > 0;
+  const canApprovePlan = (status === "ready" || status === "done" || status === "approved") && planUsable && dashboardPrototypeReady;
 
   return (
     <div className="p-4 space-y-4">
@@ -2308,6 +2369,52 @@ function StagePlan({
                 {i < plan.workflow.steps.length - 1 && !step.parallel && (
                   <ChevronRight className="h-2.5 w-2.5 text-[var(--text-tertiary)]/40" />
                 )}
+              </div>
+            ))}
+          </div>
+        </PlanSection>
+      )}
+
+      {/* Sub-agent ownership */}
+      {plan.subAgents.length > 0 && (
+        <PlanSection
+          icon={<Bot className="h-3.5 w-3.5" />}
+          title="Sub-Agent Ownership"
+          count={plan.subAgents.length}
+        >
+          <div className="space-y-1.5">
+            {plan.subAgents.map((sa) => (
+              <div
+                key={sa.id}
+                className="px-3 py-2 rounded-lg bg-[var(--card-color)] border border-[var(--border-default)]"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">
+                    {sa.name}
+                  </span>
+                  <span className="text-[10px] font-satoshi-regular text-[var(--text-tertiary)] bg-[var(--bg-subtle)] px-1.5 py-0.5 rounded">
+                    {sa.type}
+                  </span>
+                  <span className="text-[10px] font-satoshi-regular text-[var(--text-tertiary)] bg-[var(--bg-subtle)] px-1.5 py-0.5 rounded">
+                    {(sa.autonomy ?? "").replace(/_/g, " ")}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{sa.description}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {sa.skills.map((skill) => (
+                    <span
+                      key={skill}
+                      className="text-[9px] font-satoshi-medium bg-[var(--primary)]/8 text-[var(--primary)] px-1.5 py-0.5 rounded"
+                    >
+                      owns {skill}
+                    </span>
+                  ))}
+                  {sa.trigger && (
+                    <span className="text-[9px] font-satoshi-medium bg-[var(--bg-subtle)] text-[var(--text-tertiary)] px-1.5 py-0.5 rounded">
+                      trigger {sa.trigger}
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -2534,6 +2641,94 @@ function StagePlan({
         </PlanSection>
       )}
 
+      {/* Dashboard Prototype Gate */}
+      {dashboardPrototypeRequired && (
+        <PlanSection
+          icon={<ClipboardCheck className="h-3.5 w-3.5" />}
+          title="Dashboard Prototype Gate"
+          count={dashboardPrototype?.workflows.length ?? 0}
+        >
+          {dashboardPrototype ? (
+            <div className="space-y-3">
+              <div className="rounded-lg bg-[var(--primary)]/5 border border-[var(--primary)]/15 px-3 py-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-satoshi-medium text-[var(--text-primary)]">
+                      {dashboardPrototype.summary}
+                    </p>
+                    {dashboardPrototype.primaryUsers.length > 0 && (
+                      <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                        Users: {dashboardPrototype.primaryUsers.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                  <span className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--primary)]/20 bg-white px-3 text-[11px] font-satoshi-bold text-[var(--primary)]">
+                    <LayoutDashboard className="h-3.5 w-3.5" />
+                    Prototype stage next
+                  </span>
+                </div>
+                <p className="mt-2 text-[10px] text-[var(--text-tertiary)]">
+                  Approving Plan unlocks a full interactive Prototype stage. Build will not start until the prototype is approved.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                {dashboardPrototype.workflows.map((workflow) => (
+                  <div
+                    key={workflow.id}
+                    className="rounded-lg bg-[var(--card-color)] border border-[var(--border-default)] px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">
+                        {workflow.name}
+                      </span>
+                      <code className="text-[10px] text-[var(--text-tertiary)]">{workflow.id}</code>
+                    </div>
+                    <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                      {workflow.steps.join(" → ")}
+                    </p>
+                    {workflow.requiredActions.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {workflow.requiredActions.map((action) => (
+                          <span
+                            key={action}
+                            className="text-[9px] font-satoshi-medium bg-[var(--primary)]/8 text-[var(--primary)] px-1.5 py-0.5 rounded"
+                          >
+                            {action}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {dashboardPrototype.revisionPrompts.length > 0 && (
+                <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-subtle)]/40 px-3 py-2">
+                  <p className="text-[10px] font-satoshi-bold text-[var(--text-secondary)]">
+                    Review with the user before Build
+                  </p>
+                  <ul className="mt-1 space-y-1">
+                    {dashboardPrototype.revisionPrompts.map((prompt) => (
+                      <li key={prompt} className="text-[10px] text-[var(--text-tertiary)]">
+                        {prompt}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3">
+              <p className="text-xs font-satoshi-bold text-amber-700">
+                Dashboard prototype missing
+              </p>
+              <p className="mt-1 text-[10px] text-amber-700/80">
+                Ask the architect to add a dashboardPrototype that maps pages to real user workflows, required actions, and acceptance checks before Build starts.
+              </p>
+            </div>
+          )}
+        </PlanSection>
+      )}
+
       {/* Vector Collections */}
       {plan.vectorCollections && plan.vectorCollections.length > 0 && (
         <PlanSection
@@ -2562,37 +2757,6 @@ function StagePlan({
         </PlanSection>
       )}
 
-      {/* Sub-agents */}
-      {plan.subAgents.length > 0 && (
-        <PlanSection
-          icon={<Bot className="h-3.5 w-3.5" />}
-          title="Sub-Agents"
-          count={plan.subAgents.length}
-        >
-          <div className="space-y-1.5">
-            {plan.subAgents.map((sa) => (
-              <div
-                key={sa.id}
-                className="px-3 py-2 rounded-lg bg-[var(--card-color)] border border-[var(--border-default)]"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-satoshi-medium text-[var(--text-primary)]">
-                    {sa.name}
-                  </span>
-                  <span className="text-[10px] font-satoshi-regular text-[var(--text-tertiary)] bg-[var(--bg-subtle)] px-1.5 py-0.5 rounded">
-                    {sa.type}
-                  </span>
-                  <span className="text-[10px] font-satoshi-regular text-[var(--text-tertiary)] bg-[var(--bg-subtle)] px-1.5 py-0.5 rounded">
-                    {(sa.autonomy ?? "").replace(/_/g, " ")}
-                  </span>
-                </div>
-                <p className="text-[10px] text-[var(--text-tertiary)] mt-1">{sa.description}</p>
-              </div>
-            ))}
-          </div>
-        </PlanSection>
-      )}
-
       {/* Error banner — shown when plan approval failed (e.g. missing sandbox) */}
       {status === "ready" && store.skillGenerationError && (
         <div className="rounded-xl border border-[var(--error)]/20 bg-[var(--error)]/5 px-4 py-3">
@@ -2607,10 +2771,18 @@ function StagePlan({
         <div className="pt-2 space-y-3">
           <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--primary)]/5 px-4 py-3">
             <p className="text-xs font-satoshi-medium text-[var(--primary)]">
-              Architecture plan ready. Review the sections above, then approve to start building skills.
+              {!planUsable
+                ? "Architecture plan is incomplete. Ask the architect to generate skills and workflow before Build can start."
+                : dashboardPrototypeReady
+                ? "Architecture plan ready. Approve it to review the interactive prototype before Build."
+                : "Architecture plan needs a dashboard prototype before Build can start."}
             </p>
             <p className="mt-1 text-[10px] text-[var(--primary)]/70">
-              Skills will be generated from this plan. You can iterate on them in the Review stage.
+              {!planUsable
+                ? "Use Regenerate or ask the architect to produce a complete architecture.json."
+                : dashboardPrototypeReady
+                ? "Build will not start yet. The next stage is a dashboard prototype review."
+                : "Use Request Changes to ask the architect to prototype the dashboard workflow, actions, blockers, and approval checks."}
             </p>
           </div>
 
@@ -2638,11 +2810,821 @@ function StagePlan({
             <span />
             <button
               onClick={() => onPlanApproved?.()}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors"
+              disabled={!canApprovePlan}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-satoshi-bold text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-colors disabled:cursor-not-allowed disabled:opacity-45"
             >
               <CheckCircle2 className="h-3 w-3" />
-              Approve & Start Build
+              Approve Plan & Review Prototype
             </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StagePrototype({
+  store,
+  onPrototypeApproved,
+  artifactActions,
+}: {
+  store: CoPilotState & CoPilotActions;
+  onPrototypeApproved?: () => void;
+  artifactActions: ArtifactActionHandlers;
+}) {
+  const plan = store.architecturePlan;
+  const model = useMemo(() => buildDashboardPrototypeViewModel(plan), [plan]);
+  const initialPath = model.pages[0]?.path ?? "__none__";
+  const [selectedPath, setSelectedPath] = useState(initialPath);
+
+  useEffect(() => {
+    if (!model.pages.some((page) => page.path === selectedPath)) {
+      setSelectedPath(model.pages[0]?.path ?? "__none__");
+    }
+  }, [model.pages, selectedPath]);
+
+  const selectedPage = model.pages.find((page) => page.path === selectedPath) ?? model.pages[0];
+  const [workItemCreated, setWorkItemCreated] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<"idle" | "running" | "blocked" | "complete">("idle");
+  const [pipelineStepIndex, setPipelineStepIndex] = useState(-1);
+  const [artifactStates, setArtifactStates] = useState<Record<string, "planned" | "generated" | "approved" | "revision_requested">>({});
+  const [activityLog, setActivityLog] = useState<string[]>([model.emptyState]);
+  const createAction = model.actions.find((action) => action.type === "create");
+  const pipelineAction = model.actions.find((action) => action.type === "run_pipeline");
+
+  useEffect(() => {
+    setArtifactStates((current) => {
+      const next: Record<string, "planned" | "generated" | "approved" | "revision_requested"> = {};
+      for (const artifact of model.artifacts) next[artifact.id] = current[artifact.id] ?? "planned";
+      return next;
+    });
+  }, [model.artifacts]);
+
+  const pushPrototypeLog = (message: string) => {
+    setActivityLog((items) => [message, ...items].slice(0, 6));
+  };
+
+  const createSampleWorkItem = () => {
+    setWorkItemCreated(true);
+    setPipelineStatus("idle");
+    setPipelineStepIndex(-1);
+    setArtifactStates(Object.fromEntries(model.artifacts.map((artifact) => [artifact.id, "planned"])));
+    pushPrototypeLog(`${createAction?.label ?? "Create work item"} simulated.`);
+  };
+
+  const runOrAdvancePipeline = () => {
+    if (!workItemCreated) setWorkItemCreated(true);
+    if (!model.pipeline || model.pipeline.steps.length === 0) {
+      pushPrototypeLog("No pipeline steps are planned for this dashboard.");
+      return;
+    }
+    if (pipelineStatus === "complete") {
+      setPipelineStatus("running");
+      setPipelineStepIndex(0);
+      setArtifactStates(Object.fromEntries(model.artifacts.map((artifact) => [artifact.id, "planned"])));
+      pushPrototypeLog(`${pipelineAction?.label ?? "Run pipeline"} restarted.`);
+      return;
+    }
+    const nextIndex = pipelineStatus === "running" ? pipelineStepIndex + 1 : 0;
+    if (nextIndex >= model.pipeline.steps.length) {
+      setPipelineStatus("complete");
+      setPipelineStepIndex(model.pipeline.steps.length - 1);
+      setArtifactStates(Object.fromEntries(model.artifacts.map((artifact) => [artifact.id, "generated"])));
+      pushPrototypeLog("Pipeline completed and generated artifacts are ready for review.");
+      return;
+    }
+    setPipelineStatus("running");
+    setPipelineStepIndex(nextIndex);
+    pushPrototypeLog(`Pipeline step active: ${model.pipeline.steps[nextIndex]?.name ?? "Step"}.`);
+  };
+
+  const markPipelineBlocked = () => {
+    if (!model.pipeline) return;
+    setPipelineStatus("blocked");
+    pushPrototypeLog(`Blocked state simulated: ${model.pipeline.failureStates[0] ?? "operator review required"}.`);
+  };
+
+  const approveArtifact = (artifactId: string) => {
+    setArtifactStates((states) => ({ ...states, [artifactId]: "approved" }));
+    const artifact = model.artifacts.find((item) => item.id === artifactId);
+    pushPrototypeLog(`${artifact?.name ?? "Artifact"} approved in prototype.`);
+  };
+
+  const requestArtifactRevision = (artifactId: string) => {
+    setArtifactStates((states) => ({ ...states, [artifactId]: "revision_requested" }));
+    const artifact = model.artifacts.find((item) => item.id === artifactId);
+    pushPrototypeLog(`Revision requested for ${artifact?.name ?? "artifact"}.`);
+  };
+
+  const target: ArtifactTarget = { kind: "plan", path: ".openclaw/plan/architecture.json", section: "dashboardPrototype" };
+  const canStartBuild = hasUsableArchitecturePlan(plan) && model.ready;
+
+  if (!plan) {
+    return (
+      <div className="p-6 space-y-4">
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3">
+          <p className="text-sm font-satoshi-bold text-amber-700">No architecture plan found</p>
+          <p className="mt-1 text-xs text-amber-700/80">
+            Go back to Plan and generate an architecture plan before reviewing the prototype.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--background)] px-4 py-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <LayoutDashboard className="h-4 w-4 text-[var(--primary)]" />
+              <h3 className="text-sm font-satoshi-bold text-[var(--text-primary)]">
+                Dashboard Prototype
+              </h3>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">
+              {model.summary}
+            </p>
+            {model.primaryUsers.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {model.primaryUsers.map((user) => (
+                  <span
+                    key={user}
+                    className="rounded-md bg-[var(--primary)]/8 px-2 py-1 text-[10px] font-satoshi-medium text-[var(--primary)]"
+                  >
+                    {user}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => artifactActions.requestChanges(target)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-default)] bg-white px-3 text-[11px] font-satoshi-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--primary)]/30 hover:text-[var(--primary)]"
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              Request Changes
+            </button>
+            <button
+              type="button"
+              onClick={() => onPrototypeApproved?.()}
+              disabled={!canStartBuild}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--primary)] px-3 text-[11px] font-satoshi-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <Hammer className="h-3.5 w-3.5" />
+              Approve Prototype & Start Build
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {!model.ready && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3">
+          <p className="text-xs font-satoshi-bold text-amber-700">Prototype blocked</p>
+          <p className="mt-1 text-[10px] text-amber-700/80">
+            {model.blocker}
+          </p>
+        </div>
+      )}
+
+      {model.pages.length === 0 ? (
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] px-4 py-5">
+          <p className="text-sm font-satoshi-bold text-[var(--text-primary)]">No dashboard pages planned</p>
+          <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+            This agent does not require a dashboard prototype. Approve this stage to start Build.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] overflow-hidden">
+            <div className="flex flex-wrap gap-1 border-b border-[var(--border-default)] bg-[var(--background)] px-3 py-2">
+              {model.pages.map((page) => (
+                <button
+                  key={page.path}
+                  type="button"
+                  onClick={() => setSelectedPath(page.path)}
+                  className={`rounded-md px-2.5 py-1.5 text-[11px] font-satoshi-medium transition-colors ${
+                    selectedPage?.path === page.path
+                      ? "bg-[var(--primary)] text-white"
+                      : "bg-white text-[var(--text-secondary)] hover:text-[var(--primary)]"
+                  }`}
+                >
+                  {page.title}
+                </button>
+              ))}
+            </div>
+            {selectedPage && (
+              <PrototypeDashboardFrame
+                page={selectedPage}
+                model={model}
+                workItemCreated={workItemCreated}
+                pipelineStatus={pipelineStatus}
+                pipelineStepIndex={pipelineStepIndex}
+                artifactStates={artifactStates}
+                activityLog={activityLog}
+                createLabel={createAction?.label ?? "Create sample work item"}
+                runLabel={pipelineAction?.label ?? "Run pipeline"}
+                onCreate={createSampleWorkItem}
+                onRunPipeline={runOrAdvancePipeline}
+                onBlockPipeline={markPipelineBlocked}
+                onApproveArtifact={approveArtifact}
+                onRequestArtifactRevision={requestArtifactRevision}
+              />
+            )}
+          </div>
+
+          <PrototypeReviewRail
+            page={selectedPage}
+            revisionPrompts={model.revisionPrompts}
+            approvalChecklist={model.approvalChecklist}
+            subAgents={model.subAgents}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatPrototypeText(value: string): string {
+  return value
+    .replace(/[_-]/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function PrototypeDashboardFrame({
+  page,
+  model,
+  workItemCreated,
+  pipelineStatus,
+  pipelineStepIndex,
+  artifactStates,
+  activityLog,
+  createLabel,
+  runLabel,
+  onCreate,
+  onRunPipeline,
+  onBlockPipeline,
+  onApproveArtifact,
+  onRequestArtifactRevision,
+}: {
+  page: DashboardPrototypePageModel;
+  model: ReturnType<typeof buildDashboardPrototypeViewModel>;
+  workItemCreated: boolean;
+  pipelineStatus: "idle" | "running" | "blocked" | "complete";
+  pipelineStepIndex: number;
+  artifactStates: Record<string, "planned" | "generated" | "approved" | "revision_requested">;
+  activityLog: string[];
+  createLabel: string;
+  runLabel: string;
+  onCreate: () => void;
+  onRunPipeline: () => void;
+  onBlockPipeline: () => void;
+  onApproveArtifact: (artifactId: string) => void;
+  onRequestArtifactRevision: (artifactId: string) => void;
+}) {
+  return (
+    <div className="bg-[#f9f7f9] p-4">
+      <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-[10px] font-satoshi-medium uppercase text-[var(--text-tertiary)]">
+            {page.path}
+          </p>
+          <h4 className="mt-0.5 text-base font-satoshi-bold text-[var(--text-primary)]">
+            {page.title}
+          </h4>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--text-secondary)]">
+            {page.purpose}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button type="button" className="h-8 rounded-md border border-[var(--border-default)] bg-white px-2.5 text-[11px] font-satoshi-medium text-[var(--text-secondary)]">
+            Filter
+          </button>
+          <button type="button" className="h-8 rounded-md border border-[var(--border-default)] bg-white px-2.5 text-[11px] font-satoshi-medium text-[var(--text-secondary)]">
+            Export
+          </button>
+          <button type="button" className="h-8 rounded-md bg-[var(--primary)] px-2.5 text-[11px] font-satoshi-bold text-white">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-3 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+        <PrototypeWorkSurface
+          model={model}
+          workItemCreated={workItemCreated}
+          pipelineStatus={pipelineStatus}
+          pipelineStepIndex={pipelineStepIndex}
+          artifactStates={artifactStates}
+          createLabel={createLabel}
+          runLabel={runLabel}
+          onCreate={onCreate}
+          onRunPipeline={onRunPipeline}
+          onBlockPipeline={onBlockPipeline}
+        />
+        <PrototypeArtifactSurface
+          model={model}
+          artifactStates={artifactStates}
+          activityLog={activityLog}
+          onApproveArtifact={onApproveArtifact}
+          onRequestArtifactRevision={onRequestArtifactRevision}
+        />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-4">
+        {["Active", "Blocked", "Approval Ready", "Last Sync"].map((label, index) => (
+          <div key={label} className="rounded-lg border border-[var(--border-default)] bg-white px-3 py-2">
+            <p className="text-[10px] font-satoshi-medium text-[var(--text-tertiary)]">{label}</p>
+            <p className="mt-1 text-lg font-satoshi-bold text-[var(--text-primary)]">
+              {index === 3 ? "2m" : 12 + index * 7}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        {page.components.length > 0
+          ? page.components.map((component, index) => (
+            <PrototypeComponentCard key={`${component}-${index}`} type={component} index={index} />
+          ))
+          : <PrototypeComponentCard type="data-table" index={0} />}
+      </div>
+    </div>
+  );
+}
+
+function PrototypeWorkSurface({
+  model,
+  workItemCreated,
+  pipelineStatus,
+  pipelineStepIndex,
+  artifactStates,
+  createLabel,
+  runLabel,
+  onCreate,
+  onRunPipeline,
+  onBlockPipeline,
+}: {
+  model: ReturnType<typeof buildDashboardPrototypeViewModel>;
+  workItemCreated: boolean;
+  pipelineStatus: "idle" | "running" | "blocked" | "complete";
+  pipelineStepIndex: number;
+  artifactStates: Record<string, "planned" | "generated" | "approved" | "revision_requested">;
+  createLabel: string;
+  runLabel: string;
+  onCreate: () => void;
+  onRunPipeline: () => void;
+  onBlockPipeline: () => void;
+}) {
+  const approvedArtifacts = Object.values(artifactStates).filter((state) => state === "approved").length;
+  const pipelineSteps = model.pipeline?.steps ?? [];
+  return (
+    <section className="rounded-lg border border-[var(--border-default)] bg-white p-3">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Interactive workflow prototype</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+            {workItemCreated
+              ? "Sample estimate ECC-1042 is active in this simulated prototype."
+              : model.emptyState}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={onCreate}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border-default)] bg-white px-2.5 text-[10px] font-satoshi-bold text-[var(--text-secondary)] hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            {createLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onRunPipeline}
+            className="inline-flex h-8 items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 text-[10px] font-satoshi-bold text-white hover:opacity-90"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {pipelineStatus === "running" ? "Advance step" : runLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onBlockPipeline}
+            disabled={!model.pipeline}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 text-[10px] font-satoshi-bold text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Simulate blocker
+          </button>
+        </div>
+      </div>
+
+      {model.pipeline && (
+        <div className="mt-3 rounded-md bg-[var(--background)] p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-satoshi-bold text-[var(--text-primary)]">{model.pipeline.name}</p>
+            <span className={`rounded px-2 py-0.5 text-[9px] font-satoshi-bold ${
+              pipelineStatus === "complete"
+                ? "bg-green-500/10 text-green-700"
+                : pipelineStatus === "blocked"
+                  ? "bg-amber-500/10 text-amber-700"
+                  : pipelineStatus === "running"
+                    ? "bg-[var(--primary)]/10 text-[var(--primary)]"
+                    : "bg-white text-[var(--text-tertiary)]"
+            }`}>
+              {pipelineStatus.replace("_", " ")}
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {pipelineSteps.map((step, index) => {
+              const done = pipelineStatus === "complete" || (pipelineStatus === "running" && index < pipelineStepIndex);
+              const active = pipelineStatus === "running" && index === pipelineStepIndex;
+              const blocked = pipelineStatus === "blocked" && index === Math.max(pipelineStepIndex, 0);
+              return (
+                <div key={step.id} className="grid grid-cols-[24px_1fr] gap-2">
+                  <div className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-satoshi-bold ${
+                    done
+                      ? "bg-green-500 text-white"
+                      : blocked
+                        ? "bg-amber-500 text-white"
+                        : active
+                          ? "bg-[var(--primary)] text-white"
+                          : "bg-white text-[var(--text-tertiary)]"
+                  }`}>
+                    {done ? <CheckCircle2 className="h-3 w-3" /> : index + 1}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-satoshi-bold text-[var(--text-primary)]">{step.name}</p>
+                    <p className="text-[9px] text-[var(--text-tertiary)]">
+                      {step.description || step.owner || (step.requiresApproval ? "Requires approval" : "Pipeline step")}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-[10px] text-[var(--text-tertiary)]">
+            Approved artifacts: {approvedArtifacts}/{model.artifacts.length}
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PrototypeArtifactSurface({
+  model,
+  artifactStates,
+  activityLog,
+  onApproveArtifact,
+  onRequestArtifactRevision,
+}: {
+  model: ReturnType<typeof buildDashboardPrototypeViewModel>;
+  artifactStates: Record<string, "planned" | "generated" | "approved" | "revision_requested">;
+  activityLog: string[];
+  onApproveArtifact: (artifactId: string) => void;
+  onRequestArtifactRevision: (artifactId: string) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-[var(--border-default)] bg-white p-3">
+      <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Generated artifacts</p>
+      <div className="mt-2 space-y-2">
+        {model.artifacts.map((artifact) => {
+          const state = artifactStates[artifact.id] ?? "planned";
+          return (
+            <div key={artifact.id} className="rounded-md bg-[var(--background)] px-2 py-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-[10px] font-satoshi-bold text-[var(--text-primary)]">{artifact.name}</p>
+                  <p className="mt-0.5 text-[9px] text-[var(--text-tertiary)]">{artifact.description || artifact.type}</p>
+                </div>
+                <span className={`shrink-0 rounded px-1.5 py-0.5 text-[8px] font-satoshi-bold ${
+                  state === "approved"
+                    ? "bg-green-500/10 text-green-700"
+                    : state === "revision_requested"
+                      ? "bg-amber-500/10 text-amber-700"
+                      : state === "generated"
+                        ? "bg-[var(--primary)]/10 text-[var(--primary)]"
+                        : "bg-white text-[var(--text-tertiary)]"
+                }`}>
+                  {state.replace("_", " ")}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => onApproveArtifact(artifact.id)}
+                  disabled={state === "planned"}
+                  className="h-6 rounded border border-green-500/30 bg-green-500/5 px-2 text-[9px] font-satoshi-bold text-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRequestArtifactRevision(artifact.id)}
+                  disabled={state === "planned"}
+                  className="h-6 rounded border border-amber-500/30 bg-amber-500/5 px-2 text-[9px] font-satoshi-bold text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Revise
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-3 border-t border-[var(--border-default)] pt-2">
+        <p className="text-[10px] font-satoshi-bold text-[var(--text-primary)]">Prototype activity</p>
+        <ul className="mt-1 space-y-1">
+          {activityLog.map((item, index) => (
+            <li key={`${item}-${index}`} className="text-[9px] leading-relaxed text-[var(--text-tertiary)]">
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function PrototypeComponentCard({
+  type,
+  index,
+}: {
+  type: DashboardPrototypePageModel["components"][number] | "data-table";
+  index: number;
+}) {
+  const title = formatPrototypeText(type);
+  return (
+    <div className="min-h-[180px] rounded-lg border border-[var(--border-default)] bg-white p-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">{title}</p>
+        <span className="rounded bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[9px] font-satoshi-medium text-[var(--text-tertiary)]">
+          prototype
+        </span>
+      </div>
+      {type === "metric-cards" && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {["Margin", "Labor", "Materials", "Risk"].map((label, metricIndex) => (
+            <div key={label} className="rounded-md bg-[var(--background)] px-2 py-2">
+              <p className="text-[10px] text-[var(--text-tertiary)]">{label}</p>
+              <p className="mt-1 text-sm font-satoshi-bold text-[var(--text-primary)]">
+                {metricIndex === 0 ? "18.4%" : `$${(metricIndex + index + 3) * 42}k`}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+      {(type === "bar-chart" || type === "line-chart" || type === "pie-chart") && (
+        <div className="mt-4 flex h-28 items-end gap-2">
+          {[42, 68, 51, 84, 61, 74].map((height, barIndex) => (
+            <div
+              key={barIndex}
+              className="flex-1 rounded-t bg-[var(--primary)]/25"
+              style={{ height: `${height}%` }}
+            />
+          ))}
+        </div>
+      )}
+      {(type === "data-table" || type === "activity-feed" || type === "status-badge" || type === "empty-state") && (
+        <div className="mt-3 overflow-hidden rounded-md border border-[var(--border-default)]">
+          {["Bid Package A", "Hospital Retrofit", "Campus Buildout"].map((row, rowIndex) => (
+            <div key={row} className="grid grid-cols-[1fr_auto] gap-3 border-b border-[var(--border-default)] px-2 py-2 last:border-b-0">
+              <span className="truncate text-[10px] font-satoshi-medium text-[var(--text-secondary)]">{row}</span>
+              <span className={`rounded px-1.5 py-0.5 text-[9px] font-satoshi-medium ${
+                rowIndex === 1 ? "bg-amber-500/10 text-amber-700" : "bg-green-500/10 text-green-700"
+              }`}>
+                {rowIndex === 1 ? "Blocked" : "Ready"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrototypeReviewRail({
+  page,
+  revisionPrompts,
+  approvalChecklist,
+  subAgents,
+}: {
+  page?: DashboardPrototypePageModel;
+  revisionPrompts: string[];
+  approvalChecklist: string[];
+  subAgents: ReturnType<typeof buildDashboardPrototypeViewModel>["subAgents"];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] px-3 py-3">
+        <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Supported Workflows</p>
+        <div className="mt-2 space-y-2">
+          {(page?.workflows ?? []).map((workflow) => (
+            <div key={workflow.id} className="rounded-lg bg-[var(--background)] px-3 py-2">
+              <p className="text-[11px] font-satoshi-bold text-[var(--text-primary)]">{workflow.name}</p>
+              <ol className="mt-1 space-y-1">
+                {workflow.steps.map((step, index) => (
+                  <li key={`${workflow.id}-${step}`} className="flex gap-2 text-[10px] text-[var(--text-tertiary)]">
+                    <span className="font-satoshi-bold text-[var(--primary)]">{index + 1}</span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <RailList title="Required Actions" items={page?.actions ?? []} />
+      <RailList title="Acceptance Checks" items={page?.acceptanceCriteria ?? approvalChecklist} />
+      {revisionPrompts.length > 0 && <RailList title="Revision Prompts" items={revisionPrompts} />}
+
+      {subAgents.length > 0 && (
+        <div className="rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] px-3 py-3">
+          <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Sub-Agent Ownership</p>
+          <div className="mt-2 space-y-2">
+            {subAgents.map((agent) => (
+              <div key={agent.id} className="rounded-lg bg-[var(--background)] px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-satoshi-bold text-[var(--text-primary)]">{agent.name}</p>
+                  <span className="rounded bg-white px-1.5 py-0.5 text-[9px] text-[var(--text-tertiary)]">{agent.type}</span>
+                </div>
+                <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">{agent.description}</p>
+                <p className="mt-1 text-[10px] text-[var(--primary)]">
+                  Owns {agent.skills.join(", ") || "no explicit skills"} · {agent.autonomy}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RailList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-[var(--border-default)] bg-[var(--card-color)] px-3 py-3">
+      <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">{title}</p>
+      <ul className="mt-2 space-y-1.5">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2 text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+            <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[var(--success)]" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+type DashboardPrototype = NonNullable<ArchitecturePlan["dashboardPrototype"]>;
+type DashboardPage = NonNullable<ArchitecturePlan["dashboardPages"]>[number];
+
+function DashboardPrototypePreview({
+  prototype,
+  dashboardPages,
+}: {
+  prototype: DashboardPrototype;
+  dashboardPages: DashboardPage[];
+}) {
+  const firstPath = prototype.pages[0]?.path ?? dashboardPages[0]?.path ?? "";
+  const [selectedPath, setSelectedPath] = useState(firstPath);
+  const selectedPage = prototype.pages.find((page) => page.path === selectedPath) ?? prototype.pages[0];
+  const plannedPage = dashboardPages.find((page) => page.path === selectedPage?.path);
+  const workflowIds = new Set(selectedPage?.supportsWorkflows ?? []);
+  const pageWorkflows = prototype.workflows.filter((workflow) => workflowIds.has(workflow.id));
+  const componentLabels = plannedPage?.components?.map((component) => component.type) ?? [];
+
+  return (
+    <div className="rounded-xl border border-[var(--primary)]/20 bg-[var(--background)] p-3 shadow-sm">
+      <div className="flex flex-col gap-2 border-b border-[var(--border-default)] pb-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">Prototype Preview</p>
+          <p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">
+            Pre-build walkthrough for dashboard layout, workflow fit, actions, and approval checks.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1" aria-label="Dashboard prototype pages">
+          {prototype.pages.map((page) => (
+            <button
+              key={page.path}
+              type="button"
+              onClick={() => setSelectedPath(page.path)}
+              aria-pressed={page.path === selectedPage?.path}
+              className={`h-7 rounded-md border px-2 text-[10px] font-satoshi-medium transition-colors ${
+                page.path === selectedPage?.path
+                  ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                  : "border-[var(--border-default)] bg-[var(--card-color)] text-[var(--text-secondary)] hover:border-[var(--primary)]/30"
+              }`}
+            >
+              {page.title}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {selectedPage && (
+        <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(260px,0.85fr)]">
+          <div className="min-w-0 rounded-lg border border-[var(--border-default)] bg-[var(--card-color)]">
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--border-default)] px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-satoshi-bold text-[var(--text-primary)]">
+                  {selectedPage.title}
+                </p>
+                <code className="text-[10px] text-[var(--text-tertiary)]">{selectedPage.path}</code>
+              </div>
+              <span className="shrink-0 rounded-md bg-[var(--primary)]/8 px-2 py-1 text-[10px] font-satoshi-medium text-[var(--primary)]">
+                Pre-build
+              </span>
+            </div>
+            <div className="space-y-3 p-3">
+              <div>
+                <p className="text-[10px] font-satoshi-bold uppercase text-[var(--text-tertiary)]">
+                  Purpose
+                </p>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                  {selectedPage.purpose || plannedPage?.description || "Review the planned dashboard workflow before Build."}
+                </p>
+              </div>
+              {componentLabels.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-satoshi-bold uppercase text-[var(--text-tertiary)]">
+                    Planned Components
+                  </p>
+                  <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                    {componentLabels.map((label, index) => (
+                      <div
+                        key={`${label}-${index}`}
+                        className="rounded-md border border-[var(--border-default)] bg-[var(--bg-subtle)]/40 px-2 py-1.5 text-[10px] font-satoshi-medium text-[var(--text-secondary)]"
+                      >
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedPage.requiredActions.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-satoshi-bold uppercase text-[var(--text-tertiary)]">
+                    Required Actions
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {selectedPage.requiredActions.map((action) => (
+                      <span
+                        key={action}
+                        className="rounded-md bg-[var(--primary)]/8 px-2 py-1 text-[10px] font-satoshi-medium text-[var(--primary)]"
+                      >
+                        {action}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] p-3">
+              <p className="text-[10px] font-satoshi-bold uppercase text-[var(--text-tertiary)]">
+                Supported Workflows
+              </p>
+              <div className="mt-2 space-y-2">
+                {(pageWorkflows.length > 0 ? pageWorkflows : prototype.workflows.slice(0, 1)).map((workflow) => (
+                  <div key={workflow.id} className="rounded-md bg-[var(--bg-subtle)]/45 px-2.5 py-2">
+                    <p className="text-xs font-satoshi-bold text-[var(--text-primary)]">{workflow.name}</p>
+                    <ol className="mt-1.5 space-y-1">
+                      {workflow.steps.map((step, index) => (
+                        <li key={`${workflow.id}-${step}`} className="flex gap-2 text-[10px] text-[var(--text-secondary)]">
+                          <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--primary)]/10 text-[9px] font-satoshi-bold text-[var(--primary)]">
+                            {index + 1}
+                          </span>
+                          <span>{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {selectedPage.acceptanceCriteria.length > 0 && (
+              <div className="rounded-lg border border-[var(--border-default)] bg-[var(--card-color)] p-3">
+                <p className="text-[10px] font-satoshi-bold uppercase text-[var(--text-tertiary)]">
+                  Acceptance Checks
+                </p>
+                <ul className="mt-2 space-y-1.5">
+                  {selectedPage.acceptanceCriteria.map((criterion) => (
+                    <li key={criterion} className="flex gap-2 text-[10px] text-[var(--text-secondary)]">
+                      <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[var(--primary)]" />
+                      <span>{criterion}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       )}

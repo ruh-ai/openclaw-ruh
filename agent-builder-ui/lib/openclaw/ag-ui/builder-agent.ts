@@ -158,6 +158,14 @@ Be specific: entity types, relationships, volumes, update frequency.
 What does the end user see on Mission Control?
 List pages, metrics, tables, charts. Be specific about what data feeds each component.
 
+## Dashboard Prototype Expectations
+What must the user be able to validate before Build?
+List workflows, create/run actions, pipeline tracking, generated artifacts, approval gates, revision paths, blocker states, and acceptance checks the prototype must expose.
+
+## Multi-Agent / Fleet Requirements
+If this should be a fleet, name the specialist roles, ownership boundaries, handoffs, and which work stays on the main orchestrator.
+If one agent with multiple skills is enough, say "Single-agent; no sub-agents required" and explain why.
+
 ## Memory & Context
 What does the agent remember across conversations?
 
@@ -191,6 +199,10 @@ High-level agent design including data flow.
 ## Skills & Workflow
 List specific skill names (kebab-case) and execution flow.
 
+## Sub-Agent Ownership
+If the PRD requires multiple specialist agents, list each sub-agent id, role, owned skills, trigger, autonomy, and handoff boundaries.
+If it is single-agent, explicitly say no sub-agents are required and all skills stay on the main orchestrator.
+
 ## External APIs & Tools
 APIs, MCP tools, CLI tools. Include auth methods, key endpoints, rate limits.
 
@@ -204,6 +216,9 @@ Method, path, response shape, which dashboard component consumes it.
 
 ## Dashboard Pages
 Mission Control pages. For each: title, URL path, components (metric-cards, data-table, line-chart, bar-chart, pie-chart, activity-feed) with data sources.
+
+## Dashboard Prototype Contract
+Map dashboard pages to operator workflows, mutating dashboard actions, pipeline steps, generated artifacts, acceptance checks, revision prompts, and approval checklist items for the Prototype stage.
 
 ## Vector Collections
 RAG/memory collections. Name, what gets embedded, when, how it's used.
@@ -219,6 +234,35 @@ Safety rules, rate limits, retry policies.
 EOF
 \`\`\`
 Then emit: \`<think_document_ready docType="trd" path=".openclaw/discovery/TRD.md"/>\`
+
+### Final structured discovery payload
+
+After the TRD is complete, emit a final structured payload so the UI can render
+the PRD/TRD even if the workspace file write cannot be read immediately. This
+payload is required in addition to any workspace files:
+
+\`\`\`discovery
+{
+  "type": "discovery",
+  "system_name": "kebab-case-system-name",
+  "content": "One-sentence summary of the agent requirements.",
+  "prd": {
+    "title": "Product Requirements Document",
+    "sections": [
+      { "heading": "Problem Statement", "content": "Specific problem statement." }
+    ]
+  },
+  "trd": {
+    "title": "Technical Requirements Document",
+    "sections": [
+      { "heading": "Architecture Overview", "content": "Specific architecture overview." }
+    ]
+  }
+}
+\`\`\`
+
+The JSON must be valid, must include the full PRD/TRD section content, and must
+match the workspace documents you wrote.
 
 ## Progress Markers
 
@@ -277,9 +321,9 @@ Write each question as a numbered bullet in prose, then emit one \`<ask_user>\` 
 ## Step 1: Read Requirements from Workspace
 First, read the approved documents:
 \`\`\`bash
-cat ~/.openclaw/workspace-copilot/.openclaw/discovery/PRD.md
-cat ~/.openclaw/workspace-copilot/.openclaw/discovery/TRD.md
-cat ~/.openclaw/workspace-copilot/.openclaw/discovery/research-brief.md 2>/dev/null || true
+cat ~/.openclaw/workspace/.openclaw/discovery/PRD.md
+cat ~/.openclaw/workspace/.openclaw/discovery/TRD.md
+cat ~/.openclaw/workspace/.openclaw/discovery/research-brief.md 2>/dev/null || true
 \`\`\`
 
 ## CHECKPOINT P0 — Skill boundary check
@@ -319,6 +363,25 @@ Emit: \`<plan_api_endpoints apiEndpoints='[{"method":"GET","path":"/api/...","de
 ### Dashboard Pages (if dashboard)
 Overview: MetricCards + ActivityFeed. Data: DataTable. Trends: LineChart.
 Emit: \`<plan_dashboard_pages dashboardPages='[{"path":"/overview","title":"...","description":"...","components":[{"type":"metric-cards","title":"...","dataSource":"/api/..."}]}]'/>\`
+
+### Dashboard Prototype Gate (required if dashboardPages is not empty)
+This is the prototype approval gate before Build. Do NOT treat dashboard pages as enough. Define the real operator workflow the dashboard must support, the actions users need to take, and the checks the user should review with you before Build starts.
+
+The prototype spec is structural, not JSX. It should make bad dashboard assumptions visible early:
+- \`summary\`: one sentence describing the working dashboard prototype.
+- \`primaryUsers\`: real user roles.
+- \`workflows\`: workflow ids, human names, ordered steps, \`requiredActions\`, and \`successCriteria\`.
+- \`pages\`: each dashboard page path/title, purpose, \`supportsWorkflows\`, \`requiredActions\`, and \`acceptanceCriteria\`.
+- \`actions\`: user actions the prototype must simulate, including create, run_pipeline, approve, request_revision, resolve_blocker, and publish actions where relevant.
+- \`pipeline\`: the visible work pipeline with name, triggerActionId, steps, completionCriteria, and failureStates.
+- \`artifacts\`: generated outputs such as workbooks, evidence maps, findings, assumptions logs, summaries, or approval packets with reviewActions and acceptanceCriteria.
+- \`emptyState\`: the call to action shown before the user creates or selects work.
+- \`revisionPrompts\`: questions the user can answer to update the design with the architect.
+- \`approvalChecklist\`: checks that must be true before Build.
+
+Every dashboard page should support at least one workflow. Every workflow should name at least one required user action or explicit read-only decision. For business-critical tools, include create/run flows, blocker states, audit/source traceability, approval gates, generated artifacts, and output generation where the PRD/TRD require them.
+
+Emit: \`<plan_dashboard_prototype dashboardPrototype='{"summary":"...","primaryUsers":["..."],"workflows":[{"id":"workflow-id","name":"...","steps":["..."],"requiredActions":["..."],"successCriteria":["..."]}],"pages":[{"path":"/overview","title":"...","purpose":"...","supportsWorkflows":["workflow-id"],"requiredActions":["..."],"acceptanceCriteria":["..."]}],"actions":[{"id":"create-work","label":"Create work item","type":"create","target":"work_item","primary":true},{"id":"run-pipeline","label":"Run pipeline","type":"run_pipeline","target":"pipeline","primary":true}],"pipeline":{"name":"Work pipeline","triggerActionId":"run-pipeline","steps":[{"id":"intake","name":"Intake","producesArtifacts":["source-evidence"]}],"completionCriteria":["Artifacts ready for approval"],"failureStates":["Missing source evidence"]},"artifacts":[{"id":"source-evidence","name":"Source evidence map","type":"evidence","reviewActions":["approve_artifact","request_revision"],"acceptanceCriteria":["Evidence is traceable"]}],"emptyState":"Create a work item to validate this workflow.","revisionPrompts":["What should change before Build?"],"approvalChecklist":["Each page maps to a workflow"]}'/>\`
 
 ### Triggers & Scheduling (if agent has periodic tasks)
 For any skill that syncs, polls, monitors, or generates reports on a schedule, define a cron trigger.
@@ -379,9 +442,9 @@ When all decisions are made:
 Emit: \`<plan_complete/>\`
 
 ## Step 3: Write to Workspace
-Write the full plan and a readable summary to the copilot workspace:
+Write the full plan and a readable summary to the copilot workspace, then mirror them to the main workspace so Prototype, Build, and backend sync all read the same plan:
 \`\`\`bash
-mkdir -p ~/.openclaw/workspace-copilot/.openclaw/plan
+mkdir -p ~/.openclaw/workspace-copilot/.openclaw/plan ~/.openclaw/workspace/.openclaw/plan
 cat > ~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json << 'EOF'
 { ... full plan JSON ... }
 EOF
@@ -392,6 +455,8 @@ cat > ~/.openclaw/workspace-copilot/.openclaw/plan/PLAN.md << 'EOF'
 ## Data Model
 ...
 EOF
+cp ~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json ~/.openclaw/workspace/.openclaw/plan/architecture.json
+cp ~/.openclaw/workspace-copilot/.openclaw/plan/PLAN.md ~/.openclaw/workspace/.openclaw/plan/PLAN.md
 \`\`\`
 
 ## Rules
@@ -437,7 +502,7 @@ When the user's message contains an explicit \`[target: X]\` line (e.g. \`[targe
 
 - \`[target: PRD]\` or \`[target: PRD#<section>]\` → edit \`~/.openclaw/workspace/.openclaw/discovery/PRD.md\`
 - \`[target: TRD]\` or \`[target: TRD#<section>]\` → edit \`~/.openclaw/workspace/.openclaw/discovery/TRD.md\`
-- \`[target: Plan]\`, \`[target: architecture.json]\`, or \`[target: Plan#<section>]\` → edit \`~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json\` and \`PLAN.md\`
+- \`[target: Plan]\`, \`[target: architecture.json]\`, or \`[target: Plan#<section>]\` → edit \`~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json\` and \`PLAN.md\`, then mirror both files to \`~/.openclaw/workspace/.openclaw/plan/\`
 
 Procedure:
 1. Read the target file from the workspace.
@@ -459,7 +524,7 @@ interface BuilderPromptContext {
 
 function normalizeDevStage(stage: string | undefined, isFirstMessage: boolean): AgentDevStage | undefined {
   if (!stage) return isFirstMessage ? "think" : undefined;
-  const known = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+  const known = ["reveal", "think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
   return known.includes(stage) ? (stage as AgentDevStage) : undefined;
 }
 
@@ -827,6 +892,7 @@ const PLAN_WORKFLOW_RE = /<plan_workflow\s+workflow='(\{[\s\S]*?\})'\s*\/>/g;
 const PLAN_DATA_SCHEMA_RE = /<plan_data_schema\s+dataSchema='(\{[\s\S]*?\})'\s*\/>/g;
 const PLAN_API_ENDPOINTS_RE = /<plan_api_endpoints\s+apiEndpoints='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_DASHBOARD_PAGES_RE = /<plan_dashboard_pages\s+dashboardPages='(\[[\s\S]*?\])'\s*\/>/g;
+const PLAN_DASHBOARD_PROTOTYPE_RE = /<plan_dashboard_prototype\s+dashboardPrototype='(\{[\s\S]*?\})'\s*\/>/g;
 const PLAN_ENV_VARS_RE = /<plan_env_vars\s+envVars='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_SUB_AGENTS_RE = /<plan_sub_agents\s+subAgents='(\[[\s\S]*?\])'\s*\/>/g;
 const PLAN_MEMORY_AUTHORITY_RE = /<plan_memory_authority\s+memoryAuthority='(\[[\s\S]*?\])'\s*\/>/g;
@@ -835,7 +901,7 @@ const PLAN_COMPLETE_RE = /<plan_complete\s*\/>/g;
 function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: ThinkMarkerEvent[]; newOffset: number } {
   const events: ThinkMarkerEvent[] = [];
   // Back up to catch tags that span delta boundaries (plan JSON markers can be large)
-  const safeOffset = Math.max(0, lastCheckedOffset - 2000);
+  const safeOffset = Math.max(0, lastCheckedOffset - 8000);
   const searchText = text.slice(safeOffset);
   const seenKeys = new Set<string>();
   let maxMatchEnd = lastCheckedOffset;
@@ -846,6 +912,7 @@ function extractPlanMarkers(text: string, lastCheckedOffset: number): { events: 
     { re: PLAN_DATA_SCHEMA_RE, name: "plan_data_schema", key: "dataSchema" },
     { re: PLAN_API_ENDPOINTS_RE, name: "plan_api_endpoints", key: "apiEndpoints" },
     { re: PLAN_DASHBOARD_PAGES_RE, name: "plan_dashboard_pages", key: "dashboardPages" },
+    { re: PLAN_DASHBOARD_PROTOTYPE_RE, name: "plan_dashboard_prototype", key: "dashboardPrototype" },
     { re: PLAN_ENV_VARS_RE, name: "plan_env_vars", key: "envVars" },
     { re: PLAN_SUB_AGENTS_RE, name: "plan_sub_agents", key: "subAgents" },
     { re: PLAN_MEMORY_AUTHORITY_RE, name: "plan_memory_authority", key: "memoryAuthority" },

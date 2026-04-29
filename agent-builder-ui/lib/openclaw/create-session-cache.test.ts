@@ -412,6 +412,40 @@ describe("create-session-cache", () => {
     }));
   });
 
+  test("buildResumedCoPilotSeed ignores cached artifacts when cache identity belongs to another agent", () => {
+    const freshAgent: SavedAgent = {
+      ...agent,
+      id: "agent-2",
+      name: "ECC Estimation Agent QA",
+      description: "Creates construction estimates with a prototype-first dashboard.",
+      skills: [],
+      skillGraph: [],
+      workflow: null,
+      discoveryDocuments: null,
+      forgeStage: "think",
+    };
+
+    const resumed = buildResumedCoPilotSeed(freshAgent, {
+      name: "ECC Estimator",
+      description: "Old ECC readiness dashboard run.",
+      devStage: "think",
+      maxUnlockedDevStage: "think",
+      discoveryDocuments: agent.discoveryDocuments,
+      discoveryStatus: "ready",
+      thinkStatus: "ready",
+      prdPath: ".openclaw/discovery/PRD.md",
+      trdPath: ".openclaw/discovery/TRD.md",
+    });
+
+    expect(resumed.name).toBe("ECC Estimation Agent QA");
+    expect(resumed.description).toBe("Creates construction estimates with a prototype-first dashboard.");
+    expect(resumed.discoveryDocuments).toBeNull();
+    expect(resumed.discoveryStatus).toBeUndefined();
+    expect(resumed.thinkStatus).toBeUndefined();
+    expect(resumed.prdPath).toBeUndefined();
+    expect(resumed.trdPath).toBeUndefined();
+  });
+
   test("buildResumedCoPilotSeed does not let empty cached skill selection block deploy after review", () => {
     const resumed = buildResumedCoPilotSeed(
       {

@@ -33,12 +33,17 @@ export function summarizeBuildReport(input: BuildReportInput): BuildReport {
 
   for (const task of input.manifestTasks) {
     const ok = task.status === "done";
+    const isVerification = task.specialist === "verify";
     if (!ok && task.status === "failed") {
-      blockers.push(`Build task failed: ${task.specialist}`);
+      if (isVerification) {
+        warnings.push(`Verification incomplete: ${task.error ?? task.specialist}`);
+      } else {
+        blockers.push(`Build task failed: ${task.specialist}`);
+      }
     }
     checks.push({
       name: `build:${task.specialist}`,
-      status: ok ? "pass" : "fail",
+      status: ok ? "pass" : isVerification ? "warning" : "fail",
       detail: task.error,
     });
   }

@@ -21,7 +21,7 @@ mock.module("@/lib/auth/backend-fetch", () => ({
   fetchBackendWithAuth: mockFetchBackendWithAuth,
 }));
 
-const { useForgeSandbox } = await import("./use-forge-sandbox");
+const { isForgeSandboxForAgent, isReadyForgeSandboxPayload, useForgeSandbox } = await import("./use-forge-sandbox");
 
 beforeEach(() => {
   mockFetchBackendWithAuth.mockClear();
@@ -46,6 +46,31 @@ beforeEach(() => {
 describe("useForgeSandbox", () => {
   test("exports useForgeSandbox function", () => {
     expect(typeof useForgeSandbox).toBe("function");
+  });
+
+  test("rejects a stale sandbox that belongs to a different agent", () => {
+    expect(isForgeSandboxForAgent(
+      { sandbox_id: "sb-old", sandbox_name: "old-forge" },
+      "sb-current",
+    )).toBe(false);
+  });
+
+  test("accepts the sandbox only when it matches the agent forge sandbox id", () => {
+    expect(isForgeSandboxForAgent(
+      { sandbox_id: "sb-current", sandbox_name: "agent-forge" },
+      "sb-current",
+    )).toBe(true);
+  });
+
+  test("treats forge payloads without a sandbox as not ready", () => {
+    expect(isReadyForgeSandboxPayload({ status: "provisioning", sandbox: null })).toBe(false);
+  });
+
+  test("detects a ready forge payload with sandbox data", () => {
+    expect(isReadyForgeSandboxPayload({
+      status: "ready",
+      sandbox: { sandbox_id: "sb-current", sandbox_name: "agent-forge" },
+    })).toBe(true);
   });
 
   test("fetches forge endpoint with agent ID", async () => {

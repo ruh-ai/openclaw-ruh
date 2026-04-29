@@ -143,7 +143,7 @@ export interface AgentCredentialSummary {
 }
 
 export type AgentStatus = 'active' | 'draft' | 'forging';
-export type AgentForgeStage = 'reveal' | 'think' | 'plan' | 'build' | 'review' | 'test' | 'ship' | 'reflect' | 'complete';
+export type AgentForgeStage = 'reveal' | 'think' | 'plan' | 'prototype' | 'build' | 'review' | 'test' | 'ship' | 'reflect' | 'complete';
 
 export interface PaperclipWorkerRecord {
   worker_id: string;

@@ -173,6 +173,8 @@ interface TabChatProps {
   onDiscoveryComplete?:  () => void;
   /** Callback when user approves the architecture plan (Plan stage). */
   onPlanApproved?:       () => void;
+  /** Callback when user approves the dashboard prototype (Prototype stage). */
+  onPrototypeApproved?:  () => void;
   /** Callback when user clicks retry after build failure. */
   onRetryBuild?:         () => void;
   /** Callback when user clicks cancel during an active build. */
@@ -581,6 +583,7 @@ function ComputerView({
   onPreviewStart,
   onDiscoveryComplete,
   onPlanApproved,
+  onPrototypeApproved,
   onRetryBuild,
   onCancelBuild,
   onDone,
@@ -624,6 +627,8 @@ function ComputerView({
   onDiscoveryComplete?: () => void;
   /** Called when user approves architecture plan */
   onPlanApproved?: () => void;
+  /** Called when user approves dashboard prototype */
+  onPrototypeApproved?: () => void;
   /** Called when user retries build after failure */
   onRetryBuild?: () => void;
   /** Called when user cancels an active build */
@@ -958,6 +963,7 @@ function ComputerView({
             isCompleting={isCompletingBuilder}
             onDiscoveryComplete={onDiscoveryComplete}
             onPlanApproved={onPlanApproved}
+            onPrototypeApproved={onPrototypeApproved}
             onRetryBuild={onRetryBuild}
             onCancelBuild={onCancelBuild}
             onDone={onDone}
@@ -977,7 +983,7 @@ export function TabChat({
   onBuilderStateChange, onReadyForReview, onSelectOption,
   onBuilderComplete, canBuilderComplete = false, isCompletingBuilder = false,
   showCoPilotConfig = false, coPilotPhase, coPilotStore: coPilotStoreProp,
-  builderBridgeMode, onDiscoveryComplete, onPlanApproved,
+  builderBridgeMode, onDiscoveryComplete, onPlanApproved, onPrototypeApproved,
   onRetryBuild, onCancelBuild, onDone,
 }: TabChatProps) {
   const isBuilderMode = mode === "builder";
@@ -1424,7 +1430,7 @@ export function TabChat({
                             ))}
                           </div>
                           <div className="flex items-center gap-4 pt-1">
-                            {(isFeatureMode ? ["Discover", "Plan", "Build", "Review", "Test", "Merge"] : ["Think", "Plan", "Build", "Review → Test → Ship"]).map((label, i, arr) => (
+                            {(isFeatureMode ? ["Discover", "Plan", "Build", "Review", "Test", "Merge"] : ["Think", "Plan", "Prototype", "Build", "Review → Test → Ship"]).map((label, i, arr) => (
                               <div key={label} className="flex items-center gap-1.5">
                                 <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
                                   <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: `color-mix(in srgb, var(--primary) ${100 - i * 15}%, transparent)` }} />
@@ -1673,6 +1679,7 @@ export function TabChat({
               }}
               onDiscoveryComplete={onDiscoveryComplete}
               onPlanApproved={onPlanApproved}
+              onPrototypeApproved={onPrototypeApproved}
               onRetryBuild={onRetryBuild}
               onCancelBuild={onCancelBuild}
               onDone={onDone}

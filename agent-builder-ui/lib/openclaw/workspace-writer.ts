@@ -28,9 +28,12 @@ export async function readWorkspaceFile(
   sandboxId: string,
   path: string,
 ): Promise<string | null> {
+  const cacheBust = `&_=${Date.now()}`;
+
   // Try copilot workspace first (copilot-mode builds write here)
   const copilotRes = await fetchBackendWithAuth(
-    `${API_BASE}/api/sandboxes/${sandboxId}/workspace-copilot/file?path=${encodeURIComponent(path)}`,
+    `${API_BASE}/api/sandboxes/${sandboxId}/workspace-copilot/file?path=${encodeURIComponent(path)}${cacheBust}`,
+    { cache: "no-store" },
   );
   if (copilotRes.ok) {
     try {
@@ -41,7 +44,8 @@ export async function readWorkspaceFile(
 
   // Fall back to main workspace
   const res = await fetchBackendWithAuth(
-    `${API_BASE}/api/sandboxes/${sandboxId}/workspace/file?path=${encodeURIComponent(path)}`,
+    `${API_BASE}/api/sandboxes/${sandboxId}/workspace/file?path=${encodeURIComponent(path)}${cacheBust}`,
+    { cache: "no-store" },
   );
   if (!res.ok) return null;
   try {

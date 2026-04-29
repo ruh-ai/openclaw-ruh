@@ -3467,8 +3467,65 @@ app.get('/api/agents/:id/forge/status', requireAuth, asyncHandler(async (req, re
  * stage transition so the backend always knows where the creation process is.
  * This is the source of truth for resuming interrupted builds.
  */
-const VALID_FORGE_STAGES = ['reveal', 'think', 'plan', 'build', 'review', 'test', 'ship', 'reflect', 'complete'];
+const VALID_FORGE_STAGES = ['reveal', 'think', 'plan', 'prototype', 'build', 'review', 'test', 'ship', 'reflect', 'complete'];
 type ForgeBuildReadiness = 'blocked' | 'test-ready' | 'ship-ready';
+
+const LIFECYCLE_FORGE_STAGES = VALID_FORGE_STAGES.filter((stage) => stage !== 'complete') as agentStore.AgentForgeStage[];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function maxForgeStage(current: unknown, next: agentStore.AgentForgeStage): agentStore.AgentForgeStage {
+  if (typeof current !== 'string') return next;
+  const currentIdx = LIFECYCLE_FORGE_STAGES.indexOf(current as agentStore.AgentForgeStage);
+  const nextIdx = LIFECYCLE_FORGE_STAGES.indexOf(next);
+  if (currentIdx < 0 || nextIdx > currentIdx) return next;
+  return current as agentStore.AgentForgeStage;
+}
+
+function promotedStageStatus(current: unknown, status: 'approved' | 'done') {
+  return current === 'done' ? current : status;
+}
+
+async function syncCreationSessionForForgeStage(
+  agentId: string,
+  agent: agentStore.AgentRecord,
+  stage: agentStore.AgentForgeStage,
+) {
+  if (stage === 'complete') return;
+
+  const session = isRecord(agent.creation_session) ? agent.creation_session : {};
+  const coPilot = isRecord(session.coPilot) ? session.coPilot : {};
+  const stageIdx = LIFECYCLE_FORGE_STAGES.indexOf(stage);
+  if (stageIdx < 0) return;
+
+  const nextCoPilot: Record<string, unknown> = {
+    ...coPilot,
+    devStage: stage,
+    maxUnlockedDevStage: maxForgeStage(coPilot.maxUnlockedDevStage, stage),
+    lifecycleAdvanceStatus: 'idle',
+    lifecycleAdvanceError: null,
+  };
+
+  if (stageIdx > LIFECYCLE_FORGE_STAGES.indexOf('think')) {
+    nextCoPilot.thinkStatus = promotedStageStatus(coPilot.thinkStatus, 'approved');
+  }
+  if (stageIdx > LIFECYCLE_FORGE_STAGES.indexOf('plan')) {
+    nextCoPilot.planStatus = promotedStageStatus(coPilot.planStatus, 'approved');
+  }
+  if (stageIdx > LIFECYCLE_FORGE_STAGES.indexOf('build')) {
+    nextCoPilot.buildStatus = 'done';
+  }
+
+  await agentStore.updateAgentConfig(agentId, {
+    creationSession: {
+      ...session,
+      coPilot: nextCoPilot,
+      savedAt: new Date().toISOString(),
+    },
+  });
+}
 
 function isForgeBuildReadiness(value: unknown): value is ForgeBuildReadiness {
   return value === 'blocked' || value === 'test-ready' || value === 'ship-ready';
@@ -3556,12 +3613,13 @@ app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, r
   // When stage reaches "complete", also promote status to "active"
   const statusUpdate = stage === 'complete' ? { status: 'active' as const, forge_stage: stage as agentStore.AgentForgeStage } : { forge_stage: stage as agentStore.AgentForgeStage };
   await agentStore.updateAgent(req.params.id, statusUpdate);
+  await syncCreationSessionForForgeStage(req.params.id, agent, stage as agentStore.AgentForgeStage);
 
   // When entering or leaving plan stage, sync architecture.json + discovery docs
   // from the container workspace back into the agent's DB columns so the UI
   // can render them. Best-effort — missing files are ok, a broken sync should
   // never block a stage advance.
-  if (stage === 'plan' || stage === 'build') {
+  if (stage === 'plan' || stage === 'prototype' || stage === 'build') {
     try {
       const syncResult = await syncPlanFromWorkspace(req.params.id, agent);
       if (syncResult.synced) {
@@ -3575,6 +3633,7 @@ app.patch('/api/agents/:id/forge/stage', requireAuth, asyncHandler(async (req, r
   // Auto-commit at stage transitions (Agent-as-Code)
   const STAGE_COMMITS: Record<string, string> = {
     plan: 'think: complete requirements discovery',
+    prototype: 'plan: approve dashboard prototype',
     build: 'plan: lock architecture',
     review: 'build: generate skills and configuration',
     test: 'review: configuration validated',
@@ -7170,6 +7229,17 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
   plan.subAgents = plan.subAgents ?? [];
   plan.workflow = plan.workflow ?? { steps: [] };
 
+  // The Prototype stage updates the co-pilot session immediately, but older
+  // plan files may not include dashboardPrototype yet. Build must honor the
+  // approved prototype contract, otherwise the scaffold falls back to generic
+  // dashboardPages and the generated dashboard drifts from the reviewed design.
+  const session = isRecord(agent.creation_session) ? agent.creation_session : {};
+  const coPilot = isRecord(session.coPilot) ? session.coPilot : {};
+  const sessionPlan = isRecord(coPilot.architecturePlan) ? coPilot.architecturePlan : null;
+  if (!isRecord(plan.dashboardPrototype) && isRecord(sessionPlan?.dashboardPrototype)) {
+    plan.dashboardPrototype = sessionPlan.dashboardPrototype;
+  }
+
   // Fix 5: Create AbortController for cancellation support
   const abortController = new AbortController();
 
@@ -7182,6 +7252,22 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
   };
   _streams.set(streamId, entry);
   res.json({ stream_id: streamId, agent_id: req.params.id });
+
+  const persistBuildSession = async (coPilotPatch: Record<string, unknown>) => {
+    const latest = await agentStore.getAgent(req.params.id);
+    const session = (latest?.creation_session as Record<string, unknown> | null) ?? {};
+    const coPilot = (session.coPilot as Record<string, unknown> | null) ?? {};
+    await agentStore.updateAgentConfig(req.params.id, {
+      creationSession: {
+        ...session,
+        coPilot: {
+          ...coPilot,
+          ...coPilotPatch,
+        },
+        savedAt: new Date().toISOString(),
+      },
+    });
+  };
 
   // Fix 1 + 5: Start build with parallel flag and abort signal
   const { runAgentBuild } = await import('./agentBuild');
@@ -7199,22 +7285,48 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
     try {
       for await (const event of generator) {
         entry.events!.push({ type: event.type, data: event, timestamp: Date.now() });
-        if (event.type === 'build_complete') { entry.status = 'done'; break; }
-        if (event.type === 'error') { entry.status = 'error'; entry.error = event.message; break; }
+        if (event.type === 'build_report') {
+          const report = event.report as { readiness?: string };
+          await persistBuildSession({
+            buildReport: event.report,
+            buildStatus: report.readiness === 'blocked' ? 'failed' : 'done',
+          }).catch(() => { /* best-effort */ });
+        }
+        if (event.type === 'build_complete') {
+          await persistBuildSession({
+            buildManifest: event.manifest,
+            buildStatus: 'done',
+          }).catch(() => { /* best-effort */ });
+          entry.status = 'done';
+          break;
+        }
+        if (event.type === 'error') {
+          entry.status = 'error';
+          entry.error = event.message;
+          await persistBuildSession({
+            buildStatus: 'failed',
+            buildError: event.message,
+          }).catch(() => { /* best-effort */ });
+          break;
+        }
       }
       if (entry.status !== 'done' && entry.status !== 'error') entry.status = 'done';
     } catch (err) {
       entry.status = 'error';
       entry.error = err instanceof Error ? err.message : String(err);
+      await persistBuildSession({
+        buildStatus: 'failed',
+        buildError: entry.error,
+      }).catch(() => { /* best-effort */ });
     }
   })();
 
   // Fix 3: Persist stream ID on agent record for reconnection (best-effort, non-blocking)
-  import('./agentStore').then(({ updateAgentConfig }) =>
-    updateAgentConfig(req.params.id, {
-      creationSession: { ...(agent.creation_session as Record<string, unknown> ?? {}), buildStreamId: streamId },
-    }).catch(() => { /* best-effort */ }),
-  ).catch(() => { /* best-effort */ });
+  persistBuildSession({
+    buildStreamId: streamId,
+    buildStatus: 'building',
+    buildError: null,
+  }).catch(() => { /* best-effort */ });
 }));
 
 // Fix 3: GET endpoint replays buffered events + follows live events

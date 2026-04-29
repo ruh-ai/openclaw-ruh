@@ -290,6 +290,7 @@ export function stripPlanTags(text: string): string {
   result = result.replace(/<plan_data_schema\b[\s\S]*?\/>/g, "");
   result = result.replace(/<plan_api_endpoints\b[\s\S]*?\/>/g, "");
   result = result.replace(/<plan_dashboard_pages\b[\s\S]*?\/>/g, "");
+  result = result.replace(/<plan_dashboard_prototype\b[\s\S]*?\/>/g, "");
   result = result.replace(/<plan_env_vars\b[\s\S]*?\/>/g, "");
   result = result.replace(/<plan_complete\s*\/>/g, "");
   result = result.replace(/<reveal_field\b[\s\S]*?\/>/g, "");

@@ -266,6 +266,7 @@ async function callSpecialist(
   prompt: string,
   onStatus?: (msg: string) => void,
   signal?: AbortSignal,
+  options?: { hardTimeoutMs?: number },
 ): Promise<{ content: string; files: string[] }> {
   const record = await store.getSandbox(sandboxId);
   if (!record) throw new Error('Sandbox not found');
@@ -280,8 +281,11 @@ async function callSpecialist(
 
   onStatus?.('Connecting to architect...');
 
-  // Combine user-provided cancellation signal with a 10-minute timeout.
-  const timeoutSignal = AbortSignal.timeout(10 * 60 * 1000);
+  // Combine user-provided cancellation signal with an outer timeout. The
+  // reader below owns the terminal timeout so we can surface a clear error
+  // instead of treating a cancelled stream as a successful specialist run.
+  const hardTimeoutMs = options?.hardTimeoutMs ?? 10 * 60 * 1000;
+  const timeoutSignal = AbortSignal.timeout(hardTimeoutMs + 2 * 60 * 1000);
   const combinedSignal = signal
     ? AbortSignal.any([signal, timeoutSignal])
     : timeoutSignal;
@@ -305,19 +309,18 @@ async function callSpecialist(
   const filesWritten: string[] = [];
   let streamDone = false;
 
-  // Inactivity timeout: if no new data arrives for 2 minutes, the specialist
-  // likely finished but the gateway kept the stream open. Force-close the reader.
-  // 2 minutes allows for the agent's initial tool calls (reading workspace,
-  // checking files) which produce no delta content before text starts flowing.
-  // Also hard-cap at 10 minutes total.
+  // Hard timeout only. Some specialists run long shell/database work with no
+  // streamed deltas until the final specialist_done marker; a short inactivity
+  // timeout can race ahead while the gateway session is still running.
   let lastMeaningfulDataAt = Date.now();
-  const INACTIVITY_MS = 120_000;
-  const HARD_TIMEOUT_MS = 10 * 60 * 1000;
+  const HARD_TIMEOUT_MS = hardTimeoutMs;
   const startedAt = Date.now();
+  let timedOut = false;
 
   const inactivityCheck = setInterval(() => {
     const now = Date.now();
-    if (now - lastMeaningfulDataAt > INACTIVITY_MS || now - startedAt > HARD_TIMEOUT_MS) {
+    if (now - startedAt > HARD_TIMEOUT_MS) {
+      timedOut = true;
       try { reader.cancel(); } catch { /* ignore */ }
       clearInterval(inactivityCheck);
     }
@@ -425,6 +428,11 @@ async function callSpecialist(
     try { reader.cancel(); } catch { /* ignore — already closed */ }
   }
 
+  if (timedOut && !streamDone) {
+    const idleForSec = Math.round((Date.now() - lastMeaningfulDataAt) / 1000);
+    throw new Error(`Specialist stream timed out after ${Math.round(HARD_TIMEOUT_MS / 1000)}s (idle ${idleForSec}s)`);
+  }
+
   // Also extract files from specialist_done marker in response text
   const doneMatch = fullText.match(/\{[\s\S]*"specialist_done"[\s\S]*\}/);
   if (doneMatch) {
@@ -439,6 +447,13 @@ async function callSpecialist(
   }
 
   return { content: fullText, files: filesWritten };
+}
+
+export function isSpecialistTimeoutError(err: unknown, message?: string): boolean {
+  const text = (message ?? (err instanceof Error ? err.message : String(err))).toLowerCase();
+  return text.includes('timed out')
+    || text.includes('timeout')
+    || (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError'));
 }
 
 // ─── Manifest persistence (Fix 6: error handling) ──────────────────────────
@@ -689,7 +704,7 @@ async function executeSpecialist(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     const reconciled = await reconcileSpecialistFiles(sandboxId, specialist, plan, [], target);
-    if (reconciled.missing.length === 0 && reconciled.files.length > 0) {
+    if (!isSpecialistTimeoutError(err, errorMsg) && reconciled.missing.length === 0 && reconciled.files.length > 0) {
       task.files = reconciled.files;
       task.status = 'done';
       task.completedAt = new Date().toISOString();
@@ -763,6 +778,14 @@ async function executeChunkedSkills(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       events.push({ type: 'status', message: `Skills chunk ${i + 1} failed: ${msg}` });
+      if (isSpecialistTimeoutError(err, msg)) {
+        task.files = uniqueStrings(allFiles);
+        task.status = 'failed';
+        task.error = `Skills chunk ${i + 1} timed out: ${msg}`;
+        task.completedAt = new Date().toISOString();
+        events.push({ type: 'task_failed', specialist: 'skills', error: task.error });
+        return { events, files: task.files, error: task.error };
+      }
       // Continue with remaining chunks — partial skill generation is better than none
     }
   }
@@ -1033,7 +1056,7 @@ export async function* runAgentBuild(
 
         const verifyPrompt = getSpecialistPrompt('verify' as SpecialistType, plan, agentName);
         if (verifyPrompt) {
-          const result = await callSpecialist(sandboxId, verifyPrompt, undefined, signal);
+          const result = await callSpecialist(sandboxId, verifyPrompt, undefined, signal, { hardTimeoutMs: 3 * 60 * 1000 });
           verifyTask.files = result.files;
         }
 

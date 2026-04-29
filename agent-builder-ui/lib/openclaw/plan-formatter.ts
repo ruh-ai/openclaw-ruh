@@ -3,7 +3,19 @@
  * as readable markdown for workspace persistence.
  */
 
-import type { ApiEndpoint, ArchitecturePlan, ArchitecturePlanMemoryAuthorityRow, DashboardPageComponent, DiscoveryDocuments } from "./types";
+import type {
+  ApiEndpoint,
+  ArchitecturePlan,
+  ArchitecturePlanMemoryAuthorityRow,
+  DashboardPageComponent,
+  DashboardPrototypeAction,
+  DashboardPrototypeArtifact,
+  DashboardPrototypePage,
+  DashboardPrototypePipeline,
+  DashboardPrototypePipelineStep,
+  DashboardPrototypeWorkflow,
+  DiscoveryDocuments,
+} from "./types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -145,6 +157,161 @@ function dashboardComponentType(value: string): DashboardPageComponent["type"] {
   if (lower.includes("empty")) return "empty-state";
   if (lower.includes("status")) return "status-badge";
   return "data-table";
+}
+
+function normalizeDashboardPrototypeWorkflow(
+  rawWorkflow: unknown,
+  index: number,
+): DashboardPrototypeWorkflow | null {
+  const workflow = asRecord(rawWorkflow);
+  const name = asString(workflow.name, `Workflow ${index + 1}`);
+  const id = asString(workflow.id, slugifyValue(name, `workflow-${index + 1}`));
+  const steps = asStringArray(workflow.steps);
+  const requiredActions = asStringArray(workflow.requiredActions ?? workflow.required_actions);
+  const successCriteria = asStringArray(workflow.successCriteria ?? workflow.success_criteria);
+  if (!id || !name || steps.length === 0) return null;
+  return { id, name, steps, requiredActions, successCriteria };
+}
+
+function normalizeDashboardPrototypePage(
+  rawPage: unknown,
+  index: number,
+): DashboardPrototypePage | null {
+  const page = asRecord(rawPage);
+  const title = asString(page.title, `Prototype Page ${index + 1}`);
+  let path = asString(page.path, `/${slugifyValue(title, `page-${index + 1}`)}`);
+  if (!path.startsWith("/")) path = `/${path}`;
+  const purpose = asString(page.purpose ?? page.description, title);
+  const supportsWorkflows = asStringArray(page.supportsWorkflows ?? page.supports_workflows);
+  const requiredActions = asStringArray(page.requiredActions ?? page.required_actions);
+  const acceptanceCriteria = asStringArray(page.acceptanceCriteria ?? page.acceptance_criteria);
+  if (!path || !title || !purpose) return null;
+  return { path, title, purpose, supportsWorkflows, requiredActions, acceptanceCriteria };
+}
+
+function normalizeDashboardPrototypeActionType(value: string): DashboardPrototypeAction["type"] {
+  const lower = value.toLowerCase().replace(/[\s-]+/g, "_");
+  if (lower.includes("create") || lower.includes("new")) return "create";
+  if (lower.includes("pipeline") || lower.includes("run") || lower.includes("start")) return "run_pipeline";
+  if (lower.includes("approve")) return "approve";
+  if (lower.includes("revision") || lower.includes("revise")) return "request_revision";
+  if (lower.includes("blocker") || lower.includes("resolve")) return "resolve_blocker";
+  if (lower.includes("publish") || lower.includes("archive")) return "publish";
+  return "other";
+}
+
+function normalizeDashboardPrototypeActionTarget(value: string): DashboardPrototypeAction["target"] | undefined {
+  const lower = value.toLowerCase().replace(/[\s-]+/g, "_");
+  if (lower === "work_item" || lower === "estimate" || lower === "project") return "work_item";
+  if (lower === "pipeline" || lower === "run") return "pipeline";
+  if (lower === "artifact" || lower === "file" || lower === "document") return "artifact";
+  if (lower === "page" || lower === "dashboard") return "page";
+  if (lower === "external" || lower === "integration") return "external";
+  return undefined;
+}
+
+function normalizeDashboardPrototypeAction(rawAction: unknown, index: number): DashboardPrototypeAction | null {
+  const action = asRecord(rawAction);
+  const label = asString(action.label ?? action.name, `Action ${index + 1}`);
+  const id = asString(action.id, slugifyValue(label, `action-${index + 1}`));
+  if (!id || !label) return null;
+  const type = normalizeDashboardPrototypeActionType(asString(action.type ?? action.kind, label));
+  const target = normalizeDashboardPrototypeActionTarget(asString(action.target));
+  return {
+    id,
+    label,
+    description: asString(action.description) || undefined,
+    type,
+    target,
+    pagePath: asString(action.pagePath ?? action.page_path) || undefined,
+    workflowId: asString(action.workflowId ?? action.workflow_id) || undefined,
+    primary: typeof action.primary === "boolean" ? action.primary : undefined,
+  };
+}
+
+function normalizeDashboardPrototypePipelineStep(rawStep: unknown, index: number): DashboardPrototypePipelineStep | null {
+  if (typeof rawStep === "string") {
+    const name = rawStep.trim();
+    return name ? { id: slugifyValue(name, `step-${index + 1}`), name } : null;
+  }
+  const step = asRecord(rawStep);
+  const name = asString(step.name ?? step.label, `Step ${index + 1}`);
+  const id = asString(step.id, slugifyValue(name, `step-${index + 1}`));
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    description: asString(step.description) || undefined,
+    owner: asString(step.owner) || undefined,
+    producesArtifacts: asStringArray(step.producesArtifacts ?? step.produces_artifacts),
+    requiresApproval: typeof step.requiresApproval === "boolean"
+      ? step.requiresApproval
+      : typeof step.requires_approval === "boolean"
+        ? step.requires_approval
+        : undefined,
+  };
+}
+
+function normalizeDashboardPrototypePipeline(rawPipeline: unknown): DashboardPrototypePipeline | undefined {
+  const pipeline = asRecord(rawPipeline);
+  if (Object.keys(pipeline).length === 0) return undefined;
+  const name = asString(pipeline.name ?? pipeline.title, "Agent Pipeline");
+  const steps = asArray(pipeline.steps)
+    .map(normalizeDashboardPrototypePipelineStep)
+    .filter((step): step is DashboardPrototypePipelineStep => step !== null);
+  if (!name || steps.length === 0) return undefined;
+  return {
+    name,
+    triggerActionId: asString(pipeline.triggerActionId ?? pipeline.trigger_action_id) || undefined,
+    steps,
+    completionCriteria: asStringArray(pipeline.completionCriteria ?? pipeline.completion_criteria),
+    failureStates: asStringArray(pipeline.failureStates ?? pipeline.failure_states),
+  };
+}
+
+function normalizeDashboardPrototypeArtifact(rawArtifact: unknown, index: number): DashboardPrototypeArtifact | null {
+  const artifact = asRecord(rawArtifact);
+  const name = asString(artifact.name ?? artifact.title, `Artifact ${index + 1}`);
+  const id = asString(artifact.id, slugifyValue(name, `artifact-${index + 1}`));
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    type: asString(artifact.type ?? artifact.kind, "document"),
+    description: asString(artifact.description) || undefined,
+    producedByStepId: asString(artifact.producedByStepId ?? artifact.produced_by_step_id) || undefined,
+    reviewActions: asStringArray(artifact.reviewActions ?? artifact.review_actions),
+    acceptanceCriteria: asStringArray(artifact.acceptanceCriteria ?? artifact.acceptance_criteria),
+  };
+}
+
+function normalizeDashboardPrototype(raw: unknown): ArchitecturePlan["dashboardPrototype"] {
+  const prototype = asRecord(raw);
+  if (Object.keys(prototype).length === 0) return undefined;
+  const summary = asString(prototype.summary);
+  const workflows = asArray(prototype.workflows)
+    .map(normalizeDashboardPrototypeWorkflow)
+    .filter((workflow): workflow is DashboardPrototypeWorkflow => workflow !== null);
+  const pages = asArray(prototype.pages)
+    .map(normalizeDashboardPrototypePage)
+    .filter((page): page is DashboardPrototypePage => page !== null);
+  if (!summary || workflows.length === 0 || pages.length === 0) return undefined;
+  return {
+    summary,
+    primaryUsers: asStringArray(prototype.primaryUsers ?? prototype.primary_users),
+    workflows,
+    pages,
+    actions: asArray(prototype.actions ?? prototype.dashboardActions ?? prototype.dashboard_actions)
+      .map(normalizeDashboardPrototypeAction)
+      .filter((action): action is DashboardPrototypeAction => action !== null),
+    pipeline: normalizeDashboardPrototypePipeline(prototype.pipeline),
+    artifacts: asArray(prototype.artifacts ?? prototype.generatedArtifacts ?? prototype.generated_artifacts)
+      .map(normalizeDashboardPrototypeArtifact)
+      .filter((artifact): artifact is DashboardPrototypeArtifact => artifact !== null),
+    emptyState: asString(prototype.emptyState ?? prototype.empty_state) || undefined,
+    revisionPrompts: asStringArray(prototype.revisionPrompts ?? prototype.revision_prompts),
+    approvalChecklist: asStringArray(prototype.approvalChecklist ?? prototype.approval_checklist),
+  };
 }
 
 /**
@@ -353,6 +520,7 @@ export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
           : [{ type: "data-table" as const, title, dataSource: dashboardDataSource }],
       };
     }),
+    dashboardPrototype: normalizeDashboardPrototype(raw.dashboardPrototype),
     vectorCollections: asArray(raw.vectorCollections).map((rawCollection, index) => {
       if (typeof rawCollection === "string") {
         return { name: rawCollection, description: rawCollection };
@@ -412,6 +580,19 @@ export function renderPlanSummary(plan: ArchitecturePlan): string {
     for (const step of plan.workflow.steps) {
       const parallel = step.parallel ? " (parallel)" : "";
       lines.push(`- ${step.skillId}${parallel}`);
+    }
+    lines.push("");
+  }
+
+  // Sub-agents
+  if (plan.subAgents?.length) {
+    lines.push("## Sub-Agents\n");
+    lines.push("| Sub-Agent | Type | Autonomy | Trigger | Owns Skills | Description |");
+    lines.push("|-----------|------|----------|---------|-------------|-------------|");
+    for (const agent of plan.subAgents) {
+      lines.push(
+        `| ${agent.name} | ${agent.type} | ${agent.autonomy.replace(/_/g, " ")} | ${agent.trigger || "manual"} | ${agent.skills.join(", ") || "none"} | ${agent.description} |`,
+      );
     }
     lines.push("");
   }
@@ -490,6 +671,67 @@ export function renderPlanSummary(plan: ArchitecturePlan): string {
       }
     }
     lines.push("");
+  }
+
+  if (plan.dashboardPrototype) {
+    lines.push("## Dashboard Prototype Gate\n");
+    lines.push(`${plan.dashboardPrototype.summary}\n`);
+    if (plan.dashboardPrototype.primaryUsers.length > 0) {
+      lines.push(`**Primary users:** ${plan.dashboardPrototype.primaryUsers.join(", ")}\n`);
+    }
+    if (plan.dashboardPrototype.workflows.length > 0) {
+      lines.push("### Workflows\n");
+      for (const workflow of plan.dashboardPrototype.workflows) {
+        lines.push(`- **${workflow.name}** (\`${workflow.id}\`)`);
+        for (const step of workflow.steps) {
+          lines.push(`  - ${step}`);
+        }
+        if (workflow.requiredActions.length > 0) {
+          lines.push(`  - Required actions: ${workflow.requiredActions.join(", ")}`);
+        }
+      }
+      lines.push("");
+    }
+    if (plan.dashboardPrototype.actions?.length) {
+      lines.push("### Prototype Actions\n");
+      for (const action of plan.dashboardPrototype.actions) {
+        lines.push(`- **${action.label}** (\`${action.id}\`) — ${action.type}${action.target ? ` on ${action.target}` : ""}`);
+      }
+      lines.push("");
+    }
+    if (plan.dashboardPrototype.pipeline) {
+      lines.push(`### Pipeline: ${plan.dashboardPrototype.pipeline.name}\n`);
+      for (const step of plan.dashboardPrototype.pipeline.steps) {
+        lines.push(`- **${step.name}** (\`${step.id}\`)${step.owner ? ` — ${step.owner}` : ""}`);
+      }
+      if (plan.dashboardPrototype.pipeline.completionCriteria.length > 0) {
+        lines.push(`- Completion: ${plan.dashboardPrototype.pipeline.completionCriteria.join(", ")}`);
+      }
+      if (plan.dashboardPrototype.pipeline.failureStates.length > 0) {
+        lines.push(`- Failure states: ${plan.dashboardPrototype.pipeline.failureStates.join(", ")}`);
+      }
+      lines.push("");
+    }
+    if (plan.dashboardPrototype.artifacts?.length) {
+      lines.push("### Generated Artifacts\n");
+      for (const artifact of plan.dashboardPrototype.artifacts) {
+        lines.push(`- **${artifact.name}** (\`${artifact.id}\`) — ${artifact.type}`);
+        if (artifact.reviewActions.length > 0) {
+          lines.push(`  - Review actions: ${artifact.reviewActions.join(", ")}`);
+        }
+      }
+      lines.push("");
+    }
+    if (plan.dashboardPrototype.pages.length > 0) {
+      lines.push("### Prototype Pages\n");
+      for (const page of plan.dashboardPrototype.pages) {
+        lines.push(`- **${page.title}** (\`${page.path}\`): ${page.purpose}`);
+        if (page.requiredActions.length > 0) {
+          lines.push(`  - Actions: ${page.requiredActions.join(", ")}`);
+        }
+      }
+      lines.push("");
+    }
   }
 
   // Channels

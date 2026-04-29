@@ -6,6 +6,7 @@ const STAGE_LABELS: Record<StageContext["stage"], string> = {
   reveal: "Reveal",
   think: "Think",
   plan: "Plan",
+  prototype: "Prototype",
   build: "Build",
   review: "Review",
   test: "Test",
