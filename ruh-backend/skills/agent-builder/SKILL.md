@@ -61,7 +61,19 @@ If you're Claude Code, use this when the user asks about any agent-authoring wor
    described procedure. Keep skills focused, procedural, and tool-aware.
 ```
 
-**You cannot spawn sub-agents at runtime** on this platform. `architecture.json.subAgents` exists as a field but the build pipeline does not implement it. Decompose behavior into **skills**, not child agents.
+**Multi-agent fleets are supported** when the workflow genuinely needs separate specialist agents coordinated by an orchestrator. Most agents stay single-agent — leave `subAgents` empty unless the TRD describes distinct roles with their own SOULs, skill sets, and hand-off boundaries.
+
+**Heuristic:**
+- One agent doing several things in sequence → SINGLE-AGENT (decompose into skills)
+- Different agents with different SOULs/skills coordinated by an orchestrator → FLEET (emit `subAgents`)
+
+**When to emit a fleet:** the TRD describes a workflow like "intake → takeoff → pricing → narrative" with each phase owned by a specialist, OR multiple roles coordinating around shared state (e.g., research agent + writer agent + publisher agent + orchestrator).
+
+**Fleet shape (`architecture.json.subAgents[]`):** each entry has `id` (kebab-case), `name`, `description` (one sentence), `type` (`worker` | `specialist` | `monitor` | `orchestrator`), `skills` (skill ids this sub-agent owns), `trigger` (the orchestrator stage that routes to it — typically the sub-agent's own id), `autonomy` (`fully_autonomous` | `requires_approval` | `report_only`).
+
+**The main orchestrator is implicit** — do NOT add it to `subAgents`. Skills NOT assigned to any sub-agent stay on the main orchestrator. The orchestrator owns routing, approvals, and any general-purpose skills.
+
+**What the build pipeline does with this:** identity (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`) and skills specialists run **once per agent** in the fleet, writing under `agents/<id>/`. Pipeline-level specialists (database, backend, dashboard, verify, scaffold) stay shared — one DB schema, one HTTP service, one UI for the whole fleet. Single-agent (empty `subAgents`) preserves the existing root-level paths exactly.
 
 ---
 
