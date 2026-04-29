@@ -10,8 +10,17 @@ const mockGetAgentForCreator = mock(async (id: string) => ({
   sandbox_ids: ['sandbox-lifecycle-001'],
   repo_url: null,
   active_branch: 'main',
+  creation_session: {
+    coPilot: {
+      devStage: 'plan',
+      maxUnlockedDevStage: 'plan',
+      planStatus: 'ready',
+      buildStatus: 'idle',
+    },
+  },
 }));
 const mockUpdateAgent = mock(async () => ({}));
+const mockUpdateAgentConfig = mock(async () => ({}));
 const mockReadWorkspaceCopilotFile = mock(async () => null as string | null);
 const mockListEvalResults = mock(async () => ({ items: [], total: 0 }));
 
@@ -48,7 +57,7 @@ mock.module('../../../src/agentStore', () => ({
   getAgentForCreatorInOrg: mock(async () => null),
   getAgentOwnership: mock(async () => null),
   updateAgent: mockUpdateAgent,
-  updateAgentConfig: mock(async () => ({})),
+  updateAgentConfig: mockUpdateAgentConfig,
   addSandboxToAgent: mock(async () => ({})),
   removeSandboxFromAgent: mock(async () => ({})),
   setForgeSandbox: mock(async () => ({})),
@@ -255,6 +264,7 @@ async function patchForgeStage(agentId: string, body: Record<string, unknown>) {
 beforeEach(() => {
   mockGetAgentForCreator.mockClear();
   mockUpdateAgent.mockClear();
+  mockUpdateAgentConfig.mockClear();
   mockReadWorkspaceCopilotFile.mockClear();
   mockReadWorkspaceCopilotFile.mockResolvedValue(null);
   mockListEvalResults.mockClear();
@@ -267,6 +277,30 @@ afterEach(() => {
 });
 
 describe('PATCH /api/agents/:id/forge/stage lifecycle guards', () => {
+  test('allows prototype stage before build report exists', async () => {
+    const res = await patchForgeStage('agent-lifecycle-001', { stage: 'prototype' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.forge_stage).toBe('prototype');
+    expect(mockUpdateAgent).toHaveBeenCalledWith(
+      'agent-lifecycle-001',
+      { forge_stage: 'prototype' },
+    );
+    expect(mockUpdateAgentConfig).toHaveBeenCalledWith(
+      'agent-lifecycle-001',
+      expect.objectContaining({
+        creationSession: expect.objectContaining({
+          coPilot: expect.objectContaining({
+            devStage: 'prototype',
+            maxUnlockedDevStage: 'prototype',
+            planStatus: 'approved',
+            buildStatus: 'idle',
+          }),
+        }),
+      }),
+    );
+  });
+
   test('rejects review stage when build report is missing', async () => {
     const res = await patchForgeStage('agent-lifecycle-001', { stage: 'review' });
 

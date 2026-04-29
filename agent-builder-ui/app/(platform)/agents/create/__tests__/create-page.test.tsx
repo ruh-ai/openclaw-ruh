@@ -39,6 +39,8 @@ mock.module("@/lib/openclaw/builder-state", () => ({
 }));
 
 mock.module("@/lib/openclaw/copilot-state", () => ({
+  hasRequiredDashboardPrototype: () => false,
+  hasUsableArchitecturePlan: () => false,
   useCoPilotStore: () => ({
     state: { phase: "think", skills: [], tools: [], triggers: [] },
     actions: {},
@@ -70,6 +72,8 @@ mock.module("@/hooks/use-architect-sandbox", () => ({
 }));
 
 mock.module("@/hooks/use-forge-sandbox", () => ({
+  isForgeSandboxForAgent: (sandbox: { sandbox_id?: string } | null | undefined, forgeSandboxId: string | null | undefined) =>
+    Boolean(sandbox?.sandbox_id && forgeSandboxId && sandbox.sandbox_id === forgeSandboxId),
   useForgeSandbox: () => ({ sandbox: null, loading: false }),
 }));
 

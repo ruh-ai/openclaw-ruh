@@ -53,13 +53,46 @@ export interface StageContext {
 
 const APPROVABLE_STATUSES = new Set<StageStatus>(["ready", "done", "approved"]);
 
+function hasUsablePlanLike(plan: unknown): boolean {
+  if (!plan || typeof plan !== "object") return false;
+  const candidate = plan as {
+    skills?: unknown[];
+    workflow?: { steps?: unknown[] };
+  };
+  return (candidate.skills?.length ?? 0) > 0 || (candidate.workflow?.steps?.length ?? 0) > 0;
+}
+
+function hasRequiredDashboardPrototypeLike(plan: unknown): boolean {
+  if (!plan || typeof plan !== "object") return true;
+  const candidate = plan as {
+    dashboardPages?: unknown[];
+    dashboardPrototype?: {
+      summary?: unknown;
+      workflows?: unknown[];
+      pages?: unknown[];
+    };
+  };
+  if ((candidate.dashboardPages?.length ?? 0) === 0) return true;
+  const prototype = candidate.dashboardPrototype;
+  return Boolean(
+    prototype
+      && typeof prototype.summary === "string"
+      && prototype.summary.trim().length > 0
+      && (prototype.workflows?.length ?? 0) > 0
+      && (prototype.pages?.length ?? 0) > 0,
+  );
+}
+
 function resolveReadiness(input: StageContextInput): StageContext["readiness"] {
   const reportReadiness = input.buildReport?.readiness;
   if (reportReadiness) return reportReadiness;
 
   if (input.devStage === "build" && input.buildStatus === "done") return "ready";
   if (input.devStage === "think" && APPROVABLE_STATUSES.has(input.thinkStatus)) return "ready";
-  if (input.devStage === "plan" && APPROVABLE_STATUSES.has(input.planStatus)) return "ready";
+  if (input.devStage === "plan" && APPROVABLE_STATUSES.has(input.planStatus) && hasUsablePlanLike(input.architecturePlan)) return "ready";
+  if (input.devStage === "prototype" && hasUsablePlanLike(input.architecturePlan)) {
+    return hasRequiredDashboardPrototypeLike(input.architecturePlan) ? "ready" : "blocked";
+  }
   return "draft";
 }
 
@@ -84,8 +117,13 @@ export function resolveStageContext(input: StageContextInput): StageContext {
     allowed.add("approve");
   }
 
-  if (input.devStage === "plan" && APPROVABLE_STATUSES.has(input.planStatus)) {
+  if (input.devStage === "plan" && APPROVABLE_STATUSES.has(input.planStatus) && hasUsablePlanLike(input.architecturePlan)) {
     allowed.add("approve");
+  }
+
+  if (input.devStage === "prototype" && readiness === "ready") {
+    allowed.add("approve");
+    allowed.add("request_changes");
   }
 
   if (input.devStage === "build") {

@@ -11,6 +11,24 @@ interface ArchitecturePlanSkill { id: string; name: string; description: string;
 interface ArchitecturePlanEnvVar { key: string; label: string; description: string; required: boolean; inputType: string; group: string; example?: string; defaultValue?: string }
 interface DashboardPageComponent { type: string; title?: string; dataSource: string; config?: Record<string, unknown> }
 interface DashboardPage { path: string; title: string; description?: string; components: DashboardPageComponent[] }
+interface DashboardPrototypeWorkflow { id: string; name: string; steps: string[]; requiredActions: string[]; successCriteria: string[] }
+interface DashboardPrototypePage { path: string; title: string; purpose: string; supportsWorkflows: string[]; requiredActions: string[]; acceptanceCriteria: string[] }
+interface DashboardPrototypeAction { id: string; label: string; description?: string; type: "create" | "run_pipeline" | "approve" | "request_revision" | "resolve_blocker" | "publish" | "other"; target?: "work_item" | "pipeline" | "artifact" | "page" | "external"; pagePath?: string; workflowId?: string; primary?: boolean }
+interface DashboardPrototypePipelineStep { id: string; name: string; description?: string; owner?: string; producesArtifacts?: string[]; requiresApproval?: boolean }
+interface DashboardPrototypePipeline { name: string; triggerActionId?: string; steps: DashboardPrototypePipelineStep[]; completionCriteria: string[]; failureStates: string[] }
+interface DashboardPrototypeArtifact { id: string; name: string; type: string; description?: string; producedByStepId?: string; reviewActions: string[]; acceptanceCriteria: string[] }
+interface DashboardPrototypeSpec {
+  summary: string;
+  primaryUsers: string[];
+  workflows: DashboardPrototypeWorkflow[];
+  pages: DashboardPrototypePage[];
+  actions?: DashboardPrototypeAction[];
+  pipeline?: DashboardPrototypePipeline;
+  artifacts?: DashboardPrototypeArtifact[];
+  emptyState?: string;
+  revisionPrompts: string[];
+  approvalChecklist: string[];
+}
 interface ApiEndpoint { method: string; path: string; description: string; query?: string; responseShape?: string }
 interface DataSchema { tables: Array<{ name: string; columns: Array<{ name: string; type?: string; description?: string }>; indexes?: Array<{ columns: string[] }> }> }
 
@@ -42,6 +60,7 @@ export interface ArchitecturePlan {
   dataSchema?: DataSchema | null;
   apiEndpoints?: ApiEndpoint[];
   dashboardPages?: DashboardPage[];
+  dashboardPrototype?: DashboardPrototypeSpec;
   vectorCollections?: Array<{ name: string; description: string }>;
   buildDependencies?: Array<{ from: string; to: string }>;
 }
@@ -86,6 +105,160 @@ function normalizeDashboardComponentType(value: string): string {
   if (lower.includes("empty")) return "empty-state";
   if (lower.includes("status")) return "status-badge";
   return "data-table";
+}
+
+function normalizeDashboardPrototypeWorkflow(raw: unknown): DashboardPrototypeWorkflow | null {
+  const workflow = asRecord(raw);
+  const id = asString(workflow.id, slugifyValue(asString(workflow.name), "workflow"));
+  const name = asString(workflow.name, id);
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    steps: asStringArray(workflow.steps),
+    requiredActions: asStringArray(workflow.requiredActions ?? workflow.required_actions),
+    successCriteria: asStringArray(workflow.successCriteria ?? workflow.success_criteria),
+  };
+}
+
+function normalizeDashboardPrototypePage(raw: unknown): DashboardPrototypePage | null {
+  const page = asRecord(raw);
+  const title = asString(page.title, asString(page.name));
+  let path = asString(page.path, title ? `/${slugifyValue(title, "page")}` : "");
+  if (path && !path.startsWith("/")) path = `/${path}`;
+  const purpose = asString(page.purpose ?? page.description, title);
+  if (!path || !title || !purpose) return null;
+  return {
+    path,
+    title,
+    purpose,
+    supportsWorkflows: asStringArray(page.supportsWorkflows ?? page.supports_workflows),
+    requiredActions: asStringArray(page.requiredActions ?? page.required_actions),
+    acceptanceCriteria: asStringArray(page.acceptanceCriteria ?? page.acceptance_criteria),
+  };
+}
+
+function normalizeDashboardPrototypeActionType(value: string): DashboardPrototypeAction["type"] {
+  const lower = value.toLowerCase().replace(/[\s-]+/g, "_");
+  if (lower.includes("create") || lower.includes("new")) return "create";
+  if (lower.includes("pipeline") || lower.includes("run") || lower.includes("start")) return "run_pipeline";
+  if (lower.includes("approve")) return "approve";
+  if (lower.includes("revision") || lower.includes("revise")) return "request_revision";
+  if (lower.includes("blocker") || lower.includes("resolve")) return "resolve_blocker";
+  if (lower.includes("publish") || lower.includes("archive")) return "publish";
+  return "other";
+}
+
+function normalizeDashboardPrototypeActionTarget(value: string): DashboardPrototypeAction["target"] | undefined {
+  const lower = value.toLowerCase().replace(/[\s-]+/g, "_");
+  if (lower === "work_item" || lower === "estimate" || lower === "project") return "work_item";
+  if (lower === "pipeline" || lower === "run") return "pipeline";
+  if (lower === "artifact" || lower === "file" || lower === "document") return "artifact";
+  if (lower === "page" || lower === "dashboard") return "page";
+  if (lower === "external" || lower === "integration") return "external";
+  return undefined;
+}
+
+function normalizeDashboardPrototypeAction(raw: unknown, index: number): DashboardPrototypeAction | null {
+  const action = asRecord(raw);
+  const label = asString(action.label ?? action.name, `Action ${index + 1}`);
+  const id = asString(action.id, slugifyValue(label, `action-${index + 1}`));
+  if (!id || !label) return null;
+  return {
+    id,
+    label,
+    description: asString(action.description) || undefined,
+    type: normalizeDashboardPrototypeActionType(asString(action.type ?? action.kind, label)),
+    target: normalizeDashboardPrototypeActionTarget(asString(action.target)),
+    pagePath: asString(action.pagePath ?? action.page_path) || undefined,
+    workflowId: asString(action.workflowId ?? action.workflow_id) || undefined,
+    primary: typeof action.primary === "boolean" ? action.primary : undefined,
+  };
+}
+
+function normalizeDashboardPrototypePipelineStep(raw: unknown, index: number): DashboardPrototypePipelineStep | null {
+  if (typeof raw === "string") {
+    const name = raw.trim();
+    return name ? { id: slugifyValue(name, `step-${index + 1}`), name } : null;
+  }
+  const step = asRecord(raw);
+  const name = asString(step.name ?? step.label, `Step ${index + 1}`);
+  const id = asString(step.id, slugifyValue(name, `step-${index + 1}`));
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    description: asString(step.description) || undefined,
+    owner: asString(step.owner) || undefined,
+    producesArtifacts: asStringArray(step.producesArtifacts ?? step.produces_artifacts),
+    requiresApproval: typeof step.requiresApproval === "boolean"
+      ? step.requiresApproval
+      : typeof step.requires_approval === "boolean"
+        ? step.requires_approval
+        : undefined,
+  };
+}
+
+function normalizeDashboardPrototypePipeline(raw: unknown): DashboardPrototypePipeline | undefined {
+  const pipeline = asRecord(raw);
+  if (Object.keys(pipeline).length === 0) return undefined;
+  const name = asString(pipeline.name ?? pipeline.title, "Agent Pipeline");
+  const steps = asArray(pipeline.steps)
+    .map(normalizeDashboardPrototypePipelineStep)
+    .filter((step): step is DashboardPrototypePipelineStep => step !== null);
+  if (!name || steps.length === 0) return undefined;
+  return {
+    name,
+    triggerActionId: asString(pipeline.triggerActionId ?? pipeline.trigger_action_id) || undefined,
+    steps,
+    completionCriteria: asStringArray(pipeline.completionCriteria ?? pipeline.completion_criteria),
+    failureStates: asStringArray(pipeline.failureStates ?? pipeline.failure_states),
+  };
+}
+
+function normalizeDashboardPrototypeArtifact(raw: unknown, index: number): DashboardPrototypeArtifact | null {
+  const artifact = asRecord(raw);
+  const name = asString(artifact.name ?? artifact.title, `Artifact ${index + 1}`);
+  const id = asString(artifact.id, slugifyValue(name, `artifact-${index + 1}`));
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    type: asString(artifact.type ?? artifact.kind, "document"),
+    description: asString(artifact.description) || undefined,
+    producedByStepId: asString(artifact.producedByStepId ?? artifact.produced_by_step_id) || undefined,
+    reviewActions: asStringArray(artifact.reviewActions ?? artifact.review_actions),
+    acceptanceCriteria: asStringArray(artifact.acceptanceCriteria ?? artifact.acceptance_criteria),
+  };
+}
+
+function normalizeDashboardPrototype(raw: unknown): DashboardPrototypeSpec | undefined {
+  const prototype = asRecord(raw);
+  if (Object.keys(prototype).length === 0) return undefined;
+  const summary = asString(prototype.summary);
+  const workflows = asArray(prototype.workflows)
+    .map(normalizeDashboardPrototypeWorkflow)
+    .filter((workflow): workflow is DashboardPrototypeWorkflow => workflow !== null);
+  const pages = asArray(prototype.pages)
+    .map(normalizeDashboardPrototypePage)
+    .filter((page): page is DashboardPrototypePage => page !== null);
+  if (!summary || workflows.length === 0 || pages.length === 0) return undefined;
+  return {
+    summary,
+    primaryUsers: asStringArray(prototype.primaryUsers ?? prototype.primary_users),
+    workflows,
+    pages,
+    actions: asArray(prototype.actions ?? prototype.dashboardActions ?? prototype.dashboard_actions)
+      .map(normalizeDashboardPrototypeAction)
+      .filter((action): action is DashboardPrototypeAction => action !== null),
+    pipeline: normalizeDashboardPrototypePipeline(prototype.pipeline),
+    artifacts: asArray(prototype.artifacts ?? prototype.generatedArtifacts ?? prototype.generated_artifacts)
+      .map(normalizeDashboardPrototypeArtifact)
+      .filter((artifact): artifact is DashboardPrototypeArtifact => artifact !== null),
+    emptyState: asString(prototype.emptyState ?? prototype.empty_state) || undefined,
+    revisionPrompts: asStringArray(prototype.revisionPrompts ?? prototype.revision_prompts),
+    approvalChecklist: asStringArray(prototype.approvalChecklist ?? prototype.approval_checklist),
+  };
 }
 
 function normalizeDataSchema(value: unknown): DataSchema | null {
@@ -297,6 +470,7 @@ export function normalizePlan(raw: Record<string, unknown>): ArchitecturePlan {
           : [{ type: "data-table", title, dataSource: dashboardDataSource }],
       };
     }),
+    dashboardPrototype: normalizeDashboardPrototype(raw.dashboardPrototype),
     vectorCollections: asArray(raw.vectorCollections).map((rawCollection, index) => {
       if (typeof rawCollection === "string") {
         return { name: rawCollection, description: rawCollection };
@@ -492,8 +666,8 @@ function generateTsconfig(): ScaffoldFile {
   const config = {
     compilerOptions: {
       target: "ES2022",
-      module: "Node16",
-      moduleResolution: "Node16",
+      module: "ESNext",
+      moduleResolution: "Bundler",
       outDir: "./dist",
       rootDir: ".",
       strict: true,
@@ -602,16 +776,9 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
     });
   }
 
-  // Install cron jobs from the plan's triggers
-  const hasTriggers = (plan.triggers?.length ?? 0) > 0;
-  if (hasTriggers) {
-    setup.push({
-      name: "install-cron-jobs",
-      command: "sh $HOME/.openclaw/workspace/.openclaw/install-crons.sh 2>&1",
-      condition: "file:.openclaw/install-crons.sh",
-      optional: true,
-    });
-  }
+  // Cron trigger scripts are generated for deploy/runtime handoff, but Build
+  // setup does not install them. Installing crons here can fire immediate
+  // agent turns and contend with verification on the sandbox gateway lane.
 
   // Single-port architecture: the backend serves both API AND dashboard static files.
   // No separate serve process — eliminates CORS, SPA routing, and proxy issues.
@@ -679,9 +846,233 @@ function legacyHookName(dataSource: string): string {
   return `use${name || "Data"}`;
 }
 
+function js(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function findPrototypePage(
+  plan: ArchitecturePlan,
+  page: DashboardPage,
+): DashboardPrototypePage | null {
+  return plan.dashboardPrototype?.pages.find((prototypePage) =>
+    prototypePage.path === page.path || prototypePage.title === page.title
+  ) ?? null;
+}
+
+function prototypeWorkflowsForPage(
+  plan: ArchitecturePlan,
+  prototypePage: DashboardPrototypePage | null,
+): DashboardPrototypeWorkflow[] {
+  if (!prototypePage || !plan.dashboardPrototype) return [];
+  const workflowIds = new Set(prototypePage.supportsWorkflows);
+  return plan.dashboardPrototype.workflows.filter((workflow) => workflowIds.has(workflow.id));
+}
+
+function routePartsForEndpoint(path: string): { group: string; subPath: string } {
+  const parts = path.replace(/^\/api\/?/, "").split("/").filter(Boolean);
+  const group = parts[0] ?? "main";
+  const subParts = parts.slice(1).map((part) => {
+    if (!part.startsWith(":")) return part;
+    return `:${part.slice(1).replace(/[^A-Za-z0-9_]/g, "") || "id"}`;
+  });
+  return {
+    group,
+    subPath: `/${subParts.join("/")}` || "/",
+  };
+}
+
+function actionEndpointScore(action: DashboardPrototypeAction, endpoint: ApiEndpoint): number {
+  if (endpoint.method.toUpperCase() !== "POST") return -1;
+  const actionText = `${action.id} ${action.label} ${action.type}`.toLowerCase();
+  const endpointText = `${endpoint.path} ${endpoint.description}`.toLowerCase();
+  let score = 0;
+
+  for (const token of actionText.split(/[^a-z0-9]+/).filter((token) => token.length > 2)) {
+    if (endpointText.includes(token)) score += 2;
+  }
+
+  if (action.type === "create" && /create|reset|new|project|estimate/.test(endpointText)) score += 12;
+  if (action.type === "run_pipeline" && /pipeline|run|step|qa/.test(endpointText)) score += 12;
+  if (action.type === "approve" && /approve|approval/.test(endpointText)) score += 12;
+  if (action.type === "request_revision" && /revision|revise|request/.test(endpointText)) score += 12;
+  if (action.type === "resolve_blocker" && /blocker|resolve/.test(endpointText)) score += 12;
+  if (action.type === "publish" && /publish|package|artifact|archive/.test(endpointText)) score += 12;
+
+  if (/artifact/.test(actionText) && /artifact/.test(endpointText)) score += 8;
+  if (/qa|guardrail|check/.test(actionText) && /qa|check/.test(endpointText)) score += 8;
+  if (/role/.test(actionText) && /role|session/.test(endpointText)) score += 8;
+
+  return score;
+}
+
+function prototypeActionEndpointMap(plan: ArchitecturePlan): Record<string, { method: string; path: string }> {
+  const actions = plan.dashboardPrototype?.actions ?? [];
+  const endpoints = plan.apiEndpoints ?? [];
+  const endpointMap: Record<string, { method: string; path: string }> = {};
+
+  for (const action of actions) {
+    const best = endpoints
+      .map((endpoint) => ({ endpoint, score: actionEndpointScore(action, endpoint) }))
+      .sort((left, right) => right.score - left.score)[0];
+    if (best && best.score > 0) {
+      endpointMap[action.id] = {
+        method: best.endpoint.method.toUpperCase(),
+        path: best.endpoint.path,
+      };
+    }
+  }
+
+  return endpointMap;
+}
+
+function renderDashboardPrototypePanel(
+  plan: ArchitecturePlan,
+  prototypePage: DashboardPrototypePage | null,
+): string {
+  if (!prototypePage || !plan.dashboardPrototype) return "";
+  const workflows = prototypeWorkflowsForPage(plan, prototypePage);
+  const actionEndpoints = prototypeActionEndpointMap(plan);
+
+  return `
+const prototypePage = ${js(prototypePage)};
+const prototypeWorkflows = ${js(workflows)};
+const prototypeActions = ${js(plan.dashboardPrototype.actions ?? [])};
+const prototypeActionEndpoints = ${js(actionEndpoints)} as Record<string, { method: string; path: string }>;
+const prototypePipeline = ${js(plan.dashboardPrototype.pipeline ?? null)} as {
+  name: string;
+  steps: Array<{ id: string; name: string; owner?: string; description?: string; producesArtifacts?: string[] }>;
+} | null;
+const prototypeArtifacts = ${js(plan.dashboardPrototype.artifacts ?? [])};
+const prototypeEmptyState = ${js(plan.dashboardPrototype.emptyState ?? "Create a work item to validate this dashboard workflow.")};
+const prototypeRevisionPrompts = ${js(plan.dashboardPrototype.revisionPrompts)} as string[];
+const prototypeApprovalChecklist = ${js(plan.dashboardPrototype.approvalChecklist)} as string[];
+
+function DashboardPrototypePanel() {
+  const [busyAction, setBusyAction] = React.useState<string | null>(null);
+  const [actionMessage, setActionMessage] = React.useState<string | null>(null);
+
+  async function runPrototypeAction(action: { id: string; label: string }) {
+    const endpoint = prototypeActionEndpoints[action.id];
+    if (!endpoint) {
+      setActionMessage(\`\${action.label} is planned but has no API endpoint yet.\`);
+      return;
+    }
+
+    setBusyAction(action.id);
+    setActionMessage(null);
+    try {
+      const response = await fetch(endpoint.path, {
+        method: endpoint.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: endpoint.method === 'GET' ? undefined : JSON.stringify({ actionId: action.id, actionLabel: action.label }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Action failed');
+      setActionMessage(payload?.message ?? \`\${action.label} completed.\`);
+      window.setTimeout(() => window.location.reload(), 300);
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'Action failed');
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  return (
+    <section style={cardStyle}>
+      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0, textTransform: 'uppercase', color: '#7b5aff', marginBottom: 8 }}>Prototype approval gate</div>
+      <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 6px' }}>{prototypePage.title}</h2>
+      <p style={{ margin: '0 0 16px', color: '#4b5563', fontSize: 14 }}>{prototypePage.purpose}</p>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', borderTop: '1px solid #e5e7eb', paddingTop: 14 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Operator actions</div>
+          {prototypeActions.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {prototypeActions.map((action) => (
+                <button key={action.id} type="button" onClick={() => runPrototypeAction(action)} disabled={busyAction === action.id} style={{ border: action.primary ? '1px solid #ae00d0' : '1px solid #e5e7eb', background: action.primary ? '#ae00d0' : '#fff', color: action.primary ? '#fff' : '#111827', borderRadius: 6, padding: '8px 10px', fontSize: 12, fontWeight: 700, opacity: busyAction === action.id ? 0.65 : 1, cursor: 'pointer' }}>
+                  {busyAction === action.id ? 'Working...' : action.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>{prototypeEmptyState}</p>
+          )}
+          {actionMessage ? <p style={{ margin: '10px 0 0', color: '#4b5563', fontSize: 12 }}>{actionMessage}</p> : null}
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Generated artifacts</div>
+          {prototypeArtifacts.length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeArtifacts.map((artifact) => <li key={artifact.id}>{artifact.name} <span style={{ color: '#6b7280' }}>({artifact.type})</span></li>)}</ul>
+          ) : (
+            <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>No generated artifacts planned.</p>
+          )}
+        </div>
+      </div>
+
+      {prototypePipeline && (
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>{prototypePipeline.name}</div>
+          <ol style={{ margin: 0, paddingLeft: 18 }}>
+            {prototypePipeline.steps.map((step) => (
+              <li key={step.id}>
+                <strong>{step.name}</strong>{step.owner ? <span style={{ color: '#6b7280' }}> · {step.owner}</span> : null}
+                {step.description ? <div style={{ color: '#6b7280', fontSize: 12 }}>{step.description}</div> : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {prototypeWorkflows.map((workflow) => (
+        <div key={workflow.id} style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
+          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>{workflow.name}</h3>
+          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Workflow steps</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.steps.map((step) => <li key={step}>{step}</li>)}</ul>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Required actions</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.requiredActions.map((action) => <li key={action}>{action}</li>)}</ul>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Success criteria</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.successCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Page acceptance criteria</div>
+        <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypePage.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
+      </div>
+
+      {prototypeRevisionPrompts.length > 0 && (
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Review prompts</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeRevisionPrompts.map((prompt) => <li key={prompt}>{prompt}</li>)}</ul>
+        </div>
+      )}
+
+      {prototypeApprovalChecklist.length > 0 && (
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Approval checklist</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeApprovalChecklist.map((item) => <li key={item}>{item}</li>)}</ul>
+        </div>
+      )}
+    </section>
+  );
+}
+`;
+}
+
 export function staleScaffoldFilesForPlan(rawPlan: ArchitecturePlan | Record<string, unknown>): string[] {
   const plan = normalizePlan(rawPlan as Record<string, unknown>);
-  const stale = new Set<string>(["dashboard/components/ui.ts"]);
+  const stale = new Set<string>([
+    "BOOTSTRAP.md",
+    "dashboard/components/ui.ts",
+  ]);
   const dataSources = new Set<string>();
 
   for (const endpoint of plan.apiEndpoints ?? []) dataSources.add(endpoint.path);
@@ -903,7 +1294,7 @@ export function useApi<T>(url: string, deps: unknown[] = []): AsyncState<T> {
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    setState(s => ({ ...s, loading: true, error: null }));
+    setState((s: AsyncState<T>) => ({ ...s, loading: true, error: null }));
     fetch(url, { signal: controller.signal })
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
       .then(({ ok, json }) => {
@@ -1006,6 +1397,8 @@ createRoot(document.getElementById('root')!).render(<App />);
   for (const page of pages) {
     const pageSlug = slugify(page.title);
     const pageName = pascalCase(page.title) + "Page";
+    const prototypePage = findPrototypePage(plan, page);
+    const prototypePanel = renderDashboardPrototypePanel(plan, prototypePage);
 
     // Collect hooks this page needs
     const pageHooks = new Map<string, string>();
@@ -1046,9 +1439,10 @@ createRoot(document.getElementById('root')!).render(<App />);
     files.push({
       path: `dashboard/pages/${pageSlug}.tsx`,
       content: `import React from 'react';
-import { pageStyle, gridStyle, LoadingState, ErrorState, EmptyState, PageHeader } from '../components/ui';
+import { pageStyle, gridStyle, LoadingState, ErrorState, EmptyState, PageHeader${prototypePanel ? ", cardStyle" : ""} } from '../components/ui';
 ${compImports.join("\n")}
 ${hookImports}
+${prototypePanel}
 
 export default function ${pageName}() {
 ${hookCalls}
@@ -1060,6 +1454,7 @@ ${firstHookVar ? `  if (${firstHookVar}.loading) return <div style={pageStyle}><
   return (
     <div style={pageStyle}>
       <PageHeader title="${page.title}" description="${page.description ?? ""}" />
+${prototypePanel ? "      <DashboardPrototypePanel />" : ""}
 ${compUsage}
     </div>
   );
@@ -1085,8 +1480,7 @@ function generateBackendEntryFile(plan: ArchitecturePlan): ScaffoldFile | null {
   // /api/amazon/overview and /api/amazon/listings → one "amazon" router
   const routeGroups = new Map<string, string>();
   for (const ep of plan.apiEndpoints ?? []) {
-    const parts = ep.path.replace(/^\/api\//, "").split("/").filter((p) => p && !p.startsWith(":"));
-    const group = parts[0] ?? "main"; // first path segment = route group
+    const { group } = routePartsForEndpoint(ep.path);
     if (!routeGroups.has(group)) {
       const varName = group.replace(/-./g, (m) => m[1].toUpperCase()) + "Router";
       routeGroups.set(group, varName);
@@ -1154,33 +1548,382 @@ export default app;
   };
 }
 
-// ─── Placeholder route files ────────────────────────────────────────────────
-// Generate stub route files so the backend starts immediately after scaffold.
-// The backend specialist will overwrite these with real implementations.
+// ─── Demo route files ───────────────────────────────────────────────────────
+// Generate stateful demo route files so the dashboard starts with real
+// sandbox data and clickable prototype actions before specialists deepen
+// integrations.
 
 function generatePlaceholderRoutes(plan: ArchitecturePlan): ScaffoldFile[] {
   if (!(plan.apiEndpoints?.length)) return [];
 
   // Group endpoints by first path segment (same logic as backend entry file)
-  const groups = new Map<string, Array<{ method: string; subPath: string; description: string }>>();
+  const groups = new Map<string, Array<{ method: string; path: string; subPath: string; description: string }>>();
   for (const ep of plan.apiEndpoints) {
-    const parts = ep.path.replace(/^\/api\//, "").split("/").filter((p) => p && !p.startsWith(":"));
-    const group = parts[0] ?? "main";
+    const { group, subPath } = routePartsForEndpoint(ep.path);
     if (!groups.has(group)) groups.set(group, []);
-    const subPath = "/" + parts.slice(1).join("/").replace(/:[a-zA-Z]+/g, ":id") || "/";
-    groups.get(group)!.push({ method: ep.method, subPath, description: ep.description });
+    groups.get(group)!.push({ method: ep.method, path: ep.path, subPath, description: ep.description });
   }
 
   const files: ScaffoldFile[] = [];
   for (const [group, endpoints] of groups) {
     const routes = endpoints.map((ep) => {
       const m = ep.method.toLowerCase();
-      return `router.${m}('${ep.subPath}', (_req, res) => {\n  res.json({ placeholder: true, endpoint: '${ep.subPath}', description: '${ep.description.replace(/'/g, "\\'")}' });\n});`;
+      return `router.${m}('${ep.subPath}', (req, res) => {\n  res.json(handleEndpoint('${ep.method.toUpperCase()}', '${ep.path.replace(/'/g, "\\'")}', req));\n});`;
     }).join("\n\n");
 
     files.push({
       path: `backend/routes/${group}.ts`,
-      content: `import { Router } from 'express';\n\nconst router = Router();\n\n${routes}\n\nexport default router;\n`,
+      content: `import { Router, type Request } from 'express';
+
+const router = Router();
+
+type StepStatus = 'pending' | 'running' | 'complete' | 'blocked';
+type ArtifactStatus = 'not_generated' | 'generated' | 'approved' | 'revision_requested';
+type RawPipelineStep = {
+  id?: string;
+  name?: string;
+  description?: string;
+  owner?: string;
+  producesArtifacts?: string[];
+  requiresApproval?: boolean;
+};
+type PipelineStep = {
+  id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  producesArtifacts: string[];
+  requiresApproval: boolean;
+  status: StepStatus;
+  completedAt?: string;
+};
+type RawArtifact = {
+  id?: string;
+  name?: string;
+  type?: string;
+  description?: string;
+  producedByStepId?: string;
+  reviewActions?: string[];
+  acceptanceCriteria?: string[];
+};
+type Artifact = {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+  producedByStepId?: string;
+  reviewActions: string[];
+  acceptanceCriteria: string[];
+  status: ArtifactStatus;
+  version: number;
+  updatedAt?: string;
+  revisionRequest?: string;
+};
+type DemoState = {
+  role: string;
+  project: Record<string, unknown>;
+  pipeline: PipelineStep[];
+  estimate: Record<string, unknown>;
+  lineItems: Array<Record<string, unknown>>;
+  risks: Array<Record<string, unknown>>;
+  blockers: Array<Record<string, unknown> & { status: string }>;
+  assumptions: string[];
+  exclusions: string[];
+  artifacts: Artifact[];
+  qaChecks: Array<Record<string, unknown> & { status: string }>;
+  activity: Array<{ id: string; title: string; description: string; timestamp: string; status: string }>;
+  revisionRequests: Array<Record<string, unknown>>;
+};
+
+const endpointDescriptions = ${js(Object.fromEntries(endpoints.map((ep) => [ep.path, ep.description])))} as Record<string, string>;
+const prototypeSummary = ${js(plan.dashboardPrototype?.summary ?? "Agent dashboard sandbox")};
+const prototypePrimaryUsers = ${js(plan.dashboardPrototype?.primaryUsers ?? [])} as string[];
+const pipelineName = ${js(plan.dashboardPrototype?.pipeline?.name ?? "Agent workflow pipeline")};
+const pipelineTemplate = ${js(plan.dashboardPrototype?.pipeline?.steps?.length ? plan.dashboardPrototype.pipeline.steps : [
+  { id: "intake", name: "Intake" },
+  { id: "process", name: "Process" },
+  { id: "review", name: "Review" },
+])} as RawPipelineStep[];
+const artifactTemplate = ${js(plan.dashboardPrototype?.artifacts?.length ? plan.dashboardPrototype.artifacts : [
+  { id: "summary", name: "Summary artifact", type: "document", reviewActions: ["approve_artifact", "request_revision"], acceptanceCriteria: ["Generated from sandbox data"] },
+])} as RawArtifact[];
+
+function slug(value: string, fallback: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || fallback;
+}
+
+function timestamp(): string {
+  return new Date().toISOString();
+}
+
+function normalizeStep(step: RawPipelineStep, index: number): PipelineStep {
+  const name = step.name || \`Step \${index + 1}\`;
+  return {
+    id: step.id || slug(name, \`step-\${index + 1}\`),
+    name,
+    description: step.description,
+    owner: step.owner,
+    producesArtifacts: Array.isArray(step.producesArtifacts) ? step.producesArtifacts : [],
+    requiresApproval: Boolean(step.requiresApproval),
+    status: index === 0 ? 'running' : 'pending',
+  };
+}
+
+function normalizeArtifact(artifact: RawArtifact, index: number): Artifact {
+  const name = artifact.name || \`Artifact \${index + 1}\`;
+  return {
+    id: artifact.id || slug(name, \`artifact-\${index + 1}\`),
+    name,
+    type: artifact.type || 'document',
+    description: artifact.description,
+    producedByStepId: artifact.producedByStepId,
+    reviewActions: Array.isArray(artifact.reviewActions) ? artifact.reviewActions : [],
+    acceptanceCriteria: Array.isArray(artifact.acceptanceCriteria) ? artifact.acceptanceCriteria : [],
+    status: 'not_generated',
+    version: 0,
+  };
+}
+
+function createInitialState(): DemoState {
+  return {
+    role: prototypePrimaryUsers[0] || 'Operator',
+    project: {
+      id: 'demo-project',
+      name: 'Austin 15k SF TI Estimate',
+      client: 'ECC Sandbox Client',
+      phase: 'Preconstruction',
+      status: 'sandbox-ready',
+      sandbox: true,
+      summary: prototypeSummary,
+    },
+    pipeline: pipelineTemplate.map(normalizeStep),
+    estimate: {
+      totalCost: 1482500,
+      confidence: 0.82,
+      contingencyPct: 7.5,
+      lastUpdated: timestamp(),
+      sourceMix: 'synthetic takeoff + seeded historical pricing',
+    },
+    lineItems: [
+      { Trade: 'General Conditions', Quantity: 1, Unit: 'lot', UnitCost: 185000, Total: 185000, Source: 'seeded benchmark', Status: 'reviewed' },
+      { Trade: 'Partitions', Quantity: 15000, Unit: 'sf', UnitCost: 18.5, Total: 277500, Source: 'synthetic takeoff', Status: 'priced' },
+      { Trade: 'MEP Allowance', Quantity: 15000, Unit: 'sf', UnitCost: 42, Total: 630000, Source: 'hybrid pricing', Status: 'risk flagged' },
+      { Trade: 'Finishes', Quantity: 15000, Unit: 'sf', UnitCost: 26, Total: 390000, Source: 'seeded vendor range', Status: 'priced' },
+    ],
+    risks: [
+      { id: 'risk-1', title: 'MEP scope variance', severity: 'high', owner: 'Estimator', status: 'open' },
+      { id: 'risk-2', title: 'Long-lead fixture allowance', severity: 'medium', owner: 'Preconstruction Manager', status: 'monitoring' },
+    ],
+    blockers: [
+      { id: 'blocker-1', title: 'Confirm AHU reuse assumption', severity: 'high', status: 'open', owner: 'Estimator' },
+    ],
+    assumptions: ['Pricing is sandbox-only and must not be sent externally.', 'Existing drawings are represented by synthetic takeoff quantities.'],
+    exclusions: ['Permit fees', 'Owner-furnished equipment'],
+    artifacts: artifactTemplate.map(normalizeArtifact),
+    qaChecks: [
+      { id: 'qa-1', name: 'Sandbox label present', status: 'pass' },
+      { id: 'qa-2', name: 'No external send action', status: 'pass' },
+      { id: 'qa-3', name: 'Overrides require comments', status: 'pass' },
+      { id: 'qa-4', name: 'Artifacts need explicit approval', status: 'pending' },
+    ],
+    activity: [
+      { id: 'event-1', title: 'Sandbox estimate initialized', description: 'Demo data is ready for operator validation.', timestamp: timestamp(), status: 'ready' },
+    ],
+    revisionRequests: [],
+  };
+}
+
+let state = createInitialState();
+
+function pushActivity(title: string, description: string, status = 'updated') {
+  state.activity.unshift({ id: \`event-\${Date.now()}\`, title, description, timestamp: timestamp(), status });
+  state.activity = state.activity.slice(0, 20);
+}
+
+function pipelineMetrics() {
+  return {
+    totalSteps: state.pipeline.length,
+    completeSteps: state.pipeline.filter((step) => step.status === 'complete').length,
+    blockedSteps: state.pipeline.filter((step) => step.status === 'blocked').length,
+    generatedArtifacts: state.artifacts.filter((artifact) => artifact.status !== 'not_generated').length,
+  };
+}
+
+function dashboardOverview(endpoint: string) {
+  return {
+    endpoint,
+    description: endpointDescriptions[endpoint] || 'Dashboard sandbox data',
+    project: state.project,
+    metrics: {
+      estimateTotal: state.estimate.totalCost,
+      confidence: state.estimate.confidence,
+      openBlockers: state.blockers.filter((blocker) => blocker.status !== 'resolved').length,
+      approvedArtifacts: state.artifacts.filter((artifact) => artifact.status === 'approved').length,
+    },
+    items: state.pipeline.map((step) => ({ Step: step.name, Status: step.status, Owner: step.owner || state.role })),
+    activity: state.activity,
+  };
+}
+
+function completeProducedArtifacts(step: PipelineStep) {
+  const produced = new Set(step.producesArtifacts);
+  if (produced.size === 0 && /artifact|package/i.test(step.name)) {
+    for (const artifact of state.artifacts) produced.add(artifact.id);
+  }
+
+  for (const artifact of state.artifacts) {
+    if (produced.has(artifact.id) || produced.has(artifact.name)) {
+      artifact.status = 'generated';
+      artifact.version += 1;
+      artifact.updatedAt = timestamp();
+    }
+  }
+}
+
+function advancePipeline() {
+  const running = state.pipeline.find((step) => step.status === 'running');
+  const current = running ?? state.pipeline.find((step) => step.status === 'pending');
+  if (!current) {
+    pushActivity('Pipeline already complete', 'All planned steps are complete.', 'complete');
+    return null;
+  }
+
+  current.status = 'complete';
+  current.completedAt = timestamp();
+  completeProducedArtifacts(current);
+
+  const next = state.pipeline.find((step) => step.status === 'pending');
+  if (next) next.status = 'running';
+  state.estimate.lastUpdated = timestamp();
+  pushActivity('Pipeline step completed', current.name, 'complete');
+  return current;
+}
+
+function generateArtifacts() {
+  for (const artifact of state.artifacts) {
+    if (artifact.status === 'not_generated') artifact.status = 'generated';
+    artifact.version += 1;
+    artifact.updatedAt = timestamp();
+  }
+  pushActivity('Artifacts generated', \`\${state.artifacts.length} artifact(s) are ready for review.\`, 'generated');
+}
+
+function approveArtifact(artifactId?: string) {
+  const artifact = state.artifacts.find((item) => item.id === artifactId)
+    ?? state.artifacts.find((item) => item.status === 'generated' || item.status === 'revision_requested')
+    ?? state.artifacts[0];
+  if (!artifact) return null;
+  if (artifact.status === 'not_generated') {
+    artifact.status = 'generated';
+    artifact.version += 1;
+  }
+  artifact.status = 'approved';
+  artifact.updatedAt = timestamp();
+  pushActivity('Artifact approved', artifact.name, 'approved');
+  return artifact;
+}
+
+function requestRevision(body: Record<string, unknown>) {
+  const artifactId = typeof body.artifactId === 'string' ? body.artifactId : undefined;
+  const artifact = state.artifacts.find((item) => item.id === artifactId) ?? state.artifacts[0];
+  if (!artifact) return null;
+  artifact.status = 'revision_requested';
+  artifact.revisionRequest = typeof body.comment === 'string' ? body.comment : 'Revision requested from dashboard.';
+  artifact.updatedAt = timestamp();
+  state.revisionRequests.push({ artifactId: artifact.id, comment: artifact.revisionRequest, createdAt: artifact.updatedAt });
+  pushActivity('Revision requested', artifact.name, 'revision');
+  return artifact;
+}
+
+function resolveBlocker() {
+  const blocker = state.blockers.find((item) => item.status !== 'resolved');
+  if (!blocker) return null;
+  blocker.status = 'resolved';
+  blocker.resolvedAt = timestamp();
+  pushActivity('Blocker resolved', String(blocker.title), 'resolved');
+  return blocker;
+}
+
+function runQa() {
+  const allArtifactsApproved = state.artifacts.every((artifact) => artifact.status === 'approved');
+  state.qaChecks = state.qaChecks.map((check) => {
+    if (check.id === 'qa-4') return { ...check, status: allArtifactsApproved ? 'pass' : 'warning' };
+    return { ...check, status: 'pass' };
+  });
+  pushActivity('QA checks run', allArtifactsApproved ? 'All checks passed.' : 'Artifact approvals are still pending.', allArtifactsApproved ? 'pass' : 'warning');
+}
+
+function getResponse(path: string, req: Request) {
+  if (path.includes('/projects/current')) return { ...dashboardOverview(path), project: state.project, sandboxWarnings: state.assumptions };
+  if (path.includes('/pipeline/status')) return { ...dashboardOverview(path), name: pipelineName, steps: state.pipeline, items: state.pipeline.map((step) => ({ Step: step.name, Status: step.status, Owner: step.owner || state.role, Artifacts: step.producesArtifacts.join(', ') || '-' })), events: state.activity, metrics: pipelineMetrics() };
+  if (path.includes('/estimate/latest')) return { ...dashboardOverview(path), estimate: state.estimate, metrics: { totalCost: state.estimate.totalCost, confidence: state.estimate.confidence, contingencyPct: state.estimate.contingencyPct } };
+  if (path.includes('/estimate/line-items')) return { ...dashboardOverview(path), items: state.lineItems };
+  if (path.includes('/risk/summary')) return { ...dashboardOverview(path), risks: state.risks, blockers: state.blockers, assumptions: state.assumptions, exclusions: state.exclusions, items: [...state.risks, ...state.blockers] };
+  if (path.includes('/artifacts/') && path.includes('/preview')) {
+    const artifactId = req.params.artifactId ?? req.params.id;
+    const artifact = state.artifacts.find((item) => item.id === artifactId) ?? state.artifacts[0] ?? null;
+    return { ...dashboardOverview(path), artifact, preview: artifact ? \`Preview for \${artifact.name} v\${artifact.version || 1}\` : null };
+  }
+  if (path.includes('/artifacts')) return { ...dashboardOverview(path), artifacts: state.artifacts, items: state.artifacts.map((artifact) => ({ Name: artifact.name, Type: artifact.type, Status: artifact.status, Version: artifact.version })) };
+  if (path.includes('/qa/checks')) return { ...dashboardOverview(path), checks: state.qaChecks, items: state.qaChecks.map((check) => ({ Check: check.name, Status: check.status })) };
+  return dashboardOverview(path);
+}
+
+function postResponse(path: string, req: Request) {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (path.includes('/projects/reset-demo') || path.includes('/projects/create')) {
+    state = createInitialState();
+    pushActivity('Demo estimate reset', 'A clean sandbox estimate was created.', 'ready');
+    return { ok: true, message: 'Demo estimate created.', ...getResponse('/api/${group}/projects/current', req) };
+  }
+  if (path.includes('/pipeline/run-step')) {
+    const step = advancePipeline();
+    return { ok: true, message: step ? \`\${step.name} completed.\` : 'Pipeline already complete.', ...getResponse('/api/${group}/pipeline/status', req) };
+  }
+  if (path.includes('/estimate/override')) {
+    const first = state.lineItems[0];
+    first.Status = 'override pending review';
+    state.estimate.lastUpdated = timestamp();
+    pushActivity('Commented override applied', 'A sandbox override was recorded for review.', 'override');
+    return { ok: true, message: 'Override recorded.', ...getResponse('/api/${group}/estimate/latest', req) };
+  }
+  if (path.includes('/blockers/resolve')) {
+    const blocker = resolveBlocker();
+    return { ok: true, message: blocker ? 'Blocker resolved.' : 'No open blockers.', blocker, ...getResponse('/api/${group}/risk/summary', req) };
+  }
+  if (path.includes('/artifacts/generate')) {
+    generateArtifacts();
+    return { ok: true, message: 'Artifacts generated.', ...getResponse('/api/${group}/artifacts', req) };
+  }
+  if (path.includes('/artifacts/approve')) {
+    const artifact = approveArtifact(typeof body.artifactId === 'string' ? body.artifactId : undefined);
+    return { ok: true, message: artifact ? \`\${artifact.name} approved.\` : 'No artifact available.', artifact, ...getResponse('/api/${group}/artifacts', req) };
+  }
+  if (path.includes('/artifacts/request-revision') || path.includes('/revisions/respond')) {
+    const artifact = requestRevision(body);
+    return { ok: true, message: artifact ? \`Revision requested for \${artifact.name}.\` : 'No artifact available.', artifact, ...getResponse('/api/${group}/artifacts', req) };
+  }
+  if (path.includes('/qa/run')) {
+    runQa();
+    return { ok: true, message: 'QA checks run.', ...getResponse('/api/${group}/qa/checks', req) };
+  }
+  if (path.includes('/session/role')) {
+    state.role = typeof body.role === 'string' ? body.role : state.role;
+    pushActivity('Role switched', state.role, 'role');
+    return { ok: true, message: \`Role switched to \${state.role}.\`, role: state.role };
+  }
+  pushActivity('Dashboard action recorded', String(body.actionLabel ?? path), 'action');
+  return { ok: true, message: 'Action recorded.', ...dashboardOverview(path) };
+}
+
+function handleEndpoint(method: string, path: string, req: Request) {
+  return method === 'GET' ? getResponse(path, req) : postResponse(path, req);
+}
+
+${routes}
+
+export default router;
+`,
     });
   }
 

@@ -65,6 +65,7 @@ import {
 import type { CoPilotActions, CoPilotState } from "../copilot-state";
 import { useAgentsStore, type SavedAgent } from "@/hooks/use-agents-store";
 import type { BuilderState } from "../builder-state";
+import { readWorkspaceFile } from "../workspace-writer";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -755,6 +756,7 @@ export function useAgentChat(config: UseAgentChatConfig): UseAgentChatReturn {
                   setWorkspaceFilesTick,
                   setDetectedPreviewPorts,
                   fetchEditorFile,
+                  readWorkspaceFile,
                   onReadyForReview,
                   pushStep,
                   updateStepDetail,

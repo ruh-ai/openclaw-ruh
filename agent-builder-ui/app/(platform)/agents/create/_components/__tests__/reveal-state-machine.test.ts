@@ -5,9 +5,9 @@ import { AGENT_DEV_STAGES, type AgentDevStage } from "@/lib/openclaw/types";
  * Regression tests for the reveal phase addition to the agent creation state machine.
  *
  * The state machine changed from:
- *   "init" → "provisioning" → null (copilot: think → plan → build → ...)
+ *   "init" → "provisioning" → null (copilot: think → plan → prototype → build → ...)
  * To:
- *   "init" → "provisioning" → "reveal" → null (copilot: think → plan → build → ...)
+ *   "init" → "provisioning" → "reveal" → null (copilot: think → plan → prototype → build → ...)
  *
  * These tests verify the reveal stage is correctly positioned in the lifecycle
  * and that existing stage ordering is preserved.
@@ -22,14 +22,14 @@ describe("AgentDevStage lifecycle ordering", () => {
     expect(AGENT_DEV_STAGES[1]).toBe("think");
   });
 
-  test("full lifecycle has 8 stages", () => {
-    expect(AGENT_DEV_STAGES).toHaveLength(8);
+  test("full lifecycle has 9 stages", () => {
+    expect(AGENT_DEV_STAGES).toHaveLength(9);
   });
 
-  test("existing 7 stages are preserved in order", () => {
-    const original7 = ["think", "plan", "build", "review", "test", "ship", "reflect"];
+  test("existing stages are preserved with prototype before build", () => {
+    const expected = ["think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
     const current = AGENT_DEV_STAGES.slice(1); // Skip reveal
-    expect(current).toEqual(original7);
+    expect(current).toEqual(expected);
   });
 
   test("reveal stage index is 0", () => {
@@ -94,8 +94,10 @@ describe("DEV_STAGE_ORDER in create-session-cache", () => {
   test("reveal is included in session cache stage order", async () => {
     // Import the module to verify the DEV_STAGE_ORDER includes reveal
     // This ensures session restore handles the reveal stage correctly
-    const stages: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+    const stages: AgentDevStage[] = ["reveal", "think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
     expect(stages).toContain("reveal");
     expect(stages.indexOf("reveal")).toBeLessThan(stages.indexOf("think"));
+    expect(stages.indexOf("prototype")).toBeGreaterThan(stages.indexOf("plan"));
+    expect(stages.indexOf("prototype")).toBeLessThan(stages.indexOf("build"));
   });
 });

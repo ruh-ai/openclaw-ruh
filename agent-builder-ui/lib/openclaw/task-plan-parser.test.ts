@@ -244,6 +244,7 @@ describe("stripPlanTags", () => {
       '<think_document_ready docType="prd" path="PRD.md"/>\n' +
       '<plan_skills skills=\'[{"id":"x"}]\'/>\n' +
       '<plan_data_schema dataSchema=\'{"artifactRoot":".openclaw/flow-qa/evidence/<run_id>/"}\'/>\n' +
+      '<plan_dashboard_prototype dashboardPrototype=\'{"summary":"Estimator workspace"}\'/>\n' +
       '<plan_complete/>\n' +
       '<reveal_done/>\n' +
       'After.';
@@ -254,6 +255,7 @@ describe("stripPlanTags", () => {
     expect(stripped).not.toContain("<think_document_ready");
     expect(stripped).not.toContain("<plan_skills");
     expect(stripped).not.toContain("<plan_data_schema");
+    expect(stripped).not.toContain("<plan_dashboard_prototype");
     expect(stripped).not.toContain("<plan_complete");
     expect(stripped).not.toContain("<reveal_done");
     expect(stripped).toContain("Before I start:");

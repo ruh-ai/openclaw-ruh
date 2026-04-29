@@ -114,11 +114,218 @@ describe("consumeDiscoveryDocuments", () => {
   });
 });
 
+describe("consumeThinkDocumentReady", () => {
+  test("does not mark Think ready from document markers when workspace files are missing", async () => {
+    const store = {
+      setDiscoveryDocuments: mock(() => {}),
+      setThinkStatus: mock(() => {}),
+      setDevStage: mock(() => {}),
+      setPhase: mock(() => {}),
+      setArchitecturePlan: mock(() => {}),
+      setPlanStatus: mock(() => {}),
+      setBuildStatus: mock(() => {}),
+      pushBuildActivity: mock(() => {}),
+      setBuildProgress: mock(() => {}),
+      updateBuildManifestTask: mock(() => {}),
+      setThinkStep: mock(() => {}),
+      pushResearchFinding: mock(() => {}),
+      pushPendingQuestion: mock(() => {}),
+      clearPendingQuestions: mock(() => {}),
+      setResearchBriefPath: mock(() => {}),
+      setPrdPath: mock(() => {}),
+      setTrdPath: mock((path: string | null) => {
+        store.trdPath = path;
+      }),
+      setPlanStep: mock(() => {}),
+      pushPlanActivity: mock(() => {}),
+      updateArchitecturePlanSection: mock(() => {}),
+      pushThinkActivity: mock(() => {}),
+      devStage: "think",
+      agentSandboxId: "sandbox-1",
+      architecturePlan: null,
+      name: "Test Agent",
+      description: "Does things.",
+      researchBriefPath: ".openclaw/discovery/research-brief.md",
+      prdPath: ".openclaw/discovery/PRD.md",
+      trdPath: null as string | null,
+      thinkStatus: "generating",
+    };
+    const deps = createMockDeps({
+      coPilotStore: store as unknown as ConsumerDeps["coPilotStore"],
+    });
+
+    dispatchCustomEvent(CustomEventName.THINK_DOCUMENT_READY, {
+      docType: "trd",
+      path: ".openclaw/discovery/TRD.md",
+    }, deps);
+    await Promise.resolve();
+
+    expect(store.setDiscoveryDocuments).not.toHaveBeenCalled();
+    expect(store.setThinkStep).not.toHaveBeenCalledWith("complete");
+    expect(store.setThinkStatus).not.toHaveBeenCalledWith("ready");
+  });
+
+  test("hydrates discovery docs and marks Think ready after PRD/TRD files are verified", async () => {
+    const store = {
+      setDiscoveryDocuments: mock(() => {}),
+      setThinkStatus: mock(() => {}),
+      setDevStage: mock(() => {}),
+      setPhase: mock(() => {}),
+      setArchitecturePlan: mock(() => {}),
+      setPlanStatus: mock(() => {}),
+      setBuildStatus: mock(() => {}),
+      pushBuildActivity: mock(() => {}),
+      setBuildProgress: mock(() => {}),
+      updateBuildManifestTask: mock(() => {}),
+      setThinkStep: mock(() => {}),
+      pushResearchFinding: mock(() => {}),
+      pushPendingQuestion: mock(() => {}),
+      clearPendingQuestions: mock(() => {}),
+      setResearchBriefPath: mock(() => {}),
+      setPrdPath: mock(() => {}),
+      setTrdPath: mock((path: string | null) => {
+        store.trdPath = path;
+      }),
+      setPlanStep: mock(() => {}),
+      pushPlanActivity: mock(() => {}),
+      updateArchitecturePlanSection: mock(() => {}),
+      pushThinkActivity: mock(() => {}),
+      devStage: "think",
+      agentSandboxId: "sandbox-1",
+      architecturePlan: null,
+      name: "Test Agent",
+      description: "Does things.",
+      researchBriefPath: ".openclaw/discovery/research-brief.md",
+      prdPath: ".openclaw/discovery/PRD.md",
+      trdPath: null as string | null,
+      thinkStatus: "generating",
+      snapshot() {
+        return {
+          researchBriefPath: this.researchBriefPath,
+          prdPath: this.prdPath,
+          trdPath: this.trdPath,
+          thinkStatus: this.thinkStatus,
+          agentSandboxId: this.agentSandboxId,
+          discoveryDocuments: null,
+        };
+      },
+    };
+    const deps = createMockDeps({
+      coPilotStore: store as unknown as ConsumerDeps["coPilotStore"],
+      readWorkspaceFile: mock(async (_sandboxId: string, path: string) => {
+        if (path.endsWith("PRD.md")) return "# PRD\n\n## Goals\nClear estimating goals.";
+        if (path.endsWith("TRD.md")) return "# TRD\n\n## System\nClear technical plan.";
+        return null;
+      }),
+    });
+
+    dispatchCustomEvent(CustomEventName.THINK_DOCUMENT_READY, {
+      docType: "trd",
+      path: ".openclaw/discovery/TRD.md",
+    }, deps);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.setDiscoveryDocuments).toHaveBeenCalledWith({
+      prd: { title: "PRD", sections: [{ heading: "Goals", content: "Clear estimating goals." }] },
+      trd: { title: "TRD", sections: [{ heading: "System", content: "Clear technical plan." }] },
+    });
+    expect(store.setThinkStep).toHaveBeenCalledWith("complete");
+    expect(store.setThinkStatus).toHaveBeenCalledWith("ready");
+  });
+});
+
 describe("consumeArchitecturePlanReady", () => {
   test("drops if coPilotStore is null", () => {
     const deps = createMockDeps({ coPilotStore: null });
     consumeArchitecturePlanReady({ plan: {} }, deps);
     expect(deps.setMessages).toHaveBeenCalled();
+  });
+});
+
+describe("plan readiness events", () => {
+  test("does not mark Plan ready from plan_complete when architecture.json is missing", async () => {
+    const store = {
+      setDiscoveryDocuments: mock(() => {}),
+      setThinkStatus: mock(() => {}),
+      setDevStage: mock(() => {}),
+      setPhase: mock(() => {}),
+      setArchitecturePlan: mock(() => {}),
+      setPlanStatus: mock(() => {}),
+      setBuildStatus: mock(() => {}),
+      pushBuildActivity: mock(() => {}),
+      setBuildProgress: mock(() => {}),
+      updateBuildManifestTask: mock(() => {}),
+      setThinkStep: mock(() => {}),
+      pushResearchFinding: mock(() => {}),
+      pushPendingQuestion: mock(() => {}),
+      clearPendingQuestions: mock(() => {}),
+      setResearchBriefPath: mock(() => {}),
+      setPrdPath: mock(() => {}),
+      setTrdPath: mock(() => {}),
+      setPlanStep: mock(() => {}),
+      pushPlanActivity: mock(() => {}),
+      updateArchitecturePlanSection: mock(() => {}),
+      pushThinkActivity: mock(() => {}),
+      devStage: "plan",
+      agentSandboxId: "sandbox-1",
+      architecturePlan: null,
+      name: "Test Agent",
+      description: "Does things.",
+    };
+    const deps = createMockDeps({
+      coPilotStore: store as unknown as ConsumerDeps["coPilotStore"],
+      readWorkspaceFile: mock(async () => null),
+    });
+
+    dispatchCustomEvent(CustomEventName.PLAN_COMPLETE, {}, deps);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.setArchitecturePlan).not.toHaveBeenCalled();
+    expect(store.setPlanStatus).not.toHaveBeenCalledWith("ready");
+    expect(store.setPlanStatus).toHaveBeenCalledWith("failed");
+  });
+
+  test("drops empty architecture_plan_ready payloads instead of marking Plan ready", () => {
+    const store = {
+      setDiscoveryDocuments: mock(() => {}),
+      setThinkStatus: mock(() => {}),
+      setDevStage: mock(() => {}),
+      setPhase: mock(() => {}),
+      setArchitecturePlan: mock(() => {}),
+      setPlanStatus: mock(() => {}),
+      setBuildStatus: mock(() => {}),
+      pushBuildActivity: mock(() => {}),
+      setBuildProgress: mock(() => {}),
+      updateBuildManifestTask: mock(() => {}),
+      setThinkStep: mock(() => {}),
+      pushResearchFinding: mock(() => {}),
+      pushPendingQuestion: mock(() => {}),
+      clearPendingQuestions: mock(() => {}),
+      setResearchBriefPath: mock(() => {}),
+      setPrdPath: mock(() => {}),
+      setTrdPath: mock(() => {}),
+      setPlanStep: mock(() => {}),
+      pushPlanActivity: mock(() => {}),
+      updateArchitecturePlanSection: mock(() => {}),
+      pushThinkActivity: mock(() => {}),
+      devStage: "plan",
+      agentSandboxId: "sandbox-1",
+      architecturePlan: null,
+      name: "Test Agent",
+      description: "Does things.",
+    };
+    const deps = createMockDeps({
+      coPilotStore: store as unknown as ConsumerDeps["coPilotStore"],
+    });
+
+    dispatchCustomEvent("architecture_plan_ready", {
+      plan: { skills: [], workflow: { steps: [] } },
+    }, deps);
+
+    expect(store.setArchitecturePlan).not.toHaveBeenCalled();
+    expect(store.setPlanStatus).not.toHaveBeenCalledWith("ready");
   });
 });
 

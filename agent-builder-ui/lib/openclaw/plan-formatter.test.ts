@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { normalizePlan } from "./plan-formatter";
+import { normalizePlan, renderPlanSummary } from "./plan-formatter";
 
 describe("normalizePlan — subAgents (B2 marker target)", () => {
   test("accepts the architect's structured emission", () => {
@@ -223,5 +223,156 @@ describe("normalizePlan — memoryAuthority (B4 marker target)", () => {
       "estimating",
       "customer-success",
     ]);
+  });
+});
+
+describe("normalizePlan — dashboardPrototype (Plan dashboard gate)", () => {
+  test("accepts a prototype spec that ties dashboard pages to user workflows", () => {
+    const plan = normalizePlan({
+      dashboardPages: [
+        { path: "/projects", title: "Estimate Projects" },
+        { path: "/projects/:projectId/pricing", title: "Pricing" },
+      ],
+      dashboardPrototype: {
+        summary: "ECC estimator workspace for intake through lead approval.",
+        primaryUsers: ["Estimator", "Lead estimator"],
+        workflows: [
+          {
+            id: "pricing-review",
+            name: "Pricing Review",
+            steps: ["Confirm takeoff", "Map cost codes", "Review margin"],
+            requiredActions: ["edit_quantity", "override_markup", "approve_pricing"],
+            successCriteria: ["Blocked pricing cannot be approved"],
+          },
+        ],
+        pages: [
+          {
+            path: "/projects/:projectId/pricing",
+            title: "Pricing",
+            purpose: "Review estimate line items and margin before lead approval.",
+            supportsWorkflows: ["pricing-review"],
+            requiredActions: ["override_markup"],
+            acceptanceCriteria: ["Shows subtotal, markup, contingency, and total"],
+          },
+        ],
+        actions: [
+          {
+            id: "create-estimate",
+            label: "Create estimate",
+            type: "create",
+            target: "work_item",
+            primary: true,
+          },
+          {
+            id: "run-estimate-pipeline",
+            label: "Run estimate pipeline",
+            type: "run_pipeline",
+            target: "pipeline",
+            primary: true,
+          },
+        ],
+        pipeline: {
+          name: "Estimate build pipeline",
+          triggerActionId: "run-estimate-pipeline",
+          steps: [
+            {
+              id: "document-intake",
+              name: "Document intake",
+              description: "Collect plans, specs, and workbook inputs.",
+              producesArtifacts: ["source-evidence-map"],
+            },
+            {
+              id: "pricing-review",
+              name: "Pricing review",
+              owner: "Lead estimator",
+              requiresApproval: true,
+            },
+          ],
+          completionCriteria: ["Approval package is ready for lead estimator"],
+          failureStates: ["Missing source evidence", "Workbook warnings"],
+        },
+        artifacts: [
+          {
+            id: "source-evidence-map",
+            name: "Source evidence map",
+            type: "evidence",
+            producedByStepId: "document-intake",
+            reviewActions: ["approve_artifact", "request_revision"],
+            acceptanceCriteria: ["Every quantity links to source evidence"],
+          },
+        ],
+        emptyState: "Create an estimate package to start pipeline validation.",
+        revisionPrompts: [
+          "Does this match how ECC reviews pricing?",
+          "Which fields need estimator override controls?",
+        ],
+        approvalChecklist: ["Each page has at least one workflow and action"],
+      },
+    });
+
+    expect(plan.dashboardPrototype?.summary).toBe("ECC estimator workspace for intake through lead approval.");
+    expect(plan.dashboardPrototype?.workflows[0]?.requiredActions).toContain("approve_pricing");
+    expect(plan.dashboardPrototype?.pages[0]?.supportsWorkflows).toEqual(["pricing-review"]);
+    expect(plan.dashboardPrototype?.actions?.map((action) => action.id)).toEqual([
+      "create-estimate",
+      "run-estimate-pipeline",
+    ]);
+    expect(plan.dashboardPrototype?.pipeline?.steps.map((step) => step.id)).toEqual([
+      "document-intake",
+      "pricing-review",
+    ]);
+    expect(plan.dashboardPrototype?.artifacts?.[0]).toMatchObject({
+      id: "source-evidence-map",
+      reviewActions: ["approve_artifact", "request_revision"],
+    });
+    expect(plan.dashboardPrototype?.emptyState).toBe("Create an estimate package to start pipeline validation.");
+    expect(plan.dashboardPrototype?.approvalChecklist).toContain("Each page has at least one workflow and action");
+
+    const summary = renderPlanSummary(plan);
+    expect(summary).toContain("### Prototype Actions");
+    expect(summary).toContain("Create estimate");
+    expect(summary).toContain("### Pipeline: Estimate build pipeline");
+    expect(summary).toContain("### Generated Artifacts");
+    expect(summary).toContain("Source evidence map");
+  });
+
+  test("missing dashboardPrototype remains undefined for non-dashboard agents", () => {
+    const plan = normalizePlan({});
+    expect(plan.dashboardPrototype).toBeUndefined();
+  });
+});
+
+describe("renderPlanSummary — fleet visibility", () => {
+  test("renders planned sub-agents with owned skills, trigger, and autonomy", () => {
+    const summary = renderPlanSummary({
+      skills: [
+        { id: "parse-rfp", name: "Parse RFP", description: "Parse estimate packages.", dependencies: [], envVars: [] },
+      ],
+      workflow: { steps: [{ skillId: "parse-rfp", parallel: false }] },
+      integrations: [],
+      triggers: [],
+      channels: [],
+      envVars: [],
+      subAgents: [
+        {
+          id: "intake",
+          name: "Intake Specialist",
+          description: "Turns bid package inputs into structured estimating requirements.",
+          type: "specialist",
+          skills: ["parse-rfp"],
+          trigger: "intake",
+          autonomy: "requires_approval",
+        },
+      ],
+      missionControl: null,
+      dataSchema: null,
+      apiEndpoints: [],
+      dashboardPages: [],
+    });
+
+    expect(summary).toContain("## Sub-Agents");
+    expect(summary).toContain("Intake Specialist");
+    expect(summary).toContain("parse-rfp");
+    expect(summary).toContain("requires approval");
   });
 });

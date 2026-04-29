@@ -14,7 +14,7 @@ import { TabChat } from "@/app/(platform)/agents/[id]/chat/_components/TabChat";
 import { buildDeployConfigSummary } from "@/lib/agents/operator-config-summary";
 import { isRuntimeInputFilled, mergeRuntimeInputDefinitions, enrichRuntimeInputsFromPlan } from "@/lib/agents/runtime-inputs";
 import { generateSkillTests, skillTestsToEvalTasks } from "@/lib/openclaw/skill-test-generator";
-import { useCoPilotStore } from "@/lib/openclaw/copilot-state";
+import { hasRequiredDashboardPrototype, hasUsableArchitecturePlan, useCoPilotStore } from "@/lib/openclaw/copilot-state";
 import {
   buildReviewStateFromArchitecturePlan,
   evaluateCoPilotDeployReadiness,
@@ -32,6 +32,7 @@ import type { SavedAgent } from "@/hooks/use-agents-store";
 import type { ArchitectSandboxInfo } from "@/hooks/use-architect-sandbox";
 import type { AgentDevStage, ArchitecturePlan } from "@/lib/openclaw/types";
 import type { BuildReport } from "@/lib/openclaw/types";
+import { shouldApplyWorkspaceRehydration } from "@/lib/openclaw/workspace-rehydration";
 
 /**
  * True when the plan object was synthesized from `normalizePlan({})` — every
@@ -107,7 +108,6 @@ export function CoPilotLayout({
     setThinkStatus,
     setUserTriggeredThink,
     setPlanStatus,
-    setUserTriggeredPlan,
     setBuildStatus,
     setUserTriggeredBuild,
     pushBuildActivity,
@@ -345,11 +345,12 @@ export function CoPilotLayout({
   // WS connections opened milliseconds apart. Single source of truth.
 
   // ── Workspace rehydration: restore Think/Plan state from workspace files ──
-  const rehydratedRef = useRef(false);
+  const rehydratedSandboxRef = useRef<string | null>(null);
   useEffect(() => {
     const sandboxId = activeSandbox?.sandbox_id;
-    if (!sandboxId || rehydratedRef.current) return;
-    rehydratedRef.current = true;
+    if (!sandboxId || rehydratedSandboxRef.current === sandboxId) return;
+    rehydratedSandboxRef.current = sandboxId;
+    let cancelled = false;
 
     // Non-blocking: try reading workspace files to restore state after page refresh
     Promise.all([
@@ -381,6 +382,16 @@ export function CoPilotLayout({
         readWorkspaceFile(sandboxId, ".openclaw/discovery/research-brief.md"),
         readWorkspaceFile(sandboxId, ".openclaw/plan/architecture.json"),
       ]).then(([prd, trd, researchBrief, planJson]) => {
+        if (
+          cancelled
+          || !shouldApplyWorkspaceRehydration({
+            requestedSandboxId: sandboxId,
+            currentSandboxId: useCoPilotStore.getState().agentSandboxId,
+          })
+        ) {
+          return;
+        }
+
         // Rehydrate Think paths if docs exist
         if (researchBrief) coPilotStore.setResearchBriefPath(".openclaw/discovery/research-brief.md");
         if (prd) coPilotStore.setPrdPath(".openclaw/discovery/PRD.md");
@@ -407,14 +418,19 @@ export function CoPilotLayout({
         // missing arrays/objects get filled with [] / null and the UI can
         // render without defensive fallbacks.
         const hasEmptyPlan = isEmptyArchitecturePlan(coPilotStore.architecturePlan);
-        if (planJson && (!coPilotStore.architecturePlan || hasEmptyPlan)) {
+        const shouldRecoverPlan = !coPilotStore.architecturePlan
+          || hasEmptyPlan
+          || coPilotStore.planStatus === "failed"
+          || !hasUsableArchitecturePlan(coPilotStore.architecturePlan);
+        if (planJson && shouldRecoverPlan) {
           try {
             const plan = normalizePlan(JSON.parse(planJson) as Record<string, unknown>);
             coPilotStore.setArchitecturePlan(plan);
-            // If the plan was successfully parsed, mark plan status as ready
-            // so the UI shows the plan content with the "Approve & Start Build"
-            // button instead of a stale "generating" spinner or "idle" state.
-            if (coPilotStore.planStatus === "idle" || coPilotStore.planStatus === "generating") {
+            // If the plan was successfully parsed from disk, trust the
+            // workspace over stale client state. Reloading during generation
+            // intentionally sanitizes "generating" to "failed", but the
+            // architect may still have written architecture.json successfully.
+            if (coPilotStore.planStatus !== "approved" && coPilotStore.planStatus !== "done") {
               coPilotStore.setPlanStatus("ready");
             }
             // If we're still on Think but have a plan, advance to Plan stage
@@ -430,12 +446,16 @@ export function CoPilotLayout({
         // Workspace read failures are non-fatal — fresh state is fine
       });
     });
+
+    return () => {
+      cancelled = true;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSandbox?.sandbox_id]);
 
   // Set agentSandboxId early so workspace reads work during Think/Plan (not just Build)
   useEffect(() => {
-    if (activeSandbox?.sandbox_id && !coPilotStore.agentSandboxId) {
+    if (activeSandbox?.sandbox_id && coPilotStore.agentSandboxId !== activeSandbox.sandbox_id) {
       coPilotStore.setAgentSandboxId(activeSandbox.sandbox_id);
     }
   }, [activeSandbox?.sandbox_id, coPilotStore.agentSandboxId, coPilotStore]);
@@ -659,11 +679,10 @@ export function CoPilotLayout({
 
     setDevStage("plan");
     setPlanStatus("generating");
-    setUserTriggeredPlan(true);
 
     // Dispatch plan generation directly via the bridge API.
     // The TabChat useEffect approach has timing issues with Zustand prop subscriptions,
-    // so we call the architect directly here.
+    // so we call the architect directly here and leave userTriggeredPlan false.
     const forgeSandboxId = activeSandbox?.sandbox_id;
     if (!forgeSandboxId) {
       console.warn("[Plan] No forge sandbox available — cannot generate plan. The agent's container may still be provisioning.");
@@ -682,14 +701,15 @@ export function CoPilotLayout({
           const trdSummary = docs.trd.sections.map((s: { heading: string; content: string }) => `### ${s.heading}\n${s.content}`).join("\n\n");
           planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
         }
+        const planMessage = `${PLAN_SYSTEM_INSTRUCTION}\n\n${planPrompt}`;
         sendToArchitectStreaming(
-          `agent:architect:${forgeSandboxId}`,
-          planPrompt,
+          `copilot-plan:${forgeSandboxId}`,
+          planMessage,
           {
             onDelta: () => {},
             onStatus: () => {},
           },
-          { forgeSandboxId, agentId: agentId ?? undefined, soulOverride: PLAN_SYSTEM_INSTRUCTION },
+          { mode: "copilot", forgeSandboxId, agentId: agentId ?? undefined },
         ).then(async () => {
           // Read architecture.json from workspace
           try {
@@ -700,6 +720,8 @@ export function CoPilotLayout({
               const plan = normalizePlan(JSON.parse(planJson));
               coPilotStore.setArchitecturePlan(plan);
               coPilotStore.setPlanStatus("ready");
+            } else if (coPilotStore.planStatus !== "ready") {
+              coPilotStore.setPlanStatus("failed");
             }
           } catch (err) {
             console.warn("[Plan] Failed to read plan from workspace:", err);
@@ -717,17 +739,49 @@ export function CoPilotLayout({
         });
       });
     }
-  }, [confirmForgeStage, setThinkStatus, setDevStage, setPlanStatus, setUserTriggeredPlan, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments, coPilotStore]);
+  }, [confirmForgeStage, setThinkStatus, setDevStage, setPlanStatus, activeSandbox?.sandbox_id, coPilotStore.discoveryDocuments, coPilotStore]);
 
-  // Called when user approves Plan stage — triggers v4 orchestrator build
+  // Called when user approves Plan stage — unlocks Prototype review before Build.
   const handlePlanApproved = useCallback(async () => {
+    const agentId = existingAgent?.id;
+    if (!agentId) {
+      setSkillGeneration("error", "No agent ID — cannot advance to Prototype.");
+      return;
+    }
+    const planForApproval = useCoPilotStore.getState().architecturePlan ?? architecturePlan;
+    if (!hasUsableArchitecturePlan(planForApproval)) {
+      setSkillGeneration("error", "A complete architecture plan is required before Prototype. Ask the architect to regenerate the Plan with skills and workflow.");
+      return;
+    }
+    if (!hasRequiredDashboardPrototype(planForApproval)) {
+      setSkillGeneration("error", "Dashboard prototype is required before Prototype. Ask the architect to revise the Plan with dashboard workflows, actions, and acceptance checks.");
+      return;
+    }
+
+    setPlanStatus("approved");
+    const stageConfirmed = await confirmForgeStage("prototype");
+    if (!stageConfirmed) return;
+
+    setDevStage("prototype");
+  }, [architecturePlan, existingAgent, confirmForgeStage, setPlanStatus, setDevStage, setSkillGeneration]);
+
+  // Called when user approves Prototype stage — triggers v4 orchestrator build.
+  const handlePrototypeApproved = useCallback(async () => {
     const agentId = existingAgent?.id;
     if (!agentId) {
       setSkillGeneration("error", "No agent ID — cannot build.");
       return;
     }
+    const planForApproval = useCoPilotStore.getState().architecturePlan ?? architecturePlan;
+    if (!hasUsableArchitecturePlan(planForApproval)) {
+      setSkillGeneration("error", "A complete architecture plan is required before Build. Ask the architect to regenerate the Plan with skills and workflow.");
+      return;
+    }
+    if (!hasRequiredDashboardPrototype(planForApproval)) {
+      setSkillGeneration("error", "Dashboard prototype is required before Build. Ask the architect to revise the Plan with dashboard workflows, actions, and acceptance checks.");
+      return;
+    }
 
-    setPlanStatus("approved");
     const stageConfirmed = await confirmForgeStage("build");
     if (!stageConfirmed) return;
 
@@ -936,14 +990,13 @@ export function CoPilotLayout({
       setSkillGeneration("error", error instanceof Error ? error.message : "Build failed.");
       setBuildStatus("failed");
     }
-  }, [name, description, architecturePlan, existingAgent, activeSandbox, coPilotStore, confirmForgeStage, setPlanStatus, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, setBuildReport, onBuilderStateChange]);
+  }, [name, description, architecturePlan, existingAgent, activeSandbox, coPilotStore, confirmForgeStage, setDevStage, setBuildStatus, setUserTriggeredBuild, pushBuildActivity, setBuildProgress, setSkillGeneration, setSkillGraph, setBuildReport, onBuilderStateChange]);
 
-  // Called when user retries a failed build — re-triggers handlePlanApproved
+  // Called when user retries a failed build — re-triggers the prototype-approved build flow.
   const handleRetryBuild = useCallback(() => {
     buildRetryCountRef.current = 0;
-    // Re-enter the plan-approved flow which detects v3 vs v2 automatically
-    handlePlanApproved();
-  }, [handlePlanApproved]);
+    handlePrototypeApproved();
+  }, [handlePrototypeApproved]);
 
   // Fix 5: Build cancellation
   const buildStreamIdRef = useRef<string | null>(null);
@@ -1090,6 +1143,7 @@ export function CoPilotLayout({
           builderBridgeMode="copilot"
           onDiscoveryComplete={handleDiscoveryComplete}
           onPlanApproved={handlePlanApproved}
+          onPrototypeApproved={handlePrototypeApproved}
           onRetryBuild={handleRetryBuild}
           onCancelBuild={handleCancelBuild}
           onDone={handleDone}

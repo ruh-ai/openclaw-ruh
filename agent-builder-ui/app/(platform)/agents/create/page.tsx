@@ -44,6 +44,7 @@ import {
 } from "@/lib/openclaw/copilot-flow";
 import { useArchitectSandbox } from "@/hooks/use-architect-sandbox";
 import { useForgeSandbox } from "@/hooks/use-forge-sandbox";
+import { resolveCreatePageSandbox } from "./agent-sandbox-selection";
 import { CREATE_AGENT_MODE_OPTIONS, normalizeCreateMode, type CreateAgentMode } from "./create-mode";
 import { resolveCreatePageChatMode, type ForgeAgentMode } from "./agent-mode";
 import { DEV_MOCK_BAR_QUERY_PARAM, shouldShowDevMockBar } from "./dev-mock-bar";
@@ -65,6 +66,8 @@ import {
 } from "@/lib/openclaw/create-session-cache";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function deriveTriggerLabel(
   rules: string[],
@@ -286,8 +289,15 @@ function CreateAgentPageContent() {
       // and its lifecycle-aware SOUL.md emits the <reveal_field/> sequence.
       // MeetYourEmployee renders inside the copilot section when revealData arrives.
 
-      const refreshedAgent = await fetchAgent(agent_id).catch(() => null);
+      let refreshedAgent = await fetchAgent(agent_id).catch(() => null);
+      for (let attempt = 0; attempt < 30 && !refreshedAgent?.forgeSandboxId; attempt += 1) {
+        await delay(1000);
+        refreshedAgent = await fetchAgent(agent_id).catch(() => null);
+      }
       const forgeSandboxId = refreshedAgent?.forgeSandboxId ?? null;
+      if (!forgeSandboxId) {
+        throw new Error("Agent workspace started, but its dedicated sandbox has not attached yet. Please retry after the backend finishes provisioning.");
+      }
 
       updateBuilderState({
         draftAgentId: agent_id,
@@ -382,12 +392,18 @@ function CreateAgentPageContent() {
   const { sandbox: forgeSandbox, loading: forgeSandboxLoading, error: forgeSandboxError } = useForgeSandbox(
     workingAgent?.forgeSandboxId ? workingAgent.id : null
   );
-  const hasForgeAgent = Boolean(workingAgent?.forgeSandboxId);
-  const effectiveSandbox = hasForgeAgent ? forgeSandbox : architectSandbox;
+  const {
+    effectiveSandbox,
+    forgeSandboxPending,
+  } = resolveCreatePageSandbox({
+    workingAgent,
+    createdAgentId,
+    forgeSandbox,
+    architectSandbox,
+  });
   // True while the forge sandbox is expected but not yet available — either
   // the hook is mid-fetch, the agent record hasn't hydrated yet, or the
   // sandbox API hasn't returned a ready sandbox.
-  const forgeSandboxPending = hasForgeAgent && !forgeSandbox;
 
   // ── Reveal trigger (page-level) ──────────────────────────────────────────
   // The reveal waiting screen in the render block returns BEFORE CoPilotLayout

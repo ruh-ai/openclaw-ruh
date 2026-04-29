@@ -413,7 +413,7 @@ interface CoPilotAgentSeed {
   agentSandboxId?: string | null;
 }
 
-const STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+const STAGE_ORDER: AgentDevStage[] = ["reveal", "think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
 const REVIEW_STAGE_INDEX = STAGE_ORDER.indexOf("review");
 
 function normalizeForgeStage(stage: string | null | undefined): AgentDevStage | null {

@@ -61,7 +61,19 @@ If you're Claude Code, use this when the user asks about any agent-authoring wor
    described procedure. Keep skills focused, procedural, and tool-aware.
 ```
 
-**You cannot spawn sub-agents at runtime** on this platform. `architecture.json.subAgents` exists as a field but the build pipeline does not implement it. Decompose behavior into **skills**, not child agents.
+**Multi-agent fleets are supported** when the workflow genuinely needs separate specialist agents coordinated by an orchestrator. Most agents stay single-agent — leave `subAgents` empty unless the TRD describes distinct roles with their own SOULs, skill sets, and hand-off boundaries.
+
+**Heuristic:**
+- One agent doing several things in sequence → SINGLE-AGENT (decompose into skills)
+- Different agents with different SOULs/skills coordinated by an orchestrator → FLEET (emit `subAgents`)
+
+**When to emit a fleet:** the TRD describes a workflow like "intake → takeoff → pricing → narrative" with each phase owned by a specialist, OR multiple roles coordinating around shared state (e.g., research agent + writer agent + publisher agent + orchestrator).
+
+**Fleet shape (`architecture.json.subAgents[]`):** each entry has `id` (kebab-case), `name`, `description` (one sentence), `type` (`worker` | `specialist` | `monitor` | `orchestrator`), `skills` (skill ids this sub-agent owns), `trigger` (the orchestrator stage that routes to it — typically the sub-agent's own id), `autonomy` (`fully_autonomous` | `requires_approval` | `report_only`).
+
+**The main orchestrator is implicit** — do NOT add it to `subAgents`. Skills NOT assigned to any sub-agent stay on the main orchestrator. The orchestrator owns routing, approvals, and any general-purpose skills.
+
+**What the build pipeline does with this:** identity (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`) and skills specialists run **once per agent** in the fleet, writing under `agents/<id>/`. Pipeline-level specialists (database, backend, dashboard, verify, scaffold) stay shared — one DB schema, one HTTP service, one UI for the whole fleet. Single-agent (empty `subAgents`) preserves the existing root-level paths exactly.
 
 ---
 
@@ -99,8 +111,10 @@ Required sections (`## ` markdown headings — the backend parses these):
 5. **Channels & Integrations** — which services it touches
 6. **Data Requirements** — entities + expected volume + update frequency
 7. **Dashboard Requirements** — pages the user will open in Mission Control
-8. **Memory & Context** — what to remember, what to forget
-9. **Success Criteria** — functional, operational, product
+8. **Dashboard Prototype Expectations** — workflows, create/run actions, pipeline tracking, generated artifacts, approval gates, revision paths, blocker states, and acceptance checks the user must validate before Build
+9. **Multi-Agent / Fleet Requirements** — specialist roles, ownership boundaries, handoffs, or an explicit single-agent decision
+10. **Memory & Context** — what to remember, what to forget
+11. **Success Criteria** — functional, operational, product
 
 **Anti-patterns:** burying requirements in prose • promising features you can't test • omitting success criteria • skipping the memory section (agents with no memory model behave inconsistently).
 
@@ -114,22 +128,26 @@ Required sections:
 
 1. **Architecture Overview** — layers (conversation, orchestration, persistence, integration), data flow, launch-target choice
 2. **Skills & Workflow** — proposed skill IDs in kebab-case + execution flow per capability
-3. **External APIs & Tools** — one block per provider: base URL, docs link, auth method, key endpoints, rate limits, what we use it for
-4. **Database Schema** — `CREATE TABLE` DDL in SQLite/Postgres with indexes
-5. **API Endpoints** — `GET/POST /api/...` with request/response shapes
-6. **Dashboard Pages** — path + components + which endpoints they consume
-7. **Vector Collections** — names + contents + "embedded when" + "used for"
-8. **Triggers & Scheduling** — manual, scheduled (cron), event-style
-9. **Environment Variables** — one line per var with example value
-10. **Error Handling & Guardrails** — retry policy, rate-limit handling, dangerous-operation safeguards
+3. **Sub-Agent Ownership** — sub-agent ids, roles, owned skills, triggers, autonomy, handoffs, or an explicit single-agent decision
+4. **External APIs & Tools** — one block per provider: base URL, docs link, auth method, key endpoints, rate limits, what we use it for
+5. **Database Schema** — `CREATE TABLE` DDL in SQLite/Postgres with indexes
+6. **API Endpoints** — `GET/POST /api/...` with request/response shapes
+7. **Dashboard Pages** — path + components + which endpoints they consume
+8. **Dashboard Prototype Contract** — page-to-workflow mapping, mutating dashboard actions, pipeline steps, generated artifacts, acceptance checks, revision prompts, approval checklist
+9. **Vector Collections** — names + contents + "embedded when" + "used for"
+10. **Triggers & Scheduling** — manual, scheduled (cron), event-style
+11. **Environment Variables** — one line per var with example value
+12. **Error Handling & Guardrails** — retry policy, rate-limit handling, dangerous-operation safeguards
 
-**Rule:** every skill in §2 must correspond to a row in the architecture.json. Every env var in §9 must appear in `architecture.json.envVars` with a human-readable label.
+**Rule:** every skill in §2 must correspond to a row in the architecture.json. Every sub-agent in §3 must appear in `architecture.json.subAgents`. Every env var in §11 must appear in `architecture.json.envVars` with a human-readable label.
 
 ---
 
 ## Stage 2: Plan — architecture.json Shape
 
 This is the machine-readable contract between Plan and Build. Get it wrong and every downstream specialist produces garbage.
+
+**Workspace contract:** read approved Think outputs from `~/.openclaw/workspace/.openclaw/discovery/{PRD.md,TRD.md,research-brief.md}`. Write `architecture.json` and `PLAN.md` to `~/.openclaw/workspace-copilot/.openclaw/plan/`, then mirror them to `~/.openclaw/workspace/.openclaw/plan/` so Prototype, Build, and backend sync consume the same plan.
 
 ```jsonc
 {
@@ -163,6 +181,23 @@ This is the machine-readable contract between Plan and Build. Get it wrong and e
   "dataSchema": { "tables": [ /* ... */ ] },
   "apiEndpoints": [ /* ... */ ],
   "dashboardPages": [ /* ... */ ],
+  "dashboardPrototype": {
+    "summary": "Interactive dashboard prototype contract.",
+    "actions": [
+      { "id": "create-work", "label": "Create work item", "type": "create", "target": "work_item", "primary": true },
+      { "id": "run-pipeline", "label": "Run pipeline", "type": "run_pipeline", "target": "pipeline", "primary": true }
+    ],
+    "pipeline": {
+      "name": "User-visible work pipeline",
+      "triggerActionId": "run-pipeline",
+      "steps": [{ "id": "intake", "name": "Intake", "producesArtifacts": ["source-evidence"] }],
+      "completionCriteria": ["Artifacts are ready for approval"],
+      "failureStates": ["Missing source evidence"]
+    },
+    "artifacts": [
+      { "id": "source-evidence", "name": "Source evidence map", "type": "evidence", "reviewActions": ["approve_artifact", "request_revision"], "acceptanceCriteria": ["Evidence is traceable"] }
+    ]
+  },
   "vectorCollections": [ /* ... */ ],
   "triggers": [ /* ... */ ],
   "eventTriggers": [ /* ... */ ],
@@ -463,8 +498,8 @@ For OpenClaw skills, adopt: **skill ids in kebab-case** (`listing-publish-ebay`,
 
 ### Before shipping an agent (pre-Ship)
 
-- [ ] PRD has all 9 required sections
-- [ ] TRD has all 10 required sections + env vars match architecture.json
+- [ ] PRD has all 11 required sections
+- [ ] TRD has all 12 required sections + env vars and sub-agents match architecture.json
 - [ ] architecture.json passes `skill_graph` shape validation (array of SkillGraphNode, not raw object)
 - [ ] Each skill has a SKILL.md with frontmatter + 5-section body
 - [ ] Each skill's `allowed-tools` is the minimum viable set

@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 
-import { PHASE_ORDER, useCoPilotStore } from "./copilot-state";
+import { AGENT_DEV_STAGES, PHASE_ORDER, useCoPilotStore } from "./copilot-state";
 
 describe("copilot-state", () => {
   test("includes the runtime inputs phase between tools and triggers", () => {
@@ -161,7 +161,7 @@ describe("goBackDevStage", () => {
 
   test("resets planStatus to idle when going back to plan", () => {
     const store = useCoPilotStore;
-    store.setState({ devStage: "build", maxUnlockedDevStage: "build", planStatus: "approved" });
+    store.setState({ devStage: "prototype", maxUnlockedDevStage: "prototype", planStatus: "approved" });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("plan");
     expect(store.getState().maxUnlockedDevStage).toBe("plan");
@@ -205,8 +205,8 @@ describe("goBackDevStage", () => {
   test("does not reset unrelated statuses", () => {
     const store = useCoPilotStore;
     store.setState({
-      devStage: "build",
-      maxUnlockedDevStage: "build",
+      devStage: "prototype",
+      maxUnlockedDevStage: "prototype",
       planStatus: "approved",
       thinkStatus: "approved",
       buildStatus: "done",
@@ -222,6 +222,20 @@ describe("goBackDevStage", () => {
 describe("advanceDevStage", () => {
   beforeEach(() => {
     useCoPilotStore.getState().reset();
+  });
+
+  test("places prototype between plan and build in the lifecycle", () => {
+    expect(AGENT_DEV_STAGES).toEqual([
+      "reveal",
+      "think",
+      "plan",
+      "prototype",
+      "build",
+      "review",
+      "test",
+      "ship",
+      "reflect",
+    ]);
   });
 
   test("blocks advance from test when there is no passing eval report", () => {
@@ -262,12 +276,30 @@ describe("advanceDevStage", () => {
     expect(store.getState().maxUnlockedDevStage).toBe("ship");
   });
 
-  test("does not touch evalStatus when advancing from plan to build", () => {
+  test("does not touch evalStatus when advancing from plan to prototype", () => {
     const store = useCoPilotStore;
-    store.setState({ devStage: "plan", maxUnlockedDevStage: "plan", evalStatus: "idle", planStatus: "approved" });
+    store.setState({
+      devStage: "plan",
+      maxUnlockedDevStage: "plan",
+      evalStatus: "idle",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [],
+      },
+    });
     store.getState().advanceDevStage();
-    expect(store.getState().devStage).toBe("build");
-    expect(store.getState().maxUnlockedDevStage).toBe("build");
+    expect(store.getState().devStage).toBe("prototype");
+    expect(store.getState().maxUnlockedDevStage).toBe("prototype");
     expect(store.getState().evalStatus).toBe("idle");
   });
 
@@ -373,7 +405,211 @@ describe("advanceDevStage", () => {
     store.setState({ devStage: "plan", planStatus: "ready" });
     expect(store.getState().canAdvanceDevStage()).toBe(false);
     store.setState({ planStatus: "approved" });
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+    store.setState({
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [],
+      },
+    });
     expect(store.getState().canAdvanceDevStage()).toBe(true);
+  });
+
+  test("blocks advance from plan when the architecture plan is empty", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "plan",
+      maxUnlockedDevStage: "plan",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [],
+        workflow: { steps: [] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [],
+      },
+    });
+
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("plan");
+  });
+
+  test("blocks advance from plan when dashboard pages lack an approved prototype spec", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "plan",
+      maxUnlockedDevStage: "plan",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [
+          { path: "/projects", title: "Projects", components: [] },
+        ],
+      },
+    });
+
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("plan");
+  });
+
+  test("allows plan advance to prototype for dashboard agents after dashboardPrototype is present", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "plan",
+      maxUnlockedDevStage: "plan",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [
+          { path: "/projects", title: "Projects", components: [] },
+        ],
+        dashboardPrototype: {
+          summary: "Project workspace",
+          primaryUsers: ["Estimator"],
+          workflows: [
+            {
+              id: "review-project",
+              name: "Review Project",
+              steps: ["Open project", "Resolve blockers"],
+              requiredActions: ["resolve_blocker"],
+              successCriteria: ["Cannot approve with blockers"],
+            },
+          ],
+          pages: [
+            {
+              path: "/projects",
+              title: "Projects",
+              purpose: "Select active estimate",
+              supportsWorkflows: ["review-project"],
+              requiredActions: ["open_project"],
+              acceptanceCriteria: ["Shows blocker count"],
+            },
+          ],
+          revisionPrompts: ["Does this match the estimating workflow?"],
+          approvalChecklist: ["Prototype reviewed with user"],
+        },
+      },
+    });
+
+    expect(store.getState().canAdvanceDevStage()).toBe(true);
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("prototype");
+  });
+
+  test("blocks prototype advance when dashboard pages lack an approved prototype spec", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "prototype",
+      maxUnlockedDevStage: "prototype",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [
+          { path: "/projects", title: "Projects", components: [] },
+        ],
+      },
+    });
+
+    expect(store.getState().canAdvanceDevStage()).toBe(false);
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("prototype");
+  });
+
+  test("allows prototype advance to build when dashboardPrototype is present", () => {
+    const store = useCoPilotStore;
+    store.setState({
+      devStage: "prototype",
+      maxUnlockedDevStage: "prototype",
+      planStatus: "approved",
+      architecturePlan: {
+        skills: [{ id: "review-project", name: "Review Project", description: "Review estimate projects.", dependencies: [], envVars: [] }],
+        workflow: { steps: [{ skillId: "review-project" }] },
+        integrations: [],
+        triggers: [],
+        channels: [],
+        envVars: [],
+        subAgents: [],
+        missionControl: null,
+        dataSchema: null,
+        apiEndpoints: [],
+        dashboardPages: [
+          { path: "/projects", title: "Projects", components: [] },
+        ],
+        dashboardPrototype: {
+          summary: "Project workspace",
+          primaryUsers: ["Estimator"],
+          workflows: [
+            {
+              id: "review-project",
+              name: "Review Project",
+              steps: ["Open project", "Resolve blockers"],
+              requiredActions: ["resolve_blocker"],
+              successCriteria: ["Cannot approve with blockers"],
+            },
+          ],
+          pages: [
+            {
+              path: "/projects",
+              title: "Projects",
+              purpose: "Select active estimate",
+              supportsWorkflows: ["review-project"],
+              requiredActions: ["open_project"],
+              acceptanceCriteria: ["Shows blocker count"],
+            },
+          ],
+          revisionPrompts: ["Does this match the estimating workflow?"],
+          approvalChecklist: ["Prototype reviewed with user"],
+        },
+      },
+    });
+
+    expect(store.getState().canAdvanceDevStage()).toBe(true);
+    store.getState().advanceDevStage();
+    expect(store.getState().devStage).toBe("build");
   });
 
   test("setDevStage preserves the furthest unlocked stage when inspecting earlier phases", () => {

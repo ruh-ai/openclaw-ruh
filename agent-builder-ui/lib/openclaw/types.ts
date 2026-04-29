@@ -193,9 +193,9 @@ export interface DiscoveryDocuments {
 
 // ─── Agent Development Lifecycle Types ──────────────────────────────────────
 
-export type AgentDevStage = "reveal" | "think" | "plan" | "build" | "review" | "test" | "ship" | "reflect";
+export type AgentDevStage = "reveal" | "think" | "plan" | "prototype" | "build" | "review" | "test" | "ship" | "reflect";
 
-export const AGENT_DEV_STAGES: AgentDevStage[] = ["reveal", "think", "plan", "build", "review", "test", "ship", "reflect"];
+export const AGENT_DEV_STAGES: AgentDevStage[] = ["reveal", "think", "plan", "prototype", "build", "review", "test", "ship", "reflect"];
 
 export type StageStatus = "idle" | "generating" | "ready" | "approved" | "building" | "running" | "done" | "failed";
 
@@ -303,6 +303,74 @@ export interface DashboardPage {
   components: DashboardPageComponent[];
 }
 
+export interface DashboardPrototypeWorkflow {
+  id: string;
+  name: string;
+  steps: string[];
+  requiredActions: string[];
+  successCriteria: string[];
+}
+
+export interface DashboardPrototypePage {
+  path: string;
+  title: string;
+  purpose: string;
+  supportsWorkflows: string[];
+  requiredActions: string[];
+  acceptanceCriteria: string[];
+}
+
+export interface DashboardPrototypeAction {
+  id: string;
+  label: string;
+  description?: string;
+  type: "create" | "run_pipeline" | "approve" | "request_revision" | "resolve_blocker" | "publish" | "other";
+  target?: "work_item" | "pipeline" | "artifact" | "page" | "external";
+  pagePath?: string;
+  workflowId?: string;
+  primary?: boolean;
+}
+
+export interface DashboardPrototypePipelineStep {
+  id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  producesArtifacts?: string[];
+  requiresApproval?: boolean;
+}
+
+export interface DashboardPrototypePipeline {
+  name: string;
+  triggerActionId?: string;
+  steps: DashboardPrototypePipelineStep[];
+  completionCriteria: string[];
+  failureStates: string[];
+}
+
+export interface DashboardPrototypeArtifact {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+  producedByStepId?: string;
+  reviewActions: string[];
+  acceptanceCriteria: string[];
+}
+
+export interface DashboardPrototypeSpec {
+  summary: string;
+  primaryUsers: string[];
+  workflows: DashboardPrototypeWorkflow[];
+  pages: DashboardPrototypePage[];
+  actions?: DashboardPrototypeAction[];
+  pipeline?: DashboardPrototypePipeline;
+  artifacts?: DashboardPrototypeArtifact[];
+  emptyState?: string;
+  revisionPrompts: string[];
+  approvalChecklist: string[];
+}
+
 export interface VectorCollection {
   name: string;
   description: string;
@@ -349,6 +417,12 @@ export interface ArchitecturePlan {
   dataSchema?: DataSchema | null;
   apiEndpoints?: ApiEndpoint[];
   dashboardPages?: DashboardPage[];
+  /**
+   * Plan-stage prototype approval gate. When dashboardPages exist, Plan must
+   * also explain the operator workflows, required actions, and acceptance
+   * checks the dashboard prototype must satisfy before Build starts.
+   */
+  dashboardPrototype?: DashboardPrototypeSpec;
   vectorCollections?: VectorCollection[];
   /** Dependency graph between plan artifacts (v4). */
   buildDependencies?: BuildDependency[];

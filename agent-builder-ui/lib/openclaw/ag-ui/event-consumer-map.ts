@@ -10,6 +10,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { BrowserWorkspaceState } from "../browser-workspace";
 import { applyBrowserWorkspaceEvent } from "../browser-workspace";
 import type { BrowserWorkspaceEvent } from "../browser-workspace";
+import { hasUsableArchitecturePlan } from "../copilot-state";
 import type { AgentDevStage, ArchitecturePlan, DiscoveryDocument, StageStatus } from "../types";
 import type {
   AgentStep,
@@ -40,6 +41,8 @@ export interface ConsumerDeps {
   setDetectedPreviewPorts: (updater: (prev: number[]) => number[]) => void;
   // Editor file fetcher
   fetchEditorFile: (path: string) => void;
+  // Workspace reader used to verify artifact-ready markers.
+  readWorkspaceFile?: (sandboxId: string, path: string) => Promise<string | null>;
   // Callbacks
   onReadyForReview?: () => void;
   // Step tracking
@@ -73,6 +76,9 @@ interface CoPilotStoreLike {
   setResearchBriefPath: (path: string | null) => void;
   setPrdPath: (path: string | null) => void;
   setTrdPath: (path: string | null) => void;
+  researchBriefPath?: string | null;
+  prdPath?: string | null;
+  trdPath?: string | null;
   // Plan v4 incremental tracking
   setPlanStep: (step: string) => void;
   pushPlanActivity: (item: { type: string; label: string; count: number }) => void;
@@ -82,6 +88,16 @@ interface CoPilotStoreLike {
   // when the architect skipped the structured markers.
   agentSandboxId: string | null;
   architecturePlan: ArchitecturePlan | null;
+  discoveryDocuments?: { prd?: DiscoveryDocument; trd?: DiscoveryDocument } | null;
+  thinkStatus?: StageStatus | string;
+  snapshot?: () => {
+    researchBriefPath?: string | null;
+    prdPath?: string | null;
+    trdPath?: string | null;
+    agentSandboxId?: string | null;
+    discoveryDocuments?: { prd?: DiscoveryDocument; trd?: DiscoveryDocument } | null;
+    thinkStatus?: StageStatus | string;
+  };
   // Agent identity — read by emitPipelineManifest to derive manifest fields.
   name: string;
   description: string;
@@ -282,7 +298,13 @@ export function consumeArchitecturePlanReady(value: unknown, deps: ConsumerDeps)
   }
   // Normalize the plan to fill missing fields before setting in store
   const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
-  deps.coPilotStore.setArchitecturePlan(normalizePlan(payload.plan as unknown as Record<string, unknown>));
+  const plan = normalizePlan(payload.plan as unknown as Record<string, unknown>);
+  if (!hasUsableArchitecturePlan(plan)) {
+    deps.coPilotStore.setPlanStatus("failed");
+    tracer.drop("use-agent-chat", "CUSTOM", "architecture_plan_ready", "plan missing usable skills/workflow");
+    return;
+  }
+  deps.coPilotStore.setArchitecturePlan(plan);
   deps.coPilotStore.setPlanStatus("ready");
   deps.coPilotStore.setDevStage("plan");
   tracer.apply("copilot-store", "CUSTOM", "architecture_plan_ready");
@@ -402,6 +424,71 @@ function consumeAskUser(value: unknown, deps: ConsumerDeps): void {
   });
 }
 
+function parseDiscoveryMarkdown(markdown: string): DiscoveryDocument {
+  const lines = markdown.split("\n");
+  const title = lines[0]?.replace(/^#\s+/, "").trim() || "Document";
+  const sections: DiscoveryDocument["sections"] = [];
+  let heading = "";
+  let content: string[] = [];
+
+  for (const line of lines.slice(1)) {
+    if (line.startsWith("## ")) {
+      if (heading) {
+        sections.push({ heading, content: content.join("\n").trim() });
+      }
+      heading = line.replace(/^##\s+/, "").trim();
+      content = [];
+    } else {
+      content.push(line);
+    }
+  }
+
+  if (heading) {
+    sections.push({ heading, content: content.join("\n").trim() });
+  }
+
+  return { title, sections };
+}
+
+function readCoPilotSnapshot(store: CoPilotStoreLike) {
+  return store.snapshot?.() ?? store;
+}
+
+async function verifyThinkDocumentsFromWorkspace(deps: ConsumerDeps): Promise<void> {
+  const store = deps.coPilotStore;
+  if (!store || !deps.readWorkspaceFile) return;
+
+  const snapshot = readCoPilotSnapshot(store);
+  if (snapshot.discoveryDocuments?.prd && snapshot.discoveryDocuments.trd) return;
+
+  const sandboxId = snapshot.agentSandboxId ?? store.agentSandboxId;
+  const prdPath = snapshot.prdPath ?? store.prdPath;
+  const trdPath = snapshot.trdPath ?? store.trdPath;
+  if (!sandboxId || !prdPath || !trdPath) return;
+
+  const [prdContent, trdContent] = await Promise.all([
+    deps.readWorkspaceFile(sandboxId, prdPath),
+    deps.readWorkspaceFile(sandboxId, trdPath),
+  ]);
+
+  if (!prdContent || !trdContent) {
+    tracer.drop(
+      "copilot-store",
+      "CUSTOM",
+      CustomEventName.THINK_DOCUMENT_READY,
+      "document marker emitted before PRD/TRD files existed",
+    );
+    return;
+  }
+
+  store.setDiscoveryDocuments({
+    prd: parseDiscoveryMarkdown(prdContent),
+    trd: parseDiscoveryMarkdown(trdContent),
+  });
+  store.setThinkStep("complete");
+  store.setThinkStatus("ready" as StageStatus);
+}
+
 function consumeThinkDocumentReady(value: unknown, deps: ConsumerDeps): void {
   tracer.apply("copilot-store", "CUSTOM", CustomEventName.THINK_DOCUMENT_READY);
   if (!deps.coPilotStore) return;
@@ -422,25 +509,10 @@ function consumeThinkDocumentReady(value: unknown, deps: ConsumerDeps): void {
 
   deps.coPilotStore.pushThinkActivity({
     type: "status",
-    label: `${payload.docType} written to workspace`,
+    label: `${payload.docType} reported at ${payload.path}`,
   });
 
-  // Auto-complete: when all three documents are written, mark Think as ready
-  // We check the store state after updating — need to use a microtask
-  // to let Zustand commit the current set() before reading back.
-  queueMicrotask(() => {
-    if (!deps.coPilotStore) return;
-    const store = deps.coPilotStore as unknown as {
-      researchBriefPath: string | null;
-      prdPath: string | null;
-      trdPath: string | null;
-      thinkStatus: string;
-    };
-    if (store.researchBriefPath && store.prdPath && store.trdPath && store.thinkStatus !== "ready") {
-      deps.coPilotStore.setThinkStep("complete");
-      deps.coPilotStore.setThinkStatus("ready" as StageStatus);
-    }
-  });
+  void verifyThinkDocumentsFromWorkspace(deps);
 }
 
 // ─── Plan v4 event consumers ───────────────────────────────────────────────
@@ -489,6 +561,17 @@ function consumePlanDashboardPages(value: unknown, deps: ConsumerDeps): void {
   consumePlanSection(value, deps, CustomEventName.PLAN_DASHBOARD_PAGES, "dashboardPages", "dashboardPages", "dashboard");
 }
 
+function consumePlanDashboardPrototype(value: unknown, deps: ConsumerDeps): void {
+  consumePlanSection(
+    value,
+    deps,
+    CustomEventName.PLAN_DASHBOARD_PROTOTYPE,
+    "dashboardPrototype",
+    "dashboardPrototype",
+    "dashboard",
+  );
+}
+
 function consumePlanEnvVars(value: unknown, deps: ConsumerDeps): void {
   consumePlanSection(value, deps, CustomEventName.PLAN_ENV_VARS, "envVars", "envVars", "envvars");
 }
@@ -506,7 +589,6 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   if (!deps.coPilotStore) return;
   const store = deps.coPilotStore;
   store.setPlanStep("complete");
-  store.setPlanStatus("ready" as StageStatus);
   store.pushPlanActivity({
     type: "complete",
     label: "Architecture plan complete",
@@ -514,15 +596,14 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   });
 
   const { normalizePlan } = require("@/lib/openclaw/plan-formatter");
-  const hasUsablePlan = (plan: ArchitecturePlan | null | undefined): boolean =>
-    Boolean(plan && ((plan.skills?.length ?? 0) > 0 || (plan.workflow?.steps?.length ?? 0) > 0));
 
   const sandboxId = store.agentSandboxId;
 
   // If a real plan is already in the store (e.g. from architecture_plan_ready
   // or complete incremental markers), leave it alone. A partial object with no
   // skills/workflow is not usable for Build and should still recover from disk.
-  if (hasUsablePlan(store.architecturePlan)) {
+  if (hasUsableArchitecturePlan(store.architecturePlan)) {
+    store.setPlanStatus("ready" as StageStatus);
     // Plan is already in store — derive the v1-conformant pipeline manifest
     // from it now so Build/Ship can find it on disk alongside architecture.json.
     if (sandboxId) void emitPipelineManifest(sandboxId, store.architecturePlan!, store);
@@ -530,23 +611,25 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
   }
 
   if (!sandboxId) {
-    store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
-    tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+    store.setPlanStatus("failed" as StageStatus);
+    tracer.drop("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE, "plan_complete emitted without sandbox or usable plan");
     return;
   }
 
   void (async () => {
     try {
-      const { readWorkspaceFile } = await import("@/lib/openclaw/workspace-writer");
+      const readWorkspaceFile = deps.readWorkspaceFile
+        ?? (await import("@/lib/openclaw/workspace-writer")).readWorkspaceFile;
       const planJson = await readWorkspaceFile(sandboxId, ".openclaw/plan/architecture.json");
       if (!planJson) {
-        if (!hasUsablePlan(store.architecturePlan)) {
-          store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
-          tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+        if (!hasUsableArchitecturePlan(store.architecturePlan)) {
+          store.setPlanStatus("failed" as StageStatus);
+          tracer.drop("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE, "architecture.json missing after plan_complete");
         }
         return;
       }
-      if (hasUsablePlan(store.architecturePlan)) {
+      if (hasUsableArchitecturePlan(store.architecturePlan)) {
+        store.setPlanStatus("ready" as StageStatus);
         // Plan was filled in by another race; still emit the manifest derived
         // from whatever is now in the store.
         await emitPipelineManifest(sandboxId, store.architecturePlan!, store);
@@ -554,7 +637,13 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
       }
       const parsed = JSON.parse(planJson) as Record<string, unknown>;
       const plan = normalizePlan(parsed);
+      if (!hasUsableArchitecturePlan(plan)) {
+        store.setPlanStatus("failed" as StageStatus);
+        tracer.drop("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE, "architecture.json has no usable skills/workflow");
+        return;
+      }
       store.setArchitecturePlan(plan);
+      store.setPlanStatus("ready" as StageStatus);
       tracer.apply("copilot-store", "CUSTOM", "plan_complete:recovered_from_disk");
       // Derive + persist the v1-conformant pipeline manifest from the loaded
       // plan. Failures here should not block plan recovery — the manifest
@@ -562,9 +651,9 @@ function consumePlanComplete(value: unknown, deps: ConsumerDeps): void {
       // the gap loudly.
       await emitPipelineManifest(sandboxId, plan, store);
     } catch {
-      if (!hasUsablePlan(store.architecturePlan)) {
-        store.setArchitecturePlan(normalizePlan({}) as ArchitecturePlan);
-        tracer.apply("copilot-store", "CUSTOM", "plan_complete:synthesized_minimal_plan");
+      if (!hasUsableArchitecturePlan(store.architecturePlan)) {
+        store.setPlanStatus("failed" as StageStatus);
+        tracer.drop("copilot-store", "CUSTOM", CustomEventName.PLAN_COMPLETE, "failed to recover architecture.json after plan_complete");
       }
     }
   })();
@@ -640,6 +729,7 @@ const simpleConsumers: Record<string, EventConsumer> = {
   [CustomEventName.PLAN_DATA_SCHEMA]: consumePlanDataSchema,
   [CustomEventName.PLAN_API_ENDPOINTS]: consumePlanApiEndpoints,
   [CustomEventName.PLAN_DASHBOARD_PAGES]: consumePlanDashboardPages,
+  [CustomEventName.PLAN_DASHBOARD_PROTOTYPE]: consumePlanDashboardPrototype,
   [CustomEventName.PLAN_ENV_VARS]: consumePlanEnvVars,
   [CustomEventName.PLAN_SUB_AGENTS]: consumePlanSubAgents,
   [CustomEventName.PLAN_MEMORY_AUTHORITY]: consumePlanMemoryAuthority,

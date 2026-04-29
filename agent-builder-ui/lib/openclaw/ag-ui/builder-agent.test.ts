@@ -54,6 +54,15 @@ describe("BuilderAgent", () => {
     expect(PLAN_SYSTEM_INSTRUCTION).toContain("<ask_user");
   });
 
+  test("PLAN prompt reads discovery docs from main workspace and mirrors plan output", () => {
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("cat ~/.openclaw/workspace/.openclaw/discovery/PRD.md");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("cat ~/.openclaw/workspace/.openclaw/discovery/TRD.md");
+    expect(PLAN_SYSTEM_INSTRUCTION).not.toContain("cat ~/.openclaw/workspace-copilot/.openclaw/discovery/PRD.md");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain(
+      "cp ~/.openclaw/workspace-copilot/.openclaw/plan/architecture.json ~/.openclaw/workspace/.openclaw/plan/architecture.json",
+    );
+  });
+
   test("REFINE prompt routes [target: ...] prefixed messages to artifact edits", () => {
     expect(REFINE_SYSTEM_INSTRUCTION).toContain("[target:");
     expect(REFINE_SYSTEM_INSTRUCTION).toContain("PRD.md");

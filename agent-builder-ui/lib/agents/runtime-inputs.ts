@@ -17,6 +17,21 @@ function humanizeKey(key: string): string {
     .join(" ");
 }
 
+function normalizeRuntimeInputKey(key: unknown): string | null {
+  if (typeof key !== "string") return null;
+  const normalized = key.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeRuntimeInputType(
+  inputType: ArchitecturePlanEnvVar["inputType"] | string | undefined,
+): AgentRuntimeInput["inputType"] | undefined {
+  if (inputType === "boolean" || inputType === "number" || inputType === "select" || inputType === "text") {
+    return inputType;
+  }
+  return inputType ? "text" : undefined;
+}
+
 export function getRuntimeInputDetails(key: string): { label: string; description: string } {
   const trimmedKey = key.trim().toUpperCase();
   return (
@@ -123,15 +138,22 @@ export function enrichRuntimeInputsFromPlan(
   planEnvVars: ArchitecturePlanEnvVar[] | undefined,
 ): AgentRuntimeInput[] {
   if (!planEnvVars?.length) return inputs;
-  const planByKey = new Map(planEnvVars.map((ev) => [ev.key.toUpperCase(), ev]));
+  const planByKey = new Map<string, ArchitecturePlanEnvVar>();
+  for (const envVar of planEnvVars) {
+    const key = normalizeRuntimeInputKey(envVar?.key);
+    if (!key) continue;
+    planByKey.set(key, envVar);
+  }
   return inputs.map((input) => {
-    const plan = planByKey.get(input.key.toUpperCase());
+    const inputKey = normalizeRuntimeInputKey(input?.key);
+    if (!inputKey) return input;
+    const plan = planByKey.get(inputKey);
     if (!plan) return input;
     return {
       ...input,
       label: plan.label || input.label,
       description: plan.description || input.description,
-      inputType: input.inputType ?? plan.inputType,
+      inputType: input.inputType ?? normalizeRuntimeInputType(plan.inputType),
       defaultValue: input.defaultValue ?? plan.defaultValue,
       example: input.example ?? plan.example,
       options: input.options ?? plan.options,

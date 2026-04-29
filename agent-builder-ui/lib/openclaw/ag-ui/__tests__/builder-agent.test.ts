@@ -10,7 +10,7 @@ mock.module("@/lib/openclaw/api", () => ({
   BridgeApiError: class BridgeApiError extends Error { status; constructor(m: string, s = 0) { super(m); this.status = s; } },
 }));
 
-const { BuilderAgent, PLAN_SYSTEM_INSTRUCTION } = await import("../builder-agent");
+const { BuilderAgent, PLAN_SYSTEM_INSTRUCTION, THINK_SYSTEM_INSTRUCTION } = await import("../builder-agent");
 const { CustomEventName } = await import("../types");
 
 function collectBuilderEvents(response: unknown) {
@@ -78,6 +78,13 @@ describe("BuilderAgent", () => {
     expect(PLAN_SYSTEM_INSTRUCTION).toContain("ai_inferred");
     expect(PLAN_SYSTEM_INSTRUCTION).toContain("static_default");
     expect(PLAN_SYSTEM_INSTRUCTION).toContain("defaultValue");
+  });
+
+  test("instructs think-stage completion to emit structured discovery documents", () => {
+    expect(THINK_SYSTEM_INSTRUCTION).toContain("```discovery");
+    expect(THINK_SYSTEM_INSTRUCTION).toContain('"type": "discovery"');
+    expect(THINK_SYSTEM_INSTRUCTION).toContain('"prd"');
+    expect(THINK_SYSTEM_INSTRUCTION).toContain('"trd"');
   });
 
   test("normalizes object-shaped clarification questions into conversational text", async () => {
@@ -986,6 +993,13 @@ describe("REFINE_SYSTEM_INSTRUCTION", () => {
 });
 
 describe("PLAN_SYSTEM_INSTRUCTION — multi-agent + memory authority elicitation (B2 + B4)", () => {
+  test("keeps PRD/TRD templates aligned to dashboard prototype and fleet planning", () => {
+    expect(THINK_SYSTEM_INSTRUCTION).toContain("Dashboard Prototype Expectations");
+    expect(THINK_SYSTEM_INSTRUCTION).toContain("Multi-Agent / Fleet Requirements");
+    expect(THINK_SYSTEM_INSTRUCTION).toContain("Sub-Agent Ownership");
+    expect(THINK_SYSTEM_INSTRUCTION).toContain("Dashboard Prototype Contract");
+  });
+
   test("instructs the architect to emit <plan_sub_agents> ONLY for fleets", () => {
     expect(PLAN_SYSTEM_INSTRUCTION).toContain("<plan_sub_agents");
     // Single-agent agents must NOT trigger sub-agent emission. The
@@ -993,6 +1007,7 @@ describe("PLAN_SYSTEM_INSTRUCTION — multi-agent + memory authority elicitation
     // accidentally turn single-agent flows into fleets.
     expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/Most agents are single-agent/);
     expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/leave .*subAgents.* empty/);
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/TRD describes .*separate specialist agents/i);
   });
 
   test("instructs the architect to emit <plan_memory_authority> ONLY when TRD names authorities", () => {
@@ -1013,5 +1028,17 @@ describe("PLAN_SYSTEM_INSTRUCTION — multi-agent + memory authority elicitation
   test("registers PLAN_SUB_AGENTS and PLAN_MEMORY_AUTHORITY in CustomEventName", () => {
     expect(CustomEventName.PLAN_SUB_AGENTS).toBe("plan_sub_agents");
     expect(CustomEventName.PLAN_MEMORY_AUTHORITY).toBe("plan_memory_authority");
+  });
+
+  test("instructs the architect to emit an interactive dashboard prototype gate before Build", () => {
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("<plan_dashboard_prototype");
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain("dashboardPrototype");
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/prototype approval gate/i);
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/requiredActions/);
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain('"type":"run_pipeline"');
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain('"pipeline"');
+    expect(PLAN_SYSTEM_INSTRUCTION).toContain('"artifacts"');
+    expect(PLAN_SYSTEM_INSTRUCTION).toMatch(/generated artifacts/i);
+    expect(CustomEventName.PLAN_DASHBOARD_PROTOTYPE).toBe("plan_dashboard_prototype");
   });
 });

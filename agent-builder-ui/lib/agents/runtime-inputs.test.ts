@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  enrichRuntimeInputsFromPlan,
   extractRuntimeInputKeys,
   getRuntimeInputDetails,
   hasMissingRequiredInputs,
@@ -140,6 +141,72 @@ describe("isRuntimeInputFilled", () => {
         defaultValue: "info",
       }),
     ).toBe(true);
+  });
+});
+
+describe("enrichRuntimeInputsFromPlan", () => {
+  test("skips malformed plan env vars instead of crashing the create page", () => {
+    expect(
+      enrichRuntimeInputsFromPlan(
+        [
+          {
+            key: "MICROSOFT_CLIENT_SECRET",
+            label: "Old label",
+            description: "Old description",
+            required: true,
+            source: "architect_requirement",
+            value: "",
+          },
+        ],
+        [
+          { description: "Bad entry", required: true } as never,
+          {
+            key: "MICROSOFT_CLIENT_SECRET",
+            label: "Microsoft Client Secret",
+            description: "Client secret for Graph auth.",
+            required: false,
+            inputType: "password" as never,
+            group: "Microsoft Graph Auth",
+            populationStrategy: "user_required",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        key: "MICROSOFT_CLIENT_SECRET",
+        label: "Microsoft Client Secret",
+        description: "Client secret for Graph auth.",
+        required: true,
+        source: "architect_requirement",
+        value: "",
+        inputType: "text",
+        group: "Microsoft Graph Auth",
+        populationStrategy: "user_required",
+      },
+    ]);
+  });
+
+  test("leaves malformed runtime inputs untouched instead of throwing", () => {
+    const malformedInput = {
+      label: "Missing key",
+      description: "Bad saved input",
+      required: true,
+      source: "architect_requirement",
+      value: "",
+    } as never;
+
+    expect(
+      enrichRuntimeInputsFromPlan(
+        [malformedInput],
+        [
+          {
+            key: "API_KEY",
+            description: "API key",
+            required: true,
+          },
+        ],
+      ),
+    ).toEqual([malformedInput]);
   });
 });
 
