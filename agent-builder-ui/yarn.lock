@@ -61,9 +61,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@anthropic-ai/sdk@npm:^0.82.0":
-  version: 0.82.0
-  resolution: "@anthropic-ai/sdk@npm:0.82.0"
+"@anthropic-ai/sdk@npm:^0.91.1":
+  version: 0.91.1
+  resolution: "@anthropic-ai/sdk@npm:0.91.1"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
   peerDependencies:
@@ -73,7 +73,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/2d6b1ed34335b736a5bb794853469a76bcd223a56bbc6695b81c9ffa2b906b4a0dff44a1ab1ce5aa5795ee49ac88489eae7cb6383923256cbfff3103ebdd0737
+  checksum: 10c0/aa9fb1b3d0ae47f492ee7a94b76d341ac7c5486b222a9426b4815b07a65a0b6f502430b0250ff5bf2201a0cdae725a5d4f1f7a4aaa075e9fb32cc2ac10d70241
   languageName: node
   linkType: hard
 
@@ -2509,10 +2509,10 @@ __metadata:
 
 "@ruh/openclaw-runtime@file:../packages/openclaw-runtime::locator=agent-builder-ui%40workspace%3A.":
   version: 0.1.0
-  resolution: "@ruh/openclaw-runtime@file:../packages/openclaw-runtime#../packages/openclaw-runtime::hash=a02041&locator=agent-builder-ui%40workspace%3A."
+  resolution: "@ruh/openclaw-runtime@file:../packages/openclaw-runtime#../packages/openclaw-runtime::hash=a3f256&locator=agent-builder-ui%40workspace%3A."
   dependencies:
     zod: "npm:^3.23.0"
-  checksum: 10c0/a0fda63f96ea2eef252515a9a6677ce7e45225d5cac69a3b53353321952c1cdca9dfe1a038c4a3df26d2071aeadc40d3e56292acd172b06c47d0baaa0a833d59
+  checksum: 10c0/062077f1e64c0925dc436a19629a7f9543127d55c3b5ad9760952fc2ff7122f45662a8ecdd2f03f8efb15ca6640d988c5b3b9022d9a73d069184454718feb505
   languageName: node
   linkType: hard
 
@@ -3211,7 +3211,7 @@ __metadata:
   dependencies:
     "@ag-ui/client": "npm:^0.0.48"
     "@ag-ui/core": "npm:^0.0.48"
-    "@anthropic-ai/sdk": "npm:^0.82.0"
+    "@anthropic-ai/sdk": "npm:^0.91.1"
     "@codemirror/lang-css": "npm:^6.3.1"
     "@codemirror/lang-html": "npm:^6.4.11"
     "@codemirror/lang-javascript": "npm:^6.2.5"
