@@ -14,10 +14,10 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "lucide-react": "^1.7.0",
-    "next": "16.1.7",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "lucide-react": "^1.14.0",
+    "next": "16.2.4",
+    "react": "19.2.5",
+    "react-dom": "19.2.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -26,21 +26,21 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20",
+    "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.7",
+    "eslint": "^10",
+    "eslint-config-next": "16.2.4",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
-    "msw": "^2.12.13",
+    "msw": "^2.14.2",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
-    "typescript": "^5",
-    "undici": "^8.0.2"
+    "typescript": "^6",
+    "undici": "^8.2.0"
   },
   "overrides": {
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react": "19.2.5",
+    "react-dom": "19.2.5"
   }
 }
