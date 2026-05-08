@@ -37,7 +37,7 @@ implemented
 - `/authenticate` remains public.
 - Any other route without either `accessToken` or `refreshToken` cookies redirects to `/authenticate`.
 - The redirect carries `redirect_url` equal to the requested path plus query string.
-- The dashboard route `/` is also protected; it should redirect like other protected routes when no session cookies exist.
+- The dashboard route `/` is also protected; it should redirect like other protected routes when no session cookies exist, and authenticated `/` requests redirect to `/agents` in middleware before the root page renders.
 
 ### Session-bootstrap Contract
 

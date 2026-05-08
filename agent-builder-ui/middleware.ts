@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { loginRoute } from "@/shared/routes";
+import { agentsRoute, dashboardRoute, loginRoute } from "@/shared/routes";
 import { getAuthRedirectPath } from "@/lib/auth/session-guard";
 
 // Auth routes that should be accessible without tokens
@@ -26,6 +26,10 @@ export function middleware(request: NextRequest) {
       search: request.nextUrl.search,
     });
     return NextResponse.redirect(new URL(redirectPath, request.url));
+  }
+
+  if (pathname === dashboardRoute) {
+    return NextResponse.redirect(new URL(agentsRoute, request.url));
   }
 
   return NextResponse.next();
