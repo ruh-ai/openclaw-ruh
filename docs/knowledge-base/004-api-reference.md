@@ -33,6 +33,29 @@ Not-ready response:
 
 HTTP status is `200` when ready and `503` when not ready.
 
+### `GET /health/telemetry`
+Probes the three observability surfaces the platform depends on (Langfuse,
+OTEL exporter, Sentry/GlitchTip) so we notice when telemetry goes silent —
+historically Langfuse exited and ran cold for ten days before anyone caught
+it. No auth required. Returns HTTP `200` when all three are healthy and
+`503` when any surface is missing or unreachable.
+
+Healthy response:
+```json
+{
+  "status": "ok",
+  "surfaces": {
+    "langfuse": { "ok": true, "latencyMs": 18, "version": "3.40.0", "endpoint": "http://localhost:3002/api/public/health" },
+    "otel":     { "ok": true, "endpoint": "http://localhost:4318" },
+    "sentry":   { "ok": true }
+  }
+}
+```
+
+Each surface reports `ok: false` with a `reason` when its env var is missing
+(`LANGFUSE_BASE_URL`, `OTEL_ENABLED`/`OTEL_EXPORTER_OTLP_ENDPOINT`, `SENTRY_DSN`)
+or, for Langfuse, when the live HTTP probe fails. Probe timeout is 2 seconds.
+
 ---
 
 ## System Events

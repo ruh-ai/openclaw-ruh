@@ -22,6 +22,7 @@ import { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } from './age
 import { createLogger } from '@ruh/logger';
 import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
+import { buildTelemetryHealthReport } from './telemetryHealth';
 import { optionalAuth, requireAuth, requireRole } from './auth/middleware';
 import { deriveAppAccess } from './auth/appAccess';
 import { requireActiveDeveloperOrg } from './auth/builderAccess';
@@ -1974,6 +1975,11 @@ app.get('/ready', (_req, res) => {
   const readiness = getBackendReadiness();
   res.status(readiness.ready ? 200 : 503).json(readiness);
 });
+
+app.get('/health/telemetry', asyncHandler(async (_req, res) => {
+  const report = await buildTelemetryHealthReport(getConfig());
+  res.status(report.status === 'ok' ? 200 : 503).json(report);
+}));
 
 app.get('/api/system/events', asyncHandler(async (req, res) => {
   res.json(await systemEventStore.listSystemEvents(buildSystemEventFilters(req)));
