@@ -130,6 +130,15 @@ Response shape:
 
 `workspace_artifacts.<name>` is `null` when that workspace directory doesn't exist on disk yet. `sandbox` is `null` when the agent has no `forge_sandbox_id`. The endpoint reads the workspace artifacts and gateway log inside the sandbox container with a 5-second timeout per exec call, so it returns quickly even when the gateway is unresponsive.
 
+The stuck-session monitor (`source: "stuck-session-monitor"`) emits two more action types for any running sandbox whose gateway log contains `[diagnostic] stuck session` lines:
+
+| `category` | `action` | `level` | `status` | When |
+|---|---|---|---|---|
+| `runtime.diagnostic` | `session.stuck` | `warn` | `detected` | First time a `session_key` appears in the diagnostic log since this sandbox's monitor state was created (or reset). Steady-state stuck sessions emit nothing — only the transition. |
+| `runtime.diagnostic` | `session.recovered` | `info` | `cleared` | A previously-stuck `session_key` no longer appears in the latest log tail. |
+
+`details` carries `{ session_id, session_key, state, age_seconds, queue_depth }` so consumers can render a stuck-session badge without re-tailing the gateway log. Polling cadence is 30 s by default (matches the runtime's diagnostic emit cadence). The monitor stops with the backend on SIGTERM.
+
 ---
 
 ## Sandboxes

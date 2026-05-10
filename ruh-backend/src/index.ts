@@ -7,10 +7,11 @@
 import { config as dotenvConfig } from 'dotenv';
 dotenvConfig();
 
-import { startBackend } from './startup';
+import { startBackend, stopStuckSessionMonitor } from './startup';
 import { shutdownTelemetry } from './telemetry';
 
 process.on('SIGTERM', async () => {
+  stopStuckSessionMonitor();
   await shutdownTelemetry();
   process.exit(0);
 });
