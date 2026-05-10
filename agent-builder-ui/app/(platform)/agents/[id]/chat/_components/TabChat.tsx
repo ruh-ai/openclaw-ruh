@@ -1174,6 +1174,66 @@ export function TabChat({
     wasLoadingRef.current = isLoading;
   }, [isLoading, queuedMessages, sendChatMessage]);
 
+  // Artifact refresh after architect revision turns.
+  //
+  // When the user has set a selectedArtifactTarget (PRD/TRD/Plan/Build report)
+  // and the architect's turn completes, re-read the corresponding workspace
+  // file(s) and update the co-pilot store. Without this, the architect can
+  // write a revised PRD.md to disk and the UI keeps showing the pre-revision
+  // version because no marker triggered a refresh. Workspace is the source
+  // of truth; this enforces it after every revision turn.
+  //
+  // We capture the target at turn-start (rising edge of isLoading) so a
+  // mid-turn target change doesn't make us refetch the wrong artifact at
+  // turn-end. Bounded to artifact kinds with a canonical workspace file
+  // (research/review/test_report no-op in the refresh helper).
+  const turnArtifactTargetRef = useRef<ArtifactTarget | null>(null);
+  const artifactRefreshLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    const wasLoading = artifactRefreshLoadingRef.current;
+    artifactRefreshLoadingRef.current = isLoading;
+
+    // Rising edge → capture the target the user is currently revising
+    if (!wasLoading && isLoading) {
+      turnArtifactTargetRef.current = coPilotStore?.selectedArtifactTarget ?? null;
+      return;
+    }
+
+    // Falling edge with a captured target → refetch and update the store
+    if (wasLoading && !isLoading) {
+      const target = turnArtifactTargetRef.current;
+      turnArtifactTargetRef.current = null;
+      if (!target || !coPilotStore) return;
+      const sandboxId = coPilotStore.agentSandboxId;
+      if (!sandboxId) return;
+
+      void (async () => {
+        try {
+          const { refetchArtifactFromWorkspace } = await import(
+            "@/lib/openclaw/artifact-refresh"
+          );
+          const result = await refetchArtifactFromWorkspace(sandboxId, target, {
+            discoveryDocuments: coPilotStore.discoveryDocuments,
+            setDiscoveryDocuments: coPilotStore.setDiscoveryDocuments,
+            setArchitecturePlan: coPilotStore.setArchitecturePlan,
+            setBuildReport: coPilotStore.setBuildReport,
+          });
+          if (result.error) {
+            console.warn(
+              `[artifact-refresh] ${target.kind}: ${result.error}`,
+            );
+          }
+        } catch (err) {
+          console.warn("[artifact-refresh] failed:", err);
+        }
+      })();
+    }
+    // We intentionally exclude coPilotStore from deps — the setters are stable
+    // and reading coPilotStore?.X inside the effect captures the latest values
+    // at the moment isLoading transitions, which is what we want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
