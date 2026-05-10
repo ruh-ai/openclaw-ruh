@@ -7391,6 +7391,34 @@ app.post('/api/agents/:id/build/cancel/:stream_id', requireAuth, asyncHandler(as
   res.json({ cancelled: true, stream_id });
 }));
 
+// ── Pair-programmer interject queue (Phase 2.1.f) ────────────────────────────
+// In-memory per-agent queue. Frontend POSTs here when the user submits a
+// message during an active iteration build; the iteration loop in
+// agentBuild.ts:executeIteratedSkills drains the queue at the start of
+// each iteration and prepends the messages to the next per-skill prompt.
+// Volatile by design — see ruh-backend/src/interjectQueue.ts.
+
+app.post('/api/agents/:id/interjects', requireAuth, asyncHandler(async (req, res) => {
+  const agentId = req.params.id;
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  if (!message.trim()) {
+    throw httpError(400, 'message is required');
+  }
+  // Validate the agent exists so callers get a clear 404 rather than
+  // queueing into the void.
+  const agent = await agentStore.getAgent(agentId);
+  if (!agent) throw httpError(404, 'Agent not found');
+
+  const { pushInterject, peekInterjectCount } = await import('./interjectQueue');
+  const depth = pushInterject(agentId, message);
+  res.json({ ok: true, depth, queued: peekInterjectCount(agentId) });
+}));
+
+app.get('/api/agents/:id/interjects', requireAuth, asyncHandler(async (req, res) => {
+  const { peekInterjectCount } = await import('./interjectQueue');
+  res.json({ depth: peekInterjectCount(req.params.id) });
+}));
+
 // ── Agent Ship (persistent repo) ──────────────────────────────────────────────
 
 app.post('/api/agents/:id/ship', requireAuth, asyncHandler(async (req, res) => {

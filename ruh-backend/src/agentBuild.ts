@@ -21,6 +21,7 @@ import { gatewayUrlAndHeaders } from './utils';
 import * as store from './store';
 import { summarizeBuildReport, type BuildReport } from './buildReport';
 import { getConfig } from './config';
+import { drainInterjects } from './interjectQueue';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ export interface BuildEvent {
   type: "task_start" | "task_complete" | "task_failed" | "file_written"
     | "progress" | "status" | "build_complete" | "error"
     | "setup_progress" | "build_report"
-    | "iteration_announce" | "iteration_done";
+    | "iteration_announce" | "iteration_done" | "iteration_interject_received";
   specialist?: string;
   files?: string[];
   error?: string;
@@ -47,6 +48,8 @@ export interface BuildEvent {
   willTouch?: string[];
   /** Short SHA returned by `git rev-parse --short HEAD` after commit_iteration. */
   commitSha?: string;
+  /** Drained interject messages applied to the upcoming iteration's prompt. */
+  interjects?: string[];
 }
 
 interface BuildManifestTask {
@@ -269,6 +272,34 @@ export function chooseSkillsBuildPath(args: {
   if (args.ownedSkillCount > 0 && args.pairProgrammerBuildV2) return 'iterated';
   if (args.ownedSkillCount > 3) return 'chunked';
   return 'single';
+}
+
+/**
+ * Compose the per-iteration prompt with a [USER FEEDBACK] block prepended
+ * to the base specialist prompt. Used by executeIteratedSkills to deliver
+ * mid-flight steering messages from the user's interject queue into the
+ * architect's next LLM turn. Pure string composition — unit-testable
+ * without mocking the queue, gateway, or sandbox.
+ */
+export function buildIteratedPromptWithInterjects(
+  basePrompt: string,
+  interjects: string[],
+): string {
+  if (interjects.length === 0) return basePrompt;
+  const numbered = interjects
+    .map((m, i) => `${i + 1}. ${m}`)
+    .join("\n");
+  return [
+    "[USER FEEDBACK FROM PRIOR ITERATIONS]",
+    "The user submitted the following messages while the prior iteration was running.",
+    "Treat them as high-priority constraints on this iteration. If a message contradicts",
+    "your prior plan, acknowledge the contradiction and adjust accordingly.",
+    "",
+    numbered,
+    "",
+    "[CURRENT TASK]",
+    basePrompt,
+  ].join("\n");
 }
 
 /**
@@ -737,6 +768,7 @@ async function executeSpecialist(
   task: BuildManifestTask,
   signal?: AbortSignal,
   target?: TargetAgent,
+  agentId?: string,
 ): Promise<SpecialistResult> {
   const events: BuildEvent[] = [];
   task.status = 'running';
@@ -785,7 +817,7 @@ async function executeSpecialist(
       pairProgrammerBuildV2: getConfig().pairProgrammerBuildV2,
     });
     if (choice === 'iterated') {
-      return executeIteratedSkills(sandboxId, plan, agentName, task, signal, target);
+      return executeIteratedSkills(sandboxId, plan, agentName, task, signal, target, agentId);
     }
     if (choice === 'chunked') {
       return executeChunkedSkills(sandboxId, plan, agentName, task, signal, target);
@@ -933,6 +965,7 @@ async function executeIteratedSkills(
   task: BuildManifestTask,
   signal?: AbortSignal,
   target?: TargetAgent,
+  agentId?: string,
 ): Promise<SpecialistResult> {
   const events: BuildEvent[] = [];
   if (target) task.targetAgentId = target.id;
@@ -982,12 +1015,29 @@ async function executeIteratedSkills(
       willTouch: [skillFilePath],
     });
 
+    // Drain any interjects the user submitted while the prior iteration was
+    // running. We pick them up here, between announce and the LLM call, so
+    // they reach the architect on this iteration. Without an agentId we
+    // can't key the queue, so the channel silently degrades to no-op.
+    const pickedUpInterjects = agentId ? drainInterjects(agentId) : [];
+    if (pickedUpInterjects.length > 0) {
+      events.push({
+        type: 'iteration_interject_received',
+        iteration,
+        total,
+        interjects: pickedUpInterjects,
+      });
+    }
+
     const scopedPlan = { ...freshPlan, skills: [skill] };
-    const prompt = getSpecialistPrompt('skills' as SpecialistType, scopedPlan, agentName, target);
-    if (!prompt) {
+    const basePrompt = getSpecialistPrompt('skills' as SpecialistType, scopedPlan, agentName, target);
+    if (!basePrompt) {
       events.push({ type: 'status', message: `iter ${iteration}/${total}: no prompt for ${skill.id}; skipping` });
       continue;
     }
+    const prompt = pickedUpInterjects.length > 0
+      ? buildIteratedPromptWithInterjects(basePrompt, pickedUpInterjects)
+      : basePrompt;
 
     try {
       const result = await callSpecialist(sandboxId, prompt, undefined, signal);
@@ -1216,6 +1266,7 @@ export async function* runAgentBuild(
         task,
         signal,
         planned.target,
+        agentId,
       );
 
       for (const evt of result.events) {
