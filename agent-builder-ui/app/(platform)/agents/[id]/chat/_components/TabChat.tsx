@@ -26,6 +26,32 @@ import CodeEditorPanel from "./CodeEditorPanel";
 import { ChatModeControl } from "./ChatModeControl";
 import { ChatStageContextBar } from "./ChatStageContextBar";
 import { QueuedMessagesChip } from "./QueuedMessagesChip";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
+
+/**
+ * POST a user message to the per-agent interject queue while a build is
+ * running on the iterated path. Fire-and-forget — failures are logged but
+ * don't block the UI. The backend iteration loop drains the queue at the
+ * start of each iteration and prepends messages to the next per-skill
+ * prompt as user-feedback context.
+ */
+async function postBuildInterject(agentId: string, message: string): Promise<void> {
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  try {
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/interjects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) {
+      console.warn(
+        `[interject] POST /api/agents/${agentId}/interjects → ${res.status}`,
+      );
+    }
+  } catch (err) {
+    console.warn("[interject] POST failed:", err);
+  }
+}
 import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
@@ -1104,16 +1130,36 @@ export function TabChat({
   // immediately so they can keep typing additional follow-ups. Outside of
   // builder mode, behavior is unchanged: send fires through and useAgentChat
   // drops it if isLoading.
+  //
+  // Phase 2.1.g: when a build is running on the iterated path, route the
+  // message to the per-agent interject queue instead of the chat session.
+  // The iteration loop in agentBuild.ts drains that queue at the start of
+  // each iteration and prepends the messages to the next per-skill prompt,
+  // so user feedback steers the build mid-flight.
+  const buildIsRunning = isBuilderMode && coPilotStore?.buildStatus === "building";
+  const buildAgentId = builderState?.draftAgentId
+    ?? (agent.id !== "new-agent" && !agent.id.startsWith("new-") ? agent.id : null);
+
   const sendMessage = useCallback(() => {
     const text = input.trim();
     if (!text) return;
     setInput("");
+
+    // Build is running → route to interject endpoint. Fire-and-forget;
+    // the iteration loop will drain the queue and emit
+    // iteration_interject_received which CoPilotLayout surfaces in
+    // buildActivity, giving the user receipt-side confirmation.
+    if (buildIsRunning && buildAgentId) {
+      void postBuildInterject(buildAgentId, text);
+      return;
+    }
+
     if (isBuilderMode && isLoading) {
       setQueuedMessages((prev) => [...prev, text]);
       return;
     }
     sendChatMessage(text);
-  }, [input, isBuilderMode, isLoading, sendChatMessage]);
+  }, [input, isBuilderMode, isLoading, buildIsRunning, buildAgentId, sendChatMessage]);
 
   // Drain the queue on the falling edge of isLoading. We use a ref to detect
   // the transition so we don't re-fire the drain effect when the queue shrinks
