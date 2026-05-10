@@ -25,6 +25,7 @@ import TaskProgressFooter from "./TaskProgressFooter";
 import CodeEditorPanel from "./CodeEditorPanel";
 import { ChatModeControl } from "./ChatModeControl";
 import { ChatStageContextBar } from "./ChatStageContextBar";
+import { QueuedMessagesChip } from "./QueuedMessagesChip";
 import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
@@ -988,6 +989,11 @@ export function TabChat({
 }: TabChatProps) {
   const isBuilderMode = mode === "builder";
   const [input, setInput] = useState("");
+  // Pair-programmer queue: messages submitted while the architect is mid-turn
+  // are held here and drained one-by-one as each turn completes. Only used in
+  // builder mode — outside of builder mode, useAgentChat.sendMessage no-ops
+  // during isLoading and we keep the historical behavior.
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const [showComputer, setShowComputer] = useState(true);
   const fallbackCoPilotStore = useCoPilotStore();
   const coPilotStore = coPilotStoreProp ?? (isBuilderMode ? fallbackCoPilotStore : null);
@@ -1093,12 +1099,34 @@ export function TabChat({
   }, [input]);
 
   // Input handling
+  // In builder mode, submitting while a turn is in flight enqueues the message
+  // for delivery after the current turn completes. The user's input clears
+  // immediately so they can keep typing additional follow-ups. Outside of
+  // builder mode, behavior is unchanged: send fires through and useAgentChat
+  // drops it if isLoading.
   const sendMessage = useCallback(() => {
     const text = input.trim();
     if (!text) return;
     setInput("");
+    if (isBuilderMode && isLoading) {
+      setQueuedMessages((prev) => [...prev, text]);
+      return;
+    }
     sendChatMessage(text);
-  }, [input, sendChatMessage]);
+  }, [input, isBuilderMode, isLoading, sendChatMessage]);
+
+  // Drain the queue on the falling edge of isLoading. We use a ref to detect
+  // the transition so we don't re-fire the drain effect when the queue shrinks
+  // mid-flight.
+  const wasLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading && queuedMessages.length > 0) {
+      const [next, ...rest] = queuedMessages;
+      setQueuedMessages(rest);
+      sendChatMessage(next);
+    }
+    wasLoadingRef.current = isLoading;
+  }, [isLoading, queuedMessages, sendChatMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -1570,6 +1598,21 @@ export function TabChat({
           </div>
         )}
 
+        {/* Queued messages — shown when user submits during an in-flight turn */}
+        {isBuilderMode && queuedMessages.length > 0 && (
+          <div className="shrink-0 px-4 md:px-0 pt-2">
+            <div className="max-w-2xl mx-auto md:ml-8">
+              <QueuedMessagesChip
+                messages={queuedMessages}
+                onClear={() => setQueuedMessages([])}
+                onRemoveAt={(idx) =>
+                  setQueuedMessages((prev) => prev.filter((_, i) => i !== idx))
+                }
+              />
+            </div>
+          </div>
+        )}
+
         {/* Input bar */}
         <div className="shrink-0 px-4 md:px-0 pb-6 pt-3">
           <div className="max-w-2xl mx-auto md:ml-8">
@@ -1608,7 +1651,8 @@ export function TabChat({
               />
               <button
                 onClick={sendMessage}
-                disabled={!input.trim() || isLoading || (!isBuilderMode && !activeSandbox)}
+                disabled={!input.trim() || (!isBuilderMode && (isLoading || !activeSandbox))}
+                title={isBuilderMode && isLoading ? "Queue this message — it will send after the current turn completes" : undefined}
                 className="p-1.5 rounded-lg border border-[var(--border-default)] text-[var(--text-tertiary)] hover:bg-[var(--primary)] hover:text-white hover:border-[var(--primary)] disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--text-tertiary)] disabled:hover:border-[var(--border-default)] transition-all shrink-0 mb-0.5"
               >
                 <Send className="h-4 w-4" />
