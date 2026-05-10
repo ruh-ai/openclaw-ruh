@@ -20,6 +20,7 @@ import { buildHomeFileWriteCommand, dockerExec, getContainerName, shellQuote } f
 import { gatewayUrlAndHeaders } from './utils';
 import * as store from './store';
 import { summarizeBuildReport, type BuildReport } from './buildReport';
+import { getConfig } from './config';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -246,6 +247,50 @@ export async function commitIteration(sandboxId: string, message: string): Promi
   // git rev-parse --short HEAD is the last command, so the last line of
   // stdout is the SHA we want.
   return output.trim().split('\n').pop()?.trim() ?? '';
+}
+
+/**
+ * Pure decision function for which skills-build path runSpecialist should
+ * dispatch to. Lives outside the runtime path so the choice is unit-testable
+ * without mocking dockerExec / callSpecialist / getConfig.
+ *
+ * - iterated → executeIteratedSkills (Phase 2.1, one skill per LLM turn,
+ *   per-iteration git commit, fresh-read plan each iteration). Requires the
+ *   PAIR_PROGRAMMER_BUILD_V2 flag to be on AND at least one skill to write.
+ * - chunked → executeChunkedSkills (today's path, 3 skills per LLM turn,
+ *   no per-iteration commit). Used for >3 skills when the flag is off.
+ * - single → fall through to the single-shot specialist call. Used for
+ *   ≤3 skills when the flag is off (one LLM call covers them all).
+ */
+export function chooseSkillsBuildPath(args: {
+  ownedSkillCount: number;
+  pairProgrammerBuildV2: boolean;
+}): 'iterated' | 'chunked' | 'single' {
+  if (args.ownedSkillCount > 0 && args.pairProgrammerBuildV2) return 'iterated';
+  if (args.ownedSkillCount > 3) return 'chunked';
+  return 'single';
+}
+
+/**
+ * Read the workspace's architecture.json fresh from disk inside the sandbox.
+ * Used by the iteration loop so user edits between iterations propagate
+ * forward instead of being silently overwritten by the in-memory plan
+ * captured at build start. Returns null on any read or parse failure so
+ * callers can fall back to the in-memory plan.
+ */
+async function readWorkspacePlanFresh(sandboxId: string): Promise<ArchitecturePlan | null> {
+  try {
+    const containerName = getContainerName(sandboxId);
+    const [ok, output] = await dockerExec(
+      containerName,
+      `cat ${WS}/.openclaw/plan/architecture.json 2>/dev/null`,
+      10_000,
+    );
+    if (!ok || !output.trim()) return null;
+    return normalizePlan(JSON.parse(output) as Record<string, unknown>);
+  } catch {
+    return null;
+  }
 }
 
 export function isMeaningfulSpecialistSsePayload(data: string): boolean {
@@ -726,15 +771,23 @@ async function executeSpecialist(
     return { events, files: preexisting.files };
   }
 
-  // Fix 2: Chunk skills if > 3 to avoid single-point timeout. The chunking
-  // operates on the skills owned by THIS specialist run — for fleets this
-  // is the target's owned skills only; for single-agent it's all plan
-  // skills (existing behavior).
+  // Skills dispatch: chooseSkillsBuildPath decides between the iteration
+  // loop (Phase 2.1, one skill per LLM turn + per-iteration git commit),
+  // the existing chunked path (3 skills per LLM turn for >3 skills), or
+  // the single-shot specialist call (≤3 skills, fall through). The
+  // iteration path is gated behind the PAIR_PROGRAMMER_BUILD_V2 flag.
   if (specialist === 'skills') {
     const ownedSkills = target
       ? plan.skills.filter((s) => target.skills.includes(s.id))
       : plan.skills;
-    if (ownedSkills.length > 3) {
+    const choice = chooseSkillsBuildPath({
+      ownedSkillCount: ownedSkills.length,
+      pairProgrammerBuildV2: getConfig().pairProgrammerBuildV2,
+    });
+    if (choice === 'iterated') {
+      return executeIteratedSkills(sandboxId, plan, agentName, task, signal, target);
+    }
+    if (choice === 'chunked') {
       return executeChunkedSkills(sandboxId, plan, agentName, task, signal, target);
     }
   }
@@ -849,6 +902,149 @@ async function executeChunkedSkills(
     task.error = reconciled.files.length > 0
       ? `Missing skill file(s): ${reconciled.missing.join(', ')}`
       : 'All skill chunks failed';
+    events.push({ type: 'task_failed', specialist: 'skills', error: task.error });
+  }
+  return { events, files: reconciled.files, error: task.status === 'failed' ? task.error : undefined };
+}
+
+// ─── Phase 2.1: Iterated skills execution (pair-programmer build) ─────────
+
+/**
+ * Iterate the skills specialist one skill at a time, with a fresh-read of
+ * architecture.json before each iteration and a per-iteration git commit
+ * after each successful write.
+ *
+ * Differences from executeChunkedSkills:
+ * - One skill per LLM call (not 3). Higher token / latency cost, but each
+ *   skill is independently reviewable, editable, and rollbackable.
+ * - architecture.json is re-read from the workspace at the start of every
+ *   iteration so user edits between iterations propagate. The set of skill
+ *   IDs to write is locked at run start; per-skill prompt content is fresh.
+ * - After each successful iteration, commit_iteration is called to checkpoint
+ *   the workspace at iteration grain. Commit failures are logged but do not
+ *   abort the build.
+ * - Emits iteration_announce before each LLM call and iteration_done after
+ *   each successful commit so the frontend can render per-skill progress.
+ */
+async function executeIteratedSkills(
+  sandboxId: string,
+  plan: ArchitecturePlan,
+  agentName: string,
+  task: BuildManifestTask,
+  signal?: AbortSignal,
+  target?: TargetAgent,
+): Promise<SpecialistResult> {
+  const events: BuildEvent[] = [];
+  if (target) task.targetAgentId = target.id;
+
+  const ownedSkillIds = (target
+    ? plan.skills.filter((s) => target.skills.includes(s.id))
+    : plan.skills).map((s) => s.id);
+  const total = ownedSkillIds.length;
+  const allFiles: string[] = [];
+
+  const preexisting = await reconcileSpecialistFiles(sandboxId, 'skills', plan, [], target);
+  if (preexisting.missing.length === 0 && preexisting.files.length > 0) {
+    task.files = preexisting.files;
+    task.status = 'done';
+    task.completedAt = new Date().toISOString();
+    events.push({ type: 'status', message: `Skill files${target ? ` for ${target.id}` : ''} already exist; skipping iteration loop.` });
+    events.push({ type: 'task_complete', specialist: 'skills', files: preexisting.files });
+    return { events, files: preexisting.files };
+  }
+
+  events.push({ type: 'status', message: `Iterating ${total} skills${target ? ` for ${target.id}` : ''} one at a time (pair-programmer mode)...` });
+
+  for (let i = 0; i < total; i++) {
+    if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
+
+    const skillId = ownedSkillIds[i];
+    const iteration = i + 1;
+
+    // Re-read the plan fresh so user edits between iterations propagate.
+    const freshPlan = (await readWorkspacePlanFresh(sandboxId)) ?? plan;
+    const skill = freshPlan.skills.find((s) => s.id === skillId);
+    if (!skill) {
+      events.push({ type: 'status', message: `iter ${iteration}/${total}: skill ${skillId} no longer in plan; skipping` });
+      continue;
+    }
+
+    const skillLabel = skill.name || skill.id;
+    const skillFilePath = target
+      ? `agents/${target.id}/skills/${skill.id}/SKILL.md`
+      : `skills/${skill.id}/SKILL.md`;
+
+    events.push({
+      type: 'iteration_announce',
+      iteration,
+      total,
+      summary: `Writing ${skillLabel}`,
+      willTouch: [skillFilePath],
+    });
+
+    const scopedPlan = { ...freshPlan, skills: [skill] };
+    const prompt = getSpecialistPrompt('skills' as SpecialistType, scopedPlan, agentName, target);
+    if (!prompt) {
+      events.push({ type: 'status', message: `iter ${iteration}/${total}: no prompt for ${skill.id}; skipping` });
+      continue;
+    }
+
+    try {
+      const result = await callSpecialist(sandboxId, prompt, undefined, signal);
+      allFiles.push(...result.files);
+      for (const f of result.files) {
+        events.push({ type: 'file_written', path: f });
+      }
+
+      // Checkpoint this iteration. Commit failures are non-fatal so a
+      // missing-git environment doesn't blow up the whole build.
+      let commitSha = '';
+      try {
+        commitSha = await commitIteration(
+          sandboxId,
+          `iter ${iteration}/${total}: ${skillLabel}`,
+        );
+      } catch (commitErr) {
+        const m = commitErr instanceof Error ? commitErr.message : String(commitErr);
+        events.push({ type: 'status', message: `iter ${iteration}: commit failed (continuing): ${m.slice(0, 200)}` });
+      }
+
+      events.push({
+        type: 'iteration_done',
+        iteration,
+        total,
+        files: result.files,
+        commitSha,
+        summary: `Wrote ${skillLabel}`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      events.push({ type: 'status', message: `iter ${iteration}: ${skill.id} failed: ${msg}` });
+      if (isSpecialistTimeoutError(err, msg)) {
+        task.files = uniqueStrings(allFiles);
+        task.status = 'failed';
+        task.error = `iter ${iteration} (${skill.id}) timed out: ${msg}`;
+        task.completedAt = new Date().toISOString();
+        events.push({ type: 'task_failed', specialist: 'skills', error: task.error });
+        return { events, files: task.files, error: task.error };
+      }
+      // Non-timeout errors: continue with remaining iterations. Partial
+      // generation is more useful than nothing.
+    }
+  }
+
+  // Final reconciliation against the original plan so dependency analysis
+  // still works even if the user edited skill descriptions mid-run.
+  const reconciled = await reconcileSpecialistFiles(sandboxId, 'skills', plan, allFiles, target);
+  task.files = reconciled.files;
+  task.status = reconciled.missing.length === 0 ? 'done' : 'failed';
+  task.completedAt = new Date().toISOString();
+  if (task.status === 'done') {
+    events.push({ type: 'task_complete', specialist: 'skills', files: reconciled.files });
+  } else {
+    task.error = reconciled.files.length > 0
+      ? `Missing skill file(s): ${reconciled.missing.join(', ')}`
+      : 'All skill iterations failed';
     events.push({ type: 'task_failed', specialist: 'skills', error: task.error });
   }
   return { events, files: reconciled.files, error: task.status === 'failed' ? task.error : undefined };
