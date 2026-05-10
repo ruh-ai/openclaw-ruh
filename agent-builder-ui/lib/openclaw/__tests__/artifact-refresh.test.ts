@@ -8,7 +8,7 @@
  * with specific section heading rules).
  */
 import { describe, expect, test } from "bun:test";
-import { parseDiscoveryMarkdown } from "../artifact-refresh";
+import { defaultArtifactForStage, parseDiscoveryMarkdown } from "../artifact-refresh";
 
 describe("parseDiscoveryMarkdown", () => {
   test("returns null for empty input", () => {
@@ -76,5 +76,28 @@ describe("parseDiscoveryMarkdown", () => {
     // Windows CR remains in the trailing content of the heading capture
     // (existing recoverThinkDocuments has the same behavior).
     expect(doc?.sections[0]?.heading.trim()).toBe("Section");
+  });
+});
+
+describe("defaultArtifactForStage", () => {
+  test("returns prd for think stage (refetches both PRD + TRD)", () => {
+    expect(defaultArtifactForStage("think")).toEqual({ kind: "prd" });
+  });
+
+  test("returns plan for plan and prototype stages", () => {
+    expect(defaultArtifactForStage("plan")).toEqual({ kind: "plan" });
+    expect(defaultArtifactForStage("prototype")).toEqual({ kind: "plan" });
+  });
+
+  test("returns build_report for build and review stages", () => {
+    expect(defaultArtifactForStage("build")).toEqual({ kind: "build_report" });
+    expect(defaultArtifactForStage("review")).toEqual({ kind: "build_report" });
+  });
+
+  test("returns null for stages without a canonical architect-owned file", () => {
+    expect(defaultArtifactForStage("reveal")).toBeNull();
+    expect(defaultArtifactForStage("test")).toBeNull();
+    expect(defaultArtifactForStage("ship")).toBeNull();
+    expect(defaultArtifactForStage("reflect")).toBeNull();
   });
 });
