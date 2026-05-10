@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCommitIterationCommand,
+  buildIteratedPromptWithInterjects,
   chooseSkillsBuildPath,
   isMeaningfulSpecialistSsePayload,
   isSpecialistTimeoutError,
@@ -97,5 +98,40 @@ describe("chooseSkillsBuildPath", () => {
     // With no skills owned by the target, the iteration loop has nothing
     // to iterate; let the existing path handle the empty case.
     expect(chooseSkillsBuildPath({ ownedSkillCount: 0, pairProgrammerBuildV2: true })).toBe("single");
+  });
+});
+
+describe("buildIteratedPromptWithInterjects", () => {
+  test("returns the base prompt unchanged when no interjects are queued", () => {
+    const base = "Write skills/google-ads-credential-check/SKILL.md";
+    expect(buildIteratedPromptWithInterjects(base, [])).toBe(base);
+  });
+
+  test("prepends a [USER FEEDBACK] block above the base prompt", () => {
+    const result = buildIteratedPromptWithInterjects("BASE", [
+      "use OAuth refresh, not a service account",
+    ]);
+    expect(result.startsWith("[USER FEEDBACK FROM PRIOR ITERATIONS]")).toBe(true);
+    expect(result).toContain("[CURRENT TASK]");
+    expect(result.indexOf("[USER FEEDBACK FROM PRIOR ITERATIONS]")).toBeLessThan(
+      result.indexOf("[CURRENT TASK]"),
+    );
+    expect(result).toContain("BASE");
+  });
+
+  test("numbers each interject so the architect can address them in order", () => {
+    const result = buildIteratedPromptWithInterjects("BASE", [
+      "first feedback",
+      "second feedback",
+      "third feedback",
+    ]);
+    expect(result).toContain("1. first feedback");
+    expect(result).toContain("2. second feedback");
+    expect(result).toContain("3. third feedback");
+  });
+
+  test("calls out contradiction handling so the architect doesn't silently absorb dissent", () => {
+    const result = buildIteratedPromptWithInterjects("BASE", ["pivot"]);
+    expect(result).toContain("contradicts");
   });
 });
