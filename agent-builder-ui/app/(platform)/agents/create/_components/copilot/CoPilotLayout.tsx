@@ -868,6 +868,34 @@ export function CoPilotLayout({
               case "file_written":
                 pushBuildActivity({ type: "file", label: String(evt.path ?? "").split("/").slice(-2).join("/") });
                 break;
+              case "iteration_announce": {
+                // Phase 2.1 — pair-programmer build path. Surface intent
+                // before the architect generates so the user sees what's
+                // about to happen and can interject. iteration_done
+                // (below) closes the loop with the commit SHA.
+                const n = evt.iteration as number | undefined;
+                const total = evt.total as number | undefined;
+                const summary = String(evt.summary ?? "");
+                const prefix = n && total ? `iter ${n}/${total}: ` : "iter: ";
+                pushBuildActivity({ type: "task", label: `${prefix}${summary}` });
+                if (n && total) {
+                  setBuildProgress({ completed: n - 1, total, currentSkill: summary || null });
+                }
+                break;
+              }
+              case "iteration_done": {
+                const n = evt.iteration as number | undefined;
+                const total = evt.total as number | undefined;
+                const sha = (evt.commitSha as string | undefined) || "";
+                const shaLabel = sha ? ` · ${sha}` : "";
+                const summary = String(evt.summary ?? "");
+                const prefix = n && total ? `✓ iter ${n}/${total}` : "✓ iter";
+                pushBuildActivity({ type: "task", label: `${prefix}: ${summary}${shaLabel}` });
+                if (n && total) {
+                  setBuildProgress({ completed: n, total, currentSkill: null });
+                }
+                break;
+              }
               case "progress":
                 setBuildProgress({ completed: evt.completed as number, total: evt.total as number, currentSkill: null });
                 break;
