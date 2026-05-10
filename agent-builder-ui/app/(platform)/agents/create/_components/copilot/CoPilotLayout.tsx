@@ -896,6 +896,23 @@ export function CoPilotLayout({
                 }
                 break;
               }
+              case "iteration_interject_received": {
+                // Phase 2.1.f — the architect picked up user feedback
+                // from the interject queue and prepended it to this
+                // iteration's prompt. Surface as a tool-typed entry so
+                // it visually distinguishes from announce/done.
+                const n = evt.iteration as number | undefined;
+                const interjects = (evt.interjects as string[] | undefined) ?? [];
+                const count = interjects.length;
+                const preview = interjects[0] ? interjects[0].slice(0, 60) : "";
+                const more = count > 1 ? ` (+${count - 1} more)` : "";
+                const prefix = n ? `iter ${n}` : "iter";
+                pushBuildActivity({
+                  type: "tool",
+                  label: `${prefix}: applied your feedback — "${preview}"${more}`,
+                });
+                break;
+              }
               case "progress":
                 setBuildProgress({ completed: evt.completed as number, total: evt.total as number, currentSkill: null });
                 break;
