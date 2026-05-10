@@ -81,6 +81,15 @@ Same response shape as the global route, but the backend forces `agent_id = :id`
 
 The first shipped emitters cover sandbox-create and forge lifecycle milestones (`sandbox.create.*`, `agent.forge.*`). `details` is redacted for agent consumption and should not be treated as a raw process log dump.
 
+The stuck-session monitor (`source: "stuck-session-monitor"`) emits two more action types for any running sandbox whose gateway log contains `[diagnostic] stuck session` lines:
+
+| `category` | `action` | `level` | `status` | When |
+|---|---|---|---|---|
+| `runtime.diagnostic` | `session.stuck` | `warn` | `detected` | First time a `session_key` appears in the diagnostic log since this sandbox's monitor state was created (or reset). Steady-state stuck sessions emit nothing — only the transition. |
+| `runtime.diagnostic` | `session.recovered` | `info` | `cleared` | A previously-stuck `session_key` no longer appears in the latest log tail. |
+
+`details` carries `{ session_id, session_key, state, age_seconds, queue_depth }` so consumers can render a stuck-session badge without re-tailing the gateway log. Polling cadence is 30 s by default (matches the runtime's diagnostic emit cadence). The monitor stops with the backend on SIGTERM.
+
 ---
 
 ## Sandboxes
