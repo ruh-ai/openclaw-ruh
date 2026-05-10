@@ -256,6 +256,31 @@ export function buildResumedCoPilotSeed(
     }
   }
 
+  // Backend-owned content fields win over the cache when the backend has a
+  // value. The architect writes these (PRD/TRD/Plan/skills/build report)
+  // and the backend record is the source of truth. A stale cache from
+  // before a revision would otherwise mask freshly persisted content —
+  // see SPEC-pair-programmer-iteration-loop § "Workspace as truth".
+  //
+  // We only overwrite when the persisted seed has a non-null value. If
+  // the backend hasn't seen this content yet (autosave still pending),
+  // the cache value wins as before so in-progress edits aren't lost.
+  const backendOwnedContent: (keyof CoPilotState)[] = [
+    "discoveryDocuments",
+    "architecturePlan",
+    "skillGraph",
+    "workflow",
+    "agentRules",
+    "buildReport",
+    "buildManifest",
+  ];
+  for (const field of backendOwnedContent) {
+    const fromSeed = (persistedSeed as Record<string, unknown>)[field];
+    if (fromSeed != null) {
+      (merged as Record<string, unknown>)[field] = fromSeed;
+    }
+  }
+
   // Never let a stale cache regress devStage behind the backend forge_stage.
   // The persisted seed derives devStage from the agent's forge_stage which is
   // the source of truth for how far creation has actually progressed. A
