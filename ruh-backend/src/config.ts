@@ -32,6 +32,7 @@ export interface BackendConfig {
   githubClientId: string | null;
   githubClientSecret: string | null;
   githubCallbackUrl: string;
+  pairProgrammerBuildV2: boolean;
 }
 
 type EnvLike = Record<string, string | undefined>;
@@ -191,6 +192,12 @@ export function parseBackendConfig(
   const githubClientSecret = readRaw(env, 'GITHUB_CLIENT_SECRET') ?? null;
   const githubCallbackUrl = readRaw(env, 'GITHUB_CALLBACK_URL') ?? 'http://localhost:8000/api/auth/github/callback';
 
+  // Pair-programmer Build V2 (Phase 2.1) — when on, the skills specialist
+  // runs one skill per iteration with a per-iteration git commit instead of
+  // the current 3-skills-per-call chunked path. Default off; flip via env.
+  const pairProgrammerBuildV2 = readRaw(env, 'PAIR_PROGRAMMER_BUILD_V2') === '1'
+    || readRaw(env, 'PAIR_PROGRAMMER_BUILD_V2') === 'true';
+
   if (agentCredentialsKey && !/^[0-9a-fA-F]{64}$/.test(agentCredentialsKey)) {
     errors.push('AGENT_CREDENTIALS_KEY must be exactly 64 hexadecimal characters');
   }
@@ -233,6 +240,7 @@ export function parseBackendConfig(
     githubClientId,
     githubClientSecret,
     githubCallbackUrl,
+    pairProgrammerBuildV2,
   });
 }
 
