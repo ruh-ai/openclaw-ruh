@@ -28,7 +28,7 @@
  */
 
 import type { ArtifactTarget } from "./stage-context";
-import type { ArchitecturePlan, BuildReport, DiscoveryDocument, DiscoveryDocuments } from "./types";
+import type { AgentDevStage, ArchitecturePlan, BuildReport, DiscoveryDocument, DiscoveryDocuments } from "./types";
 
 // ─── Markdown parsing ──────────────────────────────────────────────────────
 
@@ -58,6 +58,34 @@ export function parseDiscoveryMarkdown(md: string): DiscoveryDocument | null {
 
   if (sections.length === 0) return null;
   return { title, sections };
+}
+
+// ─── Stage-derived fallback target ────────────────────────────────────────
+
+/**
+ * When the user revises an artifact via free-form chat (rather than the
+ * "Ask architect to revise" button), `selectedArtifactTarget` is null but
+ * we still want to refetch the stage-relevant workspace files. Map the
+ * current devStage to the artifact the architect would have edited.
+ *
+ * Returns null when the stage has no canonical architect-owned artifact
+ * (reveal/test/ship/reflect). On those stages we skip the auto-refetch
+ * rather than over-fetching.
+ */
+export function defaultArtifactForStage(devStage: AgentDevStage): ArtifactTarget | null {
+  switch (devStage) {
+    case "think":
+      // 'prd' kind triggers re-read of BOTH PRD.md and TRD.md (see dispatcher)
+      return { kind: "prd" };
+    case "plan":
+    case "prototype":
+      return { kind: "plan" };
+    case "build":
+    case "review":
+      return { kind: "build_report" };
+    default:
+      return null;
+  }
 }
 
 // ─── Refresh dispatcher ────────────────────────────────────────────────────

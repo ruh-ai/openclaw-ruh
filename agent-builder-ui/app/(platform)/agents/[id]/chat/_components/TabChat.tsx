@@ -27,6 +27,7 @@ import { ChatModeControl } from "./ChatModeControl";
 import { ChatStageContextBar } from "./ChatStageContextBar";
 import { QueuedMessagesChip } from "./QueuedMessagesChip";
 import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
+import { defaultArtifactForStage } from "@/lib/openclaw/artifact-refresh";
 
 /**
  * POST a user message to the per-agent interject queue while a build is
@@ -1174,28 +1175,42 @@ export function TabChat({
     wasLoadingRef.current = isLoading;
   }, [isLoading, queuedMessages, sendChatMessage]);
 
-  // Artifact refresh after architect revision turns.
+  // Artifact refresh after architect turns.
   //
-  // When the user has set a selectedArtifactTarget (PRD/TRD/Plan/Build report)
-  // and the architect's turn completes, re-read the corresponding workspace
-  // file(s) and update the co-pilot store. Without this, the architect can
-  // write a revised PRD.md to disk and the UI keeps showing the pre-revision
-  // version because no marker triggered a refresh. Workspace is the source
-  // of truth; this enforces it after every revision turn.
+  // Any builder-mode chat turn can result in the architect editing a
+  // canonical workspace file (PRD.md, TRD.md, architecture.json,
+  // build-report.json) — both explicit "Ask architect to revise" clicks
+  // AND free-form messages like "change sqlite to postgresql". Without
+  // this effect, the file updates but the UI keeps rendering its stale
+  // in-memory copy because no SSE marker triggered a refresh. Workspace
+  // is the source of truth; this enforces it.
   //
-  // We capture the target at turn-start (rising edge of isLoading) so a
-  // mid-turn target change doesn't make us refetch the wrong artifact at
-  // turn-end. Bounded to artifact kinds with a canonical workspace file
-  // (research/review/test_report no-op in the refresh helper).
+  // Resolution order on the rising edge of isLoading:
+  //   1. selectedArtifactTarget — user clicked the revise button
+  //   2. defaultArtifactForStage(devStage) — free-form message in a
+  //      stage that owns a canonical file (think/plan/prototype/build/
+  //      review). Falls back so the bug class is closed even when the
+  //      user didn't go through the revise button.
+  //   3. null on stages with no canonical architect-owned artifact
+  //      (reveal/test/ship/reflect) — skip the refetch entirely rather
+  //      than over-fetching.
+  //
+  // Captured at turn-start so a mid-turn target change doesn't refetch
+  // the wrong artifact at turn-end.
   const turnArtifactTargetRef = useRef<ArtifactTarget | null>(null);
   const artifactRefreshLoadingRef = useRef(isLoading);
   useEffect(() => {
     const wasLoading = artifactRefreshLoadingRef.current;
     artifactRefreshLoadingRef.current = isLoading;
 
-    // Rising edge → capture the target the user is currently revising
+    // Rising edge → capture the target (explicit > stage default)
     if (!wasLoading && isLoading) {
-      turnArtifactTargetRef.current = coPilotStore?.selectedArtifactTarget ?? null;
+      if (!isBuilderMode || !coPilotStore) {
+        turnArtifactTargetRef.current = null;
+        return;
+      }
+      const explicit = coPilotStore.selectedArtifactTarget ?? null;
+      turnArtifactTargetRef.current = explicit ?? defaultArtifactForStage(coPilotStore.devStage);
       return;
     }
 
