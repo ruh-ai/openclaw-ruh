@@ -72,6 +72,7 @@ All feature specifications live in `specs/`. Every spec links to the KB notes it
 - [[SPEC-agent-builder-architect-protocol-normalization]] — Builder bridge normalizes newer architect payloads into the stable create-flow contract
 - [[SPEC-architect-structured-config-handoff]] — Builder preserves architect-emitted `tool_connections` and `triggers` through AG-UI draft state and reopen
 - [[SPEC-google-ads-agent-creation-loop]] — `/agents/create` uses Google Ads as the proving case for persisted MCP-style tool metadata and supported trigger definitions
+- [[SPEC-pair-programmer-iteration-loop]] — Pair-programmer mode for agent creation: iteration loop, single chat lane, workspace-as-source-of-truth, per-iteration git, hand-off mode
 - [[SPEC-agent-builder-channel-persistence]] — builder-selected messaging channels persist through save, reopen, and deploy handoff as truthful planned state
 - [[SPEC-agent-discovery-doc-persistence]] — approved PRD/TRD discovery docs persist through draft autosave, save, reopen, and Improve Agent review
 - [[SPEC-agent-create-session-resume]] — `/agents/create?agentId=...` rehydrates from backend truth plus a safe local draft cache so refreshes do not drop builder progress or forge linkage
