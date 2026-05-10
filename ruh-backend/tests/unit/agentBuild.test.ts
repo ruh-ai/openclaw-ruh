@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCommitIterationCommand,
+  chooseSkillsBuildPath,
   isMeaningfulSpecialistSsePayload,
   isSpecialistTimeoutError,
 } from "../../src/agentBuild";
@@ -72,5 +73,29 @@ describe("buildCommitIterationCommand", () => {
     // The command must be runnable bash — single quotes inside the message
     // need to be escaped via shellQuote, not raw.
     expect(cmd).not.toMatch(/-m 'iter 3: it's working'/);
+  });
+});
+
+describe("chooseSkillsBuildPath", () => {
+  test("routes to iterated when the v2 flag is on and at least one skill is owned", () => {
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 1, pairProgrammerBuildV2: true })).toBe("iterated");
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 9, pairProgrammerBuildV2: true })).toBe("iterated");
+  });
+
+  test("falls back to chunked for >3 skills when the v2 flag is off", () => {
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 4, pairProgrammerBuildV2: false })).toBe("chunked");
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 9, pairProgrammerBuildV2: false })).toBe("chunked");
+  });
+
+  test("falls through to single-shot for ≤3 skills when the v2 flag is off", () => {
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 0, pairProgrammerBuildV2: false })).toBe("single");
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 1, pairProgrammerBuildV2: false })).toBe("single");
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 3, pairProgrammerBuildV2: false })).toBe("single");
+  });
+
+  test("the v2 flag does not engage when there are zero skills to write", () => {
+    // With no skills owned by the target, the iteration loop has nothing
+    // to iterate; let the existing path handle the empty case.
+    expect(chooseSkillsBuildPath({ ownedSkillCount: 0, pairProgrammerBuildV2: true })).toBe("single");
   });
 });
