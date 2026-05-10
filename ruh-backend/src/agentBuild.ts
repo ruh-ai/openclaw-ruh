@@ -26,7 +26,8 @@ import { summarizeBuildReport, type BuildReport } from './buildReport';
 export interface BuildEvent {
   type: "task_start" | "task_complete" | "task_failed" | "file_written"
     | "progress" | "status" | "build_complete" | "error"
-    | "setup_progress" | "build_report";
+    | "setup_progress" | "build_report"
+    | "iteration_announce" | "iteration_done";
   specialist?: string;
   files?: string[];
   error?: string;
@@ -37,6 +38,14 @@ export interface BuildEvent {
   manifest?: BuildManifest;
   report?: BuildReport;
   setupPhase?: string;
+  /** Iteration number (1-indexed). Set on iteration_announce / iteration_done. */
+  iteration?: number;
+  /** Per-iteration human-readable summary of the work the architect is about to do. */
+  summary?: string;
+  /** Workspace-relative paths the architect plans to write in this iteration. */
+  willTouch?: string[];
+  /** Short SHA returned by `git rev-parse --short HEAD` after commit_iteration. */
+  commitSha?: string;
 }
 
 interface BuildManifestTask {
@@ -197,6 +206,46 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     chunks.push(arr.slice(i, i + size));
   }
   return chunks;
+}
+
+// ─── Iteration helpers (Phase 2.1 — pair-programmer build) ────────────────
+
+/**
+ * Compose the shell command that initializes git in the workspace (if needed)
+ * and creates a single commit with the given message. Returns the command
+ * string so it is unit-testable in isolation from dockerExec.
+ *
+ * `git init` is idempotent and safe on every iteration. `--allow-empty` lets
+ * us still get a SHA back even if nothing changed (e.g. specialist no-op).
+ */
+export function buildCommitIterationCommand(message: string): string {
+  const safeMessage = message.replace(/[\r\n]+/g, ' ').slice(0, 200);
+  return [
+    `cd ${WS}`,
+    'git init -q 2>/dev/null || true',
+    "git config user.email 'architect@ruh.ai'",
+    "git config user.name 'Architect'",
+    'git add -A',
+    `git commit -m ${shellQuote(safeMessage)} --allow-empty -q`,
+    'git rev-parse --short HEAD',
+  ].join(' && ');
+}
+
+/**
+ * Commit the current workspace state inside the agent's sandbox. Used by
+ * the Phase 2.1 iteration loop to checkpoint per-skill output so rollback
+ * works at the iteration grain. Returns the short commit SHA.
+ */
+export async function commitIteration(sandboxId: string, message: string): Promise<string> {
+  const containerName = getContainerName(sandboxId);
+  const cmd = buildCommitIterationCommand(message);
+  const [ok, output] = await dockerExec(containerName, cmd, 30_000);
+  if (!ok) {
+    throw new Error(`commitIteration failed for sandbox ${sandboxId}: ${output.trim().slice(0, 500)}`);
+  }
+  // git rev-parse --short HEAD is the last command, so the last line of
+  // stdout is the SHA we want.
+  return output.trim().split('\n').pop()?.trim() ?? '';
 }
 
 export function isMeaningfulSpecialistSsePayload(data: string): boolean {
