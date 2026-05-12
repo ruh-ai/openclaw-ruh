@@ -10,9 +10,16 @@ import { cn } from "@/lib/utils";
 interface MessageContentProps {
   content: string;
   className?: string;
+  /**
+   * Apply the per-word typewriter animation. Defaults to false. Set to true
+   * only for the live-streaming response — applying it to historical or
+   * fully-rendered messages re-runs the animation on every re-render and
+   * scales poorly (thousands of staggered spans for a 30KB reply).
+   */
+  isLive?: boolean;
 }
 
-const MessageContent = React.memo(({ content, className }: MessageContentProps) => {
+const MessageContent = React.memo(({ content, className, isLive = false }: MessageContentProps) => {
   const components = useMemo(
     () => ({
       pre: ({ children, ...props }: React.ComponentPropsWithoutRef<"pre"> & { children?: React.ReactNode }) => (
@@ -143,13 +150,16 @@ const MessageContent = React.memo(({ content, className }: MessageContentProps) 
 
       p: ({ children, ...props }: React.ComponentPropsWithoutRef<"p"> & { children?: React.ReactNode }) => (
         <p {...props} className="leading-[1.6] my-1.5 first:mt-0 last:mb-0 text-[#3c3a3d]">
-          {typeof children === "string"
+          {/* Typewriter animation: opt-in via isLive. Cap word count so
+              long live replies don't fan out into thousands of staggered
+              spans (visually janky + heavy for the renderer). */}
+          {isLive && typeof children === "string" && children.length <= 600
             ? children.split(/(\s+)/).map((segment, i) =>
                 /^\s+$/.test(segment) ? segment : (
                   <span
                     key={i}
                     className="typewriter-word"
-                    style={{ animationDelay: `${i * 0.03}s` }}
+                    style={{ animationDelay: `${Math.min(i * 0.03, 0.6)}s` }}
                   >
                     {segment}
                   </span>
