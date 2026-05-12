@@ -14,12 +14,12 @@ export interface RefreshTokenPayload {
 
 export function signAccessToken(payload: AccessTokenPayload): string {
   const config = getConfig();
-  return jwt.sign(payload, config.jwtAccessSecret, { expiresIn: '7d' });
+  return jwt.sign(payload, config.jwtAccessSecret, { expiresIn: '30d' });
 }
 
 export function signRefreshToken(payload: RefreshTokenPayload): string {
   const config = getConfig();
-  return jwt.sign(payload, config.jwtRefreshSecret, { expiresIn: '7d' });
+  return jwt.sign(payload, config.jwtRefreshSecret, { expiresIn: '30d' });
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload | null {
