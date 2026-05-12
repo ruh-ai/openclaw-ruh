@@ -3194,7 +3194,29 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
       sandboxName,
     });
 
+    // Bootstrap watchdog: if the generator doesn't yield anything for 90s,
+    // surface an explicit error instead of letting the SSE stream sit
+    // silent. Pre-watchdog symptom: container alive, /root/.openclaw never
+    // populated, frontend stuck on think-placeholder forever with no
+    // signal that anything went wrong.
+    const BOOTSTRAP_STALL_MS = 90_000;
+    let lastYieldAt = Date.now();
+    let watchdogFired = false;
+    const watchdog = setInterval(() => {
+      if (watchdogFired) return;
+      if (Date.now() - lastYieldAt > BOOTSTRAP_STALL_MS) {
+        watchdogFired = true;
+        sendEvent('error', {
+          message: `Bootstrap stalled for ${Math.round((Date.now() - lastYieldAt) / 1000)}s — no progress events from sandboxManager. Check ruh-backend logs and docker container ${sandboxName}.`,
+        });
+        clearInterval(watchdog);
+      }
+    }, 5_000);
+
+    try {
     for await (const [eventType, data] of gen) {
+      lastYieldAt = Date.now();
+      if (watchdogFired) break;
       if (eventType === 'log') {
         sendEvent('log', { message: data });
       } else if (eventType === 'result') {
@@ -3363,6 +3385,7 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
         sendEvent('error', { message: data });
         endSpanError(forgeSpan, String(data));
         stream.close();
+        clearInterval(watchdog);
         return;
       }
     }
@@ -3370,6 +3393,9 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
     entry.status = 'done';
     endSpanOk(forgeSpan);
     sendEvent('done', { stream_id, forge_agent_id: agentId });
+    } finally {
+      clearInterval(watchdog);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     entry.status = 'error';
@@ -7282,6 +7308,7 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
   // Fix 3: Start consuming generator in background immediately.
   // Events are buffered so the SSE GET endpoint can replay + follow.
   (async () => {
+    let terminalEventSeen = false;
     try {
       for await (const event of generator) {
         entry.events!.push({ type: event.type, data: event, timestamp: Date.now() });
@@ -7298,6 +7325,7 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
             buildStatus: 'done',
           }).catch(() => { /* best-effort */ });
           entry.status = 'done';
+          terminalEventSeen = true;
           break;
         }
         if (event.type === 'error') {
@@ -7307,10 +7335,30 @@ app.post('/api/agents/:id/build', requireAuth, asyncHandler(async (req, res) => 
             buildStatus: 'failed',
             buildError: event.message,
           }).catch(() => { /* best-effort */ });
+          terminalEventSeen = true;
           break;
         }
       }
-      if (entry.status !== 'done' && entry.status !== 'error') entry.status = 'done';
+      // Generator exhausted without yielding build_complete or error.
+      // Treat as a real failure (build was abandoned mid-flight) instead of
+      // silently marking the entry as done — that path leaves the UI showing
+      // "failed" with no error and the operator unable to diagnose what happened.
+      if (!terminalEventSeen) {
+        const lastEvent = entry.events!.length > 0 ? entry.events![entry.events!.length - 1] : null;
+        const lastEventType = lastEvent?.type ?? 'none';
+        const message = `Build stream ended without a terminal event (last event: ${lastEventType}). The build process exited unexpectedly.`;
+        entry.status = 'error';
+        entry.error = message;
+        entry.events!.push({
+          type: 'error',
+          data: { type: 'error', message },
+          timestamp: Date.now(),
+        });
+        await persistBuildSession({
+          buildStatus: 'failed',
+          buildError: message,
+        }).catch(() => { /* best-effort */ });
+      }
     } catch (err) {
       entry.status = 'error';
       entry.error = err instanceof Error ? err.message : String(err);
