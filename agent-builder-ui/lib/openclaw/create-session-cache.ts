@@ -194,12 +194,29 @@ function cacheIdentityBelongsToDifferentAgent(
 export function shouldReconcileToPersistedForgeStage({
   currentStage,
   persistedStage,
+  maxUnlockedStage,
 }: {
   currentStage: AgentDevStage;
   persistedStage: AgentDevStage | null | undefined;
+  /**
+   * Highest stage the user has reached in this session. When present, we
+   * only reconcile *forward* if the backend has progressed past it —
+   * navigating BACK to inspect a prior stage (current < max but persisted
+   * ≤ max) is a deliberate user action and must not be overridden by the
+   * periodic agent-record re-fetch.
+   */
+  maxUnlockedStage?: AgentDevStage | null;
 }): boolean {
   if (!persistedStage) return false;
-  return DEV_STAGE_ORDER.indexOf(persistedStage) > DEV_STAGE_ORDER.indexOf(currentStage);
+  const persistedIdx = DEV_STAGE_ORDER.indexOf(persistedStage);
+  const currentIdx = DEV_STAGE_ORDER.indexOf(currentStage);
+  if (maxUnlockedStage) {
+    const maxIdx = DEV_STAGE_ORDER.indexOf(maxUnlockedStage);
+    // Persisted is at or behind the user's farthest visited stage —
+    // user is intentionally inspecting an earlier stage. Don't override.
+    if (persistedIdx <= maxIdx) return false;
+  }
+  return persistedIdx > currentIdx;
 }
 
 export function shouldSuppressRevealTriggerForResume({

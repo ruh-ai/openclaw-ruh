@@ -837,12 +837,19 @@ export const useCoPilotStore = create<CoPilotState & CoPilotActions>((set, get) 
   },
 
   goBackDevStage: () => {
-    const { devStage } = get();
-    const idx = AGENT_DEV_STAGES.indexOf(devStage);
-    if (idx > 0) {
+    set((state) => {
+      const idx = AGENT_DEV_STAGES.indexOf(state.devStage);
+      if (idx <= 0) return {};
       const target = AGENT_DEV_STAGES[idx - 1];
-      set({ devStage: target, maxUnlockedDevStage: target, ...STAGE_STATUS_RESET[target] });
-    }
+      // Pure navigation: stay at the highest stage the user has reached
+      // (preserve unlock state for forward navigation) and DO NOT wipe the
+      // destination stage's status/activity logs. Going back is for
+      // inspecting prior outputs, not redoing them.
+      return {
+        devStage: target,
+        maxUnlockedDevStage: maxDevStage(state.maxUnlockedDevStage, target),
+      };
+    });
   },
 
   setRevealStatus: (status) => set({ revealStatus: status }),

@@ -358,6 +358,35 @@ describe("create-session-cache", () => {
     })).toBe(false);
   });
 
+  test("does NOT reconcile when user has navigated back to inspect a prior stage", () => {
+    // User reached prototype, then clicked the Plan pill to inspect.
+    // currentStage=plan, max=prototype, persisted=prototype — must NOT
+    // force the user forward to prototype again.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "plan",
+      persistedStage: "prototype",
+      maxUnlockedStage: "prototype",
+    })).toBe(false);
+
+    // Even from build looking back at think — backend is at build, user
+    // intentionally clicked Think; let them inspect.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "think",
+      persistedStage: "build",
+      maxUnlockedStage: "build",
+    })).toBe(false);
+  });
+
+  test("still reconciles forward when backend has progressed beyond the user's max", () => {
+    // Backend just finished build; user was last on prototype. Forward
+    // them to build so they see the new progress.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "prototype",
+      persistedStage: "build",
+      maxUnlockedStage: "prototype",
+    })).toBe(true);
+  });
+
   test("suppresses reveal trigger until resume is restored or backend stage is reconciled", () => {
     expect(shouldSuppressRevealTriggerForResume({
       hasRestoredSession: false,
