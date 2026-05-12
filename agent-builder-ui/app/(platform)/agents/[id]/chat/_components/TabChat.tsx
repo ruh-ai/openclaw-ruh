@@ -27,7 +27,7 @@ import { ChatModeControl } from "./ChatModeControl";
 import { ChatStageContextBar } from "./ChatStageContextBar";
 import { QueuedMessagesChip } from "./QueuedMessagesChip";
 import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
-import { defaultArtifactForStage } from "@/lib/openclaw/artifact-refresh";
+import { defaultArtifactForStage, triggerBackendDiscoverySync } from "@/lib/openclaw/artifact-refresh";
 
 /**
  * POST a user message to the per-agent interject queue while a build is
@@ -1237,6 +1237,14 @@ export function TabChat({
             console.warn(
               `[artifact-refresh] ${target.kind}: ${result.error}`,
             );
+          }
+          // Defense in depth: also reconcile the DB row from the workspace
+          // so the next page reload renders the post-turn state. The
+          // in-memory store update above keeps the current tab fresh; this
+          // call keeps the backend honest. Fire-and-forget — failure here
+          // only affects the next reload, never the current view.
+          if (buildAgentId) {
+            void triggerBackendDiscoverySync(buildAgentId);
           }
         } catch (err) {
           console.warn("[artifact-refresh] failed:", err);
