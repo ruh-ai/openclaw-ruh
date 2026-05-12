@@ -180,3 +180,36 @@ export async function refetchArtifactFromWorkspace(
       return { refreshed: [] };
   }
 }
+
+// ─── Backend reconciliation ────────────────────────────────────────────────
+
+/**
+ * Fire-and-forget POST to /api/agents/:id/forge/sync-plan. The backend reads
+ * PRD.md, TRD.md, and architecture.json from the sandbox workspace and
+ * writes them into the agent's DB columns (discovery_documents, skill_graph,
+ * etc.). Defense in depth against the failure mode where the architect's
+ * chat-turn-end SSE event doesn't fire (gateway WS drops mid-turn, edit
+ * tool falls back to shell rewrites without a closing marker) — without
+ * this, the DB stays stale relative to the workspace and the next page
+ * reload renders pre-revision content from the backend.
+ *
+ * Safe to call repeatedly. Errors are swallowed (the in-memory copilot
+ * store has already been updated by refetchArtifactFromWorkspace, so a
+ * sync failure only affects the next reload, not the current view).
+ */
+export async function triggerBackendDiscoverySync(agentId: string): Promise<void> {
+  if (!agentId) return;
+  try {
+    const { fetchBackendWithAuth } = await import("@/lib/auth/backend-fetch");
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+    const res = await fetchBackendWithAuth(
+      `${API_BASE}/api/agents/${agentId}/forge/sync-plan`,
+      { method: "POST", headers: { "Content-Type": "application/json" } },
+    );
+    if (!res.ok) {
+      console.warn(`[artifact-refresh] sync-plan → ${res.status}`);
+    }
+  } catch (err) {
+    console.warn("[artifact-refresh] sync-plan failed:", err);
+  }
+}
