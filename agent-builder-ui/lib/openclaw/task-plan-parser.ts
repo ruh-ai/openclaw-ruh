@@ -273,28 +273,62 @@ export function applyTaskUpdates(plan: TaskPlan, updates: TaskUpdateEvent[]): Ta
  * Strip plan-related XML tags from the display text so they don't
  * render as raw markup in the chat bubble.
  */
+/**
+ * Names of lifecycle markers the bridge consumes via the event extractor.
+ * Stripped from chat display text because they render as raw XML otherwise.
+ *
+ * Order matters only for clarity — every name is matched independently.
+ */
+const LIFECYCLE_MARKER_NAMES = [
+  "ask_user",
+  "think_step",
+  "think_research_finding",
+  "think_document_ready",
+  "plan_skills",
+  "plan_workflow",
+  "plan_data_schema",
+  "plan_api_endpoints",
+  "plan_dashboard_pages",
+  "plan_dashboard_prototype",
+  "plan_sub_agents",
+  "plan_memory_authority",
+  "plan_env_vars",
+  "plan_complete",
+  "reveal_field",
+  "reveal_done",
+  "employee_reveal",
+] as const;
+
 export function stripPlanTags(text: string): string {
-  // Remove <plan>...</plan> blocks
+  // Remove <plan>...</plan> blocks (used for task plans, paired tag shape).
   let result = text.replace(/<plan>[\s\S]*?<\/plan>/g, "");
-  // Remove <task_update .../> tags
+  // Remove <task_update .../> tags (paired shape: <task_update index="N" .../>).
   result = result.replace(/<task_update\s+[^>]*\/>/g, "");
-  // Remove copilot lifecycle markers — these are consumed by the event
-  // extractor in builder-agent.ts and rendered as structured UI elsewhere.
-  // Leaving them in the chat text shows raw XML-looking attributes to the user.
-  result = result.replace(/<ask_user\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<think_step\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<think_research_finding\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<think_document_ready\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_skills\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_workflow\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_data_schema\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_api_endpoints\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_dashboard_pages\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_dashboard_prototype\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_env_vars\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<plan_complete\s*\/>/g, "");
-  result = result.replace(/<reveal_field\b[\s\S]*?\/>/g, "");
-  result = result.replace(/<reveal_done\s*\/>/g, "");
-  result = result.replace(/<employee_reveal\b[\s\S]*?\/>/g, "");
+
+  // Self-closing lifecycle markers. Two-pass match:
+  //   1. Well-formed `<name .../>` — strip with a non-greedy match up to />
+  //   2. Truncated `<name ...` with no closing `/>` (architect's reply was
+  //      cut off mid-marker) — strip from the opening to the next blank
+  //      line or end of text. Without this, the user sees raw XML/JSON
+  //      attributes leak into the chat bubble.
+  for (const name of LIFECYCLE_MARKER_NAMES) {
+    const wellFormed = new RegExp(`<${name}\\b[\\s\\S]*?\\/>`, "g");
+    result = result.replace(wellFormed, "");
+    // Truncated: <name … with no /> before next blank-line break / EOF.
+    const truncated = new RegExp(`<${name}\\b[^]*?(?=\\n\\s*\\n|$)`, "g");
+    result = result.replace(truncated, "");
+  }
+
+  // Normalize whitespace artifacts left behind by stripping. Markers were
+  // often on their own line; removing them leaves runs of blank lines and
+  // trailing spaces that ReactMarkdown renders as awkward paragraph gaps.
+  result = result
+    // Trim trailing whitespace on each line (no-op if already clean)
+    .replace(/[ \t]+$/gm, "")
+    // Collapse 3+ consecutive newlines to a single blank-line separator
+    .replace(/\n{3,}/g, "\n\n")
+    // Trim leading/trailing blank lines on the whole document
+    .replace(/^\s+|\s+$/g, "");
+
   return result;
 }

@@ -1740,7 +1740,7 @@ export function TabChat({
                       )}
 
                       {/* Streaming response */}
-                      {liveResponse && <MessageContent content={stripPlanTags(liveResponse)} />}
+                      {liveResponse && <MessageContent content={stripPlanTags(liveResponse)} isLive />}
 
                       {/* Initial thinking state — Manus-style minimal */}
                       {liveSteps.length === 0 && !liveResponse && (

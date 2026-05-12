@@ -261,4 +261,58 @@ describe("stripPlanTags", () => {
     expect(stripped).toContain("Before I start:");
     expect(stripped).toContain("After.");
   });
+
+  test("collapses 3+ consecutive newlines left by stripping into a single blank line", () => {
+    const text =
+      'Skills are defined below.\n' +
+      '<plan_skills skills=\'[{"id":"a"}]\'/>\n' +
+      '\n' +
+      '<plan_workflow workflow=\'{"steps":[]}\'/>\n' +
+      '\n' +
+      '<plan_complete/>\n' +
+      '\n' +
+      'Done.';
+    const stripped = stripPlanTags(text);
+    // Stripping the markers should NOT leave 4 consecutive newlines —
+    // ReactMarkdown would render those as multiple awkward paragraph breaks.
+    expect(stripped).not.toMatch(/\n{3,}/);
+    expect(stripped).toContain("Skills are defined below.");
+    expect(stripped).toContain("Done.");
+  });
+
+  test("trims trailing whitespace on lines after stripping", () => {
+    const text = 'Heading   \n<plan_skills skills=\'[]\'/>   \nNext line';
+    const stripped = stripPlanTags(text);
+    expect(stripped).not.toMatch(/[ \t]+$/m);
+  });
+
+  test("scrubs truncated markers when the architect's reply cut off mid-attribute", () => {
+    // The architect started a marker but its stream ended before the
+    // closing />. Without defensive scrubbing the raw XML/JSON leaks into
+    // the chat bubble. We strip from the opening tag to the next blank
+    // line (or end of text), losing some content but not showing garbage.
+    const text =
+      'Here is the plan.\n' +
+      '\n' +
+      '<plan_skills skills=\'[{"id":"task-message-ingest","name":"Ingest"\n' +
+      'truncated mid-JSON — stream ended here\n' +
+      '\n' +
+      'After-marker paragraph that should survive.';
+    const stripped = stripPlanTags(text);
+    expect(stripped).not.toContain("<plan_skills");
+    expect(stripped).not.toContain("task-message-ingest");
+    expect(stripped).toContain("Here is the plan.");
+    expect(stripped).toContain("After-marker paragraph that should survive.");
+  });
+
+  test("strips plan_sub_agents and plan_memory_authority markers (Plan-mode emit set)", () => {
+    const text =
+      '<plan_sub_agents subAgents=\'[]\'/>\n' +
+      '<plan_memory_authority memoryAuthority=\'[]\'/>\n' +
+      'Visible';
+    const stripped = stripPlanTags(text);
+    expect(stripped).not.toContain("<plan_sub_agents");
+    expect(stripped).not.toContain("<plan_memory_authority");
+    expect(stripped.trim()).toBe("Visible");
+  });
 });
