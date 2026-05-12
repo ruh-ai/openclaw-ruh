@@ -8,7 +8,7 @@
     "start": "next start -p 3333"
   },
   "dependencies": {
-    "next": "^15.2.0",
+    "next": "^15.5.18",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "lucide-react": "^0.538.0"
