@@ -514,6 +514,49 @@ test.describe("Stage status reconciliation after revision", () => {
   // planStatus, so the Think test above provides the structural coverage.
   // Manual repro: in Plan stage, send a revision; planStatus stays
   // "generating" without the fix.
+
+  // Plan-mode "failed-but-recoverable" — architect's <plan_complete/> went
+  // to exec stdout (via shell print) instead of the chat reply text, so
+  // the marker parser never saw it and planStatus flipped to "failed" via
+  // timeout. But architecture.json WAS written to disk. After the fix,
+  // when discoveryDocuments / architecturePlan ARE present in the store,
+  // a "failed" status is treated as a false negative and reset to "ready".
+  test("Think stage: stuck thinkStatus=failed is reset to ready when discoveryDocuments are present", async ({ page }) => {
+    await mockStack(page, {
+      workspaceFiles: {
+        ".openclaw/discovery/PRD.md": PRD_REVISED,
+        ".openclaw/discovery/TRD.md": TRD_REVISED,
+      },
+    });
+    await startNewAgent(page);
+    await jumpToStage(page, "think", (store) => {
+      store.setDiscoveryDocuments?.({
+        prd: { title: "PRD", sections: [{ heading: "Problem Statement", content: "Original." }] },
+        trd: { title: "TRD", sections: [{ heading: "Architecture Overview", content: "Original." }] },
+      });
+    });
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __coPilotStore?: { getState?: () => { setThinkStatus?: (s: string) => void } };
+      };
+      w.__coPilotStore?.getState?.()?.setThinkStatus?.("failed");
+    });
+
+    await sendChat(page, "Try again");
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const w = window as unknown as {
+              __coPilotStore?: { getState?: () => { thinkStatus?: string } };
+            };
+            return w.__coPilotStore?.getState?.()?.thinkStatus ?? null;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("ready");
+  });
 });
 
 test.describe("Architect turn abnormal termination", () => {
