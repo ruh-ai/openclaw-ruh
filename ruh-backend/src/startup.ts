@@ -9,6 +9,12 @@ import { markBackendNotReady, markBackendReady } from './backendReadiness';
 import { handleVncUpgrade } from './vncProxy';
 import { handleGatewayUpgrade } from './gatewayProxy';
 import { initTelemetry, shutdownTelemetry } from './telemetry';
+import { dockerExec, getContainerName, listManagedSandboxContainers } from './docker';
+import { startStuckSessionMonitor, type MonitorHandle } from './stuckSessionMonitor';
+import { getAgentByForgeSandboxId } from './agentStore';
+import { writeSystemEvent } from './systemEventStore';
+
+let stuckSessionMonitorHandle: MonitorHandle | null = null;
 
 export interface StartupLogger {
   log: (...args: unknown[]) => void;
@@ -26,6 +32,15 @@ export interface StartupDependencies {
   initSchemaMigrations?: () => Promise<void>;
   checkDocker?: () => boolean;
   skipPreflight?: boolean;
+  /** Skip starting the stuck-session monitor — used in tests and one-shot scripts. */
+  skipStuckSessionMonitor?: boolean;
+}
+
+export function stopStuckSessionMonitor(): void {
+  if (stuckSessionMonitorHandle) {
+    stuckSessionMonitorHandle.stop();
+    stuckSessionMonitorHandle = null;
+  }
 }
 
 const LLM_KEY_ENV_VARS = [
@@ -111,6 +126,58 @@ export async function startBackend(deps: StartupDependencies = {}): Promise<void
     markBackendReady();
     logger.log(`OpenClaw backend (TypeScript/Bun) listening on port ${port}`);
     logger.log('Database ready');
+
+    if (!deps.skipStuckSessionMonitor) {
+      stuckSessionMonitorHandle = startStuckSessionMonitor({
+        deps: {
+          listRunningSandboxIds: async () => {
+            const containers = await listManagedSandboxContainers().catch(() => []);
+            return containers.filter((c) => c.running).map((c) => c.sandbox_id);
+          },
+          tailGatewayLog: async (sandboxId) => {
+            const [, output] = await dockerExec(
+              getContainerName(sandboxId),
+              'tail -200 /tmp/openclaw-gateway.log 2>/dev/null || true',
+              5_000,
+            );
+            return output;
+          },
+          resolveAgentId: async (sandboxId) => {
+            const agent = await getAgentByForgeSandboxId(sandboxId).catch(() => null);
+            return agent?.id ?? null;
+          },
+          emitEvent: async (event) => {
+            await writeSystemEvent({
+              level: event.kind === 'session.stuck' ? 'warn' : 'info',
+              category: 'runtime.diagnostic',
+              action: event.kind,
+              status: event.kind === 'session.stuck' ? 'detected' : 'cleared',
+              message:
+                event.kind === 'session.stuck'
+                  ? `Session ${event.session.session_key} stuck (age ${event.session.age_seconds}s, queueDepth ${event.session.queue_depth})`
+                  : `Session ${event.session.session_key} recovered`,
+              sandbox_id: event.sandbox_id,
+              agent_id: event.agent_id,
+              source: 'stuck-session-monitor',
+              details: {
+                session_id: event.session.session_id,
+                session_key: event.session.session_key,
+                state: event.session.state,
+                age_seconds: event.session.age_seconds,
+                queue_depth: event.session.queue_depth,
+              },
+            });
+          },
+          onError: (sandboxId, error) => {
+            logger.warn(`stuck-session-monitor [${sandboxId}]:`, error instanceof Error ? error.message : error);
+          },
+        },
+        onCycleError: (error) => {
+          logger.error('stuck-session-monitor cycle error:', error);
+        },
+      });
+      logger.log('Stuck-session monitor started');
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     markBackendNotReady(`Database initialization failed: ${message}`);

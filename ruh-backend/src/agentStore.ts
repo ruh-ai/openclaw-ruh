@@ -868,6 +868,16 @@ export async function getAgentBySandboxId(sandboxId: string): Promise<AgentRecor
   });
 }
 
+export async function getAgentByForgeSandboxId(sandboxId: string): Promise<AgentRecord | null> {
+  return withConn(async (client) => {
+    const res = await client.query(
+      `SELECT * FROM agents WHERE forge_sandbox_id = $1 LIMIT 1`,
+      [sandboxId],
+    );
+    return res.rows.length > 0 ? serialize(res.rows[0]) : null;
+  });
+}
+
 // ─── Credential CRUD ──────────────────────────────────────────────────────────
 
 function normalizeCredentials(raw: unknown): AgentCredentialRecord[] {
