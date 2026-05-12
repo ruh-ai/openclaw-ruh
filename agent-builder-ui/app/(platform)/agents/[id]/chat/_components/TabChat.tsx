@@ -1214,6 +1214,22 @@ export function TabChat({
       return;
     }
 
+    // Falling edge: reconcile any "generating" stage status that didn't
+    // receive a closing marker. Revision turns don't emit
+    // <think_document_ready> / <architecture_plan_ready>, so without this
+    // the right pane stays stuck on ThinkActivityPanel / PlanActivityPanel
+    // forever after a revision completes. If the stage's primary artifact
+    // already exists in the store, the stage IS "ready" by definition —
+    // it can't be "generating" if its output is present.
+    if (wasLoading && !isLoading && coPilotStore) {
+      if (coPilotStore.thinkStatus === "generating" && coPilotStore.discoveryDocuments) {
+        coPilotStore.setThinkStatus("ready");
+      }
+      if (coPilotStore.planStatus === "generating" && coPilotStore.architecturePlan) {
+        coPilotStore.setPlanStatus("ready");
+      }
+    }
+
     // Falling edge with a captured target → refetch and update the store
     if (wasLoading && !isLoading) {
       const target = turnArtifactTargetRef.current;
@@ -1237,6 +1253,19 @@ export function TabChat({
             console.warn(
               `[artifact-refresh] ${target.kind}: ${result.error}`,
             );
+          }
+          // After the refetch lands fresh content, re-run the status
+          // reconciliation. This catches the case where discoveryDocuments
+          // was null at the falling-edge check but the workspace refetch
+          // just populated it — without this, thinkStatus would stay at
+          // "generating" through the first revision turn after a forced
+          // reload that landed before the architect's initial doc-ready
+          // marker.
+          if (coPilotStore.thinkStatus === "generating" && coPilotStore.discoveryDocuments) {
+            coPilotStore.setThinkStatus("ready");
+          }
+          if (coPilotStore.planStatus === "generating" && coPilotStore.architecturePlan) {
+            coPilotStore.setPlanStatus("ready");
           }
           // Defense in depth: also reconcile the DB row from the workspace
           // so the next page reload renders the post-turn state. The

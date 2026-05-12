@@ -450,6 +450,72 @@ test.describe("Artifact refresh after architect turn (Phase 1 fix)", () => {
   });
 });
 
+test.describe("Stage status reconciliation after revision", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.removeItem("openclaw-agents"));
+  });
+
+  // Repro of the "stuck thinking" bug — when a revision turn lands in
+  // Think stage, builder-agent.ts emits think_status: generating at turn
+  // start. Revision turns don't emit <think_document_ready>, so
+  // thinkStatus stays at "generating" after the turn ends and
+  // LifecycleStepRenderer keeps rendering ThinkActivityPanel forever.
+  // After the fix, the post-turn useEffect resets thinkStatus to "ready"
+  // when discoveryDocuments are present.
+  test("Think stage: stuck thinkStatus=generating is reset to ready on falling edge of isLoading", async ({ page }) => {
+    await mockStack(page, {
+      workspaceFiles: {
+        ".openclaw/discovery/PRD.md": PRD_REVISED,
+        ".openclaw/discovery/TRD.md": TRD_REVISED,
+      },
+    });
+    await startNewAgent(page);
+    await jumpToStage(page, "think", (store) => {
+      store.setDiscoveryDocuments?.({
+        prd: { title: "PRD", sections: [{ heading: "Problem Statement", content: "Existing." }] },
+        trd: { title: "TRD", sections: [{ heading: "Architecture Overview", content: "Existing." }] },
+      });
+    });
+
+    // Simulate the builder-agent flipping thinkStatus to "generating"
+    // at turn start (what happens when user submits a chat in Think
+    // stage). This is the precondition for the stuck-thinking bug.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __coPilotStore?: { getState?: () => { setThinkStatus?: (s: string) => void } };
+      };
+      w.__coPilotStore?.getState?.()?.setThinkStatus?.("generating");
+    });
+
+    await sendChat(page, "Tweak the PRD wording");
+
+    // After the turn completes, thinkStatus must return to "ready"
+    // because discoveryDocuments is already present — the stage IS
+    // ready, it can't be "generating".
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const w = window as unknown as {
+              __coPilotStore?: { getState?: () => { thinkStatus?: string } };
+            };
+            return w.__coPilotStore?.getState?.()?.thinkStatus ?? null;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("ready");
+  });
+
+  // Plan-stage equivalent of the Think test above. Skipped from automated
+  // E2E because the synthetic harness can't reliably render the chat input
+  // when planStatus is pre-set to "generating" (the page gates the input
+  // on additional plan-stage state we don't seed here). The reset logic in
+  // TabChat's post-turn useEffect is symmetric for thinkStatus and
+  // planStatus, so the Think test above provides the structural coverage.
+  // Manual repro: in Plan stage, send a revision; planStatus stays
+  // "generating" without the fix.
+});
+
 test.describe("Architect turn abnormal termination", () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.removeItem("openclaw-agents"));
