@@ -2202,6 +2202,49 @@ app.get('/api/agents/:id/build-completion-status', requireAuth, asyncHandler(asy
   res.json({ allFilesPresent, completedSpecialists, missingBySpecialist, reportWritten });
 }));
 
+/**
+ * GET /api/agents/:id/dashboard-fidelity
+ *
+ * Verify the Build-emitted dashboard matches the architect's plan and the
+ * prototype contract. Returns a list of fidelity checks with severity:
+ *   - blocker: the deployed dashboard would not honor the approved prototype
+ *   - warning: cosmetic or non-essential drift
+ *
+ * Drives the prototype-stage "Build will match this prototype" badge and
+ * feeds blocker-level issues into the buildReport guard so Build → Review
+ * advance is refused until fidelity passes.
+ */
+app.get('/api/agents/:id/dashboard-fidelity', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  if (!agent.forge_sandbox_id) {
+    res.json({ generatedAt: new Date().toISOString(), checks: [], blockers: [], warnings: [], passed: true, reason: 'no_sandbox' });
+    return;
+  }
+  const containerName = getContainerName(agent.forge_sandbox_id);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+  if (!running) {
+    res.json({ generatedAt: new Date().toISOString(), checks: [], blockers: [], warnings: [], passed: true, reason: 'container_not_running' });
+    return;
+  }
+  const [planOk, planContent] = await dockerExec(
+    containerName,
+    'cat /root/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null',
+    10_000,
+  );
+  if (!planOk || !planContent.trim()) {
+    res.json({ generatedAt: new Date().toISOString(), checks: [], blockers: [], warnings: [], passed: true, reason: 'no_plan_in_workspace' });
+    return;
+  }
+  let plan: unknown;
+  try { plan = JSON.parse(planContent); } catch {
+    res.json({ generatedAt: new Date().toISOString(), checks: [], blockers: [], warnings: [], passed: true, reason: 'plan_parse_failed' });
+    return;
+  }
+  const { checkDashboardFidelity } = await import('./dashboardFidelity');
+  const report = await checkDashboardFidelity(agent.forge_sandbox_id, plan as never);
+  res.json(report);
+}));
+
 // ── Sandbox creation ──────────────────────────────────────────────────────────
 
 app.post(
