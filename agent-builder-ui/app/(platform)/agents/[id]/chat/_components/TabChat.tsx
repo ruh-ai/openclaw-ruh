@@ -1214,18 +1214,36 @@ export function TabChat({
       return;
     }
 
-    // Falling edge: reconcile any "generating" stage status that didn't
-    // receive a closing marker. Revision turns don't emit
-    // <think_document_ready> / <architecture_plan_ready>, so without this
-    // the right pane stays stuck on ThinkActivityPanel / PlanActivityPanel
-    // forever after a revision completes. If the stage's primary artifact
-    // already exists in the store, the stage IS "ready" by definition —
-    // it can't be "generating" if its output is present.
+    // Falling edge: reconcile stage status against the actual artifact.
+    // Covers two stuck-status modes:
+    //
+    //   "generating" stuck — revision turns don't emit
+    //   <think_document_ready> / <architecture_plan_ready>, so the status
+    //   stays at "generating" forever after the chat reply lands.
+    //
+    //   "failed" stuck-but-recoverable — Plan-mode architects sometimes
+    //   write architecture.json via a shell script and try to emit
+    //   <plan_complete/> via print(). The bridge's marker parser only
+    //   scans the chat SSE stream (not exec stdout), so the marker never
+    //   reaches the consumer and planStatus flips to "failed" via the
+    //   timeout path — but architecture.json IS on disk. If the in-memory
+    //   store ends up with the artifact (via the refetch below), the
+    //   stage IS ready and "failed" is a false negative.
+    //
+    // Only reset when the artifact is truly present in the store. If the
+    // refetch fails too (workspace empty), we leave "failed" alone so the
+    // user can retry.
     if (wasLoading && !isLoading && coPilotStore) {
-      if (coPilotStore.thinkStatus === "generating" && coPilotStore.discoveryDocuments) {
+      const thinkStuck =
+        coPilotStore.thinkStatus === "generating"
+        || coPilotStore.thinkStatus === "failed";
+      const planStuck =
+        coPilotStore.planStatus === "generating"
+        || coPilotStore.planStatus === "failed";
+      if (thinkStuck && coPilotStore.discoveryDocuments) {
         coPilotStore.setThinkStatus("ready");
       }
-      if (coPilotStore.planStatus === "generating" && coPilotStore.architecturePlan) {
+      if (planStuck && coPilotStore.architecturePlan) {
         coPilotStore.setPlanStatus("ready");
       }
     }
@@ -1255,16 +1273,21 @@ export function TabChat({
             );
           }
           // After the refetch lands fresh content, re-run the status
-          // reconciliation. This catches the case where discoveryDocuments
-          // was null at the falling-edge check but the workspace refetch
-          // just populated it — without this, thinkStatus would stay at
-          // "generating" through the first revision turn after a forced
-          // reload that landed before the architect's initial doc-ready
-          // marker.
-          if (coPilotStore.thinkStatus === "generating" && coPilotStore.discoveryDocuments) {
+          // reconciliation. Catches the case where the artifact wasn't
+          // in the store at the falling-edge check but the workspace
+          // refetch just populated it — see the comment block above
+          // the falling-edge check for the two stuck-status modes this
+          // covers (generating + failed-but-recoverable).
+          const thinkStuckPost =
+            coPilotStore.thinkStatus === "generating"
+            || coPilotStore.thinkStatus === "failed";
+          const planStuckPost =
+            coPilotStore.planStatus === "generating"
+            || coPilotStore.planStatus === "failed";
+          if (thinkStuckPost && coPilotStore.discoveryDocuments) {
             coPilotStore.setThinkStatus("ready");
           }
-          if (coPilotStore.planStatus === "generating" && coPilotStore.architecturePlan) {
+          if (planStuckPost && coPilotStore.architecturePlan) {
             coPilotStore.setPlanStatus("ready");
           }
           // Defense in depth: also reconcile the DB row from the workspace
