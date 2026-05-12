@@ -73,6 +73,19 @@ export interface ArchitecturePlan {
   buildDependencies?: Array<{ from: string; to: string }>;
 }
 
+// Shared source of truth for dashboard tokens — re-exported into the
+// emitted ui.tsx via formatTokensForEmit(). Prototype renderer imports
+// the same module, so prototype and Build read identical values.
+import { dashboardTokens } from "../../packages/dashboard-primitives/src/tokens";
+
+function formatTokensForEmit(): string {
+  // Emit the tokens object literal with single-quoted string values to
+  // match the original inline literal style (single quotes everywhere
+  // in the emitted Vite-built dashboard).
+  const entries = Object.entries(dashboardTokens).map(([k, v]) => `  ${k}: '${v}',`);
+  return `{\n${entries.join("\n")}\n}`;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord {
@@ -1597,27 +1610,17 @@ export default defineConfig({
   });
 
   // ── components/ui.tsx — design tokens + shared styles ──
+  //
+  // The `tokens` object is derived from the shared
+  // packages/dashboard-primitives/src/tokens.ts source at scaffold time
+  // — the prototype renderer imports those same values, so there's a
+  // single source of truth. Edits to the package automatically flow
+  // into the next agent's emitted dashboard with zero drift.
   files.push({
     path: "dashboard/components/ui.tsx",
     content: `import type { CSSProperties } from 'react';
 
-export const tokens = {
-  primary: '#ae00d0',
-  primaryHover: '#9400b4',
-  secondary: '#7b5aff',
-  background: '#f9f7f9',
-  cardColor: '#ffffff',
-  sidebarBg: '#fdfbff',
-  textPrimary: '#121212',
-  textSecondary: '#4b5563',
-  textTertiary: '#9ca3af',
-  borderDefault: '#e5e7eb',
-  success: '#22c55e',
-  error: '#ef4444',
-  warning: '#f59e0b',
-  info: '#3b82f6',
-  gradient: 'linear-gradient(135deg, #ae00d0, #7b5aff)',
-};
+export const tokens = ${formatTokensForEmit()};
 
 export const pageStyle: CSSProperties = { padding: 24, maxWidth: 1200 };
 export const cardStyle: CSSProperties = { background: tokens.cardColor, border: \`1px solid \${tokens.borderDefault}\`, borderRadius: 12, padding: 20, marginBottom: 16 };
