@@ -34,6 +34,16 @@ describe("middleware", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
+  test("redirects authenticated root requests to agents before page render", () => {
+    const request = new NextRequest("http://builder.test/");
+    request.cookies.set("accessToken", "token");
+
+    const response = middleware(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://builder.test/agents");
+  });
+
   test("redirects unauthenticated requests in development too", () => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";

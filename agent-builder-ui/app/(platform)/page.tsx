@@ -1,7 +1,5 @@
-import { redirect } from "next/navigation";
-import { agentsRoute } from "@/shared/routes";
-
-// Redirect root to agents page (the default view)
+// Root routing is handled in middleware so the redirect happens before this
+// server component enters the app-router render path.
 export default function DashboardPage() {
-  redirect(agentsRoute);
+  return null;
 }

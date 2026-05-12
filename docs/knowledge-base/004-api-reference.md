@@ -33,6 +33,29 @@ Not-ready response:
 
 HTTP status is `200` when ready and `503` when not ready.
 
+### `GET /health/telemetry`
+Probes the three observability surfaces the platform depends on (Langfuse,
+OTEL exporter, Sentry/GlitchTip) so we notice when telemetry goes silent —
+historically Langfuse exited and ran cold for ten days before anyone caught
+it. No auth required. Returns HTTP `200` when all three are healthy and
+`503` when any surface is missing or unreachable.
+
+Healthy response:
+```json
+{
+  "status": "ok",
+  "surfaces": {
+    "langfuse": { "ok": true, "latencyMs": 18, "version": "3.40.0", "endpoint": "http://localhost:3002/api/public/health" },
+    "otel":     { "ok": true, "endpoint": "http://localhost:4318" },
+    "sentry":   { "ok": true }
+  }
+}
+```
+
+Each surface reports `ok: false` with a `reason` when its env var is missing
+(`LANGFUSE_BASE_URL`, `OTEL_ENABLED`/`OTEL_EXPORTER_OTLP_ENDPOINT`, `SENTRY_DSN`)
+or, for Langfuse, when the live HTTP probe fails. Probe timeout is 2 seconds.
+
 ---
 
 ## System Events
@@ -80,6 +103,33 @@ Same response shape as the global route, but the backend forces `sandbox_id = :s
 Same response shape as the global route, but the backend forces `agent_id = :id` regardless of query params.
 
 The first shipped emitters cover sandbox-create and forge lifecycle milestones (`sandbox.create.*`, `agent.forge.*`). `details` is redacted for agent consumption and should not be treated as a raw process log dump.
+
+### `GET /api/agents/:id/diagnostics`
+Auth required (creator-owned). One-shot diagnostic snapshot of an agent — collapses what previously required ten manual `docker exec` and `psql` commands into a single request. Combines DB state (forge_stage, sandbox row), live container exec (workspace artifact inventory across `workspace/`, `workspace-copilot/`, and `workspace-architect/`, plus the last 50 gateway log lines), parsed `[diagnostic] stuck session` entries from that log tail, and the 20 most recent `system_events` for the agent.
+
+Per-step exec failures (timeout, listing failure, missing dir) are appended to `errors[]` instead of failing the whole request — partial results are still useful for triage.
+
+Response shape:
+```json
+{
+  "agent": { "id": "...", "name": "...", "forge_stage": "plan", "status": "forging", "created_at": "...", "updated_at": "..." },
+  "sandbox": { "id": "...", "gateway_port": 54258, "standard_url": "http://localhost:54258", "approved": false, "container_running": true, "uptime_seconds": null },
+  "workspace_artifacts": {
+    "workspace":           { "root": [], "discovery": ["PRD.md", "TRD.md"], "plan": ["architecture.json", "PLAN.md"] },
+    "workspace_copilot":   { "root": [], "discovery": ["PRD.md", "TRD.md"], "plan": ["architecture.json", "PLAN.md"] },
+    "workspace_architect": { "root": ["workspace-state.json"], "discovery": [], "plan": [] }
+  },
+  "stuck_sessions": [
+    { "session_id": "copilot", "session_key": "agent:copilot:copilot-plan:...", "state": "processing", "age_seconds": 215, "queue_depth": 1 }
+  ],
+  "gateway_log_tail": ["..."],
+  "recent_system_events": [{ "occurred_at": "...", "level": "info", "category": "sandbox.lifecycle", "action": "agent.forge.succeeded", "status": "success", "message": "..." }],
+  "errors": []
+}
+```
+
+`workspace_artifacts.<name>` is `null` when that workspace directory doesn't exist on disk yet. `sandbox` is `null` when the agent has no `forge_sandbox_id`. The endpoint reads the workspace artifacts and gateway log inside the sandbox container with a 5-second timeout per exec call, so it returns quickly even when the gateway is unresponsive.
+
 
 The stuck-session monitor (`source: "stuck-session-monitor"`) emits two more action types for any running sandbox whose gateway log contains `[diagnostic] stuck session` lines:
 

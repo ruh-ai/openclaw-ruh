@@ -53,7 +53,7 @@ describe("@ruh/marketplace-ui public API surface", () => {
 
   test("MARKETPLACE_CATEGORIES contains all 10 categories", async () => {
     const mod = await import("../types");
-    const expected = [
+    const expected: ReadonlyArray<typeof mod.MARKETPLACE_CATEGORIES[number]> = [
       "general", "marketing", "sales", "support", "engineering",
       "data", "finance", "hr", "operations", "custom",
     ];

@@ -22,6 +22,7 @@ import { startAgentSpan, endSpanOk, endSpanError, spanTraceContext } from './age
 import { createLogger } from '@ruh/logger';
 import { requestLoggerMiddleware } from './requestLogger';
 import { getConfig } from './config';
+import { buildTelemetryHealthReport } from './telemetryHealth';
 import { optionalAuth, requireAuth, requireRole } from './auth/middleware';
 import { deriveAppAccess } from './auth/appAccess';
 import { requireActiveDeveloperOrg } from './auth/builderAccess';
@@ -51,6 +52,7 @@ import * as organizationMembershipStore from './organizationMembershipStore';
 import * as channelManager from './channelManager';
 import * as auditStore from './auditStore';
 import * as systemEventStore from './systemEventStore';
+import * as agentDiagnostics from './agentDiagnostics';
 import * as webhookDeliveryStore from './webhookDeliveryStore';
 import * as billingStore from './billingStore';
 import { resolveEntitlementAccess } from './billing/entitlementState';
@@ -1975,6 +1977,11 @@ app.get('/ready', (_req, res) => {
   res.status(readiness.ready ? 200 : 503).json(readiness);
 });
 
+app.get('/health/telemetry', asyncHandler(async (_req, res) => {
+  const report = await buildTelemetryHealthReport(getConfig());
+  res.status(report.status === 'ok' ? 200 : 503).json(report);
+}));
+
 app.get('/api/system/events', asyncHandler(async (req, res) => {
   res.json(await systemEventStore.listSystemEvents(buildSystemEventFilters(req)));
 }));
@@ -1991,6 +1998,97 @@ app.get('/api/agents/:id/system-events', requireAuth, asyncHandler(async (req, r
   res.json(await systemEventStore.listSystemEvents(buildSystemEventFilters(req, {
     agent_id: req.params.id,
   })));
+}));
+
+app.get('/api/agents/:id/diagnostics', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const errors: string[] = [];
+  const sandboxId = agent.forge_sandbox_id;
+  const sandbox = sandboxId
+    ? await store.getSandbox(sandboxId).catch((err: unknown) => {
+        errors.push(`getSandbox failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      })
+    : null;
+
+  let containerInspect: { running: boolean; uptimeSeconds: number | null } | null = null;
+  let workspaceWorkspace: string | null = null;
+  let workspaceCopilot: string | null = null;
+  let workspaceArchitect: string | null = null;
+  let gatewayLogTail = '';
+
+  if (sandboxId) {
+    const containerName = getContainerName(sandboxId);
+    const running = await dockerContainerRunning(containerName).catch(() => false);
+    containerInspect = { running, uptimeSeconds: null };
+
+    if (running) {
+      const [wsResult, wcResult, waResult, logResult] = await Promise.all([
+        sandboxExec(sandboxId, agentDiagnostics.buildWorkspaceListingCommand('workspace'), 5)
+          .catch((err: unknown) => {
+            errors.push(`workspace listing failed: ${err instanceof Error ? err.message : String(err)}`);
+            return [1, ''] as [number, string];
+          }),
+        sandboxExec(sandboxId, agentDiagnostics.buildWorkspaceListingCommand('workspace-copilot'), 5)
+          .catch((err: unknown) => {
+            errors.push(`workspace-copilot listing failed: ${err instanceof Error ? err.message : String(err)}`);
+            return [1, ''] as [number, string];
+          }),
+        sandboxExec(sandboxId, agentDiagnostics.buildWorkspaceListingCommand('workspace-architect'), 5)
+          .catch((err: unknown) => {
+            errors.push(`workspace-architect listing failed: ${err instanceof Error ? err.message : String(err)}`);
+            return [1, ''] as [number, string];
+          }),
+        sandboxExec(sandboxId, 'tail -50 /tmp/openclaw-gateway.log 2>/dev/null || true', 5)
+          .catch((err: unknown) => {
+            errors.push(`gateway log tail failed: ${err instanceof Error ? err.message : String(err)}`);
+            return [1, ''] as [number, string];
+          }),
+      ]);
+      workspaceWorkspace = wsResult[1];
+      workspaceCopilot = wcResult[1];
+      workspaceArchitect = waResult[1];
+      gatewayLogTail = logResult[1];
+    } else {
+      errors.push('container_not_running');
+    }
+  }
+
+  const systemEventResult = await systemEventStore.listSystemEvents(
+    buildSystemEventFilters(req, { agent_id: req.params.id, limit: 20 }),
+  );
+
+  const report = agentDiagnostics.buildAgentDiagnosticsReport({
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      forge_stage: agent.forge_stage,
+      forge_sandbox_id: agent.forge_sandbox_id,
+      status: agent.status,
+      created_at: agent.created_at,
+      updated_at: agent.updated_at,
+    },
+    sandbox: sandbox
+      ? {
+          sandbox_id: sandbox.sandbox_id,
+          gateway_port: sandbox.gateway_port ?? null,
+          standard_url: sandbox.standard_url ?? null,
+          approved: sandbox.approved,
+          created_at: sandbox.created_at,
+        }
+      : null,
+    containerInspect,
+    workspaceListings: {
+      workspace: workspaceWorkspace,
+      workspace_copilot: workspaceCopilot,
+      workspace_architect: workspaceArchitect,
+    },
+    gatewayLogTail,
+    systemEvents: systemEventResult.items,
+    errors,
+  });
+
+  res.json(report);
 }));
 
 // ── Sandbox creation ──────────────────────────────────────────────────────────

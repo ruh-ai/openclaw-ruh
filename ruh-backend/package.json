@@ -1,7 +1,7 @@
 {
   "name": "ruh-backend",
   "version": "1.0.0",
-  "description": "OpenClaw Backend API — TypeScript/Bun",
+  "description": "OpenClaw Backend API \u2014 TypeScript/Bun",
   "module": "src/index.ts",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -40,7 +40,7 @@
     "express-rate-limit": "^8.3.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.12.0",
-    "uuid": "^10.0.0",
+    "uuid": "^14.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -51,8 +51,8 @@
     "@types/express-rate-limit": "^6.0.2",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.11.6",
-    "@types/supertest": "^6.0.2",
-    "@types/uuid": "^10.0.0",
+    "@types/supertest": "^7.2.0",
+    "@types/uuid": "^11.0.0",
     "@types/ws": "^8.5.13",
     "bun-types": "latest",
     "supertest": "^7.0.0",

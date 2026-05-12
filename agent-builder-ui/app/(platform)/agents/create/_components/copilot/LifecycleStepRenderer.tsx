@@ -41,7 +41,6 @@ import {
   RotateCcw,
   Timer,
   XCircle,
-  Github,
   Save,
   ExternalLink,
   Database,
@@ -58,6 +57,7 @@ import {
   UserCheck,
   LayoutDashboard,
 } from "lucide-react";
+import { GithubIcon as Github } from "@/components/shared/GithubIcon";
 import type {
   ArchitecturePlan,
   ArchitecturePlanSkill,

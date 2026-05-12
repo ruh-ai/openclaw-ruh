@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import {
   X,
   Loader2,
-  Github,
   Copy,
 } from "lucide-react";
+import { GithubIcon as Github } from "@/components/shared/GithubIcon";
 import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 
 interface ReproduceDialogProps {
