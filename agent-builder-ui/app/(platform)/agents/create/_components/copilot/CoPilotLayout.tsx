@@ -40,16 +40,7 @@ import { shouldApplyWorkspaceRehydration } from "@/lib/openclaw/workspace-rehydr
  * so we overwrite them with the real one from the sandbox file.
  */
 function isEmptyArchitecturePlan(plan: ArchitecturePlan | null): boolean {
-  if (!plan) return false;
-  return (
-    (plan.skills?.length ?? 0) === 0
-    && (plan.workflow?.steps?.length ?? 0) === 0
-    && (plan.integrations?.length ?? 0) === 0
-    && (plan.apiEndpoints?.length ?? 0) === 0
-    && (plan.dashboardPages?.length ?? 0) === 0
-    && (plan.envVars?.length ?? 0) === 0
-    && !plan.dataSchema
-  );
+  return Boolean(plan && !hasUsableArchitecturePlan(plan));
 }
 
 interface CoPilotLayoutProps {
@@ -907,7 +898,7 @@ export function CoPilotLayout({
                 // stream callback can outlive the render that created it, so read
                 // the store first and fall back to the captured value.
                 let planForReview = useCoPilotStore.getState().architecturePlan ?? architecturePlan;
-                if (!planForReview && activeSandbox?.sandbox_id) {
+                if (!hasUsableArchitecturePlan(planForReview) && activeSandbox?.sandbox_id) {
                   try {
                     const [{ readWorkspaceFile }, { normalizePlan }] = await Promise.all([
                       import("@/lib/openclaw/workspace-writer"),

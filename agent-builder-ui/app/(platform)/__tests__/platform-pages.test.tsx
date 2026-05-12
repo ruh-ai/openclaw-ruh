@@ -68,15 +68,14 @@ describe("platform layout", () => {
   });
 });
 
-// --- Dashboard Page (redirect) ---
+// --- Dashboard Page (inert; middleware handles `/` redirect) ---
 
-describe("platform page (dashboard redirect)", () => {
-  test("exports a default page that calls redirect", async () => {
+describe("platform page (dashboard fallback)", () => {
+  test("exports a default page that returns null", async () => {
     const mod = await import("../page");
     expect(mod.default).toBeDefined();
     expect(typeof mod.default).toBe("function");
-    // The page calls redirect() which throws in our mock
-    expect(() => mod.default()).toThrow("NEXT_REDIRECT");
+    expect(mod.default()).toBeNull();
   });
 });
 
