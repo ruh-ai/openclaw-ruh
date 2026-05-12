@@ -47,11 +47,18 @@ export function useBuildCompletionReconciliation(
 
   const buildStageIdx = AGENT_DEV_STAGES.indexOf("build");
   const onBuildOrLater = AGENT_DEV_STAGES.indexOf(store.devStage) >= buildStageIdx;
-  const stuckBuilding = store.buildStatus === "building";
 
   useEffect(() => {
-    if (!agentId || !onBuildOrLater || !stuckBuilding) return;
-    const attemptKey = `${agentId}:building`;
+    // Fire whenever the user is on Build stage or later. Idempotent on the
+    // backend (read-only check + idempotent build-report rewrite when
+    // allFilesPresent). The attempt-key below dedupes within a session so
+    // we don't hammer the endpoint on every render. We DO NOT gate on
+    // buildStatus === "building" — the workspace's build-report.json can
+    // still be "blocked" from a prior failed run even after our in-memory
+    // status is "done", and the lifecycle-advance guard reads that file
+    // (not the store), so the report needs an idempotent rewrite too.
+    if (!agentId || !onBuildOrLater) return;
+    const attemptKey = `${agentId}:reconcile`;
     if (attemptedRef.current === attemptKey) return;
     attemptedRef.current = attemptKey;
 
@@ -90,7 +97,7 @@ export function useBuildCompletionReconciliation(
     return () => {
       cancelled = true;
     };
-  }, [agentId, onBuildOrLater, stuckBuilding, store]);
+  }, [agentId, onBuildOrLater, store]);
 
   return { status, error, lastResult };
 }
