@@ -199,12 +199,25 @@ async function runInstallStep(
     'if [ -f .npmrc ]; then sed -i "/^omit[[:space:]]*=[[:space:]]*$/d" .npmrc; fi',
     'npm config delete omit --location=project >/dev/null 2>&1 || true',
   ].join(' && ');
+  // Force-sync filesystem after install — npm's exit can return before all
+  // files (e.g., tsx/dist/preflight.cjs) are visible to subsequent processes.
+  // Symptom this guards against: "Cannot find module 'tsx/dist/preflight.cjs'"
+  // on the very next `tsx db/migrate.ts` invocation, even though tsx is
+  // installed (verified seconds later).
   const [ok, output] = await dockerExec(
     containerName,
-    `cd $HOME/.openclaw/workspace && ${sanitizeNpmConfig} && ${command} 2>&1`,
+    `cd $HOME/.openclaw/workspace && ${sanitizeNpmConfig} && ${command} 2>&1 && sync`,
     300_000, // 5 min for npm install
   );
   return { name: 'install', ok, output: output.slice(-500) };
+}
+
+// Heuristic: detect a transient install race where npm install returned
+// but Node can't yet resolve a freshly-installed module. Empirically this
+// happens with tsx on the first migrate/seed call after a cold install,
+// even though the file is on disk seconds later.
+function looksLikeTransientModuleResolutionError(output: string): boolean {
+  return /MODULE_NOT_FOUND|Cannot find module/i.test(output);
 }
 
 async function runSetupStep(
@@ -221,12 +234,22 @@ async function runSetupStep(
     }
   }
 
-  log(`Running ${step.name}...`);
-  const [ok, output] = await dockerExec(
+  const exec = async (): Promise<[boolean, string]> => dockerExec(
     containerName,
     `cd $HOME/.openclaw/workspace && if [ -f $HOME/.openclaw/.env ]; then set -a; . $HOME/.openclaw/.env; set +a; fi && ${step.command} 2>&1`,
     120_000,
   );
+
+  log(`Running ${step.name}...`);
+  let [ok, output] = await exec();
+
+  // Retry once for transient MODULE_NOT_FOUND after install — sync the FS
+  // first to flush any pending writes from `npm install`.
+  if (!ok && looksLikeTransientModuleResolutionError(output)) {
+    log(`${step.name} hit a transient module-resolution error; flushing FS and retrying once...`);
+    await dockerExec(containerName, 'sync && sleep 1', 5_000);
+    [ok, output] = await exec();
+  }
 
   if (!ok && !step.optional) {
     log(`${step.name} failed: ${output.slice(-200)}`);
