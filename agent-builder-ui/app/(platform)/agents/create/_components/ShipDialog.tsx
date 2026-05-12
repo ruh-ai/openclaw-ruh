@@ -7,8 +7,8 @@ import {
   AlertCircle,
   ExternalLink,
   Rocket,
-  Github,
 } from "lucide-react";
+import { GithubIcon as Github } from "@/components/shared/GithubIcon";
 import { createWorkspaceApiUrl } from "@/lib/openclaw/files-workspace";
 
 interface ShipDialogProps {
