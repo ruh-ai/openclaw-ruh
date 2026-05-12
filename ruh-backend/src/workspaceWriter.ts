@@ -9,7 +9,6 @@ import { buildHomeFileWriteCommand, dockerExec, getContainerName } from './docke
 import { normalizeWorkspaceRelativePath } from './workspaceFiles';
 
 const MAX_FILE_SIZE_BYTES = 1_024 * 1_024; // 1 MB per file
-const MAX_BATCH_SIZE = 50;
 const WRITE_TIMEOUT_MS = 30_000;
 
 // Paths that have dedicated endpoints and should not be overwritten via generic write
@@ -122,17 +121,18 @@ export async function readWorkspaceCopilotFile(
 }
 
 /**
- * Write multiple files to a sandbox's workspace in a single batch.
+ * Write multiple files to a sandbox's workspace, sequentially.
+ *
+ * The previous 50-file hard cap broke real builds — a richly-scoped agent
+ * like Google Ads Optimizer scaffolds 52 files (backend routes + services
+ * + db migrations + dashboard pages). The loop below writes one file at
+ * a time via docker exec, so there's no parallelism to throttle and no
+ * reason to cap the batch.
  */
 export async function writeWorkspaceFiles(
   sandboxId: string,
   files: Array<{ path: string; content: string }>,
 ): Promise<WriteFileResult[]> {
-  if (files.length > MAX_BATCH_SIZE) {
-    throw new Error(`Batch size ${files.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
-  }
-
-  // Write files sequentially to avoid overwhelming the container
   const results: WriteFileResult[] = [];
   for (const file of files) {
     const result = await writeWorkspaceFile(sandboxId, file.path, file.content);
