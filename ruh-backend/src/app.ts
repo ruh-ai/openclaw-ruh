@@ -3300,6 +3300,8 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
     const BOOTSTRAP_STALL_MS = 90_000;
     let lastYieldAt = Date.now();
     let watchdogFired = false;
+    let lastContainerName: string | null = null;
+    let bootstrapCompleted = false;
     const watchdog = setInterval(() => {
       if (watchdogFired) return;
       if (Date.now() - lastYieldAt > BOOTSTRAP_STALL_MS) {
@@ -3311,13 +3313,32 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
       }
     }, 5_000);
 
+    // Orphan-container cleanup: if the client disconnects mid-bootstrap and
+    // we never observe a 'result' event, remove the half-provisioned
+    // container so it doesn't pile up. Without this, each abandoned forge
+    // leaves a `tail -f /dev/null` container running indefinitely.
+    req.on('close', () => {
+      if (bootstrapCompleted) return;
+      if (lastContainerName) {
+        void dockerSpawn(['rm', '-f', lastContainerName], 15_000).catch(() => {});
+      }
+    });
+
     try {
     for await (const [eventType, data] of gen) {
       lastYieldAt = Date.now();
       if (watchdogFired) break;
       if (eventType === 'log') {
         sendEvent('log', { message: data });
+        // Capture the container name from the "Container started: <name>"
+        // log so the disconnect-cleanup hook can remove orphaned half-
+        // provisioned containers. The generator builds the name itself —
+        // this is the earliest the SSE handler learns of it.
+        if (typeof data === 'string' && data.startsWith('Container started: ')) {
+          lastContainerName = data.slice('Container started: '.length).trim();
+        }
       } else if (eventType === 'result') {
+        bootstrapCompleted = true;
         await store.saveSandbox(data as Record<string, unknown>, String(entry.request.sandbox_name ?? ''));
         entry.result = data as Record<string, unknown>;
         const sandboxId = (data as Record<string, unknown>)['sandbox_id'] as string;

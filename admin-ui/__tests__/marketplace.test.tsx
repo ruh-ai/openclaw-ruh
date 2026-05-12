@@ -59,16 +59,23 @@ const marketplaceData = {
   topListings: [publishedListing, { ...pendingListing, id: "l4" }],
 };
 
-const mockFetch = mock(() =>
+const defaultMockFetchImpl = () =>
   Promise.resolve({
     ok: true,
     json: () => Promise.resolve(marketplaceData),
-  } as Response),
-);
+  } as Response);
+
+const mockFetch = mock(defaultMockFetchImpl);
 
 describe("MarketplacePage", () => {
   beforeEach(() => {
+    // Reset BOTH call history and the implementation. mockClear only clears
+    // calls; without resetting the impl, a test that overrides via
+    // mockImplementation leaks its mock data to every subsequent test in
+    // the file (this caused the four approve/reject tests to fail because
+    // a prior test left the implementation returning only rejected listings).
     mockFetch.mockClear();
+    mockFetch.mockImplementation(defaultMockFetchImpl);
     globalThis.fetch = mockFetch as unknown as typeof fetch;
     localStorage.setItem("accessToken", "test-token");
     window.confirm = mock(() => true);
