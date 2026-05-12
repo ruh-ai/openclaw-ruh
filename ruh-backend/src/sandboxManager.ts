@@ -1029,8 +1029,12 @@ export async function* createOpenclawSandbox(
 
   // ── OpenClaw + Browser install (skip if using pre-built image) ──────────
   if (usingPrebuiltImage) {
-    // Pre-built image has everything installed — just verify and start VNC
-    const [verOk, ver] = await run('openclaw --version');
+    // Pre-built image has everything installed — just verify and start VNC.
+    // Each `run()` call is a `docker exec` round-trip; yield diagnostic logs
+    // before every one so a stalled bootstrap surfaces which exec hung
+    // (previously a hang here was indistinguishable from "still working").
+    yield ['log', 'Verifying openclaw binary in container…'];
+    const [verOk, ver] = await run('openclaw --version', 30);
     if (!verOk) {
       yield await failCreate('openclaw binary not found in pre-built image — rebuild with: scripts/build-sandbox-image.sh');
       return;
