@@ -344,6 +344,51 @@ export async function POST(req: NextRequest) {
               : (traced.result as Record<string, unknown>);
 
           send("result", responsePayload);
+
+          // Defense-in-depth post-turn workspace reconciliation. The
+          // architect SHOULD emit closing markers in its chat reply
+          // (PLAN_SYSTEM_INSTRUCTION + THINK_SYSTEM_INSTRUCTION are
+          // explicit about this — see the "Marker emission protocol"
+          // section). When it doesn't (e.g., emits via shell print or
+          // the chat turn drops mid-stream after a workspace write),
+          // the marker parser never fires and the DB row stays stale.
+          //
+          // Fire syncPlanFromWorkspace here so the DB picks up whatever
+          // the architect wrote to disk regardless of marker emission.
+          // Server-side fetch with the user's cookie forwarded — no
+          // browser cross-origin cookie issue.
+          //
+          // Fire-and-forget. Failures are logged but never block the
+          // SSE response. The frontend's artifact-refresh useEffect
+          // still updates the in-memory store independently.
+          if (typeof agent_id === "string" && agent_id) {
+            const syncCookie = req.headers.get("cookie") ?? "";
+            void (async () => {
+              try {
+                const res = await fetch(
+                  `${BACKEND_URL}/api/agents/${agent_id}/forge/sync-plan`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(syncCookie ? { Cookie: syncCookie } : {}),
+                    },
+                    signal: AbortSignal.timeout(15_000),
+                  },
+                );
+                if (!res.ok) {
+                  console.warn(
+                    `[bridge][${requestId}] post-turn sync-plan → ${res.status}`,
+                  );
+                }
+              } catch (err) {
+                console.warn(
+                  `[bridge][${requestId}] post-turn sync-plan failed:`,
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
+            })();
+          }
         } catch (gatewayError) {
           if (gatewayError instanceof RequestAbortedError) {
             clearInterval(keepaliveInterval);
