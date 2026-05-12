@@ -1283,8 +1283,14 @@ createRoot(document.getElementById('root')!).render(<App />);
   // Process metadata lives in the architect's plan and the prototype tab
   // in agent-builder; the deployed dashboard renders only live UI
   // primitives (MetricCard / DataTable / charts) fed by useApi.
+  //
+  // RESERVED slugs are owned by Layer 1 templates (TASKS_PAGE_TEMPLATE
+  // emits dashboard/pages/tasks.tsx as the TaskFeed + RunInspector
+  // runtime UI). Skip plan-driven pages that would overwrite them.
+  const RESERVED_PAGE_SLUGS = new Set(["tasks"]);
   for (const page of pages) {
     const pageSlug = slugify(page.title);
+    if (RESERVED_PAGE_SLUGS.has(pageSlug)) continue;
     const pageName = pascalCase(page.title) + "Page";
 
     // Collect hooks this page needs
