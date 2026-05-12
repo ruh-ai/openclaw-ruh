@@ -2091,6 +2091,86 @@ app.get('/api/agents/:id/diagnostics', requireAuth, asyncHandler(async (req, res
   res.json(report);
 }));
 
+/**
+ * GET /api/agents/:id/build-completion-status
+ *
+ * Workspace-driven reconciliation check for a stuck build. If a backend
+ * restart kills the build mid-run, the `creation_session.coPilot.buildStatus`
+ * stays at `"building"` forever even though the specialist outputs are on
+ * disk. This endpoint lets the frontend self-heal: it reads the architect's
+ * plan from the workspace, computes expected files for each specialist via
+ * the same `expectedFilesForSpecialist` helper the build pipeline uses, then
+ * checks the workspace. When `allFilesPresent === true` the frontend flips
+ * `buildStatus → "done"` and the operator is unblocked.
+ *
+ * Read-only — never mutates DB state. The frontend hook decides whether to
+ * act on the result.
+ */
+app.get('/api/agents/:id/build-completion-status', requireAuth, asyncHandler(async (req, res) => {
+  const agent = await getOwnedAgentRecord(req, req.params.id);
+  const sandboxId = agent.forge_sandbox_id;
+  if (!sandboxId) {
+    res.json({ allFilesPresent: false, reason: 'no_sandbox', completedSpecialists: [], missingBySpecialist: {} });
+    return;
+  }
+
+  const containerName = getContainerName(sandboxId);
+  const running = await dockerContainerRunning(containerName).catch(() => false);
+  if (!running) {
+    res.json({ allFilesPresent: false, reason: 'container_not_running', completedSpecialists: [], missingBySpecialist: {} });
+    return;
+  }
+
+  // Read architecture.json from the agent's workspace.
+  const [planOk, planContent] = await dockerExec(
+    containerName,
+    'cat /root/.openclaw/workspace/.openclaw/plan/architecture.json 2>/dev/null',
+    10_000,
+  );
+  if (!planOk || !planContent.trim()) {
+    res.json({ allFilesPresent: false, reason: 'no_plan_in_workspace', completedSpecialists: [], missingBySpecialist: {} });
+    return;
+  }
+  let plan: unknown;
+  try { plan = JSON.parse(planContent); } catch {
+    res.json({ allFilesPresent: false, reason: 'plan_parse_failed', completedSpecialists: [], missingBySpecialist: {} });
+    return;
+  }
+
+  const { expectedFilesForSpecialist } = await import('./agentBuild');
+  // Only specialists with workspace output. Dashboard is scaffold-only and
+  // already on disk by the time the build pipeline starts each specialist.
+  const specialists: Array<'identity' | 'database' | 'backend' | 'skills'> = [
+    'identity', 'database', 'backend', 'skills',
+  ];
+  const missingBySpecialist: Record<string, string[]> = {};
+  const completedSpecialists: string[] = [];
+
+  for (const spec of specialists) {
+    const expected = expectedFilesForSpecialist(spec, plan as never);
+    if (expected.length === 0) {
+      completedSpecialists.push(spec);
+      continue;
+    }
+    const quoted = expected.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
+    const cmd = `for p in ${quoted}; do if [ -f "$HOME/.openclaw/workspace/$p" ]; then :; else printf '%s\\n' "$p"; fi; done`;
+    const [ok, output] = await dockerExec(containerName, cmd, 10_000);
+    if (!ok) {
+      missingBySpecialist[spec] = expected;
+      continue;
+    }
+    const missing = output.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (missing.length === 0) {
+      completedSpecialists.push(spec);
+    } else {
+      missingBySpecialist[spec] = missing;
+    }
+  }
+
+  const allFilesPresent = Object.keys(missingBySpecialist).length === 0;
+  res.json({ allFilesPresent, completedSpecialists, missingBySpecialist });
+}));
+
 // ── Sandbox creation ──────────────────────────────────────────────────────────
 
 app.post(

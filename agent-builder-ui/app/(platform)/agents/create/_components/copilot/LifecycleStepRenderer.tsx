@@ -82,6 +82,7 @@ import { BuildReportPanel } from "./BuildReportPanel";
 import { approveManualEvalTasks, resolveEvalReviewState, resolveReviewSkillNodes } from "@/lib/openclaw/copilot-flow";
 import { buildDashboardPrototypeViewModel, type DashboardPrototypePageModel } from "@/lib/openclaw/dashboard-prototype";
 import { useArchitecturePlanRehydration } from "@/lib/openclaw/use-architecture-plan-rehydration";
+import { useBuildCompletionReconciliation } from "@/lib/openclaw/use-build-completion-reconciliation";
 import { prototypeActionEndpointMap } from "@/lib/openclaw/scaffold-templates";
 import { synthesizeTaskRuns } from "@/lib/openclaw/preview-fixtures";
 import { dashboardTokens as DASH } from "@/lib/dashboard/tokens";
@@ -1701,6 +1702,11 @@ export function LifecycleStepRenderer({
   const featureBranch = searchParams.get("branch");
   const featureCtx = store.featureContext;
   const [revealAttemptCount, setRevealAttemptCount] = useState(1);
+  // Workspace-driven self-heal: if buildStatus is stuck at "building" but
+  // all specialist outputs are on disk (common after a backend restart
+  // kills the pipeline mid-run), flip to "done" so the operator can
+  // advance to Review instead of staring at a permanent spinner.
+  useBuildCompletionReconciliation(store, agentId);
 
   const stageIdx = AGENT_DEV_STAGES.indexOf(devStage);
   const stageAdvanceSaving = store.lifecycleAdvanceStatus === "saving";
