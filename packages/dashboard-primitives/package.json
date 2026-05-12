@@ -5,10 +5,6 @@
   "description": "Shared source-of-truth for dashboard tokens + components. Imported as React by agent-builder-ui's prototype renderer AND embedded verbatim by ruh-backend's scaffoldTemplates into each Build-generated dashboard. Drift between prototype preview and live deployed dashboard is prevented by construction — both surfaces read from this package.",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "exports": {
-    ".": "./src/index.ts",
-    "./tokens": "./src/tokens.ts"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   }
