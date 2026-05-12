@@ -801,8 +801,11 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
   // setup does not install them. Installing crons here can fire immediate
   // agent turns and contend with verification on the sandbox gateway lane.
 
-  // Single-port architecture: the backend serves both API AND dashboard static files.
-  // No separate serve process — eliminates CORS, SPA routing, and proxy issues.
+  // Single-port architecture: the backend serves both API AND dashboard static
+  // files (see backend/index.ts template — express.static + SPA fallback at the
+  // bottom of the file). The dashboard URL is just the backend URL — registering
+  // a second "dashboard" service with empty command guarantees a spurious
+  // "Optional service unhealthy: dashboard" warning at setup time.
   const services: Array<{ name: string; command: string; port: number; healthCheck?: string; optional?: boolean }> = [];
   if (hasBackend || hasDashboard) {
     services.push({
@@ -811,10 +814,6 @@ function generateSetupJson(plan: ArchitecturePlan): ScaffoldFile {
       port: 3100,
       healthCheck: "/health",
     });
-    // Register dashboard on the same port so the builder tab discovers it
-    if (hasDashboard) {
-      services.push({ name: "dashboard", command: "", port: 3100, healthCheck: "/health", optional: true });
-    }
   }
 
   const manifest = {

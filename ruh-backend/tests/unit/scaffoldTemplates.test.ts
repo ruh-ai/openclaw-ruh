@@ -44,13 +44,18 @@ describe('generateScaffoldFiles', () => {
 
     const setup = JSON.parse(files.find((file) => file.path === '.openclaw/setup.json')!.content);
     expect(setup.install).toBe('NODE_ENV=development npm install --include=dev');
-    expect(setup.services).toContainEqual({
-      name: 'dashboard',
-      command: '',
-      port: 3100,
-      healthCheck: '/health',
-      optional: true,
-    });
+    // Single-port architecture: backend serves dashboard at /, so we register
+    // only the backend service. A separate "dashboard" service with empty
+    // command used to trigger spurious "Optional service unhealthy: dashboard"
+    // warnings at setup time.
+    expect(setup.services).toEqual([
+      {
+        name: 'backend',
+        command: 'env PORT=3100 npx tsx backend/index.ts',
+        port: 3100,
+        healthCheck: '/health',
+      },
+    ]);
 
     const route = files.find((file) => file.path === 'backend/routes/test-runs.ts');
     expect(route?.content).toContain('List recent test runs');
