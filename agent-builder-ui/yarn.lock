@@ -61,9 +61,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@anthropic-ai/sdk@npm:^0.82.0":
-  version: 0.82.0
-  resolution: "@anthropic-ai/sdk@npm:0.82.0"
+"@anthropic-ai/sdk@npm:^0.91.1":
+  version: 0.91.1
+  resolution: "@anthropic-ai/sdk@npm:0.91.1"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
   peerDependencies:
@@ -73,7 +73,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/2d6b1ed34335b736a5bb794853469a76bcd223a56bbc6695b81c9ffa2b906b4a0dff44a1ab1ce5aa5795ee49ac88489eae7cb6383923256cbfff3103ebdd0737
+  checksum: 10c0/aa9fb1b3d0ae47f492ee7a94b76d341ac7c5486b222a9426b4815b07a65a0b6f502430b0250ff5bf2201a0cdae725a5d4f1f7a4aaa075e9fb32cc2ac10d70241
   languageName: node
   linkType: hard
 
@@ -3211,7 +3211,7 @@ __metadata:
   dependencies:
     "@ag-ui/client": "npm:^0.0.48"
     "@ag-ui/core": "npm:^0.0.48"
-    "@anthropic-ai/sdk": "npm:^0.82.0"
+    "@anthropic-ai/sdk": "npm:^0.91.1"
     "@codemirror/lang-css": "npm:^6.3.1"
     "@codemirror/lang-html": "npm:^6.4.11"
     "@codemirror/lang-javascript": "npm:^6.2.5"
