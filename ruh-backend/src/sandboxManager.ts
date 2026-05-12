@@ -946,7 +946,11 @@ export async function* createOpenclawSandbox(
     return ['error', message];
   };
 
-  // Resolve the host port Docker assigned
+  // Resolve the host port Docker assigned. Yield diagnostic logs around
+  // every potentially-blocking call so a stalled bootstrap is visible in
+  // the SSE stream rather than appearing as silence — previously a hang
+  // here was indistinguishable from "still working".
+  yield ['log', 'Resolving gateway port mapping…'];
   await Bun.sleep(500);
   const [portCode, portOut] = await dockerSpawn(
     ['port', containerName, `${GATEWAY_PORT}/tcp`],

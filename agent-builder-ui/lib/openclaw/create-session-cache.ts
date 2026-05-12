@@ -194,12 +194,29 @@ function cacheIdentityBelongsToDifferentAgent(
 export function shouldReconcileToPersistedForgeStage({
   currentStage,
   persistedStage,
+  maxUnlockedStage,
 }: {
   currentStage: AgentDevStage;
   persistedStage: AgentDevStage | null | undefined;
+  /**
+   * Highest stage the user has reached in this session. When present, we
+   * only reconcile *forward* if the backend has progressed past it —
+   * navigating BACK to inspect a prior stage (current < max but persisted
+   * ≤ max) is a deliberate user action and must not be overridden by the
+   * periodic agent-record re-fetch.
+   */
+  maxUnlockedStage?: AgentDevStage | null;
 }): boolean {
   if (!persistedStage) return false;
-  return DEV_STAGE_ORDER.indexOf(persistedStage) > DEV_STAGE_ORDER.indexOf(currentStage);
+  const persistedIdx = DEV_STAGE_ORDER.indexOf(persistedStage);
+  const currentIdx = DEV_STAGE_ORDER.indexOf(currentStage);
+  if (maxUnlockedStage) {
+    const maxIdx = DEV_STAGE_ORDER.indexOf(maxUnlockedStage);
+    // Persisted is at or behind the user's farthest visited stage —
+    // user is intentionally inspecting an earlier stage. Don't override.
+    if (persistedIdx <= maxIdx) return false;
+  }
+  return persistedIdx > currentIdx;
 }
 
 export function shouldSuppressRevealTriggerForResume({
@@ -253,6 +270,31 @@ export function buildResumedCoPilotSeed(
     const persisted = (persistedSeed as Record<string, unknown>)[field];
     if (typeof cached === "string" && cached === "" && typeof persisted === "string" && persisted !== "") {
       (merged as Record<string, unknown>)[field] = persisted;
+    }
+  }
+
+  // Backend-owned content fields win over the cache when the backend has a
+  // value. The architect writes these (PRD/TRD/Plan/skills/build report)
+  // and the backend record is the source of truth. A stale cache from
+  // before a revision would otherwise mask freshly persisted content —
+  // see SPEC-pair-programmer-iteration-loop § "Workspace as truth".
+  //
+  // We only overwrite when the persisted seed has a non-null value. If
+  // the backend hasn't seen this content yet (autosave still pending),
+  // the cache value wins as before so in-progress edits aren't lost.
+  const backendOwnedContent: (keyof CoPilotState)[] = [
+    "discoveryDocuments",
+    "architecturePlan",
+    "skillGraph",
+    "workflow",
+    "agentRules",
+    "buildReport",
+    "buildManifest",
+  ];
+  for (const field of backendOwnedContent) {
+    const fromSeed = (persistedSeed as Record<string, unknown>)[field];
+    if (fromSeed != null) {
+      (merged as Record<string, unknown>)[field] = fromSeed;
     }
   }
 

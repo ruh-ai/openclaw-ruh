@@ -159,31 +159,39 @@ describe("goBackDevStage", () => {
     useCoPilotStore.getState().reset();
   });
 
-  test("resets planStatus to idle when going back to plan", () => {
+  // goBackDevStage is pure navigation. It moves devStage one step back so the
+  // user can inspect prior outputs, but it preserves:
+  //   • maxUnlockedDevStage (forward stages stay clickable)
+  //   • the destination stage's status + activity logs (no redo)
+  // Without these guarantees, clicking "Back" on Prototype would lock
+  // Prototype/Build and wipe planActivity — the user can't get back without
+  // re-running the plan.
+
+  test("preserves maxUnlockedDevStage when going back to plan", () => {
     const store = useCoPilotStore;
     store.setState({ devStage: "prototype", maxUnlockedDevStage: "prototype", planStatus: "approved" });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("plan");
-    expect(store.getState().maxUnlockedDevStage).toBe("plan");
-    expect(store.getState().planStatus).toBe("idle");
+    expect(store.getState().maxUnlockedDevStage).toBe("prototype");
+    expect(store.getState().planStatus).toBe("approved");
   });
 
-  test("resets buildStatus to idle when going back to build", () => {
+  test("preserves buildStatus when going back to build", () => {
     const store = useCoPilotStore;
     store.setState({ devStage: "review", maxUnlockedDevStage: "review", buildStatus: "done" });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("build");
-    expect(store.getState().maxUnlockedDevStage).toBe("build");
-    expect(store.getState().buildStatus).toBe("idle");
+    expect(store.getState().maxUnlockedDevStage).toBe("review");
+    expect(store.getState().buildStatus).toBe("done");
   });
 
-  test("resets thinkStatus when going back to think", () => {
+  test("preserves thinkStatus when going back to think", () => {
     const store = useCoPilotStore;
     store.setState({ devStage: "plan", maxUnlockedDevStage: "plan", thinkStatus: "approved" });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("think");
-    expect(store.getState().maxUnlockedDevStage).toBe("think");
-    expect(store.getState().thinkStatus).toBe("idle");
+    expect(store.getState().maxUnlockedDevStage).toBe("plan");
+    expect(store.getState().thinkStatus).toBe("approved");
   });
 
   test("goes back from think to reveal", () => {
@@ -191,7 +199,7 @@ describe("goBackDevStage", () => {
     store.setState({ devStage: "think", maxUnlockedDevStage: "think" });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("reveal");
-    expect(store.getState().maxUnlockedDevStage).toBe("reveal");
+    expect(store.getState().maxUnlockedDevStage).toBe("think");
   });
 
   test("does nothing at reveal stage (no underflow)", () => {
@@ -202,7 +210,7 @@ describe("goBackDevStage", () => {
     expect(store.getState().maxUnlockedDevStage).toBe("reveal");
   });
 
-  test("does not reset unrelated statuses", () => {
+  test("does not modify unrelated statuses", () => {
     const store = useCoPilotStore;
     store.setState({
       devStage: "prototype",
@@ -213,9 +221,10 @@ describe("goBackDevStage", () => {
     });
     store.getState().goBackDevStage();
     expect(store.getState().devStage).toBe("plan");
-    expect(store.getState().maxUnlockedDevStage).toBe("plan");
-    expect(store.getState().planStatus).toBe("idle");
-    expect(store.getState().thinkStatus).toBe("approved"); // should NOT be reset
+    expect(store.getState().maxUnlockedDevStage).toBe("prototype");
+    expect(store.getState().planStatus).toBe("approved");
+    expect(store.getState().thinkStatus).toBe("approved");
+    expect(store.getState().buildStatus).toBe("done");
   });
 });
 

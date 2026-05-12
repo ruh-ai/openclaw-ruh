@@ -6,14 +6,22 @@ import type {
   DashboardPrototypePipelineStep,
   DashboardPageComponent,
   DashboardPrototypeWorkflow,
+  PreviewFixtureMap,
   SubAgentConfig,
 } from "./types";
+import { synthesizeFixtures } from "./preview-fixtures";
 
+/**
+ * `components` carries the planned component shape plus its data source so
+ * the renderer can look up fixture data without re-walking the plan. The
+ * `dataSource` is optional because components in `dashboardPrototype.pages`
+ * may not be linked to a route yet.
+ */
 export interface DashboardPrototypePageModel {
   path: string;
   title: string;
   purpose: string;
-  components: DashboardPageComponent["type"][];
+  components: Array<{ type: DashboardPageComponent["type"]; dataSource?: string; title?: string }>;
   workflows: DashboardPrototypeWorkflow[];
   actions: string[];
   acceptanceCriteria: string[];
@@ -60,6 +68,13 @@ export interface DashboardPrototypeViewModel {
   revisionPrompts: string[];
   approvalChecklist: string[];
   subAgents: DashboardPrototypeSubAgentModel[];
+  /**
+   * Per-dataSource fixture map — preferred source of truth for both the
+   * prototype renderer and the production dashboard's day-1 hydration.
+   * Always populated: architect-emitted values merged over synthetic
+   * fallbacks so the prototype always renders meaningful data.
+   */
+  fixtures: PreviewFixtureMap;
 }
 
 function normalizePath(path: string | undefined, fallback: string): string {
@@ -171,19 +186,34 @@ function fallbackArtifacts(
   ];
 }
 
+function diagnoseBlocker(
+  hasDashboard: boolean,
+  prototype: ArchitecturePlan["dashboardPrototype"] | undefined,
+  dashboardPages: NonNullable<ArchitecturePlan["dashboardPages"]>,
+): string | null {
+  if (!hasDashboard) return null;
+  if (!prototype) return "dashboardPrototype is missing from the plan — Plan stage needs to define it before Build.";
+  if (!prototype.summary) return "dashboardPrototype.summary is empty — describe what the operator does on this dashboard.";
+  if (prototype.workflows.length === 0) return "dashboardPrototype.workflows is empty — at least one workflow is required.";
+  if (prototype.pages.length === 0) return "dashboardPrototype.pages is empty — add at least one prototype page.";
+  const plannedPaths = new Set(dashboardPages.map((page) => normalizePath(page.path, page.title)));
+  const prototypePaths = new Set(prototype.pages.map((page) => normalizePath(page.path, page.title)));
+  const missing: string[] = [];
+  for (const planned of plannedPaths) {
+    if (!prototypePaths.has(planned)) missing.push(planned);
+  }
+  if (missing.length > 0) {
+    return `dashboardPrototype.pages is missing entries for: ${missing.join(", ")} — every planned page needs a prototype.`;
+  }
+  return null;
+}
+
 export function buildDashboardPrototypeViewModel(plan: ArchitecturePlan | null | undefined): DashboardPrototypeViewModel {
   const dashboardPages = plan?.dashboardPages ?? [];
   const prototype = plan?.dashboardPrototype;
   const hasDashboard = dashboardPages.length > 0;
-  const ready = Boolean(
-    !hasDashboard
-      || (
-        prototype
-        && prototype.summary
-        && prototype.workflows.length > 0
-        && prototype.pages.length > 0
-      ),
-  );
+  const blockerMessage = diagnoseBlocker(hasDashboard, prototype, dashboardPages);
+  const ready = blockerMessage === null;
 
   const workflows = prototype?.workflows ?? [];
   const pages = dashboardPages.length > 0
@@ -196,7 +226,11 @@ export function buildDashboardPrototypeViewModel(plan: ArchitecturePlan | null |
         path,
         title: prototypePage?.title || plannedPage.title || `Page ${index + 1}`,
         purpose: prototypePage?.purpose || plannedPage.description || plannedPage.title || "Review planned dashboard behavior.",
-        components: (plannedPage.components ?? []).map((component) => component.type),
+        components: (plannedPage.components ?? []).map((component) => ({
+          type: component.type,
+          dataSource: component.dataSource,
+          title: component.title,
+        })),
         workflows: pageWorkflows.length > 0 ? pageWorkflows : workflows,
         actions: prototypePage?.requiredActions ?? [],
         acceptanceCriteria: prototypePage?.acceptanceCriteria ?? [],
@@ -226,7 +260,7 @@ export function buildDashboardPrototypeViewModel(plan: ArchitecturePlan | null |
 
   return {
     ready,
-    blocker: ready ? null : "dashboardPrototype is required before Build can start.",
+    blocker: blockerMessage,
     summary: prototype?.summary ?? "No dashboard prototype is required for this agent.",
     primaryUsers: prototype?.primaryUsers ?? [],
     pages,
@@ -246,5 +280,6 @@ export function buildDashboardPrototypeViewModel(plan: ArchitecturePlan | null |
       autonomy: agent.autonomy.replace(/_/g, " "),
       description: agent.description,
     })),
+    fixtures: synthesizeFixtures(plan),
   };
 }

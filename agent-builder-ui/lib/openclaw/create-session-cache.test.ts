@@ -358,6 +358,35 @@ describe("create-session-cache", () => {
     })).toBe(false);
   });
 
+  test("does NOT reconcile when user has navigated back to inspect a prior stage", () => {
+    // User reached prototype, then clicked the Plan pill to inspect.
+    // currentStage=plan, max=prototype, persisted=prototype — must NOT
+    // force the user forward to prototype again.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "plan",
+      persistedStage: "prototype",
+      maxUnlockedStage: "prototype",
+    })).toBe(false);
+
+    // Even from build looking back at think — backend is at build, user
+    // intentionally clicked Think; let them inspect.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "think",
+      persistedStage: "build",
+      maxUnlockedStage: "build",
+    })).toBe(false);
+  });
+
+  test("still reconciles forward when backend has progressed beyond the user's max", () => {
+    // Backend just finished build; user was last on prototype. Forward
+    // them to build so they see the new progress.
+    expect(shouldReconcileToPersistedForgeStage({
+      currentStage: "prototype",
+      persistedStage: "build",
+      maxUnlockedStage: "prototype",
+    })).toBe(true);
+  });
+
   test("suppresses reveal trigger until resume is restored or backend stage is reconciled", () => {
     expect(shouldSuppressRevealTriggerForResume({
       hasRestoredSession: false,
@@ -410,6 +439,104 @@ describe("create-session-cache", () => {
       channels: [],
       runtimeInputs: agent.runtimeInputs,
     }));
+  });
+
+  test("buildResumedCoPilotSeed lets the backend agent record win for architect-written content on reload", () => {
+    // Bug repro from 935d01d0…: the architect revises the PRD on disk,
+    // the backend record is updated, the user reloads — but a stale
+    // localStorage cache was masking the fresh backend content because
+    // the cache merged OVER the persisted seed without distinguishing
+    // backend-owned content from UX cursor state.
+    const revisedAgent: SavedAgent = {
+      ...agent,
+      discoveryDocuments: {
+        prd: {
+          title: "Product Requirements Document",
+          sections: [
+            { heading: "Problem Statement", content: "Now references PostgreSQL." },
+          ],
+        },
+        trd: {
+          title: "Technical Requirements Document",
+          sections: [
+            { heading: "Architecture Overview", content: "PostgreSQL-based storage." },
+          ],
+        },
+      },
+      skillGraph: [
+        {
+          skill_id: "inventory-monitor",
+          name: "Inventory Monitor (revised)",
+          description: "Revised after architect turn",
+        },
+      ],
+    };
+
+    const staleCachedCoPilot = {
+      // Same agent id, so the cache isn't treated as belonging to another agent
+      name: agent.name,
+      description: agent.description,
+      devStage: "plan" as const,
+      // Stale content from BEFORE the architect's revision
+      discoveryDocuments: {
+        prd: {
+          title: "Product Requirements Document",
+          sections: [
+            { heading: "Problem Statement", content: "Old SQLite-based design." },
+          ],
+        },
+        trd: {
+          title: "Technical Requirements Document",
+          sections: [
+            { heading: "Architecture Overview", content: "SQLite-based storage." },
+          ],
+        },
+      },
+      skillGraph: [
+        {
+          skill_id: "inventory-monitor",
+          name: "Inventory Monitor (stale)",
+          description: "Pre-revision",
+        },
+      ],
+    };
+
+    const resumed = buildResumedCoPilotSeed(revisedAgent, staleCachedCoPilot);
+
+    // Backend wins for architect-written content
+    expect(resumed.discoveryDocuments?.prd.sections[0]?.content).toBe("Now references PostgreSQL.");
+    expect(resumed.discoveryDocuments?.trd.sections[0]?.content).toBe("PostgreSQL-based storage.");
+    expect(resumed.skillGraph?.[0]?.name).toBe("Inventory Monitor (revised)");
+  });
+
+  test("buildResumedCoPilotSeed preserves cache values for backend-owned fields when the backend has nothing yet", () => {
+    // The autosave-pending case: user typed something the autosave
+    // hasn't flushed to the backend yet, then reloads. Cache should
+    // still win in that case so in-progress edits aren't lost.
+    const draftAgent: SavedAgent = {
+      ...agent,
+      discoveryDocuments: null,
+      skillGraph: null,
+    };
+
+    const cachedCoPilot = {
+      name: agent.name,
+      description: agent.description,
+      devStage: "think" as const,
+      discoveryDocuments: {
+        prd: {
+          title: "PRD draft",
+          sections: [{ heading: "Problem Statement", content: "In-progress draft." }],
+        },
+        trd: {
+          title: "TRD draft",
+          sections: [{ heading: "Architecture Overview", content: "In-progress draft." }],
+        },
+      },
+    };
+
+    const resumed = buildResumedCoPilotSeed(draftAgent, cachedCoPilot);
+    expect(resumed.discoveryDocuments?.prd.sections[0]?.content).toBe("In-progress draft.");
   });
 
   test("buildResumedCoPilotSeed ignores cached artifacts when cache identity belongs to another agent", () => {

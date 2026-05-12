@@ -837,11 +837,12 @@ function CreateAgentPageContent() {
     if (!shouldReconcileToPersistedForgeStage({
       currentStage: coPilotStore.devStage,
       persistedStage,
+      maxUnlockedStage: coPilotStore.maxUnlockedDevStage,
     })) {
       return;
     }
     coPilotStore.hydrateFromSeed(persistedSeed);
-  }, [coPilotStore, coPilotStore.devStage, workingAgent]);
+  }, [coPilotStore, coPilotStore.devStage, coPilotStore.maxUnlockedDevStage, workingAgent]);
 
   useEffect(() => {
     setCreateSessionConfig(createInitialCreateSessionConfig(workingAgent));

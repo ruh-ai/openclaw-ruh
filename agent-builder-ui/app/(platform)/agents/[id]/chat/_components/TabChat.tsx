@@ -25,6 +25,36 @@ import TaskProgressFooter from "./TaskProgressFooter";
 import CodeEditorPanel from "./CodeEditorPanel";
 import { ChatModeControl } from "./ChatModeControl";
 import { ChatStageContextBar } from "./ChatStageContextBar";
+import { QueuedMessagesChip } from "./QueuedMessagesChip";
+import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
+import { defaultArtifactForStage, triggerBackendDiscoverySync } from "@/lib/openclaw/artifact-refresh";
+import { buildCompactPlanPrompt } from "@/lib/openclaw/build-compact-plan-prompt";
+
+/**
+ * POST a user message to the per-agent interject queue while a build is
+ * running on the iterated path. Fire-and-forget — failures are logged but
+ * don't block the UI. The backend iteration loop drains the queue at the
+ * start of each iteration and prepends messages to the next per-skill
+ * prompt as user-feedback context.
+ */
+async function postBuildInterject(agentId: string, message: string): Promise<void> {
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  try {
+    const res = await fetchBackendWithAuth(`${API_BASE}/api/agents/${agentId}/interjects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) {
+      console.warn(
+        `[interject] POST /api/agents/${agentId}/interjects → ${res.status}`,
+      );
+    }
+  } catch (err) {
+    console.warn("[interject] POST failed:", err);
+  }
+}
+
 import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
@@ -988,6 +1018,11 @@ export function TabChat({
 }: TabChatProps) {
   const isBuilderMode = mode === "builder";
   const [input, setInput] = useState("");
+  // Pair-programmer queue: messages submitted while the architect is mid-turn
+  // are held here and drained one-by-one as each turn completes. Only used in
+  // builder mode — outside of builder mode, useAgentChat.sendMessage no-ops
+  // during isLoading and we keep the historical behavior.
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const [showComputer, setShowComputer] = useState(true);
   const fallbackCoPilotStore = useCoPilotStore();
   const coPilotStore = coPilotStoreProp ?? (isBuilderMode ? fallbackCoPilotStore : null);
@@ -1093,12 +1128,188 @@ export function TabChat({
   }, [input]);
 
   // Input handling
+  // In builder mode, submitting while a turn is in flight enqueues the message
+  // for delivery after the current turn completes. The user's input clears
+  // immediately so they can keep typing additional follow-ups. Outside of
+  // builder mode, behavior is unchanged: send fires through and useAgentChat
+  // drops it if isLoading.
+  //
+  // Phase 2.1.g: when a build is running on the iterated path, route the
+  // message to the per-agent interject queue instead of the chat session.
+  // The iteration loop in agentBuild.ts drains that queue at the start of
+  // each iteration and prepends the messages to the next per-skill prompt,
+  // so user feedback steers the build mid-flight.
+  const buildIsRunning = isBuilderMode && coPilotStore?.buildStatus === "building";
+  const buildAgentId = builderState?.draftAgentId
+    ?? (agent.id !== "new-agent" && !agent.id.startsWith("new-") ? agent.id : null);
+
   const sendMessage = useCallback(() => {
     const text = input.trim();
     if (!text) return;
     setInput("");
+
+    // Build is running → route to interject endpoint. Fire-and-forget;
+    // the iteration loop will drain the queue and emit
+    // iteration_interject_received which CoPilotLayout surfaces in
+    // buildActivity, giving the user receipt-side confirmation.
+    if (buildIsRunning && buildAgentId) {
+      void postBuildInterject(buildAgentId, text);
+      return;
+    }
+
+    if (isBuilderMode && isLoading) {
+      setQueuedMessages((prev) => [...prev, text]);
+      return;
+    }
     sendChatMessage(text);
-  }, [input, sendChatMessage]);
+  }, [input, isBuilderMode, isLoading, buildIsRunning, buildAgentId, sendChatMessage]);
+
+  // Drain the queue on the falling edge of isLoading. We use a ref to detect
+  // the transition so we don't re-fire the drain effect when the queue shrinks
+  // mid-flight.
+  const wasLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading && queuedMessages.length > 0) {
+      const [next, ...rest] = queuedMessages;
+      setQueuedMessages(rest);
+      sendChatMessage(next);
+    }
+    wasLoadingRef.current = isLoading;
+  }, [isLoading, queuedMessages, sendChatMessage]);
+
+  // Artifact refresh after architect turns.
+  //
+  // Any builder-mode chat turn can result in the architect editing a
+  // canonical workspace file (PRD.md, TRD.md, architecture.json,
+  // build-report.json) — both explicit "Ask architect to revise" clicks
+  // AND free-form messages like "change sqlite to postgresql". Without
+  // this effect, the file updates but the UI keeps rendering its stale
+  // in-memory copy because no SSE marker triggered a refresh. Workspace
+  // is the source of truth; this enforces it.
+  //
+  // Resolution order on the rising edge of isLoading:
+  //   1. selectedArtifactTarget — user clicked the revise button
+  //   2. defaultArtifactForStage(devStage) — free-form message in a
+  //      stage that owns a canonical file (think/plan/prototype/build/
+  //      review). Falls back so the bug class is closed even when the
+  //      user didn't go through the revise button.
+  //   3. null on stages with no canonical architect-owned artifact
+  //      (reveal/test/ship/reflect) — skip the refetch entirely rather
+  //      than over-fetching.
+  //
+  // Captured at turn-start so a mid-turn target change doesn't refetch
+  // the wrong artifact at turn-end.
+  const turnArtifactTargetRef = useRef<ArtifactTarget | null>(null);
+  const artifactRefreshLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    const wasLoading = artifactRefreshLoadingRef.current;
+    artifactRefreshLoadingRef.current = isLoading;
+
+    // Rising edge → capture the target (explicit > stage default)
+    if (!wasLoading && isLoading) {
+      if (!isBuilderMode || !coPilotStore) {
+        turnArtifactTargetRef.current = null;
+        return;
+      }
+      const explicit = coPilotStore.selectedArtifactTarget ?? null;
+      turnArtifactTargetRef.current = explicit ?? defaultArtifactForStage(coPilotStore.devStage);
+      return;
+    }
+
+    // Falling edge: reconcile stage status against the actual artifact.
+    // Covers two stuck-status modes:
+    //
+    //   "generating" stuck — revision turns don't emit
+    //   <think_document_ready> / <architecture_plan_ready>, so the status
+    //   stays at "generating" forever after the chat reply lands.
+    //
+    //   "failed" stuck-but-recoverable — Plan-mode architects sometimes
+    //   write architecture.json via a shell script and try to emit
+    //   <plan_complete/> via print(). The bridge's marker parser only
+    //   scans the chat SSE stream (not exec stdout), so the marker never
+    //   reaches the consumer and planStatus flips to "failed" via the
+    //   timeout path — but architecture.json IS on disk. If the in-memory
+    //   store ends up with the artifact (via the refetch below), the
+    //   stage IS ready and "failed" is a false negative.
+    //
+    // Only reset when the artifact is truly present in the store. If the
+    // refetch fails too (workspace empty), we leave "failed" alone so the
+    // user can retry.
+    if (wasLoading && !isLoading && coPilotStore) {
+      const thinkStuck =
+        coPilotStore.thinkStatus === "generating"
+        || coPilotStore.thinkStatus === "failed";
+      const planStuck =
+        coPilotStore.planStatus === "generating"
+        || coPilotStore.planStatus === "failed";
+      if (thinkStuck && coPilotStore.discoveryDocuments) {
+        coPilotStore.setThinkStatus("ready");
+      }
+      if (planStuck && coPilotStore.architecturePlan) {
+        coPilotStore.setPlanStatus("ready");
+      }
+    }
+
+    // Falling edge with a captured target → refetch and update the store
+    if (wasLoading && !isLoading) {
+      const target = turnArtifactTargetRef.current;
+      turnArtifactTargetRef.current = null;
+      if (!target || !coPilotStore) return;
+      const sandboxId = coPilotStore.agentSandboxId;
+      if (!sandboxId) return;
+
+      void (async () => {
+        try {
+          const { refetchArtifactFromWorkspace } = await import(
+            "@/lib/openclaw/artifact-refresh"
+          );
+          const result = await refetchArtifactFromWorkspace(sandboxId, target, {
+            discoveryDocuments: coPilotStore.discoveryDocuments,
+            setDiscoveryDocuments: coPilotStore.setDiscoveryDocuments,
+            setArchitecturePlan: coPilotStore.setArchitecturePlan,
+            setBuildReport: coPilotStore.setBuildReport,
+          });
+          if (result.error) {
+            console.warn(
+              `[artifact-refresh] ${target.kind}: ${result.error}`,
+            );
+          }
+          // After the refetch lands fresh content, re-run the status
+          // reconciliation. Catches the case where the artifact wasn't
+          // in the store at the falling-edge check but the workspace
+          // refetch just populated it — see the comment block above
+          // the falling-edge check for the two stuck-status modes this
+          // covers (generating + failed-but-recoverable).
+          const thinkStuckPost =
+            coPilotStore.thinkStatus === "generating"
+            || coPilotStore.thinkStatus === "failed";
+          const planStuckPost =
+            coPilotStore.planStatus === "generating"
+            || coPilotStore.planStatus === "failed";
+          if (thinkStuckPost && coPilotStore.discoveryDocuments) {
+            coPilotStore.setThinkStatus("ready");
+          }
+          if (planStuckPost && coPilotStore.architecturePlan) {
+            coPilotStore.setPlanStatus("ready");
+          }
+          // Defense in depth: also reconcile the DB row from the workspace
+          // so the next page reload renders the post-turn state. The
+          // in-memory store update above keeps the current tab fresh; this
+          // call keeps the backend honest. Fire-and-forget — failure here
+          // only affects the next reload, never the current view.
+          if (buildAgentId) {
+            void triggerBackendDiscoverySync(buildAgentId);
+          }
+        } catch (err) {
+          console.warn("[artifact-refresh] failed:", err);
+        }
+      })();
+    }
+    // We intentionally exclude coPilotStore from deps — the setters are stable
+    // and reading coPilotStore?.X inside the effect captures the latest values
+    // at the moment isLoading transitions, which is what we want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -1202,14 +1413,14 @@ export function TabChat({
     ) {
       coPilotStore?.markPlanRunDispatched?.(planRunId);
       coPilotStore?.setUserTriggeredPlan?.(false);
-      // Build a message that includes the approved PRD/TRD for the architect
+      // Build a COMPACT plan prompt. Earlier versions embedded the full
+      // PRD + TRD content (~30-50KB) and the architect sometimes
+      // delegated marker emission to shell scripts under context-window
+      // pressure (see SOUL.md fix in 651340a). Now we send only the
+      // section outline; the architect cats the full PRD/TRD from the
+      // workspace if it needs the prose.
       const docs = coPilotStore.discoveryDocuments;
-      let planPrompt = "Generate the architecture plan for this agent.";
-      if (docs) {
-        const prdSummary = docs.prd.sections.map((s) => `### ${s.heading}\n${s.content}`).join("\n\n");
-        const trdSummary = docs.trd.sections.map((s) => `### ${s.heading}\n${s.content}`).join("\n\n");
-        planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
-      }
+      const planPrompt = buildCompactPlanPrompt(docs);
       sendChatMessage(planPrompt, { silent: true })
         .then(async () => {
           // Plan message completed — architect should have written architecture.json
@@ -1529,7 +1740,7 @@ export function TabChat({
                       )}
 
                       {/* Streaming response */}
-                      {liveResponse && <MessageContent content={stripPlanTags(liveResponse)} />}
+                      {liveResponse && <MessageContent content={stripPlanTags(liveResponse)} isLive />}
 
                       {/* Initial thinking state — Manus-style minimal */}
                       {liveSteps.length === 0 && !liveResponse && (
@@ -1567,6 +1778,21 @@ export function TabChat({
               disabled={isLoading}
               onSubmit={(composed) => sendChatMessage(composed)}
             />
+          </div>
+        )}
+
+        {/* Queued messages — shown when user submits during an in-flight turn */}
+        {isBuilderMode && queuedMessages.length > 0 && (
+          <div className="shrink-0 px-4 md:px-0 pt-2">
+            <div className="max-w-2xl mx-auto md:ml-8">
+              <QueuedMessagesChip
+                messages={queuedMessages}
+                onClear={() => setQueuedMessages([])}
+                onRemoveAt={(idx) =>
+                  setQueuedMessages((prev) => prev.filter((_, i) => i !== idx))
+                }
+              />
+            </div>
           </div>
         )}
 
@@ -1608,7 +1834,8 @@ export function TabChat({
               />
               <button
                 onClick={sendMessage}
-                disabled={!input.trim() || isLoading || (!isBuilderMode && !activeSandbox)}
+                disabled={!input.trim() || (!isBuilderMode && (isLoading || !activeSandbox))}
+                title={isBuilderMode && isLoading ? "Queue this message — it will send after the current turn completes" : undefined}
                 className="p-1.5 rounded-lg border border-[var(--border-default)] text-[var(--text-tertiary)] hover:bg-[var(--primary)] hover:text-white hover:border-[var(--primary)] disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-[var(--text-tertiary)] disabled:hover:border-[var(--border-default)] transition-all shrink-0 mb-0.5"
               >
                 <Send className="h-4 w-4" />

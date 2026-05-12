@@ -130,6 +130,7 @@ Response shape:
 
 `workspace_artifacts.<name>` is `null` when that workspace directory doesn't exist on disk yet. `sandbox` is `null` when the agent has no `forge_sandbox_id`. The endpoint reads the workspace artifacts and gateway log inside the sandbox container with a 5-second timeout per exec call, so it returns quickly even when the gateway is unresponsive.
 
+
 The stuck-session monitor (`source: "stuck-session-monitor"`) emits two more action types for any running sandbox whose gateway log contains `[diagnostic] stuck session` lines:
 
 | `category` | `action` | `level` | `status` | When |

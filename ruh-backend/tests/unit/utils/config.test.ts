@@ -16,6 +16,27 @@ describe('parseBackendConfig', () => {
     expect(config.codexAuthJsonPath).toContain('.codex/auth.json');
     expect(config.openaiApiKey).toBeNull();
     expect(config.agentCredentialsKey).toBeNull();
+    expect(config.pairProgrammerBuildV2).toBe(false);
+  });
+
+  test("PAIR_PROGRAMMER_BUILD_V2 enables the iteration-loop build path when set to 1 or true", () => {
+    const enabledOne = parseBackendConfig({
+      DATABASE_URL: 'postgres://openclaw:changeme@localhost:5432/openclaw',
+      PAIR_PROGRAMMER_BUILD_V2: '1',
+    });
+    expect(enabledOne.pairProgrammerBuildV2).toBe(true);
+
+    const enabledTrue = parseBackendConfig({
+      DATABASE_URL: 'postgres://openclaw:changeme@localhost:5432/openclaw',
+      PAIR_PROGRAMMER_BUILD_V2: 'true',
+    });
+    expect(enabledTrue.pairProgrammerBuildV2).toBe(true);
+
+    const disabled = parseBackendConfig({
+      DATABASE_URL: 'postgres://openclaw:changeme@localhost:5432/openclaw',
+      PAIR_PROGRAMMER_BUILD_V2: 'no',
+    });
+    expect(disabled.pairProgrammerBuildV2).toBe(false);
   });
 
   test('throws one aggregated error for missing and malformed variables', () => {

@@ -859,6 +859,51 @@ export function CoPilotLayout({
               case "file_written":
                 pushBuildActivity({ type: "file", label: String(evt.path ?? "").split("/").slice(-2).join("/") });
                 break;
+              case "iteration_announce": {
+                // Phase 2.1 — pair-programmer build path. Surface intent
+                // before the architect generates so the user sees what's
+                // about to happen and can interject. iteration_done
+                // (below) closes the loop with the commit SHA.
+                const n = evt.iteration as number | undefined;
+                const total = evt.total as number | undefined;
+                const summary = String(evt.summary ?? "");
+                const prefix = n && total ? `iter ${n}/${total}: ` : "iter: ";
+                pushBuildActivity({ type: "task", label: `${prefix}${summary}` });
+                if (n && total) {
+                  setBuildProgress({ completed: n - 1, total, currentSkill: summary || null });
+                }
+                break;
+              }
+              case "iteration_done": {
+                const n = evt.iteration as number | undefined;
+                const total = evt.total as number | undefined;
+                const sha = (evt.commitSha as string | undefined) || "";
+                const shaLabel = sha ? ` · ${sha}` : "";
+                const summary = String(evt.summary ?? "");
+                const prefix = n && total ? `✓ iter ${n}/${total}` : "✓ iter";
+                pushBuildActivity({ type: "task", label: `${prefix}: ${summary}${shaLabel}` });
+                if (n && total) {
+                  setBuildProgress({ completed: n, total, currentSkill: null });
+                }
+                break;
+              }
+              case "iteration_interject_received": {
+                // Phase 2.1.f — the architect picked up user feedback
+                // from the interject queue and prepended it to this
+                // iteration's prompt. Surface as a tool-typed entry so
+                // it visually distinguishes from announce/done.
+                const n = evt.iteration as number | undefined;
+                const interjects = (evt.interjects as string[] | undefined) ?? [];
+                const count = interjects.length;
+                const preview = interjects[0] ? interjects[0].slice(0, 60) : "";
+                const more = count > 1 ? ` (+${count - 1} more)` : "";
+                const prefix = n ? `iter ${n}` : "iter";
+                pushBuildActivity({
+                  type: "tool",
+                  label: `${prefix}: applied your feedback — "${preview}"${more}`,
+                });
+                break;
+              }
               case "progress":
                 setBuildProgress({ completed: evt.completed as number, total: evt.total as number, currentSkill: null });
                 break;

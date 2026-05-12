@@ -31,6 +31,13 @@ interface DashboardPrototypeSpec {
 }
 interface ApiEndpoint { method: string; path: string; description: string; query?: string; responseShape?: string }
 interface DataSchema { tables: Array<{ name: string; columns: Array<{ name: string; type?: string; description?: string }>; indexes?: Array<{ columns: string[] }> }> }
+interface PreviewFixtureValue {
+  items?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
+  series?: Array<{ label: string; value: number }>;
+  [key: string]: unknown;
+}
+type PreviewFixtureMap = Record<string, PreviewFixtureValue>;
 
 export interface ArchitecturePlan {
   skills: ArchitecturePlanSkill[];
@@ -61,6 +68,7 @@ export interface ArchitecturePlan {
   apiEndpoints?: ApiEndpoint[];
   dashboardPages?: DashboardPage[];
   dashboardPrototype?: DashboardPrototypeSpec;
+  previewFixtures?: PreviewFixtureMap;
   vectorCollections?: Array<{ name: string; description: string }>;
   buildDependencies?: Array<{ from: string; to: string }>;
 }
@@ -1088,6 +1096,456 @@ export function staleScaffoldFilesForPlan(rawPlan: ArchitecturePlan | Record<str
   return Array.from(stale);
 }
 
+// ── Build-time task fixture synth — mirrors agent-builder-ui ───────────────
+
+interface TaskSummaryBT {
+  id: string; title: string; status: string;
+  pipelineId?: string; startedAt?: string; updatedAt?: string;
+  completedAt?: string; assignedTo?: string;
+  currentStepId?: string; currentStepName?: string;
+  inputs?: Record<string, unknown>;
+}
+interface TimelineEventBT {
+  id: string; timestamp: string; kind: string;
+  stepId?: string; stepName?: string; actor?: string;
+  label: string; detail?: string;
+  toolName?: string; toolArgs?: Record<string, unknown>; toolResult?: unknown;
+}
+interface ArtifactRecordBT {
+  id: string; taskId: string; name: string; type: string;
+  status: string; content?: string; createdAt: string;
+}
+interface TaskRunDetailBT {
+  task: TaskSummaryBT; timeline: TimelineEventBT[]; artifacts: ArtifactRecordBT[];
+}
+
+function buildTaskFixtures(plan: ArchitecturePlan): { tasks: TaskSummaryBT[]; runs: Record<string, TaskRunDetailBT> } {
+  const TITLES = ["Quarterly review", "Outreach batch", "Compliance check", "Stakeholder digest", "Anomaly investigation", "Onboarding follow-up"];
+  const STATUSES = ["in_progress", "in_progress", "needs_approval", "blocked", "completed", "pending"];
+  const NOUNS = ["Alpha", "Beta", "Gamma", "Delta", "Echo", "Foxtrot"];
+  const hash = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); };
+  const isoAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  const pipeline = plan.dashboardPrototype?.pipeline ?? null;
+  const stepNames = pipeline?.steps.map((s) => s.name) ?? ["Intake", "Analyze", "Draft", "Review", "Publish"];
+  const stepIds = pipeline?.steps.map((s) => s.id) ?? stepNames.map((_, i) => `step-${i + 1}`);
+  const subAgent = (i: number) => plan.subAgents?.[i % Math.max(1, plan.subAgents.length)]?.name;
+
+  const tasks: TaskSummaryBT[] = [];
+  const runs: Record<string, TaskRunDetailBT> = {};
+  for (let i = 0; i < 6; i++) {
+    const status = STATUSES[i % STATUSES.length];
+    const seed = hash(`task-${i}`);
+    const stepCount = Math.max(1, stepNames.length);
+    const currentIndex = status === "pending" ? -1 : status === "completed" ? stepCount - 1 : (seed + i) % Math.max(1, stepCount - 1);
+    const startedMin = 5 + ((seed + i * 11) % 240);
+    const task: TaskSummaryBT = {
+      id: `task-${1000 + i}`,
+      title: `${TITLES[i % TITLES.length]} #${100 + i}`,
+      status,
+      pipelineId: pipeline?.name,
+      startedAt: status === "pending" ? undefined : isoAgo(startedMin),
+      updatedAt: isoAgo(Math.max(1, startedMin - 5)),
+      completedAt: status === "completed" ? isoAgo(Math.max(0, startedMin - 30)) : undefined,
+      assignedTo: subAgent(Math.max(0, currentIndex)),
+      currentStepId: currentIndex >= 0 ? stepIds[currentIndex] : undefined,
+      currentStepName: currentIndex >= 0 ? stepNames[currentIndex] : undefined,
+      inputs: { sample: NOUNS[i % NOUNS.length] },
+    };
+    tasks.push(task);
+
+    const timeline: TimelineEventBT[] = [];
+    const stopIndex = status === "completed" ? stepCount : status === "pending" ? 0 : currentIndex + 1;
+    timeline.push({ id: `${task.id}-input`, timestamp: task.startedAt ?? isoAgo(60), kind: "input", actor: "operator", label: `Task assigned: ${task.title}`, detail: `Input: ${JSON.stringify(task.inputs ?? {})}` });
+    for (let j = 0; j < stopIndex; j++) {
+      timeline.push({ id: `${task.id}-step-${j}-start`, timestamp: isoAgo(50 - j * 8), kind: "step_started", stepId: stepIds[j], stepName: stepNames[j], actor: subAgent(j) ?? "agent", label: `${stepNames[j]} started` });
+      if (j % 2 === 0) {
+        timeline.push({ id: `${task.id}-step-${j}-tool`, timestamp: isoAgo(48 - j * 8), kind: "tool_call", stepId: stepIds[j], stepName: stepNames[j], actor: subAgent(j) ?? "agent", label: `Called ${["search","summarize","lookup","draft"][j % 4]} tool`, toolName: ["search_records","summarize_text","fetch_data","generate_draft"][j % 4], toolArgs: { query: NOUNS[(j + i) % NOUNS.length] }, toolResult: { ok: true, items: 3 + ((seed + j) % 12) } });
+      }
+      const isLast = j === stopIndex - 1 && status !== "completed";
+      if (!isLast) {
+        timeline.push({ id: `${task.id}-step-${j}-end`, timestamp: isoAgo(45 - j * 8), kind: "step_completed", stepId: stepIds[j], stepName: stepNames[j], actor: subAgent(j) ?? "agent", label: `${stepNames[j]} completed` });
+      }
+    }
+    if (status === "needs_approval") timeline.push({ id: `${task.id}-appr`, timestamp: isoAgo(2), kind: "approval_requested", actor: "agent", label: "Operator approval requested", detail: "Review the generated artifact before publishing." });
+    if (status === "blocked") timeline.push({ id: `${task.id}-err`, timestamp: isoAgo(3), kind: "error", actor: "agent", label: "Step blocked", detail: "Upstream API returned 429 — retrying with backoff" });
+    if (status === "completed") timeline.push({ id: `${task.id}-comp`, timestamp: task.completedAt ?? isoAgo(1), kind: "complete", actor: "agent", label: "Task completed" });
+
+    const planArtifacts = plan.dashboardPrototype?.artifacts ?? [{ id: "summary", name: "Run summary", type: "summary", description: "Auto-generated summary of what this agent did.", reviewActions: [], acceptanceCriteria: [] }];
+    const artifacts: ArtifactRecordBT[] = planArtifacts.slice(0, 2).map((a, k) => ({
+      id: `${task.id}-art-${k}`,
+      taskId: task.id,
+      name: a.name,
+      type: a.type,
+      status: status === "completed" ? "approved" : status === "needs_approval" ? "pending_review" : status === "blocked" ? "revision_requested" : "draft",
+      content: `# ${a.name}\n\n${a.description ?? "Generated artifact for review."}\n\n**Status:** ${status.replace("_", " ")}\n**Run input:** ${NOUNS[(seed + k) % NOUNS.length]}\n\n## Key findings\n- Insight ${seed % 100}\n- Insight ${(seed + 17) % 100}\n- Insight ${(seed + 31) % 100}\n`,
+      createdAt: isoAgo(4 + k * 2),
+    }));
+
+    runs[task.id] = { task, timeline, artifacts };
+  }
+  return { tasks, runs };
+}
+
+/**
+ * Build a fixture map for dashboard/fixtures.json. The architect-emitted
+ * `previewFixtures` wins; missing dataSources get a small synthetic
+ * fallback so the dashboard's day-1 load is never empty.
+ *
+ * Keep behavior aligned with agent-builder-ui/lib/openclaw/preview-fixtures.ts.
+ */
+function buildBuildtimeFixtures(plan: ArchitecturePlan): PreviewFixtureMap {
+  const out: PreviewFixtureMap = {};
+  const seeded = plan.previewFixtures ?? {};
+  for (const [key, value] of Object.entries(seeded)) {
+    out[key] = { ...value };
+  }
+
+  const hashString = (value: string): number => {
+    let h = 0;
+    for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) | 0;
+    return Math.abs(h);
+  };
+  const titleFromPath = (path: string): string => {
+    const tail = path.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean).pop() ?? "item";
+    return tail.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  for (const page of plan.dashboardPages ?? []) {
+    for (const comp of page.components ?? []) {
+      if (!comp.dataSource) continue;
+      const key = comp.dataSource.split("?")[0];
+      if (out[key]) continue;
+      const seed = hashString(key);
+      const base = titleFromPath(key);
+      switch (comp.type) {
+        case "metric-cards":
+          out[key] = {
+            metrics: {
+              [`Total ${base}`]: ((seed) % 90) + 10,
+              Active: ((seed + 7) % 50) + 5,
+              Blocked: ((seed + 13) % 8),
+              "Pending review": ((seed + 19) % 12) + 1,
+            },
+          };
+          break;
+        case "bar-chart":
+        case "line-chart":
+        case "pie-chart":
+          out[key] = {
+            series: Array.from({ length: 6 }).map((_, i) => ({
+              label: ["Mon","Tue","Wed","Thu","Fri","Sat"][i] ?? `T${i + 1}`,
+              value: ((seed + i * 11) % 80) + 20,
+            })),
+          };
+          break;
+        default:
+          out[key] = {
+            items: Array.from({ length: 3 }).map((_, i) => ({
+              id: `seed-${i + 1}`,
+              name: `${base} ${i + 1}`,
+              status: ["active", "ready", "blocked"][i % 3],
+            })),
+          };
+      }
+    }
+  }
+  // Seed task/run fixtures under reserved keys consumed by Tasks page hook
+  const taskData = buildTaskFixtures(plan);
+  (out as Record<string, unknown>).__tasks = { items: taskData.tasks } as unknown as PreviewFixtureValue;
+  (out as Record<string, unknown>).__runs = taskData.runs as unknown as PreviewFixtureValue;
+  return out;
+}
+
+// ── Generated dashboard file contents (Tasks page) ─────────────────────────
+// Kept as plain string templates so we don't compile-bundle dashboard React
+// into the architect server. Strings are static — no plan interpolation,
+// behavior is driven entirely by fixtures.json.
+
+const TASK_FEED_TEMPLATE = `import React from 'react';
+import { tokens } from './ui';
+import type { TaskSummary, TaskStatus } from './tasks-types';
+
+const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
+  pending: { label: 'Pending', color: tokens.textTertiary },
+  in_progress: { label: 'In progress', color: tokens.primary },
+  blocked: { label: 'Blocked', color: tokens.warning },
+  needs_approval: { label: 'Needs approval', color: tokens.secondary },
+  completed: { label: 'Completed', color: tokens.success },
+  failed: { label: 'Failed', color: tokens.error },
+};
+
+function formatRelative(iso: string | undefined): string {
+  if (!iso) return '—';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const m = Math.max(0, Math.round(diffMs / 60_000));
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.round(h / 24) + 'd ago';
+}
+
+export function TaskFeed({ tasks, selectedTaskId, onSelect }: {
+  tasks: TaskSummary[];
+  selectedTaskId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const groups: Array<{ title: string; statuses: TaskStatus[] }> = [
+    { title: 'In flight', statuses: ['in_progress', 'blocked', 'needs_approval'] },
+    { title: 'Pending', statuses: ['pending'] },
+    { title: 'Done', statuses: ['completed', 'failed'] },
+  ];
+  return (
+    <div style={{ background: tokens.cardColor, border: \`1px solid \${tokens.borderDefault}\`, borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 16px', borderBottom: \`1px solid \${tokens.borderDefault}\`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: tokens.textPrimary }}>Tasks</div>
+          <div style={{ fontSize: 12, color: tokens.textTertiary }}>Click any task to inspect its run</div>
+        </div>
+        <button style={{ padding: '8px 14px', background: tokens.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+ Assign new task</button>
+      </div>
+      <div style={{ maxHeight: 540, overflowY: 'auto' }}>
+        {groups.map((g) => {
+          const items = tasks.filter((t) => g.statuses.includes(t.status));
+          if (!items.length) return null;
+          return (
+            <div key={g.title}>
+              <div style={{ padding: '10px 16px', background: '#fafafa', fontSize: 10, fontWeight: 700, color: tokens.textTertiary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{g.title}</div>
+              {items.map((t) => {
+                const meta = STATUS_META[t.status];
+                const active = selectedTaskId === t.id;
+                return (
+                  <button key={t.id} onClick={() => onSelect(t.id)} style={{ width: '100%', textAlign: 'left', padding: '12px 16px', borderBottom: \`1px solid \${tokens.borderDefault}\`, background: active ? 'rgba(174,0,208,0.04)' : 'transparent', borderLeft: active ? \`3px solid \${tokens.primary}\` : '3px solid transparent', cursor: 'pointer', border: 'none', borderTop: 0, borderRight: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontWeight: 600, color: tokens.textPrimary, fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</div>
+                      <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: meta.color + '18', color: meta.color }}>{meta.label}</span>
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: tokens.textTertiary }}>
+                      {t.currentStepName ? 'Step: ' + t.currentStepName : 'Not started'}
+                      {t.assignedTo ? ' · ' + t.assignedTo : ''} · {formatRelative(t.updatedAt)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+`;
+
+const RUN_INSPECTOR_TEMPLATE = `import React, { useState } from 'react';
+import { tokens } from './ui';
+import type { TaskRunDetail, TimelineEventKind, ArtifactStatus } from './tasks-types';
+
+const KIND_COLOR: Record<TimelineEventKind, string> = {
+  input: tokens.info,
+  step_started: tokens.primary,
+  step_completed: tokens.success,
+  tool_call: tokens.secondary,
+  decision: tokens.primary,
+  artifact_produced: tokens.primary,
+  approval_requested: tokens.warning,
+  approval_granted: tokens.success,
+  approval_rejected: tokens.error,
+  error: tokens.error,
+  complete: tokens.success,
+};
+
+const ARTIFACT_META: Record<ArtifactStatus, { label: string; color: string }> = {
+  draft: { label: 'Draft', color: tokens.textTertiary },
+  pending_review: { label: 'Pending review', color: tokens.secondary },
+  approved: { label: 'Approved', color: tokens.success },
+  revision_requested: { label: 'Revision requested', color: tokens.warning },
+};
+
+function formatRelative(iso: string | undefined): string {
+  if (!iso) return '—';
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.round(h / 24) + 'd ago';
+}
+
+export function RunInspector({ run }: { run: TaskRunDetail | null }) {
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  if (!run) {
+    return <div style={{ background: tokens.cardColor, border: \`1px solid \${tokens.borderDefault}\`, borderRadius: 12, padding: 40, textAlign: 'center', color: tokens.textTertiary }}>Select a task to inspect its run.</div>;
+  }
+  const { task, timeline, artifacts } = run;
+  const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId) ?? artifacts[0] ?? null;
+  return (
+    <div style={{ background: tokens.cardColor, border: \`1px solid \${tokens.borderDefault}\`, borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 700 }}>
+      <div style={{ padding: '14px 16px', borderBottom: \`1px solid \${tokens.borderDefault}\` }}>
+        <div style={{ fontSize: 11, color: tokens.textTertiary, fontFamily: 'ui-monospace, monospace' }}>{task.id}</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: tokens.textPrimary, marginTop: 2 }}>{task.title}</div>
+        <div style={{ marginTop: 6, fontSize: 11, color: tokens.textTertiary }}>
+          {task.assignedTo ? 'Owner: ' + task.assignedTo + ' · ' : ''}Started {formatRelative(task.startedAt)}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 1fr)', flex: 1, minHeight: 0 }}>
+        <div style={{ padding: 16, overflowY: 'auto', borderRight: \`1px solid \${tokens.borderDefault}\` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: tokens.textTertiary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>Timeline</div>
+          {timeline.map((event) => (
+            <div key={event.id} style={{ display: 'grid', gridTemplateColumns: '16px 1fr', gap: 10, marginBottom: 10 }}>
+              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: KIND_COLOR[event.kind], marginTop: 5, boxShadow: \`0 0 0 3px \${KIND_COLOR[event.kind]}22\` }} />
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: tokens.textPrimary }}>{event.label}</div>
+                {event.detail && <div style={{ fontSize: 11, color: tokens.textTertiary, marginTop: 2 }}>{event.detail}</div>}
+                {event.toolName && <div style={{ marginTop: 4, padding: '4px 8px', background: 'rgba(123,90,255,0.06)', borderRadius: 6, fontSize: 10, color: tokens.secondary, fontFamily: 'ui-monospace, monospace' }}>{event.toolName}({event.toolArgs ? JSON.stringify(event.toolArgs) : ''})</div>}
+                <div style={{ marginTop: 4, fontSize: 10, color: tokens.textTertiary }}>{event.actor ?? 'agent'} · {formatRelative(event.timestamp)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: 16, overflowY: 'auto' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: tokens.textTertiary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>Artifacts</div>
+          {artifacts.length === 0 ? <div style={{ fontSize: 12, color: tokens.textTertiary }}>No artifacts produced yet.</div> : artifacts.map((a) => {
+            const meta = ARTIFACT_META[a.status];
+            const selected = selectedArtifact?.id === a.id;
+            return (
+              <button key={a.id} onClick={() => setSelectedArtifactId(a.id)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: 12, marginBottom: 8, background: selected ? 'rgba(174,0,208,0.04)' : tokens.cardColor, border: \`1px solid \${selected ? 'rgba(174,0,208,0.25)' : tokens.borderDefault}\`, borderRadius: 10, cursor: 'pointer' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontWeight: 600, color: tokens.textPrimary, fontSize: 13 }}>{a.name}</div>
+                  <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: meta.color + '18', color: meta.color }}>{meta.label}</span>
+                </div>
+                <div style={{ marginTop: 4, fontSize: 11, color: tokens.textTertiary }}>{a.type} · {formatRelative(a.createdAt)}</div>
+              </button>
+            );
+          })}
+          {selectedArtifact && (
+            <div style={{ marginTop: 12, padding: 12, border: \`1px solid \${tokens.borderDefault}\`, borderRadius: 10, background: '#fafafa' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: tokens.textPrimary, marginBottom: 8 }}>{selectedArtifact.name}</div>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace', fontSize: 12, color: tokens.textSecondary, margin: 0, lineHeight: 1.55 }}>{selectedArtifact.content ?? '(no content)'}</pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+`;
+
+const USE_TASKS_HOOK_TEMPLATE = `import { useEffect, useState } from 'react';
+import fixtures from '../fixtures.json';
+import type { TaskSummary, TaskRunDetail } from '../components/tasks-types';
+
+type FixtureMap = Record<string, unknown>;
+const all = fixtures as FixtureMap;
+
+/**
+ * Try GET /api/tasks; fall back to fixtures.json under the reserved
+ * "__tasks" key. This way day-1 dashboards render even before the backend
+ * specialist has implemented the endpoint.
+ */
+export function useTasks(): { tasks: TaskSummary[]; loading: boolean; error: string | null } {
+  const [state, setState] = useState<{ tasks: TaskSummary[]; loading: boolean; error: string | null }>({
+    tasks: [], loading: true, error: null,
+  });
+  useEffect(() => {
+    let active = true;
+    fetch('/api/tasks').then((r) => r.ok ? r.json() : Promise.reject(r.statusText)).then((json) => {
+      if (!active) return;
+      const items = Array.isArray(json?.items) ? json.items as TaskSummary[] : Array.isArray(json) ? json as TaskSummary[] : [];
+      if (items.length > 0) {
+        setState({ tasks: items, loading: false, error: null });
+      } else {
+        const seeded = ((all.__tasks as { items?: TaskSummary[] } | undefined)?.items) ?? [];
+        setState({ tasks: seeded, loading: false, error: null });
+      }
+    }).catch(() => {
+      if (!active) return;
+      const seeded = ((all.__tasks as { items?: TaskSummary[] } | undefined)?.items) ?? [];
+      setState({ tasks: seeded, loading: false, error: null });
+    });
+    return () => { active = false; };
+  }, []);
+  return state;
+}
+
+export function useRun(taskId: string | null): { run: TaskRunDetail | null; loading: boolean } {
+  const [state, setState] = useState<{ run: TaskRunDetail | null; loading: boolean }>({ run: null, loading: false });
+  useEffect(() => {
+    if (!taskId) { setState({ run: null, loading: false }); return; }
+    let active = true;
+    setState({ run: null, loading: true });
+    fetch('/api/tasks/' + taskId + '/run').then((r) => r.ok ? r.json() : Promise.reject(r.statusText)).then((json) => {
+      if (!active) return;
+      setState({ run: json as TaskRunDetail, loading: false });
+    }).catch(() => {
+      if (!active) return;
+      const runs = (all.__runs ?? {}) as Record<string, TaskRunDetail>;
+      setState({ run: runs[taskId] ?? null, loading: false });
+    });
+    return () => { active = false; };
+  }, [taskId]);
+  return state;
+}
+`;
+
+const TASKS_TYPES_TEMPLATE = `// Runtime task types — kept in sync with agent-builder-ui types.
+
+export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'needs_approval' | 'completed' | 'failed';
+
+export interface TaskSummary {
+  id: string; title: string; status: TaskStatus;
+  pipelineId?: string; startedAt?: string; updatedAt?: string;
+  completedAt?: string; assignedTo?: string;
+  currentStepId?: string; currentStepName?: string;
+  inputs?: Record<string, unknown>;
+}
+
+export type TimelineEventKind = 'input' | 'step_started' | 'step_completed' | 'tool_call' | 'decision' | 'artifact_produced' | 'approval_requested' | 'approval_granted' | 'approval_rejected' | 'error' | 'complete';
+
+export interface TimelineEvent {
+  id: string; timestamp: string; kind: TimelineEventKind;
+  stepId?: string; stepName?: string; actor?: string;
+  label: string; detail?: string;
+  toolName?: string; toolArgs?: Record<string, unknown>; toolResult?: unknown;
+}
+
+export type ArtifactStatus = 'draft' | 'pending_review' | 'approved' | 'revision_requested';
+
+export interface ArtifactRecord {
+  id: string; taskId: string; name: string; type: string;
+  status: ArtifactStatus; content?: string; createdAt: string;
+}
+
+export interface TaskRunDetail {
+  task: TaskSummary; timeline: TimelineEvent[]; artifacts: ArtifactRecord[];
+}
+`;
+
+const TASKS_PAGE_TEMPLATE = `import React, { useEffect, useState } from 'react';
+import { pageStyle, LoadingState } from '../components/ui';
+import { TaskFeed } from '../components/TaskFeed';
+import { RunInspector } from '../components/RunInspector';
+import { useTasks, useRun } from '../hooks/useTasks';
+
+export default function TasksPage() {
+  const { tasks, loading } = useTasks();
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedTaskId && tasks.length > 0) setSelectedTaskId(tasks[0].id);
+  }, [tasks, selectedTaskId]);
+  const { run } = useRun(selectedTaskId);
+  if (loading) return <div style={pageStyle}><LoadingState /></div>;
+  return (
+    <div style={pageStyle}>
+      <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>Tasks</h1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 0.6fr) minmax(0, 1fr)', gap: 16 }}>
+        <TaskFeed tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} />
+        <RunInspector run={run} />
+      </div>
+    </div>
+  );
+}
+`;
+
 function generateDashboardFiles(plan: ArchitecturePlan): ScaffoldFile[] {
   if (!(plan.dashboardPages?.length)) return [];
   const pages = plan.dashboardPages;
@@ -1283,11 +1741,45 @@ export function ${chartType}({ data, label = '' }: { data: Array<{ label: string
   files.push({ path: "dashboard/components/LineChart.tsx", content: chartTemplate("LineChart") });
   files.push({ path: "dashboard/components/PieChart.tsx", content: chartTemplate("PieChart") });
 
+  // ── fixtures.json ──
+  // Seed data for the production dashboard's first load. Architect-provided
+  // previewFixtures merged with a minimal synthetic fallback so every
+  // dataSource has *something* to render before real data arrives.
+  files.push({
+    path: "dashboard/fixtures.json",
+    content: JSON.stringify(buildBuildtimeFixtures(plan), null, 2) + "\n",
+  });
+
   // ── hooks/useApi.ts ──
+  // Falls back to fixtures.json when the response is empty or the request
+  // fails. The empty-payload check protects day-1 dashboards from
+  // looking broken before any operator data exists.
   files.push({
     path: "dashboard/hooks/useApi.ts",
     content: `import { useEffect, useState } from 'react';
 import type { AsyncState } from '../components/types';
+import fixtures from '../fixtures.json';
+
+type FixtureMap = Record<string, Record<string, unknown>>;
+const allFixtures = fixtures as FixtureMap;
+
+function fixtureFor(url: string): Record<string, unknown> | null {
+  const key = url.split('?')[0];
+  return allFixtures[key] ?? null;
+}
+
+function isEmptyPayload(payload: unknown): boolean {
+  if (payload == null) return true;
+  if (Array.isArray(payload)) return payload.length === 0;
+  if (typeof payload !== 'object') return false;
+  const obj = payload as Record<string, unknown>;
+  if (Array.isArray(obj.items)) return obj.items.length === 0;
+  if (obj.metrics && typeof obj.metrics === 'object') {
+    return Object.keys(obj.metrics as Record<string, unknown>).length === 0;
+  }
+  if (Array.isArray(obj.series)) return obj.series.length === 0;
+  return Object.keys(obj).length === 0;
+}
 
 export function useApi<T>(url: string, deps: unknown[] = []): AsyncState<T> {
   const [state, setState] = useState<AsyncState<T>>({ data: null, loading: true, error: null });
@@ -1300,9 +1792,24 @@ export function useApi<T>(url: string, deps: unknown[] = []): AsyncState<T> {
       .then(({ ok, json }) => {
         if (!active) return;
         if (!ok) throw new Error((json as {error?:{message?:string}})?.error?.message || 'Request failed');
+        if (isEmptyPayload(json)) {
+          const fallback = fixtureFor(url);
+          if (fallback) {
+            setState({ data: fallback as T, loading: false, error: null });
+            return;
+          }
+        }
         setState({ data: json as T, loading: false, error: null });
       })
-      .catch(e => { if (active && !controller.signal.aborted) setState({ data: null, loading: false, error: e instanceof Error ? e.message : 'Unknown error' }); });
+      .catch(e => {
+        if (!active || controller.signal.aborted) return;
+        const fallback = fixtureFor(url);
+        if (fallback) {
+          setState({ data: fallback as T, loading: false, error: null });
+          return;
+        }
+        setState({ data: null, loading: false, error: e instanceof Error ? e.message : 'Unknown error' });
+      });
     return () => { active = false; controller.abort(); };
   }, deps);
   return state;
@@ -1326,8 +1833,22 @@ export function useApi<T>(url: string, deps: unknown[] = []): AsyncState<T> {
     }
   }
 
+  // ── Tasks page + components (Layer 1: assign task → watch run) ──
+  files.push({ path: "dashboard/components/tasks-types.ts", content: TASKS_TYPES_TEMPLATE });
+  files.push({ path: "dashboard/components/TaskFeed.tsx", content: TASK_FEED_TEMPLATE });
+  files.push({ path: "dashboard/components/RunInspector.tsx", content: RUN_INSPECTOR_TEMPLATE });
+  files.push({ path: "dashboard/hooks/useTasks.ts", content: USE_TASKS_HOOK_TEMPLATE });
+  files.push({ path: "dashboard/pages/tasks.tsx", content: TASKS_PAGE_TEMPLATE });
+
   // ── layout.tsx ──
-  const navItems = pages.map((p) => `  { href: '${p.path}', label: '${p.title}' },`).join("\n");
+  // Horizontal top nav. The previous 240px sidebar consumed too much
+  // horizontal space for the dashboard body — kept the prototype preview
+  // and the live dashboard visually aligned by moving navigation up top.
+  // "Tasks" is always the first nav item — every agent has tasks.
+  const navItems = [
+    "  { href: '/tasks', label: 'Tasks' },",
+    ...pages.map((p) => `  { href: '${p.path}', label: '${p.title}' },`),
+  ].join("\n");
   files.push({
     path: "dashboard/layout.tsx",
     content: `import React, { type ReactNode } from 'react';
@@ -1340,25 +1861,27 @@ ${navItems}
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/';
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', gridTemplateColumns: '240px 1fr', background: tokens.background, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
-      <aside style={{ background: tokens.sidebarBg, borderRight: \`1px solid \${tokens.borderDefault}\`, padding: 20 }}>
-        <div style={{ padding: '8px 10px 20px' }}>
-          <div style={{ width: 44, height: 44, borderRadius: 12, background: tokens.gradient, marginBottom: 14 }} />
-          <div style={{ fontSize: 18, fontWeight: 700, color: tokens.textPrimary }}>Mission Control</div>
-          <div style={{ color: tokens.textSecondary, fontSize: 14, marginTop: 4 }}>Agent operations</div>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: tokens.background, fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+      <header style={{ background: tokens.sidebarBg, borderBottom: \`1px solid \${tokens.borderDefault}\`, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: tokens.gradient, flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: tokens.textPrimary, lineHeight: 1.2 }}>Mission Control</div>
+            <div style={{ color: tokens.textSecondary, fontSize: 11, marginTop: 1 }}>Agent operations</div>
+          </div>
         </div>
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <nav style={{ display: 'flex', gap: 2, flexWrap: 'wrap', marginLeft: 'auto' }} aria-label="Dashboard pages">
           {navItems.map((item) => {
             const active = currentPath === item.href || currentPath.startsWith(item.href + '/');
             return (
-              <a key={item.href} href={item.href} style={{ display: 'block', padding: '11px 12px', borderRadius: 10, color: active ? tokens.primary : tokens.textSecondary, background: active ? 'rgba(174,0,208,0.08)' : 'transparent', textDecoration: 'none', fontSize: 14, fontWeight: active ? 600 : 400 }}>
+              <a key={item.href} href={item.href} style={{ padding: '8px 14px', borderRadius: 8, color: active ? tokens.primary : tokens.textSecondary, background: active ? 'rgba(174,0,208,0.08)' : 'transparent', border: active ? '1px solid rgba(174,0,208,0.20)' : '1px solid transparent', textDecoration: 'none', fontSize: 13, fontWeight: active ? 600 : 500 }}>
                 {item.label}
               </a>
             );
           })}
         </nav>
-      </aside>
-      <main style={{ padding: 0, overflow: 'auto' }}>{children}</main>
+      </header>
+      <main style={{ flex: 1, padding: 0, overflow: 'auto' }}>{children}</main>
     </div>
   );
 }
@@ -1374,6 +1897,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     content: `import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import DashboardLayout from './layout';
+import TasksPage from './pages/tasks';
 ${pageImports}
 
 function App() {
@@ -1381,8 +1905,9 @@ function App() {
     <BrowserRouter>
       <DashboardLayout>
         <Routes>
+          <Route path="/tasks" element={<TasksPage />} />
 ${pageRoutes}
-          <Route path="*" element={<Navigate to="${pages[0]?.path ?? "/"}" replace />} />
+          <Route path="*" element={<Navigate to="/tasks" replace />} />
         </Routes>
       </DashboardLayout>
     </BrowserRouter>
