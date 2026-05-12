@@ -33,14 +33,10 @@
     "eslint-config-next": "16.2.4",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
-    "msw": "^2.14.2",
+    "msw": "~2.12.13",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^6",
-    "undici": "^8.2.0"
-  },
-  "overrides": {
-    "react": "19.2.5",
-    "react-dom": "19.2.5"
+    "undici": "8.0.2"
   }
 }
