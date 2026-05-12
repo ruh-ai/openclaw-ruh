@@ -1,16 +1,18 @@
 /**
  * Rehydrate `architecturePlan` from the agent's workspace when the store
  * lost it (e.g., creation_session was overwritten with `architecturePlan:
- * null` by a stale snapshot save).
+ * null` by a stale snapshot save, or the SSE stream completed write to
+ * disk but the store status stayed "failed").
  *
  * Source of truth: `.openclaw/plan/architecture.json` written by the
  * architect during the Plan stage. Reading it back in is safe — the file
  * is JSON and `normalizePlan` is the same routine that ingested it
  * originally.
  *
- * Guard: only fires when the user has actually progressed past Plan AND
- * the store is empty. For a fresh agent at Plan stage we let the normal
- * generate-plan flow run.
+ * Guard: fires when devStage is plan-or-later AND the store has no plan.
+ * Fire-once per (sandbox, no-plan) tuple. If the file isn't on disk yet
+ * (fresh Plan stage), we get "missing" and the normal generate-plan SSE
+ * flow takes over without interference.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -29,17 +31,15 @@ export function useArchitecturePlanRehydration(
   const sandboxId = store.agentSandboxId;
   const hasPlan = Boolean(store.architecturePlan);
   const planStageIdx = AGENT_DEV_STAGES.indexOf("plan");
-  const unlockedStageIdx = AGENT_DEV_STAGES.indexOf(store.maxUnlockedDevStage);
-  const reachedPastPlan = unlockedStageIdx > planStageIdx;
   const onPlanOrLater = AGENT_DEV_STAGES.indexOf(store.devStage) >= planStageIdx;
 
   useEffect(() => {
     // Only act when:
-    //   - user has progressed past Plan (so a plan must already exist on disk)
+    //   - we're at Plan stage or later
     //   - the store currently has no plan (definite drift)
     //   - we have a sandbox to read from
     //   - we haven't already attempted this (sandbox, plan-presence) combo
-    if (!sandboxId || hasPlan || !reachedPastPlan || !onPlanOrLater) return;
+    if (!sandboxId || hasPlan || !onPlanOrLater) return;
     const attemptKey = `${sandboxId}:no-plan`;
     if (attemptedKeyRef.current === attemptKey) return;
     attemptedKeyRef.current = attemptKey;
@@ -76,7 +76,7 @@ export function useArchitecturePlanRehydration(
     return () => {
       cancelled = true;
     };
-  }, [sandboxId, hasPlan, reachedPastPlan, onPlanOrLater, store]);
+  }, [sandboxId, hasPlan, onPlanOrLater, store]);
 
   return { status, error };
 }
