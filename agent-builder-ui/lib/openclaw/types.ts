@@ -289,11 +289,44 @@ export interface ApiEndpoint {
   responseShape?: string;
 }
 
+/**
+ * Bindings the architect declares on a dashboard component so the scaffold can
+ * (a) render specific labels in the dashboard and (b) synthesize a backend
+ * response shape that matches what the dashboard reads. Mirrored in
+ * `ruh-backend/src/scaffoldTemplates.ts`.
+ */
+export interface DashboardComponentMetric {
+  label: string;
+  field: string;
+  format?: "number" | "currency" | "percent" | "string";
+  sampleValue?: string | number;
+}
+
+export interface DashboardComponentSeries {
+  labelField: string;
+  valueField: string;
+  name?: string;
+}
+
+export interface DashboardComponentColumn {
+  header: string;
+  field: string;
+}
+
+export interface DashboardComponentConfig {
+  metrics?: DashboardComponentMetric[];
+  series?: DashboardComponentSeries | DashboardComponentSeries[];
+  columns?: DashboardComponentColumn[];
+  itemsField?: string;
+  activityField?: string;
+  [key: string]: unknown;
+}
+
 export interface DashboardPageComponent {
   type: "metric-cards" | "data-table" | "line-chart" | "bar-chart" | "pie-chart" | "activity-feed" | "status-badge" | "empty-state";
   title?: string;
   dataSource: string;
-  config?: Record<string, unknown>;
+  config?: DashboardComponentConfig;
 }
 
 export interface DashboardPage {
@@ -311,6 +344,17 @@ export interface DashboardPrototypeWorkflow {
   successCriteria: string[];
 }
 
+export interface DashboardPrototypePageSection {
+  type: "metric-cards" | "data-table" | "line-chart" | "bar-chart" | "pie-chart" | "activity-feed" | "status-badge" | "empty-state";
+  title?: string;
+  dataSource?: string;
+  purpose?: string;
+  acceptanceCriteria?: string[];
+  metrics?: DashboardComponentMetric[];
+  series?: DashboardComponentSeries | DashboardComponentSeries[];
+  columns?: DashboardComponentColumn[];
+}
+
 export interface DashboardPrototypePage {
   path: string;
   title: string;
@@ -318,6 +362,7 @@ export interface DashboardPrototypePage {
   supportsWorkflows: string[];
   requiredActions: string[];
   acceptanceCriteria: string[];
+  sections?: DashboardPrototypePageSection[];
 }
 
 export interface DashboardPrototypeAction {
@@ -371,6 +416,111 @@ export interface DashboardPrototypeSpec {
   approvalChecklist: string[];
 }
 
+// ── Layer 1: Task / Run / Timeline / Artifact primitives ───────────────────
+//
+// The agent's *runtime* domain. Operators assign Tasks, the agent walks a
+// Pipeline producing Timeline events and Artifacts. These types are
+// consumed by the dashboard's Tasks page (production) and the prototype
+// preview's Tasks tab (pre-build). The architect declares pipelines in
+// `dashboardPrototype.pipeline`; tasks are runtime instances of those
+// pipelines.
+
+export type TaskStatus =
+  | "pending"
+  | "in_progress"
+  | "blocked"
+  | "needs_approval"
+  | "completed"
+  | "failed";
+
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  pipelineId?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  assignedTo?: string;
+  currentStepId?: string;
+  currentStepName?: string;
+  inputs?: Record<string, unknown>;
+}
+
+export type TimelineEventKind =
+  | "input"
+  | "step_started"
+  | "step_completed"
+  | "tool_call"
+  | "decision"
+  | "artifact_produced"
+  | "approval_requested"
+  | "approval_granted"
+  | "approval_rejected"
+  | "error"
+  | "complete";
+
+export interface TimelineEvent {
+  id: string;
+  timestamp: string;
+  kind: TimelineEventKind;
+  stepId?: string;
+  stepName?: string;
+  actor?: string;
+  label: string;
+  detail?: string;
+  artifactId?: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolResult?: unknown;
+}
+
+export type ArtifactStatus =
+  | "draft"
+  | "pending_review"
+  | "approved"
+  | "revision_requested";
+
+export interface ArtifactRecord {
+  id: string;
+  taskId: string;
+  name: string;
+  type: string;
+  status: ArtifactStatus;
+  content?: string;
+  url?: string;
+  createdAt: string;
+  producedByStepId?: string;
+}
+
+export interface TaskRunDetail {
+  task: TaskSummary;
+  timeline: TimelineEvent[];
+  artifacts: ArtifactRecord[];
+}
+
+/**
+ * Per-dataSource seed/fixture payload used by the prototype preview and
+ * by the production dashboard on its first load. Keys mirror the api
+ * endpoint paths declared in dashboardPages[*].components[*].dataSource.
+ *
+ * Field conventions match what scaffoldTemplates.ts already expects when
+ * wiring useApi() → component:
+ *   - `items`   → row data for data-table / activity-feed
+ *   - `metrics` → label→value object for metric-cards
+ *   - `series`  → [{ label, value }] for bar/line/pie charts
+ *
+ * Any additional fields are passed through to the component as-is.
+ */
+export interface PreviewFixtureValue {
+  items?: Array<Record<string, unknown>>;
+  metrics?: Record<string, unknown>;
+  series?: Array<{ label: string; value: number }>;
+  [key: string]: unknown;
+}
+
+export type PreviewFixtureMap = Record<string, PreviewFixtureValue>;
+
 export interface VectorCollection {
   name: string;
   description: string;
@@ -423,6 +573,12 @@ export interface ArchitecturePlan {
    * checks the dashboard prototype must satisfy before Build starts.
    */
   dashboardPrototype?: DashboardPrototypeSpec;
+  /**
+   * Seed data for the prototype preview and the production dashboard's
+   * day-1 load. Keyed by dataSource path. If the architect doesn't emit
+   * this, the prototype frontend synthesizes deterministic fallbacks.
+   */
+  previewFixtures?: PreviewFixtureMap;
   vectorCollections?: VectorCollection[];
   /** Dependency graph between plan artifacts (v4). */
   buildDependencies?: BuildDependency[];

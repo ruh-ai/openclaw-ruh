@@ -116,8 +116,8 @@ describe("buildDashboardPrototypeViewModel", () => {
       purpose: "Prioritize active estimates.",
       actions: ["Open project"],
       acceptanceCriteria: ["Shows blocker count"],
-      components: ["metric-cards", "data-table"],
     });
+    expect(model.pages[0]?.components.map((c) => c.type)).toEqual(["metric-cards", "data-table"]);
     expect(model.pages[0]?.workflows.map((workflow) => workflow.name)).toEqual(["Project Triage"]);
     expect(model.primaryActions.map((action) => action.id)).toEqual([
       "create-estimate",

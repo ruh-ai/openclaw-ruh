@@ -344,11 +344,16 @@ test.describe("Prototype stage validation", () => {
     const monitorQuality = SAMPLE_PLAN.dashboardPrototype.workflows.find((w) => w.id === "monitor-quality")!;
     const captureAndApprove = SAMPLE_PLAN.dashboardPrototype.workflows.find((w) => w.id === "capture-and-approve")!;
 
-    // Default page (Overview) → monitor-quality should be visible
+    // The prototype's default tab is now "Tasks" (Layer 1). Scope all
+    // page-tab clicks to the prototype's own top nav (aria-label set on
+    // PreviewTopNav) so we don't accidentally match outer-dashboard nav.
+    const protoNav = page.getByRole("navigation", { name: "Dashboard pages" });
+    const overviewPage = SAMPLE_PLAN.dashboardPages[0];
+    await protoNav.getByRole("button", { name: overviewPage.title, exact: false }).click();
     await expect(page.getByText(monitorQuality.name, { exact: false }).first()).toBeVisible();
 
     // Click the approvals page in the prototype navigation → capture-and-approve should appear
-    await page.getByRole("button", { name: "Pending Approvals", exact: false }).first().click();
+    await protoNav.getByRole("button", { name: "Pending Approvals", exact: false }).click();
     await expect(page.getByText(captureAndApprove.name, { exact: false }).first()).toBeVisible();
   });
 
@@ -388,5 +393,103 @@ test.describe("Prototype stage validation", () => {
         { timeout: 10_000 },
       )
       .toBe("build");
+  });
+});
+
+// ─── Layer 1: Tasks tab + Assign Task flow ─────────────────────────────────
+// Validates the runtime experience the founder will preview before Build:
+// the Tasks tab is the default landing tab; seeded fixture tasks appear in
+// the feed; clicking the inspector renders a timeline; "+ Assign new task"
+// opens a modal whose submission spins up a simulated pipeline run.
+
+test.describe("Tasks tab + Assign Task simulation", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.removeItem("openclaw-agents"));
+  });
+
+  test("Tasks is the default tab on prototype mount", async ({ page }) => {
+    await mockStack(page);
+    await startNewAgent(page);
+    await jumpToPrototypeStage(page, SAMPLE_PLAN);
+    await expect(page.getByRole("heading", { name: /Dashboard Prototype/i })).toBeVisible({ timeout: 10_000 });
+
+    // PreviewTopNav has aria-label "Dashboard pages"; the Tasks tab is the
+    // first button and should render with aria-pressed=true on mount.
+    const protoNav = page.getByRole("navigation", { name: "Dashboard pages" });
+    const tasksTab = protoNav.getByRole("button", { name: "Tasks", exact: true }).first();
+    await expect(tasksTab).toBeVisible();
+    await expect(tasksTab).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("seeded fixture tasks render in the feed with statuses", async ({ page }) => {
+    await mockStack(page);
+    await startNewAgent(page);
+    await jumpToPrototypeStage(page, SAMPLE_PLAN);
+    await expect(page.getByRole("heading", { name: /Dashboard Prototype/i })).toBeVisible({ timeout: 10_000 });
+
+    // The synthesizeTaskRuns helper produces 6 tasks across statuses. We
+    // should see at least one item under each visible status group.
+    await expect(page.getByText(/In flight/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Done/i).first()).toBeVisible();
+
+    // The right-hand RunInspector shows the first task's timeline by
+    // default. Verify the "Timeline" header is present.
+    await expect(page.getByText(/Timeline/i).first()).toBeVisible();
+  });
+
+  test("clicking '+ Assign new task' opens the modal with title + input fields", async ({ page }) => {
+    await mockStack(page);
+    await startNewAgent(page);
+    await jumpToPrototypeStage(page, SAMPLE_PLAN);
+    await expect(page.getByRole("heading", { name: /Dashboard Prototype/i })).toBeVisible({ timeout: 10_000 });
+
+    await page.getByRole("button", { name: /\+ Assign new task/i }).click();
+    await expect(page.getByText(/Assign a new task/i)).toBeVisible({ timeout: 5_000 });
+
+    const titleBox = page.getByRole("textbox", { name: "Title" });
+    const inputBox = page.getByRole("textbox", { name: "Input" });
+    await expect(titleBox).toBeVisible();
+    await expect(inputBox).toBeVisible();
+
+    // Run-task button is disabled when Input is empty (Title is pre-populated
+    // from the plan's createAction.label).
+    await inputBox.fill("");
+    const runBtn = page.getByRole("button", { name: /Run task/i });
+    await expect(runBtn).toBeDisabled();
+  });
+
+  test("submitting the modal adds a task that progresses through the simulated pipeline", async ({ page }) => {
+    await mockStack(page);
+    await startNewAgent(page);
+    await jumpToPrototypeStage(page, SAMPLE_PLAN);
+    await expect(page.getByRole("heading", { name: /Dashboard Prototype/i })).toBeVisible({ timeout: 10_000 });
+
+    await page.getByRole("button", { name: /\+ Assign new task/i }).click();
+    await expect(page.getByText(/Assign a new task/i)).toBeVisible({ timeout: 5_000 });
+
+    const uniqueTitle = `E2E task ${Date.now()}`;
+    await page.getByRole("textbox", { name: "Title" }).fill(uniqueTitle);
+    await page.getByRole("textbox", { name: "Input" }).fill("Investigate stuck approvals from yesterday");
+
+    const runBtn = page.getByRole("button", { name: /Run task/i });
+    await expect(runBtn).not.toBeDisabled();
+    await runBtn.click();
+
+    // Modal closes; the new task appears in the feed and is auto-selected
+    // so the inspector immediately shows the timeline with the initial
+    // "Task assigned" input event.
+    await expect(page.getByText(/Assign a new task/i)).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(uniqueTitle).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(`Task assigned: ${uniqueTitle}`)).toBeVisible({ timeout: 5_000 });
+
+    // Simulator ticks at 1.4s/step. The 3-step SAMPLE_PLAN pipeline
+    // (ingest → extract → approval) produces a `Task completed` event in
+    // ~5-6s. Allow generous timeout for slower CI.
+    await expect(page.getByText(/Task completed/i).first()).toBeVisible({ timeout: 20_000 });
+
+    // Final status should flip to "Needs approval" once the artifact is
+    // produced, and the artifact appears in the right-hand panel.
+    await expect(page.getByText(/Needs approval/i).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Source record|Run summary/i).first()).toBeVisible();
   });
 });
