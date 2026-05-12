@@ -119,7 +119,7 @@ describe('generateScaffoldFiles', () => {
     expect(files.find((file) => file.path === '.openclaw/install-crons.sh')?.content).toContain('openclaw cron add');
   });
 
-  test('renders dashboard prototype workflows and actions into generated dashboard pages', () => {
+  test('production dashboard pages do NOT embed prototype-spec metadata (workflows, actions, artifacts, approval gate)', () => {
     const files = generateScaffoldFiles({
       skills: [],
       workflow: { steps: [] },
@@ -195,16 +195,23 @@ describe('generateScaffoldFiles', () => {
     } as never, 'Estimator');
 
     const page = files.find((file) => file.path === 'dashboard/pages/estimate-projects.tsx');
-    expect(page?.content).toContain('Prototype approval gate');
-    expect(page?.content).toContain('Project Review');
-    expect(page?.content).toContain('prototypeActionEndpoints');
-    expect(page?.content).toContain('onClick={() => runPrototypeAction(action)}');
-    expect(page?.content).toContain('Create estimate');
-    expect(page?.content).toContain('Estimate build pipeline');
-    expect(page?.content).toContain('Source evidence map');
-    expect(page?.content).toContain('resolve_blocker');
-    expect(page?.content).toContain('Blocked projects cannot be approved');
-    expect(page?.content).toContain('Does this match ECC project review?');
+    // The prototype spec — workflow names, planned actions, generated
+    // artifacts, approval-gate header, revision prompts — is process
+    // metadata that belongs in the architect's plan and the prototype tab
+    // in agent-builder. It must NOT appear on the operator's live
+    // dashboard. Production pages render only live UI primitives
+    // (PageHeader + MetricCard/DataTable/charts fed by useApi).
+    expect(page?.content).not.toContain('Prototype approval gate');
+    expect(page?.content).not.toContain('Project Review');
+    expect(page?.content).not.toContain('prototypeActionEndpoints');
+    expect(page?.content).not.toContain('runPrototypeAction');
+    expect(page?.content).not.toContain('Create estimate');
+    expect(page?.content).not.toContain('Estimate build pipeline');
+    expect(page?.content).not.toContain('Source evidence map');
+    expect(page?.content).not.toContain('Does this match ECC project review?');
+    // But the page DOES still render the live primitives for its components.
+    expect(page?.content).toContain("PageHeader title=\"Estimate Projects\"");
+    expect(page?.content).toContain("DataTable");
 
     const route = files.find((file) => file.path === 'backend/routes/estimator.ts');
     expect(route?.content).toContain('createInitialState');

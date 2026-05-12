@@ -1275,11 +1275,17 @@ createRoot(document.getElementById('root')!).render(<App />);
   });
 
   // ── Page files — one per dashboardPage ──
+  //
+  // The prototype-spec panel (DashboardPrototypePanel) is NOT emitted into
+  // production pages. It was dumping process documentation (workflow
+  // steps, planned-action lists, generated-artifacts lists, a literal
+  // "PROTOTYPE APPROVAL GATE" header) into every operator-facing page.
+  // Process metadata lives in the architect's plan and the prototype tab
+  // in agent-builder; the deployed dashboard renders only live UI
+  // primitives (MetricCard / DataTable / charts) fed by useApi.
   for (const page of pages) {
     const pageSlug = slugify(page.title);
     const pageName = pascalCase(page.title) + "Page";
-    const prototypePage = findPrototypePage(plan, page);
-    const prototypePanel = renderDashboardPrototypePanel(plan, prototypePage);
 
     // Collect hooks this page needs
     const pageHooks = new Map<string, string>();
@@ -1320,10 +1326,9 @@ createRoot(document.getElementById('root')!).render(<App />);
     files.push({
       path: `dashboard/pages/${pageSlug}.tsx`,
       content: `import React from 'react';
-import { pageStyle, gridStyle, LoadingState, ErrorState, EmptyState, PageHeader${prototypePanel ? ", cardStyle" : ""} } from '../components/ui';
+import { pageStyle, gridStyle, LoadingState, ErrorState, EmptyState, PageHeader } from '../components/ui';
 ${compImports.join("\n")}
 ${hookImports}
-${prototypePanel}
 
 export default function ${pageName}() {
 ${hookCalls}
@@ -1335,7 +1340,6 @@ ${firstHookVar ? `  if (${firstHookVar}.loading) return <div style={pageStyle}><
   return (
     <div style={pageStyle}>
       <PageHeader title="${page.title}" description="${page.description ?? ""}" />
-${prototypePanel ? "      <DashboardPrototypePanel />" : ""}
 ${compUsage}
     </div>
   );

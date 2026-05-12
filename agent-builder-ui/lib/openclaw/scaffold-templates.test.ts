@@ -4,7 +4,7 @@ import { generateScaffoldFiles } from "./scaffold-templates";
 import type { ArchitecturePlan } from "./types";
 
 describe("generateScaffoldFiles — dashboardPrototype", () => {
-  test("renders prototype workflows and required actions into generated dashboard pages", () => {
+  test("production dashboard pages do NOT embed prototype-spec metadata (workflows, actions, artifacts, approval gate)", () => {
     const plan: ArchitecturePlan = {
       skills: [],
       workflow: { steps: [] },
@@ -82,27 +82,27 @@ describe("generateScaffoldFiles — dashboardPrototype", () => {
     const page = generateScaffoldFiles(plan, "Estimator")
       .find((file) => file.path === "dashboard/pages/estimate-projects.tsx");
 
-    expect(page?.content).toContain("Project Review");
-    expect(page?.content).toContain("prototypeActionEndpoints");
-    expect(page?.content).toContain("runPrototypeAction(action.id, action.label)");
-    expect(page?.content).toContain("Create estimate");
-    expect(page?.content).toContain("Estimate build pipeline");
-    expect(page?.content).toContain("Source evidence map");
-    expect(page?.content).toContain("resolve_blocker");
-    expect(page?.content).toContain("Blocked projects cannot be approved");
-    // Visual fidelity: workflows render via WorkflowCard with arrow-flow steps
-    expect(page?.content).toContain("function WorkflowCard");
-    expect(page?.content).toContain("workflow.steps.join(' → ')");
-    // Pipeline renders as a horizontal stepper, not a numbered <ol>
-    expect(page?.content).toContain("function PipelineStepper");
-    // Artifacts render via ArtifactReviewCard with reviewAction buttons
-    expect(page?.content).toContain("function ArtifactReviewCard");
-    // Review artifacts (revisionPrompts, approvalChecklist) gate Plan→Build in
-    // the builder UI; they must NOT appear in the runtime scaffold.
+    // The prototype-spec content — workflow names, planned-action labels,
+    // generated-artifact names, pipeline step lists, revision prompts,
+    // approval-checklist items — is PROCESS METADATA. It documents what
+    // the agent should do, not what the operator should see. Production
+    // dashboard pages must render only live UI primitives (PageHeader +
+    // MetricCard / DataTable / charts fed by useApi).
+    expect(page?.content).not.toContain("Project Review");
+    expect(page?.content).not.toContain("prototypeActionEndpoints");
+    expect(page?.content).not.toContain("runPrototypeAction");
+    expect(page?.content).not.toContain("Create estimate");
+    expect(page?.content).not.toContain("Estimate build pipeline");
+    expect(page?.content).not.toContain("Source evidence map");
+    expect(page?.content).not.toContain("Blocked projects cannot be approved");
+    expect(page?.content).not.toContain("function WorkflowCard");
+    expect(page?.content).not.toContain("function PipelineStepper");
+    expect(page?.content).not.toContain("function ArtifactReviewCard");
     expect(page?.content).not.toContain("Does this match ECC project review?");
     expect(page?.content).not.toContain("Prototype reviewed");
-    expect(page?.content).not.toContain("prototypeRevisionPrompts");
-    expect(page?.content).not.toContain("prototypeApprovalChecklist");
+    // Page still renders the live primitives
+    expect(page?.content).toContain('PageHeader title="Estimate Projects"');
+    expect(page?.content).toContain("DataTable");
 
     const route = generateScaffoldFiles(plan, "Estimator")
       .find((file) => file.path === "backend/routes/estimator.ts");
