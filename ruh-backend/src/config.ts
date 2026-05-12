@@ -26,6 +26,11 @@ export interface BackendConfig {
   otelExporterOtlpEndpoint: string | null;
   otelExporterOtlpHeaders: string | null;
   otelSampleRate: number;
+  // Used by /health/telemetry to probe Langfuse availability. Independent of
+  // OTEL_EXPORTER_OTLP_ENDPOINT because that may point at any OTLP collector,
+  // not necessarily Langfuse's web UI.
+  langfuseBaseUrl: string | null;
+  sentryDsn: string | null;
   logLevel: string;
   paperclipApiUrl: string | null;
   openspaceMcpEnabled: boolean;
@@ -183,6 +188,9 @@ export function parseBackendConfig(
     }
   }
 
+  const langfuseBaseUrl = parseUrlField(readRaw(env, 'LANGFUSE_BASE_URL'), 'LANGFUSE_BASE_URL', errors);
+  const sentryDsn = normalizeOptionalString(readRaw(env, 'SENTRY_DSN'));
+
   const logLevel = readRaw(env, 'LOG_LEVEL') ?? 'info';
 
   const paperclipApiUrl = parseUrlField(readRaw(env, 'PAPERCLIP_API_URL'), 'PAPERCLIP_API_URL', errors);
@@ -227,6 +235,8 @@ export function parseBackendConfig(
     otelExporterOtlpEndpoint,
     otelExporterOtlpHeaders,
     otelSampleRate,
+    langfuseBaseUrl,
+    sentryDsn,
     logLevel,
     paperclipApiUrl,
     openspaceMcpEnabled,
