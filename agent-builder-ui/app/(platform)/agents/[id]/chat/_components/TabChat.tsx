@@ -28,6 +28,7 @@ import { ChatStageContextBar } from "./ChatStageContextBar";
 import { QueuedMessagesChip } from "./QueuedMessagesChip";
 import { fetchBackendWithAuth } from "@/lib/auth/backend-fetch";
 import { defaultArtifactForStage, triggerBackendDiscoverySync } from "@/lib/openclaw/artifact-refresh";
+import { buildCompactPlanPrompt } from "@/lib/openclaw/build-compact-plan-prompt";
 
 /**
  * POST a user message to the per-agent interject queue while a build is
@@ -53,6 +54,7 @@ async function postBuildInterject(agentId: string, message: string): Promise<voi
     console.warn("[interject] POST failed:", err);
   }
 }
+
 import { shouldAutoSwitchWorkspaceTab } from "./tab-workspace-autoswitch";
 import { AgentConfigPanel } from "@/app/(platform)/agents/create/_components/AgentConfigPanel";
 import { ClarificationMessage } from "@/app/(platform)/agents/create/_components/ClarificationMessage";
@@ -1411,14 +1413,14 @@ export function TabChat({
     ) {
       coPilotStore?.markPlanRunDispatched?.(planRunId);
       coPilotStore?.setUserTriggeredPlan?.(false);
-      // Build a message that includes the approved PRD/TRD for the architect
+      // Build a COMPACT plan prompt. Earlier versions embedded the full
+      // PRD + TRD content (~30-50KB) and the architect sometimes
+      // delegated marker emission to shell scripts under context-window
+      // pressure (see SOUL.md fix in 651340a). Now we send only the
+      // section outline; the architect cats the full PRD/TRD from the
+      // workspace if it needs the prose.
       const docs = coPilotStore.discoveryDocuments;
-      let planPrompt = "Generate the architecture plan for this agent.";
-      if (docs) {
-        const prdSummary = docs.prd.sections.map((s) => `### ${s.heading}\n${s.content}`).join("\n\n");
-        const trdSummary = docs.trd.sections.map((s) => `### ${s.heading}\n${s.content}`).join("\n\n");
-        planPrompt = `The user has approved the following requirements. Generate a structured architecture plan.\n\n## PRD: ${docs.prd.title}\n${prdSummary}\n\n## TRD: ${docs.trd.title}\n${trdSummary}`;
-      }
+      const planPrompt = buildCompactPlanPrompt(docs);
       sendChatMessage(planPrompt, { silent: true })
         .then(async () => {
           // Plan message completed — architect should have written architecture.json
