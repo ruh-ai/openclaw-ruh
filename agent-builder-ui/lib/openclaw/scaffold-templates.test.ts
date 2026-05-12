@@ -84,13 +84,25 @@ describe("generateScaffoldFiles — dashboardPrototype", () => {
 
     expect(page?.content).toContain("Project Review");
     expect(page?.content).toContain("prototypeActionEndpoints");
-    expect(page?.content).toContain("onClick={() => runPrototypeAction(action)}");
+    expect(page?.content).toContain("runPrototypeAction(action.id, action.label)");
     expect(page?.content).toContain("Create estimate");
     expect(page?.content).toContain("Estimate build pipeline");
     expect(page?.content).toContain("Source evidence map");
     expect(page?.content).toContain("resolve_blocker");
     expect(page?.content).toContain("Blocked projects cannot be approved");
-    expect(page?.content).toContain("Does this match ECC project review?");
+    // Visual fidelity: workflows render via WorkflowCard with arrow-flow steps
+    expect(page?.content).toContain("function WorkflowCard");
+    expect(page?.content).toContain("workflow.steps.join(' → ')");
+    // Pipeline renders as a horizontal stepper, not a numbered <ol>
+    expect(page?.content).toContain("function PipelineStepper");
+    // Artifacts render via ArtifactReviewCard with reviewAction buttons
+    expect(page?.content).toContain("function ArtifactReviewCard");
+    // Review artifacts (revisionPrompts, approvalChecklist) gate Plan→Build in
+    // the builder UI; they must NOT appear in the runtime scaffold.
+    expect(page?.content).not.toContain("Does this match ECC project review?");
+    expect(page?.content).not.toContain("Prototype reviewed");
+    expect(page?.content).not.toContain("prototypeRevisionPrompts");
+    expect(page?.content).not.toContain("prototypeApprovalChecklist");
 
     const route = generateScaffoldFiles(plan, "Estimator")
       .find((file) => file.path === "backend/routes/estimator.ts");

@@ -435,6 +435,9 @@ function prototypeActionEndpointMap(plan: ArchitecturePlan): Record<string, { me
   return endpointMap;
 }
 
+// revisionPrompts and approvalChecklist are review artifacts that gate the
+// Plan→Build transition in the builder UI; they are intentionally NOT
+// rendered in the runtime page.
 function renderDashboardPrototypePanel(
   plan: ArchitecturePlan,
   prototypePage: DashboardPrototypePage | null,
@@ -450,35 +453,133 @@ const prototypeActions = ${js(plan.dashboardPrototype.actions ?? [])};
 const prototypeActionEndpoints = ${js(actionEndpoints)} as Record<string, { method: string; path: string }>;
 const prototypePipeline = ${js(plan.dashboardPrototype.pipeline ?? null)} as {
   name: string;
-  steps: Array<{ id: string; name: string; owner?: string; description?: string; producesArtifacts?: string[] }>;
+  steps: Array<{ id: string; name: string; owner?: string; description?: string; producesArtifacts?: string[]; requiresApproval?: boolean }>;
 } | null;
 const prototypeArtifacts = ${js(plan.dashboardPrototype.artifacts ?? [])};
-const prototypeEmptyState = ${js(plan.dashboardPrototype.emptyState ?? "Create a work item to validate this dashboard workflow.")};
-const prototypeRevisionPrompts = ${js(plan.dashboardPrototype.revisionPrompts)} as string[];
-const prototypeApprovalChecklist = ${js(plan.dashboardPrototype.approvalChecklist)} as string[];
+
+function humanizeId(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\\b\\w/g, (c) => c.toUpperCase());
+}
+
+const sectionDivider: React.CSSProperties = { borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 };
+const sectionLabel: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#7b5aff', marginBottom: 8 };
+const chipStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: 'rgba(174,0,208,0.08)', color: '#7b5aff', whiteSpace: 'nowrap' };
+const stepNumberStyle: React.CSSProperties = { width: 22, height: 22, borderRadius: 999, background: '#ae00d0', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 };
+
+function WorkflowCard({ workflow }: { workflow: { id: string; name: string; steps: string[]; requiredActions: string[]; successCriteria: string[] } }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <strong style={{ fontSize: 13, color: '#111827' }}>{workflow.name}</strong>
+        <code style={{ fontSize: 10, color: '#9ca3af' }}>{workflow.id}</code>
+      </div>
+      {workflow.steps.length > 0 && (
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: '#4b5563' }}>{workflow.steps.join(' → ')}</p>
+      )}
+      {workflow.requiredActions.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+          {workflow.requiredActions.map((action) => (
+            <span key={action} style={chipStyle}>{action}</span>
+          ))}
+        </div>
+      )}
+      {workflow.successCriteria.length > 0 && (
+        <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 11, color: '#6b7280' }}>
+          {workflow.successCriteria.map((c) => <li key={c}>{c}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PipelineStepper({ pipeline }: { pipeline: NonNullable<typeof prototypePipeline> }) {
+  return (
+    <div style={sectionDivider}>
+      <div style={sectionLabel}>{pipeline.name}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0, alignItems: 'stretch' }}>
+        {pipeline.steps.map((step, idx) => (
+          <React.Fragment key={step.id}>
+            <div style={{ flex: '1 1 160px', minWidth: 160, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={stepNumberStyle}>{idx + 1}</span>
+                <strong style={{ fontSize: 12, color: '#111827' }}>{step.name}</strong>
+              </div>
+              {step.owner ? <div style={{ fontSize: 10, color: '#9ca3af', marginBottom: 4 }}>{step.owner}</div> : null}
+              {step.description ? <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>{step.description}</div> : null}
+              {step.requiresApproval ? <span style={{ ...chipStyle, background: 'rgba(245,158,11,0.12)', color: '#b45309' }}>Approval gate</span> : null}
+              {step.producesArtifacts && step.producesArtifacts.length > 0 ? (
+                <div style={{ marginTop: 6, fontSize: 10, color: '#6b7280' }}>
+                  → {step.producesArtifacts.map(humanizeId).join(', ')}
+                </div>
+              ) : null}
+            </div>
+            {idx < pipeline.steps.length - 1 ? (
+              <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px', color: '#9ca3af', fontSize: 18 }}>→</div>
+            ) : null}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ArtifactReviewCard({ artifact, onAction, busyAction }: { artifact: { id: string; name: string; type: string; reviewActions?: string[]; acceptanceCriteria?: string[] }; onAction: (id: string, label: string) => void; busyAction: string | null }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <strong style={{ fontSize: 13, color: '#111827' }}>{artifact.name}</strong>
+        <span style={{ ...chipStyle, background: 'rgba(123,90,255,0.12)' }}>{artifact.type}</span>
+      </div>
+      {artifact.acceptanceCriteria && artifact.acceptanceCriteria.length > 0 ? (
+        <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 11, color: '#6b7280' }}>
+          {artifact.acceptanceCriteria.map((c) => <li key={c}>{c}</li>)}
+        </ul>
+      ) : null}
+      {artifact.reviewActions && artifact.reviewActions.length > 0 ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {artifact.reviewActions.map((actionId) => {
+            const wired = prototypeActionEndpoints[actionId] != null;
+            return (
+              <button
+                key={actionId}
+                type="button"
+                onClick={() => onAction(actionId, humanizeId(actionId))}
+                disabled={busyAction === actionId || !wired}
+                title={wired ? '' : 'No API endpoint planned for this review action yet'}
+                style={{ border: '1px solid #e5e7eb', background: '#fff', color: wired ? '#111827' : '#9ca3af', borderRadius: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: wired ? 'pointer' : 'not-allowed', opacity: busyAction === actionId ? 0.65 : 1 }}
+              >
+                {busyAction === actionId ? 'Working...' : humanizeId(actionId)}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function DashboardPrototypePanel() {
   const [busyAction, setBusyAction] = React.useState<string | null>(null);
   const [actionMessage, setActionMessage] = React.useState<string | null>(null);
 
-  async function runPrototypeAction(action: { id: string; label: string }) {
-    const endpoint = prototypeActionEndpoints[action.id];
+  async function runPrototypeAction(actionId: string, actionLabel: string) {
+    const endpoint = prototypeActionEndpoints[actionId];
     if (!endpoint) {
-      setActionMessage(\`\${action.label} is planned but has no API endpoint yet.\`);
+      setActionMessage(\`\${actionLabel} is planned but has no API endpoint yet.\`);
       return;
     }
 
-    setBusyAction(action.id);
+    setBusyAction(actionId);
     setActionMessage(null);
     try {
       const response = await fetch(endpoint.path, {
         method: endpoint.method,
         headers: { 'Content-Type': 'application/json' },
-        body: endpoint.method === 'GET' ? undefined : JSON.stringify({ actionId: action.id, actionLabel: action.label }),
+        body: endpoint.method === 'GET' ? undefined : JSON.stringify({ actionId, actionLabel }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.error?.message ?? 'Action failed');
-      setActionMessage(payload?.message ?? \`\${action.label} completed.\`);
+      setActionMessage(payload?.message ?? \`\${actionLabel} completed.\`);
       window.setTimeout(() => window.location.reload(), 300);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'Action failed');
@@ -489,88 +590,53 @@ function DashboardPrototypePanel() {
 
   return (
     <section style={cardStyle}>
-      <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0, textTransform: 'uppercase', color: '#7b5aff', marginBottom: 8 }}>Prototype approval gate</div>
+      <div style={sectionLabel}>Prototype</div>
       <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 6px' }}>{prototypePage.title}</h2>
-      <p style={{ margin: '0 0 16px', color: '#4b5563', fontSize: 14 }}>{prototypePage.purpose}</p>
+      <p style={{ margin: '0 0 4px', color: '#4b5563', fontSize: 14 }}>{prototypePage.purpose}</p>
 
-      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', borderTop: '1px solid #e5e7eb', paddingTop: 14 }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Operator actions</div>
-          {prototypeActions.length > 0 ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {prototypeActions.map((action) => (
-                <button key={action.id} type="button" onClick={() => runPrototypeAction(action)} disabled={busyAction === action.id} style={{ border: action.primary ? '1px solid #ae00d0' : '1px solid #e5e7eb', background: action.primary ? '#ae00d0' : '#fff', color: action.primary ? '#fff' : '#111827', borderRadius: 6, padding: '8px 10px', fontSize: 12, fontWeight: 700, opacity: busyAction === action.id ? 0.65 : 1, cursor: 'pointer' }}>
-                  {busyAction === action.id ? 'Working...' : action.label}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>{prototypeEmptyState}</p>
-          )}
-          {actionMessage ? <p style={{ margin: '10px 0 0', color: '#4b5563', fontSize: 12 }}>{actionMessage}</p> : null}
-        </div>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Generated artifacts</div>
-          {prototypeArtifacts.length > 0 ? (
-            <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeArtifacts.map((artifact) => <li key={artifact.id}>{artifact.name} <span style={{ color: '#6b7280' }}>({artifact.type})</span></li>)}</ul>
-          ) : (
-            <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>No generated artifacts planned.</p>
-          )}
-        </div>
-      </div>
-
-      {prototypePipeline && (
-        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>{prototypePipeline.name}</div>
-          <ol style={{ margin: 0, paddingLeft: 18 }}>
-            {prototypePipeline.steps.map((step) => (
-              <li key={step.id}>
-                <strong>{step.name}</strong>{step.owner ? <span style={{ color: '#6b7280' }}> · {step.owner}</span> : null}
-                {step.description ? <div style={{ color: '#6b7280', fontSize: 12 }}>{step.description}</div> : null}
-              </li>
+      {prototypeActions.length > 0 ? (
+        <div style={{ ...sectionDivider, paddingTop: 12, marginTop: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {prototypeActions.map((action) => (
+              <button key={action.id} type="button" onClick={() => runPrototypeAction(action.id, action.label)} disabled={busyAction === action.id} style={{ border: action.primary ? '1px solid #ae00d0' : '1px solid #e5e7eb', background: action.primary ? '#ae00d0' : '#fff', color: action.primary ? '#fff' : '#111827', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 700, opacity: busyAction === action.id ? 0.65 : 1, cursor: 'pointer' }}>
+                {busyAction === action.id ? 'Working...' : action.label}
+              </button>
             ))}
-          </ol>
+          </div>
+          {actionMessage ? <p style={{ margin: '8px 0 0', color: '#4b5563', fontSize: 12 }}>{actionMessage}</p> : null}
         </div>
-      )}
+      ) : null}
 
-      {prototypeWorkflows.map((workflow) => (
-        <div key={workflow.id} style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
-          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>{workflow.name}</h3>
-          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Workflow steps</div>
-              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.steps.map((step) => <li key={step}>{step}</li>)}</ul>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Required actions</div>
-              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.requiredActions.map((action) => <li key={action}>{action}</li>)}</ul>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Success criteria</div>
-              <ul style={{ margin: 0, paddingLeft: 18 }}>{workflow.successCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
-            </div>
+      {prototypePipeline ? <PipelineStepper pipeline={prototypePipeline} /> : null}
+
+      {prototypeWorkflows.length > 0 ? (
+        <div style={sectionDivider}>
+          <div style={sectionLabel}>Workflows on this page</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {prototypeWorkflows.map((workflow) => <WorkflowCard key={workflow.id} workflow={workflow} />)}
           </div>
         </div>
-      ))}
+      ) : null}
 
-      <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Page acceptance criteria</div>
-        <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypePage.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
-      </div>
-
-      {prototypeRevisionPrompts.length > 0 && (
-        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Review prompts</div>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeRevisionPrompts.map((prompt) => <li key={prompt}>{prompt}</li>)}</ul>
+      {prototypeArtifacts.length > 0 ? (
+        <div style={sectionDivider}>
+          <div style={sectionLabel}>Generated artifacts</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {prototypeArtifacts.map((artifact) => (
+              <ArtifactReviewCard key={artifact.id} artifact={artifact} onAction={runPrototypeAction} busyAction={busyAction} />
+            ))}
+          </div>
         </div>
-      )}
+      ) : null}
 
-      {prototypeApprovalChecklist.length > 0 && (
-        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, marginTop: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#4b5563', marginBottom: 6 }}>Approval checklist</div>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>{prototypeApprovalChecklist.map((item) => <li key={item}>{item}</li>)}</ul>
+      {prototypePage.acceptanceCriteria.length > 0 ? (
+        <div style={sectionDivider}>
+          <div style={sectionLabel}>Page acceptance</div>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#4b5563' }}>
+            {prototypePage.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}
+          </ul>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
