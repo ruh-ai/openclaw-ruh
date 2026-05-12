@@ -358,28 +358,18 @@ function CreateAgentPageContent() {
     setHasRestoredSession(false);
     setRouteFetchedAgent(null);
 
-    // Defense in depth: before fetching the agent record, ask the backend to
-    // reconcile the DB row with the sandbox workspace files. This closes the
-    // gap where the architect wrote PRD/TRD/architecture.json on disk in a
-    // prior session but the chat-turn-end SSE marker didn't fire (gateway WS
-    // drop, edit-tool fallback to shell rewrites), leaving the DB stale.
-    // Fire-and-forget — if it fails we still render whatever the backend has.
-    // The fetchAgent that follows picks up the freshly-synced row.
-    void (async () => {
-      try {
-        const { triggerBackendDiscoverySync } = await import(
-          "@/lib/openclaw/artifact-refresh"
-        );
-        await triggerBackendDiscoverySync(editingAgentId);
-      } catch {
-        // non-fatal
-      }
-      if (!cancelled) {
-        const agent = await fetchAgent(editingAgentId).catch(() => null);
-        if (!cancelled) setRouteFetchedAgent(agent);
-        if (!cancelled) setIsRouteAgentHydrated(true);
-      }
-    })();
+    void fetchAgent(editingAgentId)
+      .catch(() => null)
+      .then((agent) => {
+        if (!cancelled) {
+          setRouteFetchedAgent(agent);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsRouteAgentHydrated(true);
+        }
+      });
 
     return () => {
       cancelled = true;
