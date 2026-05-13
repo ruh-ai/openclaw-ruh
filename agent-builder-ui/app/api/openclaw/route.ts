@@ -497,14 +497,26 @@ async function forwardToGateway(
       headers: Object.keys(wsHeaders).length > 0 ? wsHeaders : undefined,
     });
     let chatAccepted = false;
-    const timeout = setTimeout(() => {
-      rejectOnce(
-        new GatewayRetryBoundaryError(
-          chatAccepted ? "post_accept" : "pre_accept",
-          `Gateway timeout (${effectiveTimeout / 1000}s)`
-        )
-      );
-    }, effectiveTimeout);
+    // Idle timeout (not total-run timeout). Reset every time the gateway
+    // sends a message, so a long architect turn that's actively streaming
+    // (e.g. Think stage writing research-brief → PRD → TRD over several
+    // minutes) doesn't trip the timer mid-write. Pre-fix: a 3-min hard
+    // total timeout fired during PRD/TRD generation and dropped the
+    // connection mid-flight ("post_accept" GatewayRetryBoundaryError →
+    // UI "Connection lost after the agent run started").
+    let timeout: ReturnType<typeof setTimeout>;
+    const resetIdleTimeout = () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        rejectOnce(
+          new GatewayRetryBoundaryError(
+            chatAccepted ? "post_accept" : "pre_accept",
+            `Gateway idle timeout (${effectiveTimeout / 1000}s since last message)`,
+          ),
+        );
+      }, effectiveTimeout);
+    };
+    resetIdleTimeout();
 
     let connected = false;
     let resolved = false;
@@ -626,6 +638,10 @@ async function forwardToGateway(
     });
 
     ws.on("message", (data) => {
+      // Any message from the gateway means the run is still alive — reset
+      // the idle watchdog so a long-but-active turn doesn't get killed.
+      resetIdleTimeout();
+
       let frame: Record<string, unknown>;
       try {
         frame = JSON.parse(data.toString());
