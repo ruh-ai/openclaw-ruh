@@ -3446,12 +3446,20 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
       sandboxName,
     });
 
-    // Bootstrap watchdog: if the generator doesn't yield anything for 90s,
-    // surface an explicit error instead of letting the SSE stream sit
-    // silent. Pre-watchdog symptom: container alive, /root/.openclaw never
-    // populated, frontend stuck on think-placeholder forever with no
+    // Bootstrap watchdog: if the generator doesn't yield anything for 4
+    // minutes, surface an explicit error instead of letting the SSE stream
+    // sit silent. Pre-watchdog symptom: container alive, /root/.openclaw
+    // never populated, frontend stuck on think-placeholder forever with no
     // signal that anything went wrong.
-    const BOOTSTRAP_STALL_MS = 90_000;
+    //
+    // The threshold was originally 90s, but openclaw's cold-start path
+    // includes an npm install of its OpenAI extension dependencies inside
+    // the sandbox (writes ~hundreds of files to
+    // /usr/local/lib/node_modules/openclaw/dist/extensions/openai/node_modules).
+    // On a slow npm registry day that can take 2-3 minutes between
+    // sandboxManager yields. 240s gives healthy bootstraps room while
+    // still catching genuine stalls within a reasonable timeframe.
+    const BOOTSTRAP_STALL_MS = 240_000;
     let lastYieldAt = Date.now();
     let watchdogFired = false;
     let lastContainerName: string | null = null;
