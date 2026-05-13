@@ -397,11 +397,66 @@ function assertExpectedResolvedModel(
   }
 }
 
+/**
+ * Decode the JWT payload from a token without verifying its signature.
+ * Returns the payload object, or null if the input isn't a parseable JWT.
+ */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+  try {
+    const json = Buffer.from(normalized + padding, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify the auth seed has a non-expired token before we copy it into a new
+ * sandbox. Without this, an expired Codex auth gets seeded silently, the
+ * architect's first LLM call rejects with 401, openclaw retries indefinitely,
+ * and the bootstrap stalls until the 90s watchdog fires — leaving the user
+ * with the unhelpful "Bootstrap stalled for 94s" error instead of the real
+ * cause. Fail loud at seed time with an actionable message instead.
+ */
+function assertSeedFreshness(seed: SharedAuthSeed): void {
+  if (seed.kind !== 'codex-auth') return; // openclaw-oauth seeds are checked elsewhere
+  let raw: string;
+  try {
+    raw = fs.readFileSync(seed.hostPath, 'utf8');
+  } catch {
+    return; // unreadable file gets surfaced when we try to copy it; not our concern here
+  }
+  let parsed: { tokens?: { id_token?: string; access_token?: string } };
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return; // malformed JSON gets surfaced inside the sandbox; trust the file at seed time
+  }
+  const token = parsed.tokens?.id_token ?? parsed.tokens?.access_token;
+  if (!token) return; // stub fixtures and partial files are tolerated
+  const payload = decodeJwtPayload(token);
+  const exp = typeof payload?.exp === 'number' ? payload.exp : null;
+  if (!exp) return; // unparseable JWT — trust the file
+  const now = Math.floor(Date.now() / 1000);
+  if (exp <= now + 60) {
+    const expired = new Date(exp * 1000).toISOString();
+    throw new Error(
+      `Codex CLI auth token expired at ${expired} (now ${new Date().toISOString()}). ` +
+      `Run \`codex login\` on the host to refresh ${seed.hostPath}, then retry the build.`,
+    );
+  }
+}
+
 async function seedSharedAuthState(
   containerName: string,
   seed: SharedAuthSeed,
   homeDir = '/root',
 ): Promise<void> {
+  assertSeedFreshness(seed);
   const destination = seed.containerPath.replace(/^\/root/, homeDir);
   const payload = fs.readFileSync(seed.hostPath).toString('base64');
   const script =

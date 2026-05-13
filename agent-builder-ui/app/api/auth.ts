@@ -68,8 +68,8 @@ interface LocalRegisterInput {
   membershipRole?: "owner" | "admin" | "developer" | "employee";
 }
 
-const ACCESS_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
-const REFRESH_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+const ACCESS_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+const REFRESH_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 function syncBuilderUser(session: AuthSessionResponse) {
   useUserStore.getState().setUser({

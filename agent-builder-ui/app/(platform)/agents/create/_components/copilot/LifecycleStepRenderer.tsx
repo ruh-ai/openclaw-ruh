@@ -83,6 +83,7 @@ import { approveManualEvalTasks, resolveEvalReviewState, resolveReviewSkillNodes
 import { buildDashboardPrototypeViewModel, type DashboardPrototypePageModel } from "@/lib/openclaw/dashboard-prototype";
 import { useArchitecturePlanRehydration } from "@/lib/openclaw/use-architecture-plan-rehydration";
 import { useBuildCompletionReconciliation } from "@/lib/openclaw/use-build-completion-reconciliation";
+import { useBuildReportRehydration } from "@/lib/openclaw/use-build-report-rehydration";
 import { prototypeActionEndpointMap } from "@/lib/openclaw/scaffold-templates";
 import { synthesizeTaskRuns } from "@/lib/openclaw/preview-fixtures";
 import { dashboardTokens as DASH } from "@/lib/dashboard/tokens";
@@ -1707,6 +1708,11 @@ export function LifecycleStepRenderer({
   // kills the pipeline mid-run), flip to "done" so the operator can
   // advance to Review instead of staring at a permanent spinner.
   useBuildCompletionReconciliation(store, agentId);
+  // Same self-heal for the build report itself: if a stale report (e.g.,
+  // captured from a failed mid-build SSE) is persisted in the store but
+  // the workspace's build-report.json is newer, swap in the on-disk
+  // version. Prevents the UI from showing blockers that no longer exist.
+  useBuildReportRehydration(store);
 
   const stageIdx = AGENT_DEV_STAGES.indexOf(devStage);
   const stageAdvanceSaving = store.lifecycleAdvanceStatus === "saving";

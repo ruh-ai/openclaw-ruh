@@ -35,7 +35,7 @@ export async function createSession(
 ): Promise<SessionRecord> {
   return withConn(async (client) => {
     const id = uuidv4();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const result = await client.query(
       `INSERT INTO sessions (id, user_id, refresh_token, user_agent, ip_address, expires_at, active_org_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)

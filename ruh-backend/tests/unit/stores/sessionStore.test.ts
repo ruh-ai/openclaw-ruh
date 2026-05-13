@@ -87,7 +87,7 @@ describe('sessionStore.createSession', () => {
     expect(params[6]).toBe('org-456');
   });
 
-  test('sets 7-day expiry', async () => {
+  test('sets 30-day expiry', async () => {
     mockQuery.mockImplementation(async () => ({
       rows: [makeSessionRow()],
       rowCount: 1,
@@ -97,9 +97,9 @@ describe('sessionStore.createSession', () => {
     const params = mockQuery.mock.calls[0][1] as unknown[];
     const expiresAt = new Date(params[5] as string);
     const now = Date.now();
-    // Should be roughly 7 days from now (within 5 seconds tolerance)
-    expect(expiresAt.getTime() - now).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
-    expect(expiresAt.getTime() - now).toBeLessThan(8 * 24 * 60 * 60 * 1000);
+    // Should be roughly 30 days from now (within a day's tolerance)
+    expect(expiresAt.getTime() - now).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
+    expect(expiresAt.getTime() - now).toBeLessThan(31 * 24 * 60 * 60 * 1000);
   });
 });
 

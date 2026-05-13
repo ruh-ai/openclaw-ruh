@@ -456,6 +456,33 @@ describe('createOpenclawSandbox', () => {
     }
   });
 
+  test('rejects expired Codex auth seed with an actionable error before bootstrap stalls', async () => {
+    // Build a JWT whose `exp` claim is 60s in the past. Signature doesn't
+    // matter — assertSeedFreshness only decodes the payload.
+    const expiredExp = Math.floor(Date.now() / 1000) - 60;
+    const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ exp: expiredExp })).toString('base64url');
+    const expiredJwt = `${header}.${payload}.sig`;
+    const codexAuth = makeTempAuthFile(
+      'codex/auth.json',
+      JSON.stringify({ tokens: { id_token: expiredJwt, refresh_token: 'r', access_token: 'a' } }),
+    );
+
+    try {
+      const events = await collectEvents({
+        ...BASE_OPTS,
+        sharedOpenClawOauthPath: join(tmpdir(), 'does-not-exist-oauth.json'),
+        sharedCodexAuthPath: codexAuth.filePath,
+      });
+      const errors = events.filter(([t]) => t === 'error').map(([, m]) => String(m));
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0]).toContain('Codex CLI auth token expired');
+      expect(errors[0]).toContain('codex login');
+    } finally {
+      codexAuth.cleanup();
+    }
+  });
+
   test('prefers shared OpenClaw OAuth state over Codex CLI auth when both are present', async () => {
     const openclawOauth = makeTempAuthFile('openclaw/credentials/oauth.json', '{"oauth":"shared"}');
     const codexAuth = makeTempAuthFile('codex/auth.json', '{"account":"shared"}');

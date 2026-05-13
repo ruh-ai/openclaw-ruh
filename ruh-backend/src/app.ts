@@ -3446,12 +3446,20 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
       sandboxName,
     });
 
-    // Bootstrap watchdog: if the generator doesn't yield anything for 90s,
-    // surface an explicit error instead of letting the SSE stream sit
-    // silent. Pre-watchdog symptom: container alive, /root/.openclaw never
-    // populated, frontend stuck on think-placeholder forever with no
+    // Bootstrap watchdog: if the generator doesn't yield anything for 4
+    // minutes, surface an explicit error instead of letting the SSE stream
+    // sit silent. Pre-watchdog symptom: container alive, /root/.openclaw
+    // never populated, frontend stuck on think-placeholder forever with no
     // signal that anything went wrong.
-    const BOOTSTRAP_STALL_MS = 90_000;
+    //
+    // The threshold was originally 90s, but openclaw's cold-start path
+    // includes an npm install of its OpenAI extension dependencies inside
+    // the sandbox (writes ~hundreds of files to
+    // /usr/local/lib/node_modules/openclaw/dist/extensions/openai/node_modules).
+    // On a slow npm registry day that can take 2-3 minutes between
+    // sandboxManager yields. 240s gives healthy bootstraps room while
+    // still catching genuine stalls within a reasonable timeframe.
+    const BOOTSTRAP_STALL_MS = 240_000;
     let lastYieldAt = Date.now();
     let watchdogFired = false;
     let lastContainerName: string | null = null;
@@ -3467,15 +3475,25 @@ app.get('/api/agents/:id/forge/stream/:stream_id', requireAuth, asyncHandler(asy
       }
     }, 5_000);
 
-    // Orphan-container cleanup: if the client disconnects mid-bootstrap and
-    // we never observe a 'result' event, remove the half-provisioned
-    // container so it doesn't pile up. Without this, each abandoned forge
-    // leaves a `tail -f /dev/null` container running indefinitely.
+    // Orphan-container cleanup with a grace period.
+    //
+    // The bootstrap generator runs to completion regardless of whether the
+    // SSE client stays connected — so a brief disconnect (auth token
+    // refresh, network blip, page reload) shouldn't kill the container.
+    // Previously we ran `docker rm -f` immediately on req.close, which
+    // turned a transient session refresh failure into a permanent agent
+    // loss. Now we wait 5 minutes: if the bootstrap completes before then,
+    // no cleanup; if the user really did abandon the build, we still
+    // reclaim the container.
+    const ORPHAN_CLEANUP_GRACE_MS = 5 * 60 * 1000;
     req.on('close', () => {
       if (bootstrapCompleted) return;
-      if (lastContainerName) {
-        void dockerSpawn(['rm', '-f', lastContainerName], 15_000).catch(() => {});
-      }
+      setTimeout(() => {
+        if (bootstrapCompleted) return;
+        if (lastContainerName) {
+          void dockerSpawn(['rm', '-f', lastContainerName], 15_000).catch(() => {});
+        }
+      }, ORPHAN_CLEANUP_GRACE_MS);
     });
 
     try {

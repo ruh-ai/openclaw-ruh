@@ -22,8 +22,8 @@ const mockSwitchBuilderOrgRequest = mock(async (orgId: string) => ({
   activeOrganization: { id: orgId, name: "Org", slug: "org", kind: "developer" as const, plan: "pro" },
 }));
 
-const ACCESS_TOKEN_AGE = 15 * 60;
-const REFRESH_TOKEN_AGE = 7 * 24 * 60 * 60;
+const ACCESS_TOKEN_AGE = 30 * 24 * 60 * 60;
+const REFRESH_TOKEN_AGE = 30 * 24 * 60 * 60;
 
 const MOCK_SESSION = {
   user: { id: "u1", email: "test@example.com", displayName: "Test User", role: "developer" },

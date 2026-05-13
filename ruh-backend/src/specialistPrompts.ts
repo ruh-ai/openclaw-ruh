@@ -580,6 +580,7 @@ ENDREPORT
 
 ## Critical Rules
 
+- **NEVER use the \`Edit\` tool to modify files.** Every time you've tried, the \`oldText\` argument has been a hallucinated reconstruction of file contents rather than a byte-for-byte match, and the call fails. The retry loop has burned the entire 3-minute budget on a single file. ALWAYS use the \`cat > <path> << 'ENDFIX'\` pattern from Step 2.4.d to rewrite the WHOLE file. Read first, then write the new full contents — not a diff.
 - Fix the ACTUAL source code, not the tests. If npm install fails, fix package.json. If TypeScript fails, fix the .ts file.
 - NEVER add \`// @ts-ignore\`, \`any\` casts, or \`as unknown\` to silence errors. Fix the real type issue.
 - If a service crashes on startup, read \`/tmp/agent-<name>.log\` to find the crash reason, then fix the entry point.
