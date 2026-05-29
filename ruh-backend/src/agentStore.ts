@@ -23,6 +23,7 @@ const AGENT_SELECT_COLUMNS = `
   triggers,
   improvements,
   channels,
+  voice,
   discovery_documents,
   workspace_memory,
   paperclip_company_id,
@@ -106,6 +107,28 @@ export interface AgentChannelRecord {
   description: string;
 }
 
+// AB-416 Phase 1: voice channel state.
+// Lives on the agent record directly (not in the `channels` array) because
+// activation is a platform-managed provisioning side-effect — tenant +
+// pool number are claimed by the backend, not pasted by the user. Default
+// state is { enabled: false, status: "disabled" } so every agent has a
+// renderable Voice card without any backfill.
+export type AgentVoiceStatus =
+  | 'disabled'
+  | 'provisioning'
+  | 'active'
+  | 'error';
+
+export interface AgentVoiceChannelRecord {
+  enabled: boolean;
+  status: AgentVoiceStatus;
+  tenant_id: string | null;
+  api_token: string | null;
+  phone_number: string | null;
+  provisioned_at: string | null;
+  last_error: string | null;
+}
+
 export interface AgentCredentialRecord {
   toolId: string;
   encrypted: string;
@@ -147,6 +170,7 @@ export interface AgentRecord {
   triggers: AgentTriggerRecord[];
   improvements: AgentImprovementRecord[];
   channels: AgentChannelRecord[];
+  voice: AgentVoiceChannelRecord;
   discovery_documents: AgentDiscoveryDocumentsRecord | null;
   workspace_memory: AgentWorkspaceMemory;
   paperclip_company_id: string | null;
@@ -546,6 +570,36 @@ export async function updateAgentWorkspaceMemory(
   return updated ? normalizeWorkspaceMemory(updated.workspace_memory) : null;
 }
 
+// AB-416 Phase 1: merge-patch the agent's voice channel state. Returns
+// the new state or null if the agent doesn't exist. Callers send only
+// the fields they want to change; everything else is preserved from the
+// existing row. Phase 2's voice/activate + voice/deactivate endpoints
+// drive this; the frontend reads `agent.voice` directly via getAgent().
+export async function updateAgentVoice(
+  id: string,
+  patch: Partial<AgentVoiceChannelRecord>,
+): Promise<AgentVoiceChannelRecord | null> {
+  const existing = await getAgent(id);
+  if (!existing) {
+    return null;
+  }
+
+  const next: AgentVoiceChannelRecord = {
+    ...normalizeVoice(existing.voice),
+    ...patch,
+  };
+
+  await withConn(async (client) => {
+    await client.query(
+      `UPDATE agents SET voice = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(next), id],
+    );
+  });
+
+  const updated = await getAgent(id);
+  return updated ? normalizeVoice(updated.voice) : null;
+}
+
 function serialize(row: Record<string, unknown>): AgentRecord {
   if (row['created_at'] instanceof Date) {
     row['created_at'] = row['created_at'].toISOString();
@@ -558,6 +612,7 @@ function serialize(row: Record<string, unknown>): AgentRecord {
   row['triggers'] = normalizeTriggers(row['triggers']);
   row['improvements'] = normalizeImprovements(row['improvements']);
   row['channels'] = normalizeChannels(row['channels']);
+  row['voice'] = normalizeVoice(row['voice']);
   row['discovery_documents'] = normalizeDiscoveryDocuments(row['discovery_documents']);
   row['workspace_memory'] = normalizeWorkspaceMemory(row['workspace_memory']);
   // Normalize forge_sandbox_id: null if not present or not a string
@@ -691,6 +746,43 @@ function normalizeChannels(value: unknown): AgentChannelRecord[] {
       description: typeof item.description === 'string' ? item.description : '',
     }))
     .filter((item) => item.label.trim().length > 0);
+}
+
+// AB-416 Phase 1: defensive coercion of the `voice` JSONB. Defaults to the
+// disabled state so every agent has a renderable Voice card.
+const DEFAULT_VOICE: AgentVoiceChannelRecord = {
+  enabled: false,
+  status: 'disabled',
+  tenant_id: null,
+  api_token: null,
+  phone_number: null,
+  provisioned_at: null,
+  last_error: null,
+};
+
+function normalizeVoice(value: unknown): AgentVoiceChannelRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ...DEFAULT_VOICE };
+  }
+  const item = value as Record<string, unknown>;
+  const status =
+    item.status === 'disabled' ||
+    item.status === 'provisioning' ||
+    item.status === 'active' ||
+    item.status === 'error'
+      ? item.status
+      : 'disabled';
+  return {
+    enabled: typeof item.enabled === 'boolean' ? item.enabled : false,
+    status,
+    tenant_id: typeof item.tenant_id === 'string' ? item.tenant_id : null,
+    api_token: typeof item.api_token === 'string' ? item.api_token : null,
+    phone_number:
+      typeof item.phone_number === 'string' ? item.phone_number : null,
+    provisioned_at:
+      typeof item.provisioned_at === 'string' ? item.provisioned_at : null,
+    last_error: typeof item.last_error === 'string' ? item.last_error : null,
+  };
 }
 
 function normalizeDiscoveryDocuments(value: unknown): AgentDiscoveryDocumentsRecord | null {
