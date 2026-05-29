@@ -766,3 +766,194 @@ describe('agentStore public reads', () => {
     expect(result).not.toHaveProperty('agent_credentials');
   });
 });
+
+// AB-416 Phase 1 — voice channel state on the agent record. The migration
+// 0028_agent_voice_channel installs a JSONB column with a disabled default;
+// normalizeVoice in serialize() coerces unknown shapes; updateAgentVoice
+// is the platform-managed mutation surface that Phase 2's activate /
+// deactivate endpoints call.
+
+describe('agentStore voice channel — serialize defaults', () => {
+  test('missing voice column → default disabled state', async () => {
+    mockQuery.mockImplementation(async () => ({
+      // makeAgentRow doesn't include `voice` (row from a pre-migration
+      // serialize call); we expect serialize to coerce to the default.
+      rows: [makeAgentRow()],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgent(AGENT_ID);
+    expect(result?.voice).toEqual({
+      enabled: false,
+      status: 'disabled',
+      tenant_id: null,
+      api_token: null,
+      phone_number: null,
+      provisioned_at: null,
+      last_error: null,
+    });
+  });
+
+  test('voice column with active state survives serialize unchanged', async () => {
+    const fullyActive = {
+      enabled: true,
+      status: 'active',
+      tenant_id: 'ten_abc123',
+      api_token: 'rv_live_xyz',
+      phone_number: '+12538936631',
+      provisioned_at: '2026-05-28T10:00:00.000Z',
+      last_error: null,
+    };
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow({ voice: fullyActive })],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgent(AGENT_ID);
+    expect(result?.voice).toEqual(fullyActive);
+  });
+
+  test('garbage in voice column → falls back to default (no crash)', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow({ voice: 'not an object' })],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgent(AGENT_ID);
+    expect(result?.voice.enabled).toBe(false);
+    expect(result?.voice.status).toBe('disabled');
+  });
+
+  test('unknown status string → coerced to disabled', async () => {
+    mockQuery.mockImplementation(async () => ({
+      rows: [makeAgentRow({ voice: { enabled: true, status: 'banana' } })],
+      rowCount: 1,
+    }));
+
+    const result = await agentStore.getAgent(AGENT_ID);
+    expect(result?.voice.status).toBe('disabled');
+    // boolean fields are still respected
+    expect(result?.voice.enabled).toBe(true);
+  });
+});
+
+describe('agentStore.updateAgentVoice', () => {
+  test('returns null when agent does not exist', async () => {
+    mockQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+    const result = await agentStore.updateAgentVoice('missing', {
+      enabled: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  test('merge-patches voice JSON and writes UPDATE … voice = $1::jsonb', async () => {
+    let phase = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      // first SELECT: existing agent with disabled voice
+      // UPDATE: returns rowCount:1
+      // second SELECT: same agent but now with the patched voice
+      if (sql.includes('SELECT') && phase === 0) {
+        phase = 1;
+        return {
+          rows: [makeAgentRow({
+            voice: {
+              enabled: false,
+              status: 'disabled',
+              tenant_id: null,
+              api_token: null,
+              phone_number: null,
+              provisioned_at: null,
+              last_error: null,
+            },
+          })],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('UPDATE agents SET voice')) {
+        return { rows: [], rowCount: 1 };
+      }
+      // post-update SELECT
+      return {
+        rows: [makeAgentRow({
+          voice: {
+            enabled: true,
+            status: 'active',
+            tenant_id: 'ten_abc123',
+            api_token: 'rv_live_xyz',
+            phone_number: '+12538936631',
+            provisioned_at: '2026-05-28T10:00:00.000Z',
+            last_error: null,
+          },
+        })],
+        rowCount: 1,
+      };
+    });
+
+    const result = await agentStore.updateAgentVoice(AGENT_ID, {
+      enabled: true,
+      status: 'active',
+      tenant_id: 'ten_abc123',
+      api_token: 'rv_live_xyz',
+      phone_number: '+12538936631',
+      provisioned_at: '2026-05-28T10:00:00.000Z',
+    });
+
+    const updateCall = mockQuery.mock.calls.find(
+      (c) => (c[0] as string).includes('UPDATE agents SET voice'),
+    );
+    expect(updateCall).toBeDefined();
+    // first param is the JSONB string of the merged voice state
+    const jsonbArg = JSON.parse(updateCall![1]![0] as string);
+    expect(jsonbArg.enabled).toBe(true);
+    expect(jsonbArg.status).toBe('active');
+    expect(jsonbArg.tenant_id).toBe('ten_abc123');
+    expect(jsonbArg.phone_number).toBe('+12538936631');
+
+    expect(result?.status).toBe('active');
+    expect(result?.phone_number).toBe('+12538936631');
+  });
+
+  test('partial patch preserves untouched fields', async () => {
+    let phase = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT') && phase === 0) {
+        phase = 1;
+        return {
+          rows: [makeAgentRow({
+            voice: {
+              enabled: true,
+              status: 'active',
+              tenant_id: 'ten_keep_me',
+              api_token: 'rv_live_keep_me',
+              phone_number: '+15555550100',
+              provisioned_at: '2026-05-28T10:00:00.000Z',
+              last_error: null,
+            },
+          })],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('UPDATE agents SET voice')) {
+        return { rows: [], rowCount: 1 };
+      }
+      // post-update — return whatever was written
+      const writeCall = mockQuery.mock.calls.find(
+        (c) => (c[0] as string).includes('UPDATE agents SET voice'),
+      );
+      const written = writeCall ? JSON.parse(writeCall[1]![0] as string) : {};
+      return { rows: [makeAgentRow({ voice: written })], rowCount: 1 };
+    });
+
+    // only flip status; tenant/token/number must be preserved
+    const result = await agentStore.updateAgentVoice(AGENT_ID, {
+      status: 'error',
+      last_error: 'transient downstream timeout',
+    });
+
+    expect(result?.tenant_id).toBe('ten_keep_me');
+    expect(result?.api_token).toBe('rv_live_keep_me');
+    expect(result?.phone_number).toBe('+15555550100');
+    expect(result?.status).toBe('error');
+    expect(result?.last_error).toBe('transient downstream timeout');
+  });
+});

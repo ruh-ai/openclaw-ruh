@@ -612,6 +612,21 @@ export const MIGRATIONS: SchemaMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_eval_results_agent ON eval_results (agent_id, created_at DESC)`,
     ],
   },
+  {
+    // AB-416 Phase 1: voice channel state lives directly on the agent
+    // record (not in the `channels` array) because activation is a
+    // platform-managed provisioning side-effect — not credentials the
+    // user pastes. Default {enabled:false,status:"disabled"} so existing
+    // rows are valid without any backfill.
+    id: '0028_agent_voice_channel',
+    statements: [
+      `
+      ALTER TABLE agents
+      ADD COLUMN IF NOT EXISTS voice JSONB NOT NULL
+      DEFAULT '{"enabled":false,"status":"disabled","tenant_id":null,"api_token":null,"phone_number":null,"provisioned_at":null,"last_error":null}'::jsonb
+      `,
+    ],
+  },
 ];
 
 export async function runSchemaMigrations(): Promise<void> {
